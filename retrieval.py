@@ -45,6 +45,31 @@ _HIGH_VALUE_PREDICATES = (
     'entry_condition', 'exit_condition', 'rating', 'key_finding',
 )
 
+# Query keyword → predicate boost mapping
+# When a query contains these words, we directly fetch atoms with the mapped predicates
+_KEYWORD_PREDICATE_BOOST: dict = {
+    'target':      ('price_target', 'signal_direction'),
+    'upside':      ('price_target', 'signal_direction'),
+    'analyst':     ('price_target', 'signal_direction', 'rating'),
+    'consensus':   ('price_target', 'signal_direction'),
+    'signal':      ('signal_direction', 'signal_confidence'),
+    'direction':   ('signal_direction',),
+    'long':        ('signal_direction',),
+    'short':       ('signal_direction',),
+    'catalyst':    ('catalyst',),
+    'risk':        ('risk_factor',),
+    'earnings':    ('earnings_quality',),
+    'regime':      ('regime_label', 'central_bank_stance', 'dominant_driver', 'growth_environment', 'inflation_environment'),
+    'macro':       ('regime_label', 'central_bank_stance', 'dominant_driver', 'growth_environment', 'inflation_environment'),
+    'inflation':   ('inflation_environment', 'dominant_driver', 'regime_label'),
+    'rate':        ('central_bank_stance', 'dominant_driver'),
+    'yield':       ('risk_factor', 'dominant_driver'),
+    'sector':      ('sector',),
+    'volatility':  ('volatility_regime',),
+    'beta':        ('volatility_regime',),
+    'momentum':    ('signal_direction',),
+}
+
 _STOPWORDS = {
     'the', 'is', 'at', 'which', 'on', 'a', 'an', 'and', 'or', 'for',
     'in', 'of', 'to', 'that', 'this', 'with', 'from', 'by', 'are',
@@ -186,6 +211,43 @@ def retrieve(
             _add(c.fetchall())
         except Exception:
             pass
+
+    # ── 4b. Predicate keyword boost ───────────────────────────────────────────
+    # When query contains intent words (upside, target, sector, regime...) fetch
+    # atoms with those exact predicates for all matched tickers/terms.
+    boosted_predicates: set = set()
+    for term in terms:
+        for kw, preds in _KEYWORD_PREDICATE_BOOST.items():
+            if kw in term or term in kw:
+                boosted_predicates.update(preds)
+
+    if boosted_predicates:
+        pred_ph = ','.join('?' * len(boosted_predicates))
+        if tickers:
+            for ticker in tickers:
+                try:
+                    c.execute(f"""
+                        SELECT subject, predicate, object, source, confidence
+                        FROM facts
+                        WHERE predicate IN ({pred_ph})
+                        AND LOWER(subject) = ?
+                        ORDER BY confidence DESC LIMIT 10
+                    """, (*boosted_predicates, ticker.lower()))
+                    _add(c.fetchall())
+                except Exception:
+                    pass
+        else:
+            # No explicit tickers — fetch top boosted-predicate atoms globally
+            try:
+                c.execute(f"""
+                    SELECT subject, predicate, object, source, confidence
+                    FROM facts
+                    WHERE predicate IN ({pred_ph})
+                    ORDER BY confidence DESC LIMIT 20
+                """, (*boosted_predicates,))
+                _add(c.fetchall())
+            except Exception:
+                pass
 
     # ── 5. Fallback: top-confidence atoms ─────────────────────────────────────
     if len(results) < 8:
