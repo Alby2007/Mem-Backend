@@ -37,6 +37,7 @@ _AUTHORITY_TABLE: Dict[str, float] = {
     # Derived / model outputs
     'model_signal_':       0.70,  # quantitative model signals
     'cross_asset_gnn':     0.70,  # GNN-derived cross-asset relationships
+    'llm_extracted_':      0.70,  # LLM-structured atoms extracted from news/filings text
     'derived_signal_':     0.65,  # second-order signals computed over KB atoms
     'technical_':          0.65,  # technical analysis indicators
 

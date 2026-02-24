@@ -32,9 +32,15 @@ try:
 except ImportError:
     HistoricalBackfillAdapter = None  # type: ignore
 
+try:
+    from .llm_extraction_adapter import LLMExtractionAdapter
+except ImportError:
+    LLMExtractionAdapter = None  # type: ignore
+
 
 __all__ = [
     'BaseIngestAdapter', 'RawAtom', 'IngestScheduler',
     'YFinanceAdapter', 'FREDAdapter', 'EDGARAdapter', 'RSSAdapter',
     'SignalEnrichmentAdapter', 'HistoricalBackfillAdapter',
+    'LLMExtractionAdapter',
 ]

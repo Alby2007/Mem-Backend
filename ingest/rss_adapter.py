@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set
@@ -96,6 +97,24 @@ def _is_negative(headline: str) -> bool:
     return any(kw in lower for kw in _NEGATIVE_KEYWORDS)
 
 
+def _ensure_extraction_queue(conn: sqlite3.Connection) -> None:
+    """Create extraction_queue table if it doesn't exist."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS extraction_queue (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            text             TEXT NOT NULL,
+            url              TEXT,
+            source           TEXT,
+            fetched_at       TEXT,
+            processed        INTEGER DEFAULT 0,
+            processed_at     TEXT,
+            atoms_extracted  INTEGER DEFAULT 0,
+            failed_attempts  INTEGER DEFAULT 0
+        )
+    """)
+    conn.commit()
+
+
 class RSSAdapter(BaseIngestAdapter):
     """
     RSS news feed ingest adapter.
@@ -104,10 +123,11 @@ class RSSAdapter(BaseIngestAdapter):
     No API key required.
     """
 
-    def __init__(self, feeds: Optional[Dict[str, str]] = None):
+    def __init__(self, feeds: Optional[Dict[str, str]] = None, db_path: Optional[str] = None):
         super().__init__(name='rss_news')
         self.feeds = feeds or _DEFAULT_FEEDS
         self._seen_titles: Set[str] = set()
+        self._db_path: Optional[str] = db_path
 
     def fetch(self) -> List[RawAtom]:
         if not HAS_FEEDPARSER:
@@ -116,6 +136,7 @@ class RSSAdapter(BaseIngestAdapter):
 
         now_iso = datetime.now(timezone.utc).isoformat()
         atoms: List[RawAtom] = []
+        queue_rows: List[tuple] = []  # (text, url, source, fetched_at)
 
         with ThreadPoolExecutor(max_workers=_RSS_WORKERS, thread_name_prefix='rss') as ex:
             futures = {
@@ -125,17 +146,36 @@ class RSSAdapter(BaseIngestAdapter):
             for future in as_completed(futures):
                 name = futures[future]
                 try:
-                    atoms.extend(future.result(timeout=15))
+                    feed_atoms, feed_queue = future.result(timeout=15)
+                    atoms.extend(feed_atoms)
+                    queue_rows.extend(feed_queue)
                 except Exception as e:
                     self._logger.warning('Failed to fetch RSS feed %s: %s', name, e)
+
+        if queue_rows and self._db_path:
+            try:
+                conn = sqlite3.connect(self._db_path)
+                _ensure_extraction_queue(conn)
+                conn.executemany(
+                    "INSERT INTO extraction_queue (text, url, source, fetched_at) VALUES (?,?,?,?)",
+                    queue_rows,
+                )
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                self._logger.warning('Failed to write extraction_queue: %s', e)
 
         return atoms
 
     def _fetch_feed(
         self, outlet_name: str, url: str, now_iso: str
-    ) -> List[RawAtom]:
-        """Parse a single RSS feed and convert entries to atoms."""
+    ):
+        """Parse a single RSS feed and convert entries to atoms.
+
+        Returns (atoms, queue_rows) tuple.
+        """
         atoms: List[RawAtom] = []
+        queue_rows: List[tuple] = []
         source = f'news_wire_{outlet_name}'
 
         feed = feedparser.parse(url)
@@ -144,7 +184,7 @@ class RSSAdapter(BaseIngestAdapter):
                 'RSS feed %s returned no entries (bozo=%s)',
                 outlet_name, feed.bozo_exception,
             )
-            return atoms
+            return atoms, queue_rows
 
         for entry in feed.entries[:20]:  # cap per feed
             title = (entry.get('title') or '').strip()
@@ -195,4 +235,9 @@ class RSSAdapter(BaseIngestAdapter):
                     metadata=meta,
                 ))
 
-        return atoms
+            # Queue raw text for LLM extraction pass
+            summary = (entry.get('summary') or entry.get('description') or '').strip()
+            raw_text = f"{title}. {summary}"[:800] if summary else title[:800]
+            queue_rows.append((raw_text, link, source, now_iso))
+
+        return atoms, queue_rows

@@ -21,10 +21,11 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import requests
 
@@ -150,9 +151,10 @@ class EDGARAdapter(BaseIngestAdapter):
     No API key required.
     """
 
-    def __init__(self, tickers: Optional[List[str]] = None):
+    def __init__(self, tickers: Optional[List[str]] = None, db_path: Optional[str] = None):
         super().__init__(name='edgar')
         self.tickers = tickers or _DEFAULT_TICKERS
+        self._db_path: Optional[str] = db_path
 
     def fetch(self) -> List[RawAtom]:
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -163,6 +165,7 @@ class EDGARAdapter(BaseIngestAdapter):
 
         # ── Parallel filing fetch ─────────────────────────────────────────
         all_atoms: List[RawAtom] = []
+        all_queue: List[tuple] = []
         with ThreadPoolExecutor(
             max_workers=_EDGAR_WORKERS, thread_name_prefix='edgar'
         ) as ex:
@@ -173,27 +176,49 @@ class EDGARAdapter(BaseIngestAdapter):
             for future in as_completed(futures):
                 sym = futures[future]
                 try:
-                    all_atoms.extend(future.result(timeout=20))
+                    sym_atoms, sym_queue = future.result(timeout=20)
+                    all_atoms.extend(sym_atoms)
+                    all_queue.extend(sym_queue)
                 except Exception as e:
                     self._logger.warning('Failed to process %s: %s', sym, e)
+
+        if all_queue and self._db_path:
+            try:
+                from ingest.rss_adapter import _ensure_extraction_queue
+                conn = sqlite3.connect(self._db_path)
+                _ensure_extraction_queue(conn)
+                conn.executemany(
+                    "INSERT INTO extraction_queue (text, url, source, fetched_at) VALUES (?,?,?,?)",
+                    all_queue,
+                )
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                self._logger.warning('Failed to write extraction_queue: %s', e)
 
         return all_atoms
 
     def _fetch_symbol(
         self, symbol: str, source: str, now_iso: str
-    ) -> List[RawAtom]:
-        """Fetch filings for one ticker and convert to atoms."""
+    ) -> Tuple[List[RawAtom], List[tuple]]:
+        """Fetch filings for one ticker and convert to atoms.
+
+        Returns (atoms, queue_rows) tuple.
+        """
         atoms: List[RawAtom] = []
+        queue_rows: List[tuple] = []
         cik = _ticker_to_cik(symbol)
         if not cik:
             self._logger.debug('No CIK found for %s', symbol)
-            return atoms
+            return atoms, queue_rows
 
         time.sleep(_EDGAR_REQ_DELAY)  # per-thread rate limit respect
         filings = _fetch_recent_filings(cik)
         for filing in filings:
-            atoms.extend(self._filing_to_atoms(symbol, filing, source, now_iso))
-        return atoms
+            filing_atoms, filing_queue = self._filing_to_atoms(symbol, filing, source, now_iso)
+            atoms.extend(filing_atoms)
+            queue_rows.extend(filing_queue)
+        return atoms, queue_rows
 
     def _filing_to_atoms(
         self,
@@ -201,8 +226,11 @@ class EDGARAdapter(BaseIngestAdapter):
         filing: dict,
         source: str,
         now_iso: str,
-    ) -> List[RawAtom]:
-        """Convert a single filing into one or more atoms."""
+    ) -> Tuple[List[RawAtom], List[tuple]]:
+        """Convert a single filing into one or more atoms.
+
+        Returns (atoms, queue_rows) tuple.
+        """
         atoms: List[RawAtom] = []
         form = filing['form']
         date = filing.get('date', '')
@@ -262,4 +290,12 @@ class EDGARAdapter(BaseIngestAdapter):
                 metadata=meta,
             ))
 
-        return atoms
+        # Queue the filing description for LLM extraction
+        filing_url = (
+            f"https://www.sec.gov/Archives/edgar/data/"
+            f"{filing.get('accession','').replace('-','')}/{filing.get('accession','')}-index.htm"
+        )
+        raw_text = f"{symbol} {form} filed {date}: {desc}"[:800]
+        queue_rows = [(raw_text, filing_url, source, now_iso)]
+
+        return atoms, queue_rows

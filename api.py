@@ -42,6 +42,7 @@ try:
     from ingest.rss_adapter import RSSAdapter
     from ingest.signal_enrichment_adapter import SignalEnrichmentAdapter
     from ingest.historical_adapter import HistoricalBackfillAdapter
+    from ingest.llm_extraction_adapter import LLMExtractionAdapter
     HAS_INGEST = True
 except ImportError:
     HAS_INGEST = False
@@ -114,11 +115,12 @@ _ingest_scheduler = None
 if HAS_INGEST:
     try:
         _ingest_scheduler = IngestScheduler(_kg)
-        _ingest_scheduler.register(YFinanceAdapter(),                        interval_sec=300)    # 5 min
+        _ingest_scheduler.register(YFinanceAdapter(),                         interval_sec=300)    # 5 min
         _ingest_scheduler.register(SignalEnrichmentAdapter(db_path=_DB_PATH), interval_sec=300)   # 5 min, after yfinance
-        _ingest_scheduler.register(RSSAdapter(),                             interval_sec=900)    # 15 min
-        _ingest_scheduler.register(EDGARAdapter(),                           interval_sec=21600)  # 6 hours
-        _ingest_scheduler.register(FREDAdapter(),                            interval_sec=86400)  # 24 hours
+        _ingest_scheduler.register(RSSAdapter(db_path=_DB_PATH),             interval_sec=900)    # 15 min
+        _ingest_scheduler.register(LLMExtractionAdapter(db_path=_DB_PATH),   interval_sec=300)    # 5 min, drains queue
+        _ingest_scheduler.register(EDGARAdapter(db_path=_DB_PATH),           interval_sec=21600)  # 6 hours
+        _ingest_scheduler.register(FREDAdapter(),                             interval_sec=86400)  # 24 hours
         _ingest_scheduler.start()
     except Exception as _e:
         import logging as _logging

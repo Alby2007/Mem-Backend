@@ -20,8 +20,9 @@ import requests as _requests
 
 _logger = logging.getLogger(__name__)
 
-_BASE_URL   = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+_BASE_URL          = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+DEFAULT_MODEL      = os.environ.get("OLLAMA_MODEL", "llama3.2")
+EXTRACTION_MODEL   = os.environ.get("OLLAMA_EXTRACTION_MODEL", "phi3")
 
 _CHAT_URL  = f"{_BASE_URL}/api/chat"
 _TAGS_URL  = f"{_BASE_URL}/api/tags"
