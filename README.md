@@ -27,13 +27,14 @@ trading-galaxy/
 ├── retrieval.py                 # Smart multi-strategy retrieval engine
 ├── api.py                       # Flask REST API
 ├── ingest/
-│   ├── base.py                  # BaseIngestAdapter + RawAtom contract
-│   ├── scheduler.py             # Background scheduler (threading.Timer)
-│   ├── yfinance_adapter.py      # Yahoo Finance: price, fundamentals, targets
-│   ├── fred_adapter.py          # FRED: macro regime atoms (requires FRED_API_KEY)
-│   ├── edgar_adapter.py         # SEC EDGAR: filings, insider transactions
-│   ├── rss_adapter.py           # RSS: Reuters, BBC, CNBC, MarketWatch headlines
-│   └── __init__.py              # exports all adapters + scheduler
+│   ├── base.py                          # BaseIngestAdapter + RawAtom contract
+│   ├── scheduler.py                     # Background scheduler (threading.Timer)
+│   ├── yfinance_adapter.py              # Yahoo Finance: price, fundamentals, targets
+│   ├── signal_enrichment_adapter.py     # Second-order KB signals (no external API)
+│   ├── fred_adapter.py                  # FRED: macro regime atoms (requires FRED_API_KEY)
+│   ├── edgar_adapter.py                 # SEC EDGAR: filings, insider transactions
+│   ├── rss_adapter.py                   # RSS: BBC, CNBC, MarketWatch, Yahoo Finance
+│   └── __init__.py                      # exports all adapters + scheduler
 ├── CONTRIBUTING.md              # Ingest team guide
 └── requirements.txt
 ```
@@ -69,16 +70,24 @@ python api.py
 
 ## Automated Ingest
 
-On startup, `api.py` launches a background scheduler that runs four ingest adapters automatically:
+On startup, `api.py` launches a background scheduler that runs five ingest adapters automatically:
 
 | Adapter | Source | Interval | API Key? | Authority |
 |---|---|---|---|---|
-| **YFinance** | Yahoo Finance (price, fundamentals, analyst targets) | 15 min | No | 1.00 |
-| **RSS News** | Reuters, BBC, CNBC, MarketWatch headlines | 30 min | No | 0.60 |
+| **YFinance** | Yahoo Finance (price, fundamentals, analyst targets) | 5 min | No | 1.00 |
+| **SignalEnrichment** | KB introspection — second-order derived signals | 5 min | No | 0.65 |
+| **RSS News** | BBC, CNBC, MarketWatch, Yahoo Finance headlines | 15 min | No | 0.60 |
 | **EDGAR** | SEC filings (8-K, 10-Q, insider transactions) | 6 hours | No | 0.95 |
 | **FRED** | Fed funds rate, CPI, GDP, yield curve | 24 hours | Yes (free) | 0.80 |
 
 All adapters are fault-tolerant — if one fails (missing key, rate limit, network error), the others continue. Check adapter health via `GET /ingest/status`.
+
+Trigger an immediate full refresh without waiting for the next scheduled run:
+```bash
+curl -X POST http://localhost:5050/ingest/run-all
+# or a subset:
+curl -X POST http://localhost:5050/ingest/run-all -d '{"adapters":["yfinance","signal_enrichment"]}'
+```
 
 ---
 
@@ -252,6 +261,25 @@ Full schema in `knowledge/kb_domain_schemas.py`. Key predicates:
 | **macro_regime** | `regime_label`, `dominant_driver`, `asset_class_bias`, `risk_on_off`, `central_bank_stance`, `inflation_environment` |
 | **company** | `sector`, `market_cap_tier`, `earnings_quality`, `competitive_moat`, `revenue_trend`, `catalyst` |
 | **research_report** | `publisher`, `analyst`, `rating`, `price_target`, `key_finding`, `compared_to_consensus` |
+| **derived_signal** | `price_regime`, `upside_pct`, `signal_quality`, `macro_confirmation` |
+
+### Derived Signal Predicates
+
+Produced by `SignalEnrichmentAdapter` — computed over existing KB atoms, no external calls.
+
+| Predicate | Values | Meaning |
+|---|---|---|
+| `price_regime` | `near_52w_high` \| `mid_range` \| `near_52w_low` | Where price sits vs fair value (derived from last_price / price_target ratio) |
+| `upside_pct` | e.g. `"34.2"` | % upside from last_price to consensus price_target. Negative = price above target. |
+| `signal_quality` | `strong` \| `confirmed` \| `extended` \| `conflicted` \| `weak` | Coherence of signal_direction, vol_regime, price_regime, upside_pct composite |
+| `macro_confirmation` | `confirmed` \| `partial` \| `unconfirmed` \| `no_data` | Cross-asset alignment: HYG (credit) + TLT (rates) + SPY (market) vs equity signal |
+
+**signal_quality decision rules** (documented in adapter for auditability):
+- `conflicted` — bullish signal but price > target; or bearish signal but large upside; or bullish + high_vol + near_52w_high
+- `extended` — bullish signal but price already near_52w_high
+- `strong` — bullish + ≥15% upside + not extended + low/med volatility
+- `confirmed` — bullish + ≥8% upside + not extended
+- `weak` — neutral direction or upside_pct unavailable
 
 ---
 
@@ -268,6 +296,7 @@ Sources are prefix-matched. Use the correct prefix to get accurate authority wei
 | `broker_research` | 0.80 | 21 days | Institutional research |
 | `macro_data` | 0.80 | 60 days | Central bank, government |
 | `model_signal_` | 0.70 | 12 hours | Quant model outputs |
+| `derived_signal_` | 0.65 | 5 min | Second-order KB signals (SignalEnrichmentAdapter) |
 | `technical_` | 0.65 | 6 hours | Technical indicators |
 | `news_wire_` | 0.60 | 1 day | Reuters, Bloomberg |
 | `alt_data_` | 0.55 | 3 days | Satellite, web data |

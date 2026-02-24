@@ -23,6 +23,12 @@ Use predicates from knowledge/kb_domain_schemas.py. Key ones:
     time_horizon, sector, price_target, catalyst, risk_factor,
     invalidation_condition, correlation_to, liquidity_profile, volatility_regime
 
+  Derived signals (computed by SignalEnrichmentAdapter over existing atoms):
+    price_regime        near_52w_high | mid_range | near_52w_low
+    upside_pct          % upside to consensus target (negative = overextended)
+    signal_quality      strong | confirmed | extended | conflicted | weak
+    macro_confirmation  confirmed | partial | unconfirmed | no_data
+
   Market theses:
     premise, supporting_evidence, contradicting_evidence,
     entry_condition, exit_condition, invalidated_by,
