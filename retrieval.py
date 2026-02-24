@@ -354,7 +354,7 @@ def retrieve(
         # result slots with irrelevant cross-ticker rows, pushing out
         # thesis_risk_level / signal_quality for the named tickers.
         ranking_boost = boosted_predicates & _RANKING_PREDICATES
-        if ranking_boost and len(tickers) < 2:
+        if ranking_boost and len(tickers) == 0:
             for pred in ranking_boost:
                 try:
                     c.execute("""
@@ -562,12 +562,17 @@ def retrieve(
     # ── Format output ──────────────────────────────────────────────────────────
     lines = ['=== TRADING KNOWLEDGE CONTEXT ===']
 
-    signals, theses, macro, research, other = [], [], [], [], []
+    signals, invalidation, quality, theses, macro, research, other = [], [], [], [], [], [], []
     for r in results:
         pred = r['predicate']
         src = r['source']
-        if pred in ('signal_direction', 'signal_confidence', 'price_target',
-                    'entry_condition', 'exit_condition', 'invalidation_condition'):
+        if pred in ('invalidation_price', 'invalidation_distance', 'thesis_risk_level'):
+            invalidation.append(r)
+        elif pred in ('signal_quality', 'macro_confirmation', 'price_regime',
+                      'upside_pct', 'signal_direction', 'signal_confidence'):
+            quality.append(r)
+        elif pred in ('price_target', 'entry_condition', 'exit_condition',
+                      'invalidation_condition', 'last_price'):
             signals.append(r)
         elif pred in ('premise', 'supporting_evidence', 'contradicting_evidence',
                       'risk_reward_ratio', 'position_sizing_note'):
@@ -584,6 +589,12 @@ def retrieve(
     def _fmt(r):
         return f"  {r['subject']} | {r['predicate']} | {r['object']}"
 
+    if invalidation:
+        lines.append('[Invalidation & Risk]')
+        lines.extend(_fmt(r) for r in invalidation[:15])
+    if quality:
+        lines.append('[Signal Quality & Regime]')
+        lines.extend(_fmt(r) for r in quality[:15])
     if signals:
         lines.append('[Signals & Positioning]')
         lines.extend(_fmt(r) for r in signals[:10])
