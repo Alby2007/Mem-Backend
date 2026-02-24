@@ -43,9 +43,17 @@ try:
     from ingest.signal_enrichment_adapter import SignalEnrichmentAdapter
     from ingest.historical_adapter import HistoricalBackfillAdapter
     from ingest.llm_extraction_adapter import LLMExtractionAdapter
+    from ingest.edgar_realtime_adapter import EDGARRealtimeAdapter
     HAS_INGEST = True
 except ImportError:
     HAS_INGEST = False
+
+try:
+    from analytics.backtest import run_backtest
+    from analytics.portfolio import build_portfolio_summary
+    HAS_ANALYTICS = True
+except ImportError:
+    HAS_ANALYTICS = False
 
 try:
     from knowledge.epistemic_stress import compute_stress
@@ -120,6 +128,7 @@ if HAS_INGEST:
         _ingest_scheduler.register(RSSAdapter(db_path=_DB_PATH),             interval_sec=900)    # 15 min
         _ingest_scheduler.register(LLMExtractionAdapter(db_path=_DB_PATH),   interval_sec=300)    # 5 min, drains queue
         _ingest_scheduler.register(EDGARAdapter(db_path=_DB_PATH),           interval_sec=21600)  # 6 hours
+        _ingest_scheduler.register(EDGARRealtimeAdapter(db_path=_DB_PATH),   interval_sec=180)    # 3 min real-time 8-K
         _ingest_scheduler.register(FREDAdapter(),                             interval_sec=86400)  # 24 hours
         _ingest_scheduler.start()
     except Exception as _e:
@@ -1209,6 +1218,71 @@ def chat_models():
         'default':   DEFAULT_MODEL,
         'available': bool(models),
     })
+
+
+# ── Analytics endpoints ──────────────────────────────────────────────────────
+
+@app.route('/analytics/backtest', methods=['GET'])
+def analytics_backtest():
+    """
+    Cross-sectional KB backtest — measures whether high-conviction names
+    show better trailing returns than low-conviction names.
+
+    Query params:
+      window  — return window: '1w', '1m' (default), '3m'
+
+    Returns cohort statistics, portfolio-weighted return, and an alpha_signal
+    boolean computed against a pre-committed threshold of:
+      high cohort mean_return > low cohort mean_return + 1.0 percentage points
+
+    IMPORTANT — methodology: 'point_in_time_snapshot'
+      This is NOT a walk-forward backtest. It measures coherence between
+      current signal state and recent trailing returns. See methodology_note
+      in the response for the full disclaimer.
+    """
+    if not HAS_ANALYTICS:
+        return jsonify({'error': 'analytics module not available'}), 503
+
+    window = request.args.get('window', '1m')
+    if window not in ('1w', '1m', '3m'):
+        return jsonify({'error': "window must be '1w', '1m', or '3m'"}), 400
+
+    try:
+        result = run_backtest(_DB_PATH, window=window)
+        return jsonify(result)
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('backtest failed: %s', e)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/portfolio/summary', methods=['GET'])
+def portfolio_summary():
+    """
+    Aggregated portfolio view from current KB signal atoms.
+
+    Returns:
+      long_book       — tickers with conviction_tier != avoid, with totals
+      avoid_book      — names the KB recommends avoiding
+      sector_weights  — position-size-weighted sector allocation
+      macro_alignment — macro_confirmation distribution across long book
+      top_conviction  — top 20 names sorted by tier then upside
+      all_tickers     — full ranked list
+
+    NOTE on total_position_pct:
+      Exceeds 100% by design. See the 'total_position_pct_note' field
+      in the long_book object for interpretation guidance.
+    """
+    if not HAS_ANALYTICS:
+        return jsonify({'error': 'analytics module not available'}), 503
+
+    try:
+        result = build_portfolio_summary(_DB_PATH)
+        return jsonify(result)
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('portfolio summary failed: %s', e)
+        return jsonify({'error': str(e)}), 500
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

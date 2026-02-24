@@ -37,10 +37,15 @@ try:
 except ImportError:
     LLMExtractionAdapter = None  # type: ignore
 
+try:
+    from .edgar_realtime_adapter import EDGARRealtimeAdapter
+except ImportError:
+    EDGARRealtimeAdapter = None  # type: ignore
+
 
 __all__ = [
     'BaseIngestAdapter', 'RawAtom', 'IngestScheduler',
     'YFinanceAdapter', 'FREDAdapter', 'EDGARAdapter', 'RSSAdapter',
     'SignalEnrichmentAdapter', 'HistoricalBackfillAdapter',
-    'LLMExtractionAdapter',
+    'LLMExtractionAdapter', 'EDGARRealtimeAdapter',
 ]
