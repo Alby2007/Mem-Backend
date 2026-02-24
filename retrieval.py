@@ -303,8 +303,17 @@ def retrieve(
     # ── 3. Predicate keyword boost (intent-aware) ───────────────────────────
     # Runs BEFORE bulk ticker match. Fetches exact predicate atoms for tickers.
 
+    # Historical / ranking predicates that benefit from numeric sort across all tickers
+    _RANKING_PREDICATES = frozenset({
+        'return_vs_spy_1m', 'return_vs_spy_3m',
+        'return_1m', 'return_3m', 'return_6m', 'return_1y',
+        'return_1w', 'drawdown_from_52w_high',
+        'volatility_30d', 'volatility_90d', 'upside_pct',
+    })
+
     if boosted_predicates:
         pred_ph = ','.join('?' * len(boosted_predicates))
+        # Per-ticker fetch when explicit tickers are named
         if tickers:
             for ticker in tickers:
                 try:
@@ -318,7 +327,30 @@ def retrieve(
                     _add(c.fetchall())
                 except Exception:
                     pass
-        else:
+
+        # ── 3b. Cross-ticker ranking fetch ──────────────────────────────────
+        # Runs unconditionally when ranking predicates are in the boost set,
+        # regardless of whether tickers were named. Without this, queries like
+        # "which tickers outperformed SPY" fail because SPY is extracted as a
+        # ticker but is the benchmark, not the subjects of comparison.
+        # Fetches ALL atoms for each ranking predicate ordered by CAST(object
+        # AS REAL) DESC — gives the LLM a pre-sorted cross-ticker list.
+        # The seen-set (_add) deduplicates with the per-ticker fetch above.
+        ranking_boost = boosted_predicates & _RANKING_PREDICATES
+        if ranking_boost:
+            for pred in ranking_boost:
+                try:
+                    c.execute("""
+                        SELECT subject, predicate, object, source, confidence
+                        FROM facts
+                        WHERE predicate = ?
+                        ORDER BY CAST(object AS REAL) DESC
+                        LIMIT 30
+                    """, (pred,))
+                    _add(c.fetchall())
+                except Exception:
+                    pass
+        elif not tickers:
             try:
                 c.execute(f"""
                     SELECT subject, predicate, object, source, confidence
