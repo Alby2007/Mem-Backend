@@ -41,6 +41,7 @@ try:
     from ingest.edgar_adapter import EDGARAdapter
     from ingest.rss_adapter import RSSAdapter
     from ingest.signal_enrichment_adapter import SignalEnrichmentAdapter
+    from ingest.historical_adapter import HistoricalBackfillAdapter
     HAS_INGEST = True
 except ImportError:
     HAS_INGEST = False
@@ -194,6 +195,43 @@ def ingest_run_all():
         'skipped':    skipped,
         'note':       'runs are async — poll /ingest/status to track progress',
     })
+
+
+@app.route('/ingest/historical', methods=['POST'])
+def ingest_historical():
+    """
+    Trigger a one-shot historical summary backfill for the watchlist.
+
+    Downloads 1 year of daily OHLCV via yf.download() and writes
+    interpretable summary atoms (returns, vol, drawdown, 52w levels,
+    relative performance vs SPY) into the KB.  All atoms are upsert=True
+    so repeated calls are safe and idempotent.
+
+    Body (optional):
+      { "tickers": ["NVDA", "META"] }  — backfill a subset
+      {}                               — backfill full default watchlist
+
+    This is synchronous (runs in the request thread) because the download
+    is a single bulk call and typically completes in 5-15 seconds.
+    """
+    if not HAS_INGEST:
+        return jsonify({'error': 'ingest not available'}), 503
+
+    data    = request.get_json(force=True, silent=True) or {}
+    tickers = data.get('tickers')  # None = full watchlist
+
+    try:
+        adapter = HistoricalBackfillAdapter(tickers=tickers)
+        result  = adapter.run_and_push(_kg)
+        return jsonify({
+            'ingested': result.get('ingested', 0),
+            'skipped':  result.get('skipped',  0),
+            'tickers':  len(adapter.tickers),
+        })
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('historical backfill failed: %s', e)
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/stats', methods=['GET'])

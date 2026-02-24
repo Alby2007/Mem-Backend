@@ -57,6 +57,9 @@ _HIGH_VALUE_PREDICATES = (
     'contradicting_evidence', 'regime_label', 'risk_factor',
     'entry_condition', 'exit_condition', 'rating', 'key_finding',
     'signal_quality', 'macro_confirmation', 'price_regime', 'upside_pct',
+    'return_1m', 'return_3m', 'return_6m', 'return_1y',
+    'volatility_30d', 'volatility_90d', 'drawdown_from_52w_high',
+    'return_vs_spy_1m', 'return_vs_spy_3m',
 )
 
 # Query keyword → predicate boost mapping
@@ -84,10 +87,17 @@ _KEYWORD_PREDICATE_BOOST: dict = {
     'sector':      ('sector',),
     'volatility':  ('volatility_regime', 'signal_quality'),
     'beta':        ('volatility_regime',),
-    'momentum':    ('signal_direction', 'price_regime', 'signal_quality'),
+    'momentum':    ('signal_direction', 'price_regime', 'signal_quality', 'return_1m', 'return_3m'),
     'extended':    ('signal_quality', 'price_regime'),
     'conflict':    ('signal_quality', 'macro_confirmation'),
     'conviction':  ('signal_quality', 'upside_pct', 'macro_confirmation'),
+    'return':      ('return_1m', 'return_3m', 'return_6m', 'return_1y', 'return_vs_spy_1m'),
+    'performance': ('return_1m', 'return_3m', 'return_6m', 'return_1y', 'return_vs_spy_3m'),
+    'drawdown':    ('drawdown_from_52w_high', 'price_regime', 'volatility_90d'),
+    'relative':    ('return_vs_spy_1m', 'return_vs_spy_3m', 'signal_quality'),
+    'outperform':  ('return_vs_spy_1m', 'return_vs_spy_3m'),
+    'vol':         ('volatility_30d', 'volatility_90d', 'volatility_regime'),
+    'trend':       ('return_1m', 'return_3m', 'price_regime', 'signal_direction'),
 }
 
 _STOPWORDS = {
@@ -239,6 +249,9 @@ def retrieve(
     _PINNED_PREDICATES = (
         'last_price', 'price_target', 'signal_direction', 'earnings_quality',
         'signal_quality', 'macro_confirmation', 'price_regime', 'upside_pct',
+        'return_1m', 'return_3m', 'return_1y',
+        'volatility_30d', 'drawdown_from_52w_high',
+        'return_vs_spy_1m', 'return_vs_spy_3m',
     )
     _pin_ph = ','.join('?' * len(_PINNED_PREDICATES))
     for ticker in tickers:

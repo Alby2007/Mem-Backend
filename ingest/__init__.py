@@ -27,9 +27,14 @@ try:
 except ImportError:
     SignalEnrichmentAdapter = None  # type: ignore
 
+try:
+    from .historical_adapter import HistoricalBackfillAdapter
+except ImportError:
+    HistoricalBackfillAdapter = None  # type: ignore
+
 
 __all__ = [
     'BaseIngestAdapter', 'RawAtom', 'IngestScheduler',
     'YFinanceAdapter', 'FREDAdapter', 'EDGARAdapter', 'RSSAdapter',
-    'SignalEnrichmentAdapter',
+    'SignalEnrichmentAdapter', 'HistoricalBackfillAdapter',
 ]
