@@ -37,12 +37,33 @@ except ImportError:
 _logger = logging.getLogger(__name__)
 
 # Default watchlist — override via constructor
+# Covers all 11 S&P sectors + major ETFs + macro proxies
 _DEFAULT_TICKERS = [
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA',
-    'JPM', 'V', 'UNH', 'XOM', 'JNJ', 'WMT', 'PG',
-    'SPY', 'QQQ', 'IWM', 'DIA',   # ETFs for regime
-    'GLD', 'TLT', 'HYG',          # macro proxies
+    # Mega-cap tech
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'AVGO',
+    # Financials
+    'JPM', 'V', 'MA', 'BAC', 'GS', 'MS', 'BRK-B',
+    # Healthcare
+    'UNH', 'JNJ', 'LLY', 'ABBV', 'PFE',
+    # Energy
+    'XOM', 'CVX', 'COP',
+    # Consumer
+    'WMT', 'PG', 'KO', 'MCD', 'COST',
+    # Industrials
+    'CAT', 'HON', 'RTX',
+    # Comms
+    'DIS', 'NFLX', 'CMCSA',
+    # Broad market ETFs
+    'SPY', 'QQQ', 'IWM', 'DIA', 'VTI',
+    # Sector ETFs
+    'XLF', 'XLE', 'XLK', 'XLV', 'XLI',
+    # Macro proxies
+    'GLD', 'SLV', 'TLT', 'HYG', 'UUP',
 ]
+
+# Batch size for yfinance calls — keeps requests small to avoid rate limits
+_BATCH_SIZE = 10
+_BATCH_DELAY_SEC = 1.0  # seconds between batches
 
 
 def _market_cap_tier(market_cap: Optional[float]) -> str:
@@ -102,14 +123,20 @@ class YFinanceAdapter(BaseIngestAdapter):
             )
             return []
 
+        import time
         atoms: List[RawAtom] = []
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        for symbol in self.tickers:
-            try:
-                atoms.extend(self._fetch_ticker(symbol, now_iso))
-            except Exception as e:
-                self._logger.warning('Failed to fetch %s: %s', symbol, e)
+        # Process in batches to avoid yfinance rate limits
+        for i in range(0, len(self.tickers), _BATCH_SIZE):
+            batch = self.tickers[i:i + _BATCH_SIZE]
+            for symbol in batch:
+                try:
+                    atoms.extend(self._fetch_ticker(symbol, now_iso))
+                except Exception as e:
+                    self._logger.warning('Failed to fetch %s: %s', symbol, e)
+            if i + _BATCH_SIZE < len(self.tickers):
+                time.sleep(_BATCH_DELAY_SEC)
 
         return atoms
 
