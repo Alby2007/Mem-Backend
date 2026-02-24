@@ -63,7 +63,10 @@ _DEFAULT_TICKERS = [
 
 # Batch size for yfinance calls — keeps requests small to avoid rate limits
 _BATCH_SIZE = 10
-_BATCH_DELAY_SEC = 1.0  # seconds between batches
+_BATCH_DELAY_SEC = 1.5  # seconds between batches
+
+# ETF quoteType values that don't carry equity fundamentals
+_ETF_QUOTE_TYPES = {'ETF', 'MUTUALFUND', 'INDEX', 'FUTURE', 'CRYPTOCURRENCY'}
 
 
 def _market_cap_tier(market_cap: Optional[float]) -> str:
@@ -131,14 +134,32 @@ class YFinanceAdapter(BaseIngestAdapter):
         for i in range(0, len(self.tickers), _BATCH_SIZE):
             batch = self.tickers[i:i + _BATCH_SIZE]
             for symbol in batch:
-                try:
-                    atoms.extend(self._fetch_ticker(symbol, now_iso))
-                except Exception as e:
-                    self._logger.warning('Failed to fetch %s: %s', symbol, e)
+                atoms.extend(self._fetch_with_backoff(symbol, now_iso))
             if i + _BATCH_SIZE < len(self.tickers):
                 time.sleep(_BATCH_DELAY_SEC)
 
         return atoms
+
+    def _fetch_with_backoff(self, symbol: str, now_iso: str) -> List[RawAtom]:
+        """Fetch a ticker with exponential backoff on transient errors."""
+        import time
+        delay = 2.0
+        for attempt in range(3):
+            try:
+                return self._fetch_ticker(symbol, now_iso)
+            except Exception as e:
+                err = str(e).lower()
+                if any(k in err for k in ('429', 'rate', 'too many', 'timeout', 'timed out')):
+                    self._logger.warning(
+                        'Rate limit on %s attempt %d, backing off %.0fs', symbol, attempt + 1, delay
+                    )
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    self._logger.warning('Failed to fetch %s: %s', symbol, e)
+                    return []
+        self._logger.warning('Giving up on %s after 3 attempts', symbol)
+        return []
 
     def _fetch_ticker(self, symbol: str, now_iso: str) -> List[RawAtom]:
         """Fetch atoms for a single ticker."""
@@ -153,27 +174,39 @@ class YFinanceAdapter(BaseIngestAdapter):
         if not info:
             return atoms
 
-        # ── Price atom ────────────────────────────────────────────────────
-        current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+        quote_type = info.get('quoteType', 'EQUITY').upper()
+        is_etf = quote_type in _ETF_QUOTE_TYPES
+        src = f'exchange_feed_yahoo_{symbol.lower().replace("-", "_")}'
+
+        # ── Price atom (all instruments) ──────────────────────────────────
+        current_price = (
+            info.get('navPrice')
+            or info.get('currentPrice')
+            or info.get('regularMarketPrice')
+        )
         if current_price:
             atoms.append(RawAtom(
                 subject=symbol,
                 predicate='last_price',
                 object=str(round(current_price, 2)),
                 confidence=0.95,
-                source=f'exchange_feed_yahoo_{symbol.lower()}',
-                metadata={'as_of': now_iso, 'currency': info.get('currency', 'USD')},
+                source=src,
+                metadata={'as_of': now_iso, 'currency': info.get('currency', 'USD'), 'quote_type': quote_type},
             ))
+
+        if is_etf:
+            return self._etf_atoms(symbol, info, src, now_iso, atoms)
 
         # ── Analyst consensus target ──────────────────────────────────────
         target_price = info.get('targetMeanPrice')
+        consensus_src = f'broker_research_yahoo_consensus_{symbol.lower()}'
         if target_price:
             atoms.append(RawAtom(
                 subject=symbol,
                 predicate='price_target',
                 object=str(round(target_price, 2)),
                 confidence=0.75,
-                source=f'broker_research_yahoo_consensus_{symbol.lower()}',
+                source=consensus_src,
                 metadata={
                     'as_of': now_iso,
                     'target_high': info.get('targetHighPrice'),
@@ -181,35 +214,24 @@ class YFinanceAdapter(BaseIngestAdapter):
                     'num_analysts': info.get('numberOfAnalystOpinions'),
                 },
             ))
-
-            # ── Derived directional signal ────────────────────────────────
             if current_price:
                 direction = _direction_from_target(current_price, target_price)
-                pct_upside = round(
-                    (target_price - current_price) / current_price * 100, 1
-                )
+                pct_upside = round((target_price - current_price) / current_price * 100, 1)
                 atoms.append(RawAtom(
                     subject=symbol,
                     predicate='signal_direction',
                     object=direction,
                     confidence=0.65,
-                    source=f'broker_research_yahoo_consensus_{symbol.lower()}',
-                    metadata={
-                        'derived_from': 'price_vs_consensus_target',
-                        'pct_upside': pct_upside,
-                        'as_of': now_iso,
-                    },
+                    source=consensus_src,
+                    metadata={'derived_from': 'price_vs_consensus_target', 'pct_upside': pct_upside, 'as_of': now_iso},
                 ))
 
         # ── Sector ────────────────────────────────────────────────────────
         sector = info.get('sector')
         if sector:
             atoms.append(RawAtom(
-                subject=symbol,
-                predicate='sector',
-                object=sector,
-                confidence=0.95,
-                source=f'exchange_feed_yahoo_{symbol.lower()}',
+                subject=symbol, predicate='sector', object=sector,
+                confidence=0.95, source=src,
                 metadata={'industry': info.get('industry')},
             ))
 
@@ -217,11 +239,9 @@ class YFinanceAdapter(BaseIngestAdapter):
         market_cap = info.get('marketCap')
         if market_cap:
             atoms.append(RawAtom(
-                subject=symbol,
-                predicate='market_cap_tier',
+                subject=symbol, predicate='market_cap_tier',
                 object=_market_cap_tier(market_cap),
-                confidence=0.95,
-                source=f'exchange_feed_yahoo_{symbol.lower()}',
+                confidence=0.95, source=src,
                 metadata={'market_cap_raw': market_cap},
             ))
 
@@ -231,12 +251,8 @@ class YFinanceAdapter(BaseIngestAdapter):
             regime = _volatility_regime(beta)
             if regime != 'unknown':
                 atoms.append(RawAtom(
-                    subject=symbol,
-                    predicate='volatility_regime',
-                    object=regime,
-                    confidence=0.80,
-                    source=f'exchange_feed_yahoo_{symbol.lower()}',
-                    metadata={'beta': beta},
+                    subject=symbol, predicate='volatility_regime', object=regime,
+                    confidence=0.80, source=src, metadata={'beta': beta},
                 ))
 
         # ── Next earnings date ────────────────────────────────────────────
@@ -266,5 +282,54 @@ class YFinanceAdapter(BaseIngestAdapter):
                     ))
         except Exception:
             pass
+
+        return atoms
+
+    def _etf_atoms(
+        self, symbol: str, info: dict, src: str, now_iso: str, atoms: List[RawAtom]
+    ) -> List[RawAtom]:
+        """ETF-specific atoms: category, AUM tier, beta-derived volatility."""
+        # Category → sector proxy
+        category = info.get('category') or info.get('fundFamily')
+        if category:
+            atoms.append(RawAtom(
+                subject=symbol, predicate='sector', object=f'etf:{category}',
+                confidence=0.90, source=src,
+                metadata={'etf_category': category},
+            ))
+
+        # AUM → market cap tier equivalent
+        aum = info.get('totalAssets')
+        if aum:
+            atoms.append(RawAtom(
+                subject=symbol, predicate='market_cap_tier',
+                object=_market_cap_tier(aum),
+                confidence=0.90, source=src,
+                metadata={'aum_raw': aum, 'metric': 'total_assets'},
+            ))
+
+        # Beta → volatility regime (3-year beta preferred for ETFs)
+        beta = info.get('beta3Year') or info.get('beta')
+        if beta is not None:
+            regime = _volatility_regime(beta)
+            if regime != 'unknown':
+                atoms.append(RawAtom(
+                    subject=symbol, predicate='volatility_regime', object=regime,
+                    confidence=0.75, source=src,
+                    metadata={'beta': beta, 'etf': True},
+                ))
+
+        # 52-week performance → momentum signal
+        high_52 = info.get('fiftyTwoWeekHigh')
+        low_52 = info.get('fiftyTwoWeekLow')
+        price = info.get('regularMarketPrice') or info.get('navPrice')
+        if high_52 and low_52 and price:
+            pct_from_high = round((price - high_52) / high_52 * 100, 1)
+            momentum = 'near_high' if pct_from_high > -5 else ('near_low' if pct_from_high < -20 else 'mid_range')
+            atoms.append(RawAtom(
+                subject=symbol, predicate='signal_direction', object=momentum,
+                confidence=0.60, source=src,
+                metadata={'pct_from_52w_high': pct_from_high, 'as_of': now_iso},
+            ))
 
         return atoms
