@@ -262,11 +262,13 @@ Full schema in `knowledge/kb_domain_schemas.py`. Key predicates:
 | **macro_regime** | `regime_label`, `dominant_driver`, `asset_class_bias`, `risk_on_off`, `central_bank_stance`, `inflation_environment` |
 | **company** | `sector`, `market_cap_tier`, `earnings_quality`, `competitive_moat`, `revenue_trend`, `catalyst` |
 | **research_report** | `publisher`, `analyst`, `rating`, `price_target`, `key_finding`, `compared_to_consensus` |
-| **derived_signal** | `price_regime`, `upside_pct`, `signal_quality`, `macro_confirmation` |
+| **derived_signal** | `price_regime`, `upside_pct`, `signal_quality`, `macro_confirmation`, `invalidation_price`, `invalidation_distance`, `thesis_risk_level`, `conviction_tier`, `volatility_scalar`, `position_size_pct` |
 
 ### Derived Signal Predicates
 
-Produced by `SignalEnrichmentAdapter` — computed over existing KB atoms, no external calls.
+All produced by `SignalEnrichmentAdapter` — computed over existing KB atoms, no external calls. Three logical layers, each building on the previous.
+
+#### Layer 1 — Signal regime
 
 | Predicate | Values | Meaning |
 |---|---|---|
@@ -281,6 +283,44 @@ Produced by `SignalEnrichmentAdapter` — computed over existing KB atoms, no ex
 - `strong` — bullish + ≥15% upside + not extended + low/med volatility
 - `confirmed` — bullish + ≥8% upside + not extended
 - `weak` — neutral direction or upside_pct unavailable
+
+#### Layer 2 — Invalidation layer
+
+Answers: *at what price is this thesis wrong?* Derived from `low_52w`, `last_price`, `volatility_30d`, `price_regime`.
+
+| Predicate | Values | Meaning |
+|---|---|---|
+| `invalidation_price` | e.g. `"94.29"` | Structural stop level. IP1: 52w low anchor (if price >15% above it). IP2: 15%-floor when near 52w low. IP3: 20%-floor fallback when 52w low absent. |
+| `invalidation_distance` | e.g. `"-51.18"` | `(invalidation_price − last_price) / last_price × 100`. Always negative for long thesis. |
+| `thesis_risk_level` | `tight` \| `moderate` \| `wide` | Risk classification. `tight` if distance > −15% or `price_regime=near_52w_low`; `moderate` if distance > −30%; `wide` otherwise (vol-adjusted thresholds apply). |
+
+**thesis_risk_level decision rules** (priority order):
+- `tight` — R-T3: `price_regime=near_52w_low`; R-T1: distance > −15%; R-T2: distance > −25% AND vol > 50%
+- `moderate` — R-M1: distance > −30%; R-M2: distance > −40% AND vol > 35%
+- `wide` — R-W1: all remaining cases
+
+#### Layer 3 — Position sizing layer
+
+Answers: *how much should I allocate?* Derived from `signal_quality`, `thesis_risk_level`, `macro_confirmation`, `volatility_30d`.
+
+| Predicate | Values | Meaning |
+|---|---|---|
+| `conviction_tier` | `high` \| `medium` \| `low` \| `avoid` \| `no_data` | Composite classification from signal quality × risk level × macro alignment. |
+| `volatility_scalar` | `0.20` – `1.00` | `min(1.0, max(0.2, 20.0 / volatility_30d))`. Compresses allocation for high-vol names relative to SPY 20% reference vol. |
+| `position_size_pct` | e.g. `"1.82"` | `base_alloc × volatility_scalar`. Base: high=5%, medium=3%, low=1.5%, avoid=0%. |
+
+**conviction_tier decision rules** (priority order, first match wins):
+- `avoid` — CT-A2: `signal_quality=conflicted`; CT-A1: `signal_quality=weak AND thesis_risk_level=tight`
+- `low` — CT-L1: `signal_quality=weak`; CT-L2: `thesis_risk_level=tight` (non-strong signal); CT-L3: `macro_confirmation=unconfirmed`
+- `medium` — CT-M2: `signal_quality=strong AND thesis_risk_level=tight`; CT-M1: `signal_quality=confirmed`
+- `high` — CT-H1: `signal_quality=strong AND thesis_risk_level ∈ {moderate,wide} AND macro_confirmation ∈ {confirmed,partial}`
+
+**Volatility scalar examples:**
+- `vol=20` → `1.00` (no adjustment — at SPY reference)
+- `vol=40` → `0.50` (half allocation)
+- `vol=10` → `1.00` (capped — low vol doesn't inflate beyond base)
+- `vol=200` → `0.20` (floored — extreme vol still gets minimal allocation)
+- `vol missing` → `conviction_tier` only emitted; scalar and size skipped
 
 ---
 
