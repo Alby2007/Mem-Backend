@@ -156,7 +156,10 @@ def detect_topic_domain(topic: str, atoms: List[Dict]) -> Optional[str]:
 # intra-topic contradictions without embeddings.
 
 PREDICATE_VALUE_CONSTRAINTS: Dict[str, Dict] = {
-    'signal_direction':       {'allowed_values': ['long', 'short', 'neutral', 'bullish', 'bearish']},
+    'signal_direction':       {'allowed_values': ['long', 'short', 'neutral', 'bullish', 'bearish',
+                                                   'near_high', 'mid_range', 'near_low',
+                                                   'strong_uptrend', 'weak_uptrend',
+                                                   'strong_downtrend', 'weak_downtrend']},
     'signal_confidence':      {'min_length': 1,  'max_length': 20},
     'time_horizon':           {'min_length': 2,  'max_length': 50},
     'price_target':           {'min_length': 1,  'max_length': 50},
