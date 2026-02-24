@@ -172,6 +172,11 @@ def retrieve(
     terms = _extract_key_terms(message)
     tickers = _extract_tickers(message)
 
+    # Expand limit dynamically for multi-ticker queries so pinned atoms
+    # (4 per ticker) don't crowd out the context atoms.
+    if len(tickers) > 3:
+        limit = max(limit, len(tickers) * 5 + 10)
+
     # Pre-compute boost predicates so FTS can be skipped when not needed
     boosted_predicates: set = set()
     for term in terms:
@@ -214,6 +219,28 @@ def retrieve(
                     unique_graph_atoms.append(a)
             if len(unique_graph_atoms) >= 5:
                 graph_snippet = build_graph_context(unique_graph_atoms, message, max_nodes_in_context=80)
+        except Exception:
+            pass
+
+    # ── 0.5. Ticker-pinned key-atom pre-fetch ─────────────────────────────────
+    # For every ticker explicitly named in the query, guarantee that
+    # last_price, price_target, signal_direction and earnings_quality are
+    # retrieved FIRST — before any limit-based competition with other atoms.
+    # Without this, multi-ticker queries (e.g. "rank AAPL MSFT GOOGL AMZN
+    # NVDA META by upside") exhaust the 30-atom limit before all tickers
+    # get their price/target atoms, leaving the LLM with gaps.
+    _PINNED_PREDICATES = ('last_price', 'price_target', 'signal_direction', 'earnings_quality')
+    _pin_ph = ','.join('?' * len(_PINNED_PREDICATES))
+    for ticker in tickers:
+        try:
+            c.execute(f"""
+                SELECT subject, predicate, object, source, confidence
+                FROM facts
+                WHERE LOWER(subject) = ?
+                AND predicate IN ({_pin_ph})
+                ORDER BY confidence DESC
+            """, (ticker.lower(), *_PINNED_PREDICATES))
+            _add(c.fetchall())
         except Exception:
             pass
 
