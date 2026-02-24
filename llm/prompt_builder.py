@@ -16,7 +16,7 @@ from typing import Optional
 
 _STRESS_WARN_THRESHOLD = 0.6
 
-_SYSTEM_PROMPT = """\
+_SYSTEM_PROMPT_BASE = """\
 You are a trading analyst assistant powered by a live knowledge base.
 The KNOWLEDGE CONTEXT block below contains ranked, authority-weighted market facts \
 sourced from price feeds, macro indicators, SEC filings, and financial news.
@@ -24,14 +24,25 @@ sourced from price feeds, macro indicators, SEC filings, and financial news.
 Rules:
 1. Reason strictly from the facts in KNOWLEDGE CONTEXT. Do not introduce external facts.
 2. If a fact has a low confidence score, treat it as tentative and say so.
-3. If the KB stress score is above 0.60, explicitly flag that KB coverage may be thin \
-for this topic and qualify your answer accordingly.
-4. Do not make specific buy/sell recommendations or price predictions beyond what the \
+3. Do not make specific buy/sell recommendations or price predictions beyond what the \
 context directly states.
-5. When the context contains conflicting signals, surface the conflict rather than \
+4. When the context contains conflicting signals, surface the conflict rather than \
 picking a side.
-6. Be concise. Lead with the most actionable insight from the context.\
+5. Be concise. Lead with the most actionable insight from the context.
+6. Do NOT reproduce metadata tags, stress scores, or diagnostic labels in your answer — \
+they are instructions for you, not content for the user.\
 """
+
+_SYSTEM_THIN_COVERAGE = (
+    "\n7. IMPORTANT: KB coverage is thin for this topic. "
+    "Say so explicitly at the start of your answer and qualify every claim accordingly. "
+    "Do not speculate beyond what the context states."
+)
+
+_SYSTEM_DIAGNOSIS_SUFFIX = (
+    "\n8. The knowledge base has a structural gap ({primary_type}) for this topic. "
+    "Acknowledge the gap and indicate what additional data would improve the answer."
+)
 
 
 def build(
@@ -54,48 +65,35 @@ def build(
     Returns:
         [{"role": "system", "content": ...}, {"role": "user", "content": ...}]
     """
-    user_parts: list[str] = []
+    # ── Build dynamic system prompt ────────────────────────────────────────────
+    system_text = _SYSTEM_PROMPT_BASE
 
-    # ── Stress header ──────────────────────────────────────────────────────────
+    composite = 0.0
     if stress:
-        composite  = stress.get("composite_stress", 0.0)
-        decay      = stress.get("decay_pressure", 0.0)
-        conflict   = stress.get("authority_conflict", 0.0)
-        entropy    = stress.get("domain_entropy", 1.0)
-        stress_line = (
-            f"[KB STRESS: {composite:.2f} | "
-            f"decay:{decay:.2f} | conflict:{conflict:.2f} | entropy:{entropy:.2f}]"
-        )
-        user_parts.append(stress_line)
-
+        composite = stress.get("composite_stress", 0.0)
         if composite >= _STRESS_WARN_THRESHOLD:
-            user_parts.append(
-                "⚠  KB coverage is thin for this topic "
-                f"(composite stress {composite:.2f} ≥ {_STRESS_WARN_THRESHOLD}). "
-                "Answer with caution and flag any gaps explicitly."
-            )
+            system_text += _SYSTEM_THIN_COVERAGE
 
-    # ── KB insufficiency diagnosis (if fired) ──────────────────────────────────
     if kb_diagnosis:
         primary = kb_diagnosis.get("primary_type", "unknown")
         conf    = kb_diagnosis.get("confidence", 0.0)
-        if primary != "unknown" and conf > 0.0:
-            user_parts.append(
-                f"[KB DIAGNOSIS: {primary} (confidence {conf:.2f}) — "
-                "the knowledge base may have structural gaps for this topic.]"
-            )
+        if primary not in ("unknown", "") and conf > 0.3:
+            system_text += _SYSTEM_DIAGNOSIS_SUFFIX.format(primary_type=primary)
 
-    # ── Prior session state (first turn of new session) ───────────────────────
+    # ── User turn ─────────────────────────────────────────────────────────────
+    user_parts: list[str] = []
+
+    # Prior session state (cross-session continuity)
     if prior_context:
         user_parts.append(prior_context)
 
-    # ── KB context block ───────────────────────────────────────────────────────
+    # KB context block
     user_parts.append(snippet if snippet.strip() else "(No KB context available for this query.)")
 
-    # ── User question ──────────────────────────────────────────────────────────
+    # User question — always last so the LLM sees context then question
     user_parts.append(f"Question: {user_message}")
 
     return [
-        {"role": "system",  "content": _SYSTEM_PROMPT},
-        {"role": "user",    "content": "\n\n".join(user_parts)},
+        {"role": "system", "content": system_text},
+        {"role": "user",   "content": "\n\n".join(user_parts)},
     ]
