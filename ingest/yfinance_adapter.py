@@ -68,6 +68,37 @@ _BATCH_DELAY_SEC = 1.5  # seconds between batches
 # ETF quoteType values that don't carry equity fundamentals
 _ETF_QUOTE_TYPES = {'ETF', 'MUTUALFUND', 'INDEX', 'FUTURE', 'CRYPTOCURRENCY'}
 
+# Fallback category labels for well-known ETFs when yfinance returns empty category
+_ETF_CATEGORY_FALLBACK: dict = {
+    # Sector ETFs
+    'XLF': 'financials_sector',
+    'XLE': 'energy_sector',
+    'XLK': 'technology_sector',
+    'XLV': 'healthcare_sector',
+    'XLI': 'industrials_sector',
+    'XLC': 'communication_services_sector',
+    'XLY': 'consumer_discretionary_sector',
+    'XLP': 'consumer_staples_sector',
+    'XLU': 'utilities_sector',
+    'XLRE': 'real_estate_sector',
+    'XLB': 'materials_sector',
+    # Broad market
+    'SPY': 'broad_market_us_large_cap',
+    'QQQ': 'broad_market_nasdaq100',
+    'IWM': 'broad_market_us_small_cap',
+    'DIA': 'broad_market_dow30',
+    'VTI': 'broad_market_us_total',
+    # Rates & credit
+    'TLT': 'long_government_bonds',
+    'HYG': 'high_yield_credit',
+    'LQD': 'investment_grade_credit',
+    # Macro proxies
+    'GLD': 'gold_commodity_inflation_hedge',
+    'SLV': 'silver_commodity_inflation_hedge',
+    'UUP': 'us_dollar_index',
+    'USO': 'crude_oil_commodity',
+}
+
 
 def _market_cap_tier(market_cap: Optional[float]) -> str:
     """Classify market cap into standard tiers."""
@@ -289,8 +320,12 @@ class YFinanceAdapter(BaseIngestAdapter):
         self, symbol: str, info: dict, src: str, now_iso: str, atoms: List[RawAtom]
     ) -> List[RawAtom]:
         """ETF-specific atoms: category, AUM tier, beta-derived volatility."""
-        # Category → sector proxy
-        category = info.get('category') or info.get('fundFamily')
+        # Category → sector proxy (fallback to hardcoded map for well-known ETFs)
+        category = (
+            info.get('category')
+            or info.get('fundFamily')
+            or _ETF_CATEGORY_FALLBACK.get(symbol)
+        )
         if category:
             atoms.append(RawAtom(
                 subject=symbol, predicate='sector', object=f'etf:{category}',
