@@ -240,12 +240,16 @@ def ingest():
 
     ingested = 0
     skipped = 0
+    is_single = 'atoms' not in data
     for atom in atoms:
         subject   = atom.get('subject')
         predicate = atom.get('predicate')
         obj       = atom.get('object')
         if not (subject and predicate and obj):
             skipped += 1
+            # Single-atom call with missing required field → 400
+            if is_single:
+                return jsonify({'error': 'subject, predicate and object are all required'}), 400
             continue
         ok = _kg.add_fact(
             subject=subject,
@@ -306,6 +310,7 @@ def retrieve_endpoint():
     goal       = data.get('goal')
     topic      = data.get('topic')
     turn_count = int(data.get('turn_count', 1))
+    limit      = int(data.get('limit', 30))
 
     conn = _kg.thread_local_conn()
 
@@ -354,7 +359,7 @@ def retrieve_endpoint():
         except Exception:
             nudges = None
 
-    snippet, atoms = retrieve(message, conn, nudges=nudges)
+    snippet, atoms = retrieve(message, conn, limit=limit, nudges=nudges)
 
     response: dict = {
         'snippet': snippet,
