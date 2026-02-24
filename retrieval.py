@@ -56,31 +56,38 @@ _HIGH_VALUE_PREDICATES = (
     'catalyst', 'invalidation_condition', 'supporting_evidence',
     'contradicting_evidence', 'regime_label', 'risk_factor',
     'entry_condition', 'exit_condition', 'rating', 'key_finding',
+    'signal_quality', 'macro_confirmation', 'price_regime', 'upside_pct',
 )
 
 # Query keyword → predicate boost mapping
 # When a query contains these words, we directly fetch atoms with the mapped predicates
 _KEYWORD_PREDICATE_BOOST: dict = {
-    'target':      ('price_target', 'signal_direction'),
-    'upside':      ('price_target', 'signal_direction'),
-    'analyst':     ('price_target', 'signal_direction', 'rating'),
-    'consensus':   ('price_target', 'signal_direction'),
-    'signal':      ('signal_direction', 'signal_confidence'),
-    'direction':   ('signal_direction',),
-    'long':        ('signal_direction',),
-    'short':       ('signal_direction',),
+    'target':      ('price_target', 'signal_direction', 'upside_pct'),
+    'upside':      ('price_target', 'signal_direction', 'upside_pct'),
+    'analyst':     ('price_target', 'signal_direction', 'rating', 'upside_pct'),
+    'consensus':   ('price_target', 'signal_direction', 'upside_pct'),
+    'signal':      ('signal_direction', 'signal_confidence', 'signal_quality'),
+    'quality':     ('signal_quality', 'signal_direction', 'macro_confirmation'),
+    'direction':   ('signal_direction', 'signal_quality'),
+    'long':        ('signal_direction', 'signal_quality'),
+    'short':       ('signal_direction', 'signal_quality'),
     'catalyst':    ('catalyst',),
-    'risk':        ('risk_factor',),
+    'risk':        ('risk_factor', 'signal_quality', 'macro_confirmation'),
     'earnings':    ('earnings_quality',),
-    'regime':      ('regime_label', 'central_bank_stance', 'dominant_driver', 'growth_environment', 'inflation_environment'),
-    'macro':       ('regime_label', 'central_bank_stance', 'dominant_driver', 'growth_environment', 'inflation_environment'),
+    'confirm':     ('macro_confirmation', 'signal_quality'),
+    'confirmed':   ('macro_confirmation', 'signal_quality'),
+    'macro':       ('regime_label', 'central_bank_stance', 'dominant_driver', 'growth_environment', 'inflation_environment', 'macro_confirmation'),
+    'regime':      ('regime_label', 'central_bank_stance', 'dominant_driver', 'growth_environment', 'inflation_environment', 'price_regime'),
     'inflation':   ('inflation_environment', 'dominant_driver', 'regime_label'),
     'rate':        ('central_bank_stance', 'dominant_driver'),
     'yield':       ('risk_factor', 'dominant_driver'),
     'sector':      ('sector',),
-    'volatility':  ('volatility_regime',),
+    'volatility':  ('volatility_regime', 'signal_quality'),
     'beta':        ('volatility_regime',),
-    'momentum':    ('signal_direction',),
+    'momentum':    ('signal_direction', 'price_regime', 'signal_quality'),
+    'extended':    ('signal_quality', 'price_regime'),
+    'conflict':    ('signal_quality', 'macro_confirmation'),
+    'conviction':  ('signal_quality', 'upside_pct', 'macro_confirmation'),
 }
 
 _STOPWORDS = {
@@ -174,8 +181,8 @@ def retrieve(
 
     # Expand limit dynamically for multi-ticker queries so pinned atoms
     # (4 per ticker) don't crowd out the context atoms.
-    if len(tickers) > 3:
-        limit = max(limit, len(tickers) * 5 + 10)
+    if len(tickers) >= 2:
+        limit = max(limit, len(tickers) * 6 + 12)
 
     # Pre-compute boost predicates so FTS can be skipped when not needed
     boosted_predicates: set = set()
@@ -229,7 +236,10 @@ def retrieve(
     # Without this, multi-ticker queries (e.g. "rank AAPL MSFT GOOGL AMZN
     # NVDA META by upside") exhaust the 30-atom limit before all tickers
     # get their price/target atoms, leaving the LLM with gaps.
-    _PINNED_PREDICATES = ('last_price', 'price_target', 'signal_direction', 'earnings_quality')
+    _PINNED_PREDICATES = (
+        'last_price', 'price_target', 'signal_direction', 'earnings_quality',
+        'signal_quality', 'macro_confirmation', 'price_regime', 'upside_pct',
+    )
     _pin_ph = ','.join('?' * len(_PINNED_PREDICATES))
     for ticker in tickers:
         try:

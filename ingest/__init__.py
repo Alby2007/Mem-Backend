@@ -22,8 +22,14 @@ try:
 except ImportError:
     RSSAdapter = None  # type: ignore
 
+try:
+    from .signal_enrichment_adapter import SignalEnrichmentAdapter
+except ImportError:
+    SignalEnrichmentAdapter = None  # type: ignore
+
 
 __all__ = [
     'BaseIngestAdapter', 'RawAtom', 'IngestScheduler',
     'YFinanceAdapter', 'FREDAdapter', 'EDGARAdapter', 'RSSAdapter',
+    'SignalEnrichmentAdapter',
 ]
