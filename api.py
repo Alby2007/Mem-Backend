@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from flask import Flask, request, jsonify
@@ -146,7 +147,68 @@ def ingest_status():
 
 @app.route('/stats', methods=['GET'])
 def stats():
-    return jsonify(_kg.get_stats())
+    base = _kg.get_stats()
+    conn = _kg.thread_local_conn()
+    c = conn.cursor()
+    extras = {}
+
+    # Conflict audit count
+    try:
+        c.execute("SELECT COUNT(*) FROM fact_conflicts")
+        extras['total_conflicts_detected'] = c.fetchone()[0]
+    except Exception:
+        extras['total_conflicts_detected'] = 0
+
+    # Top 5 most-retrieved atoms (hit_count)
+    try:
+        c.execute("""
+            SELECT subject, predicate, SUM(hit_count) as hits
+            FROM facts
+            WHERE hit_count > 0
+            GROUP BY subject, predicate
+            ORDER BY hits DESC
+            LIMIT 5
+        """)
+        extras['top_retrieved_atoms'] = [
+            {'subject': r[0], 'predicate': r[1], 'hits': r[2]}
+            for r in c.fetchall()
+        ]
+    except Exception:
+        extras['top_retrieved_atoms'] = []
+
+    # Pending repair proposals
+    try:
+        c.execute("SELECT COUNT(*) FROM repair_proposals WHERE status = 'pending'")
+        extras['pending_repair_proposals'] = c.fetchone()[0]
+    except Exception:
+        extras['pending_repair_proposals'] = 0
+
+    # Unprocessed domain refresh queue entries
+    try:
+        c.execute("SELECT COUNT(*) FROM domain_refresh_queue WHERE processed = 0")
+        extras['domain_refresh_queue_depth'] = c.fetchone()[0]
+    except Exception:
+        extras['domain_refresh_queue_depth'] = 0
+
+    # Active adaptation sessions (streak > 0)
+    extras['adaptation_sessions_active'] = sum(
+        1 for s in _session_streaks.values() if s.get('streak', 0) > 0
+    )
+    extras['adaptation_sessions_total'] = len(_session_streaks)
+
+    # KB insufficient events in last 7 days
+    try:
+        from datetime import timedelta as _td
+        cutoff = (datetime.now(timezone.utc) - _td(days=7)).isoformat()
+        c.execute(
+            "SELECT COUNT(*) FROM kb_insufficient_log WHERE detected_at >= ?",
+            (cutoff,)
+        )
+        extras['kb_insufficient_events_7d'] = c.fetchone()[0]
+    except Exception:
+        extras['kb_insufficient_events_7d'] = 0
+
+    return jsonify({**base, **extras})
 
 
 @app.route('/ingest', methods=['POST'])
@@ -726,6 +788,116 @@ def kb_traverse():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/kb/conflicts', methods=['GET'])
+def kb_conflicts():
+    """
+    Return the fact_conflicts audit log — atoms that were detected as contradicting
+    existing atoms and superseded.
+
+    Query params: limit (default 50), subject (optional filter)
+    """
+    limit   = int(request.args.get('limit', 50))
+    subject = request.args.get('subject', '').strip()
+
+    conn = _kg.thread_local_conn()
+    c = conn.cursor()
+    try:
+        if subject:
+            c.execute("""
+                SELECT fc.id, fc.winner_id, fc.loser_id, fc.winner_obj, fc.loser_obj,
+                       fc.reason, fc.detected_at,
+                       fw.subject, fw.predicate
+                FROM fact_conflicts fc
+                LEFT JOIN facts fw ON fc.winner_id = fw.id
+                WHERE fw.subject LIKE ?
+                ORDER BY fc.detected_at DESC LIMIT ?
+            """, (f'%{subject.lower()}%', limit))
+        else:
+            c.execute("""
+                SELECT fc.id, fc.winner_id, fc.loser_id, fc.winner_obj, fc.loser_obj,
+                       fc.reason, fc.detected_at,
+                       fw.subject, fw.predicate
+                FROM fact_conflicts fc
+                LEFT JOIN facts fw ON fc.winner_id = fw.id
+                ORDER BY fc.detected_at DESC LIMIT ?
+            """, (limit,))
+        rows = c.fetchall()
+        return jsonify({
+            'count': len(rows),
+            'conflicts': [
+                {
+                    'id':          r[0],
+                    'winner_id':   r[1],
+                    'loser_id':    r[2],
+                    'winner_obj':  r[3],
+                    'loser_obj':   r[4],
+                    'reason':      r[5],
+                    'detected_at': r[6],
+                    'subject':     r[7],
+                    'predicate':   r[8],
+                }
+                for r in rows
+            ]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/kb/refresh-queue', methods=['GET'])
+def kb_refresh_queue():
+    """
+    Inspect the domain_refresh_queue and synthesis_queue.
+    These are populated by the EpistemicAdaptationEngine when decay_pressure
+    or conflict_cluster remains elevated across multiple turns.
+
+    Query params: processed (0=pending only, 1=all, default 0)
+    """
+    processed = int(request.args.get('processed', 0))
+    conn = _kg.thread_local_conn()
+    c = conn.cursor()
+    result = {}
+
+    try:
+        if processed:
+            c.execute("SELECT * FROM domain_refresh_queue ORDER BY queued_at DESC LIMIT 50")
+        else:
+            c.execute("SELECT * FROM domain_refresh_queue WHERE processed = 0 ORDER BY queued_at DESC LIMIT 50")
+        rows = c.fetchall()
+        result['domain_refresh_queue'] = [
+            {'id': r[0], 'topic': r[1], 'reason': r[2], 'queued_at': r[3], 'processed': r[4]}
+            for r in rows
+        ]
+    except Exception:
+        result['domain_refresh_queue'] = []
+
+    try:
+        if processed:
+            c.execute("SELECT * FROM synthesis_queue ORDER BY queued_at DESC LIMIT 50")
+        else:
+            c.execute("SELECT * FROM synthesis_queue WHERE processed = 0 ORDER BY queued_at DESC LIMIT 50")
+        rows = c.fetchall()
+        result['synthesis_queue'] = [
+            {'id': r[0], 'topic': r[1], 'key_terms': r[2], 'reason': r[3],
+             'queued_at': r[4], 'processed': r[5]}
+            for r in rows
+        ]
+    except Exception:
+        result['synthesis_queue'] = []
+
+    try:
+        c.execute("SELECT * FROM kb_insufficient_log ORDER BY detected_at DESC LIMIT 20")
+        rows = c.fetchall()
+        result['kb_insufficient_log'] = [
+            {'id': r[0], 'topic': r[1], 'consolidation_count': r[2],
+             'window_days': r[3], 'insufficiency_types': r[4], 'detected_at': r[5]}
+            for r in rows
+        ]
+    except Exception:
+        result['kb_insufficient_log'] = []
+
+    return jsonify(result)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
