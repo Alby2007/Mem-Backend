@@ -90,6 +90,10 @@ class RawAtom:
     confidence: epistemic confidence [0.0, 1.0]
     source:     source string — MUST use a recognised prefix (see above)
     metadata:   optional dict of extra fields (analyst, date, url, etc.)
+    upsert:     if True, key on (subject, predicate, source) and update the
+                existing row instead of inserting a new one.  Use for
+                time-series predicates (last_price, price_target, signal_direction)
+                so repeat ingest runs update rather than append.
     """
     subject:    str
     predicate:  str
@@ -97,6 +101,7 @@ class RawAtom:
     confidence: float = 0.5
     source:     str   = 'unverified_ingest'
     metadata:   Dict[str, Any] = field(default_factory=dict)
+    upsert:     bool  = False
 
     def validate(self) -> List[str]:
         """Return list of validation errors. Empty = valid."""
@@ -198,6 +203,7 @@ class BaseIngestAdapter(abc.ABC):
                 confidence=atom.confidence,
                 source=atom.source,
                 metadata=atom.metadata or None,
+                upsert=atom.upsert,
             )
             if ok:
                 ingested += 1

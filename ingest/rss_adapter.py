@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set
 
@@ -37,12 +38,24 @@ _logger = logging.getLogger(__name__)
 # ── RSS feed URLs ─────────────────────────────────────────────────────────────
 
 _DEFAULT_FEEDS: Dict[str, str] = {
-    'ft_home':      'https://www.ft.com/rss/home',
-    'investing_com': 'https://www.investing.com/rss/news.rss',
-    'bbc_business':  'http://feeds.bbci.co.uk/news/business/rss.xml',
-    'cnbc_finance':  'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664',
-    'marketwatch':   'http://feeds.marketwatch.com/marketwatch/topstories/',
+    # Core financial news
+    'bbc_business':         'http://feeds.bbci.co.uk/news/business/rss.xml',
+    'cnbc_finance':         'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664',
+    'marketwatch':          'http://feeds.marketwatch.com/marketwatch/topstories/',
+    # Yahoo Finance
+    'yahoo_finance':        'https://finance.yahoo.com/rss/topfinstories',
+    # Seeking Alpha
+    'seeking_alpha_market': 'https://seekingalpha.com/market_currents.xml',
+    # WSJ (public)
+    'wsj_markets':          'https://feeds.a.dj.com/rss/RSSMarketsMain.xml',
+    # Motley Fool
+    'motley_fool':          'https://www.fool.com/feeds/index.aspx',
+    # CNBC earnings
+    'cnbc_earnings':        'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839135',
 }
+
+# Max parallel workers for feed fetching
+_RSS_WORKERS = 8
 
 
 # ── Ticker extraction ─────────────────────────────────────────────────────────
@@ -98,22 +111,23 @@ class RSSAdapter(BaseIngestAdapter):
 
     def fetch(self) -> List[RawAtom]:
         if not HAS_FEEDPARSER:
-            self._logger.error(
-                'feedparser not installed — pip install feedparser'
-            )
+            self._logger.error('feedparser not installed — pip install feedparser')
             return []
 
-        atoms: List[RawAtom] = []
         now_iso = datetime.now(timezone.utc).isoformat()
+        atoms: List[RawAtom] = []
 
-        for outlet_name, url in self.feeds.items():
-            try:
-                feed_atoms = self._fetch_feed(outlet_name, url, now_iso)
-                atoms.extend(feed_atoms)
-            except Exception as e:
-                self._logger.warning(
-                    'Failed to fetch RSS feed %s: %s', outlet_name, e
-                )
+        with ThreadPoolExecutor(max_workers=_RSS_WORKERS, thread_name_prefix='rss') as ex:
+            futures = {
+                ex.submit(self._fetch_feed, name, url, now_iso): name
+                for name, url in self.feeds.items()
+            }
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    atoms.extend(future.result(timeout=15))
+                except Exception as e:
+                    self._logger.warning('Failed to fetch RSS feed %s: %s', name, e)
 
         return atoms
 

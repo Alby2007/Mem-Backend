@@ -104,18 +104,38 @@ class IngestScheduler:
             'Registered adapter %r (every %ds)', adapter.name, interval_sec
         )
 
-    def start(self) -> None:
-        """Start all registered adapters. Non-blocking."""
+    def start(self, startup_delay_sec: float = 5.0) -> None:
+        """
+        Start all registered adapters. Non-blocking.
+
+        startup_delay_sec: seconds to wait before firing the first run of each
+        adapter, giving the main thread time to complete DB initialisation.
+        """
         if self._running:
             _logger.warning('Scheduler already running')
             return
 
         self._running = True
-        _logger.info('Starting ingest scheduler with %d adapters', len(self._adapters))
+        _logger.info(
+            'Starting ingest scheduler with %d adapters (startup delay %.0fs)',
+            len(self._adapters), startup_delay_sec,
+        )
 
         for adapter, interval_sec in self._adapters:
-            # Run immediately on first start, then schedule repeats
-            self._schedule(adapter, interval_sec, immediate=True)
+            if startup_delay_sec > 0:
+                # Delay the first run so DB init completes first
+                timer = threading.Timer(
+                    startup_delay_sec,
+                    self._schedule,
+                    kwargs={'adapter': adapter, 'interval_sec': interval_sec, 'immediate': True},
+                )
+                timer.daemon = True
+                timer.name = f'ingest-startup-{adapter.name}'
+                with self._lock:
+                    self._timers[f'startup-{adapter.name}'] = timer
+                timer.start()
+            else:
+                self._schedule(adapter, interval_sec, immediate=True)
 
     def stop(self) -> None:
         """Stop all timers gracefully."""

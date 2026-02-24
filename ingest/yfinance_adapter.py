@@ -16,12 +16,18 @@ Atoms produced:
 Source prefix: exchange_feed_yahoo  (authority 1.0, fast decay)
                broker_research_yahoo_consensus (for analyst targets)
 
-Interval: recommended 15 min for price, daily for fundamentals.
+Performance:
+  - Fast path: yf.download() bulk price fetch for last_price (all tickers in 1 call)
+  - Parallel:  ThreadPoolExecutor for per-ticker info() calls (fundamentals/targets)
+  - upsert=True on all time-series atoms so repeat runs update rather than append
+
+Interval: recommended 5 min for price, 30 min for fundamentals.
 """
 
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -37,7 +43,6 @@ except ImportError:
 _logger = logging.getLogger(__name__)
 
 # Default watchlist — override via constructor
-# Covers all 11 S&P sectors + major ETFs + macro proxies
 _DEFAULT_TICKERS = [
     # Mega-cap tech
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'AVGO',
@@ -56,21 +61,26 @@ _DEFAULT_TICKERS = [
     # Broad market ETFs
     'SPY', 'QQQ', 'IWM', 'DIA', 'VTI',
     # Sector ETFs
-    'XLF', 'XLE', 'XLK', 'XLV', 'XLI',
+    'XLF', 'XLE', 'XLK', 'XLV', 'XLI', 'XLC', 'XLY', 'XLP',
     # Macro proxies
-    'GLD', 'SLV', 'TLT', 'HYG', 'UUP',
+    'GLD', 'SLV', 'TLT', 'HYG', 'LQD', 'UUP',
+    # Additional high-coverage equities
+    'AMD', 'INTC', 'QCOM', 'MU', 'CRM', 'ADBE', 'NOW', 'SNOW',
+    'PYPL', 'COIN',
+    'BRK-B', 'AXP', 'BLK', 'SCHW',
+    'CVS', 'MRK', 'BMY', 'GILD',
+    'NEE', 'DUK', 'SO',
+    'AMT', 'PLD', 'EQIX',
 ]
 
-# Batch size for yfinance calls — keeps requests small to avoid rate limits
-_BATCH_SIZE = 10
-_BATCH_DELAY_SEC = 1.5  # seconds between batches
+# Parallel workers for per-ticker info() calls
+_MAX_WORKERS = 12
 
 # ETF quoteType values that don't carry equity fundamentals
 _ETF_QUOTE_TYPES = {'ETF', 'MUTUALFUND', 'INDEX', 'FUTURE', 'CRYPTOCURRENCY'}
 
 # Fallback category labels for well-known ETFs when yfinance returns empty category
 _ETF_CATEGORY_FALLBACK: dict = {
-    # Sector ETFs
     'XLF': 'financials_sector',
     'XLE': 'energy_sector',
     'XLK': 'technology_sector',
@@ -82,22 +92,22 @@ _ETF_CATEGORY_FALLBACK: dict = {
     'XLU': 'utilities_sector',
     'XLRE': 'real_estate_sector',
     'XLB': 'materials_sector',
-    # Broad market
     'SPY': 'broad_market_us_large_cap',
     'QQQ': 'broad_market_nasdaq100',
     'IWM': 'broad_market_us_small_cap',
     'DIA': 'broad_market_dow30',
     'VTI': 'broad_market_us_total',
-    # Rates & credit
     'TLT': 'long_government_bonds',
     'HYG': 'high_yield_credit',
     'LQD': 'investment_grade_credit',
-    # Macro proxies
     'GLD': 'gold_commodity_inflation_hedge',
     'SLV': 'silver_commodity_inflation_hedge',
     'UUP': 'us_dollar_index',
     'USO': 'crude_oil_commodity',
 }
+
+# Predicates that are time-series and should upsert (update) on repeat ingest
+_UPSERT_PREDICATES = {'last_price', 'price_target', 'signal_direction', 'volatility_regime'}
 
 
 def _market_cap_tier(market_cap: Optional[float]) -> str:
@@ -140,102 +150,204 @@ def _direction_from_target(current_price: float, target_price: float) -> str:
 
 class YFinanceAdapter(BaseIngestAdapter):
     """
-    Yahoo Finance ingest adapter.
+    Yahoo Finance ingest adapter — parallel fetch version.
 
-    Pulls price, fundamentals, analyst targets for a watchlist of tickers.
-    No API key required.
+    Fast path: yf.download() fetches all last_price atoms in a single
+    bulk HTTP call (~2s for 60 tickers).
+
+    Parallel path: ThreadPoolExecutor with _MAX_WORKERS concurrent threads
+    for per-ticker info() calls (fundamentals, analyst targets, beta).
+
+    Time-series atoms (last_price, price_target, signal_direction,
+    volatility_regime) are marked upsert=True so repeat runs overwrite
+    the existing row from the same source rather than appending new rows.
     """
 
     def __init__(self, tickers: Optional[List[str]] = None):
         super().__init__(name='yfinance')
-        self.tickers = tickers or _DEFAULT_TICKERS
+        # Deduplicate while preserving order
+        seen: set = set()
+        self.tickers: List[str] = []
+        for t in (tickers or _DEFAULT_TICKERS):
+            if t not in seen:
+                seen.add(t)
+                self.tickers.append(t)
 
     def fetch(self) -> List[RawAtom]:
         if not HAS_YFINANCE:
-            self._logger.error(
-                'yfinance not installed — pip install yfinance'
-            )
+            self._logger.error('yfinance not installed — pip install yfinance')
             return []
 
-        import time
-        atoms: List[RawAtom] = []
         now_iso = datetime.now(timezone.utc).isoformat()
+        atoms: List[RawAtom] = []
 
-        # Process in batches to avoid yfinance rate limits
-        for i in range(0, len(self.tickers), _BATCH_SIZE):
-            batch = self.tickers[i:i + _BATCH_SIZE]
-            for symbol in batch:
-                atoms.extend(self._fetch_with_backoff(symbol, now_iso))
-            if i + _BATCH_SIZE < len(self.tickers):
-                time.sleep(_BATCH_DELAY_SEC)
+        # ── 1. Bulk last_price via yf.download() ──────────────────────────
+        bulk_prices = self._bulk_download_prices(now_iso)
+        atoms.extend(bulk_prices)
+
+        # ── 2. Parallel per-ticker info() for fundamentals + targets ──────
+        info_atoms = self._parallel_info_fetch(now_iso, bulk_prices)
+        atoms.extend(info_atoms)
+
+        self._logger.info(
+            'fetch complete: %d tickers, %d total atoms (%d price, %d info)',
+            len(self.tickers), len(atoms), len(bulk_prices), len(info_atoms),
+        )
+        return atoms
+
+    # ── Fast bulk price path ───────────────────────────────────────────────
+
+    def _bulk_download_prices(self, now_iso: str) -> List[RawAtom]:
+        """
+        Use yf.download() to fetch the latest close price for ALL tickers in
+        a single HTTP round-trip. Falls back to empty list on failure.
+        """
+        atoms: List[RawAtom] = []
+        try:
+            import pandas as pd
+            data = yf.download(
+                tickers=self.tickers,
+                period='2d',
+                interval='1d',
+                group_by='ticker',
+                auto_adjust=True,
+                progress=False,
+                threads=True,
+            )
+            if data is None or data.empty:
+                return atoms
+
+            for symbol in self.tickers:
+                src = f'exchange_feed_yahoo_{symbol.lower().replace("-", "_")}'
+                try:
+                    if len(self.tickers) == 1:
+                        # Single-ticker download has flat columns
+                        col_data = data['Close']
+                    else:
+                        col_data = data[symbol]['Close']
+
+                    series = col_data.dropna()
+                    if series.empty:
+                        continue
+                    price = float(series.iloc[-1])
+                    atoms.append(RawAtom(
+                        subject=symbol,
+                        predicate='last_price',
+                        object=str(round(price, 2)),
+                        confidence=0.95,
+                        source=src,
+                        metadata={'as_of': now_iso, 'via': 'bulk_download'},
+                        upsert=True,
+                    ))
+                except Exception as e:
+                    self._logger.debug('bulk price miss for %s: %s', symbol, e)
+
+        except Exception as e:
+            self._logger.warning('bulk_download_prices failed: %s', e)
 
         return atoms
 
-    def _fetch_with_backoff(self, symbol: str, now_iso: str) -> List[RawAtom]:
-        """Fetch a ticker with exponential backoff on transient errors."""
+    # ── Parallel info() path ───────────────────────────────────────────────
+
+    def _parallel_info_fetch(
+        self, now_iso: str, bulk_atoms: List[RawAtom]
+    ) -> List[RawAtom]:
+        """
+        Fetch per-ticker .info() in parallel using ThreadPoolExecutor.
+        Skips last_price (already covered by bulk download).
+        """
+        # Build a quick lookup of prices already fetched via bulk
+        bulk_prices: Dict[str, float] = {}
+        for a in bulk_atoms:
+            if a.predicate == 'last_price':
+                try:
+                    bulk_prices[a.subject.upper()] = float(a.object)
+                except ValueError:
+                    pass
+
+        all_atoms: List[RawAtom] = []
+        with ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix='yf-info') as ex:
+            futures = {
+                ex.submit(self._fetch_info_atoms, sym, now_iso, bulk_prices): sym
+                for sym in self.tickers
+            }
+            for future in as_completed(futures):
+                sym = futures[future]
+                try:
+                    result = future.result(timeout=30)
+                    all_atoms.extend(result)
+                except Exception as e:
+                    self._logger.warning('info fetch failed for %s: %s', sym, e)
+
+        return all_atoms
+
+    def _fetch_info_atoms(
+        self, symbol: str, now_iso: str, bulk_prices: Dict[str, float]
+    ) -> List[RawAtom]:
+        """
+        Fetch .info() for one ticker and return non-price atoms.
+        Retries once on rate-limit / timeout.
+        """
         import time
-        delay = 2.0
-        for attempt in range(3):
+        for attempt in range(2):
             try:
-                return self._fetch_ticker(symbol, now_iso)
+                ticker = yf.Ticker(symbol)
+                info = ticker.info or {}
+                if not info:
+                    return []
+                return self._info_to_atoms(symbol, info, now_iso, bulk_prices)
             except Exception as e:
                 err = str(e).lower()
-                if any(k in err for k in ('429', 'rate', 'too many', 'timeout', 'timed out')):
-                    self._logger.warning(
-                        'Rate limit on %s attempt %d, backing off %.0fs', symbol, attempt + 1, delay
-                    )
-                    time.sleep(delay)
-                    delay *= 2
-                else:
-                    self._logger.warning('Failed to fetch %s: %s', symbol, e)
-                    return []
-        self._logger.warning('Giving up on %s after 3 attempts', symbol)
+                if attempt == 0 and any(k in err for k in ('429', 'rate', 'too many', 'timeout')):
+                    time.sleep(3.0)
+                    continue
+                self._logger.debug('info() failed for %s (attempt %d): %s', symbol, attempt + 1, e)
+                return []
         return []
 
-    def _fetch_ticker(self, symbol: str, now_iso: str) -> List[RawAtom]:
-        """Fetch atoms for a single ticker."""
+    def _info_to_atoms(
+        self,
+        symbol: str,
+        info: dict,
+        now_iso: str,
+        bulk_prices: Dict[str, float],
+    ) -> List[RawAtom]:
+        """Convert a .info() dict to atoms (excluding last_price which came from bulk)."""
         atoms: List[RawAtom] = []
-        ticker = yf.Ticker(symbol)
-
-        try:
-            info = ticker.info or {}
-        except Exception:
-            info = {}
-
-        if not info:
-            return atoms
-
+        src = f'exchange_feed_yahoo_{symbol.lower().replace("-", "_")}'
         quote_type = info.get('quoteType', 'EQUITY').upper()
         is_etf = quote_type in _ETF_QUOTE_TYPES
-        src = f'exchange_feed_yahoo_{symbol.lower().replace("-", "_")}'
 
-        # ── Price atom (all instruments) ──────────────────────────────────
-        current_price = (
+        # Use bulk price if available, fall back to info fields
+        current_price = bulk_prices.get(symbol.upper()) or (
             info.get('navPrice')
             or info.get('currentPrice')
             or info.get('regularMarketPrice')
         )
-        if current_price:
+
+        # If bulk download missed this ticker, emit last_price from info
+        if current_price and symbol.upper() not in bulk_prices:
             atoms.append(RawAtom(
                 subject=symbol,
                 predicate='last_price',
-                object=str(round(current_price, 2)),
-                confidence=0.95,
+                object=str(round(float(current_price), 2)),
+                confidence=0.90,
                 source=src,
-                metadata={'as_of': now_iso, 'currency': info.get('currency', 'USD'), 'quote_type': quote_type},
+                metadata={'as_of': now_iso, 'via': 'info_fallback', 'quote_type': quote_type},
+                upsert=True,
             ))
 
         if is_etf:
-            return self._etf_atoms(symbol, info, src, now_iso, atoms)
+            return self._etf_atoms(symbol, info, src, now_iso, atoms, current_price)
 
         # ── Analyst consensus target ──────────────────────────────────────
-        target_price = info.get('targetMeanPrice')
         consensus_src = f'broker_research_yahoo_consensus_{symbol.lower()}'
+        target_price = info.get('targetMeanPrice')
         if target_price:
             atoms.append(RawAtom(
                 subject=symbol,
                 predicate='price_target',
-                object=str(round(target_price, 2)),
+                object=str(round(float(target_price), 2)),
                 confidence=0.75,
                 source=consensus_src,
                 metadata={
@@ -244,10 +356,11 @@ class YFinanceAdapter(BaseIngestAdapter):
                     'target_low': info.get('targetLowPrice'),
                     'num_analysts': info.get('numberOfAnalystOpinions'),
                 },
+                upsert=True,
             ))
-            if current_price:
-                direction = _direction_from_target(current_price, target_price)
-                pct_upside = round((target_price - current_price) / current_price * 100, 1)
+            if current_price and float(current_price) > 0:
+                direction = _direction_from_target(float(current_price), float(target_price))
+                pct_upside = round((float(target_price) - float(current_price)) / float(current_price) * 100, 1)
                 atoms.append(RawAtom(
                     subject=symbol,
                     predicate='signal_direction',
@@ -255,9 +368,10 @@ class YFinanceAdapter(BaseIngestAdapter):
                     confidence=0.65,
                     source=consensus_src,
                     metadata={'derived_from': 'price_vs_consensus_target', 'pct_upside': pct_upside, 'as_of': now_iso},
+                    upsert=True,
                 ))
 
-        # ── Sector ────────────────────────────────────────────────────────
+        # ── Sector (static — no upsert needed) ───────────────────────────
         sector = info.get('sector')
         if sector:
             atoms.append(RawAtom(
@@ -266,7 +380,7 @@ class YFinanceAdapter(BaseIngestAdapter):
                 metadata={'industry': info.get('industry')},
             ))
 
-        # ── Market cap tier ───────────────────────────────────────────────
+        # ── Market cap tier (static) ──────────────────────────────────────
         market_cap = info.get('marketCap')
         if market_cap:
             atoms.append(RawAtom(
@@ -279,29 +393,26 @@ class YFinanceAdapter(BaseIngestAdapter):
         # ── Volatility regime (beta) ──────────────────────────────────────
         beta = info.get('beta')
         if beta is not None:
-            regime = _volatility_regime(beta)
+            regime = _volatility_regime(float(beta))
             if regime != 'unknown':
                 atoms.append(RawAtom(
                     subject=symbol, predicate='volatility_regime', object=regime,
                     confidence=0.80, source=src, metadata={'beta': beta},
+                    upsert=True,
                 ))
 
-        # ── Next earnings date ────────────────────────────────────────────
+        # ── Next earnings date (upsert — date changes each quarter) ───────
         try:
+            ticker = yf.Ticker(symbol)
             cal = ticker.calendar
-            if cal is not None:
-                # yfinance returns calendar as dict or DataFrame depending on version
-                if isinstance(cal, dict):
-                    earnings_date = cal.get('Earnings Date')
-                    if isinstance(earnings_date, list) and earnings_date:
-                        earnings_date = str(earnings_date[0])
-                    elif earnings_date:
-                        earnings_date = str(earnings_date)
-                    else:
-                        earnings_date = None
+            if cal is not None and isinstance(cal, dict):
+                earnings_date = cal.get('Earnings Date')
+                if isinstance(earnings_date, list) and earnings_date:
+                    earnings_date = str(earnings_date[0])
+                elif earnings_date:
+                    earnings_date = str(earnings_date)
                 else:
                     earnings_date = None
-
                 if earnings_date:
                     atoms.append(RawAtom(
                         subject=symbol,
@@ -310,6 +421,7 @@ class YFinanceAdapter(BaseIngestAdapter):
                         confidence=0.85,
                         source=f'earnings_{symbol.lower()}_upcoming',
                         metadata={'earnings_date': earnings_date},
+                        upsert=True,
                     ))
         except Exception:
             pass
@@ -317,10 +429,10 @@ class YFinanceAdapter(BaseIngestAdapter):
         return atoms
 
     def _etf_atoms(
-        self, symbol: str, info: dict, src: str, now_iso: str, atoms: List[RawAtom]
+        self, symbol: str, info: dict, src: str, now_iso: str,
+        atoms: List[RawAtom], current_price
     ) -> List[RawAtom]:
-        """ETF-specific atoms: category, AUM tier, beta-derived volatility."""
-        # Category → sector proxy (fallback to hardcoded map for well-known ETFs)
+        """ETF-specific atoms: category, AUM tier, beta-derived volatility, momentum."""
         category = (
             info.get('category')
             or info.get('fundFamily')
@@ -333,7 +445,6 @@ class YFinanceAdapter(BaseIngestAdapter):
                 metadata={'etf_category': category},
             ))
 
-        # AUM → market cap tier equivalent
         aum = info.get('totalAssets')
         if aum:
             atoms.append(RawAtom(
@@ -343,28 +454,28 @@ class YFinanceAdapter(BaseIngestAdapter):
                 metadata={'aum_raw': aum, 'metric': 'total_assets'},
             ))
 
-        # Beta → volatility regime (3-year beta preferred for ETFs)
         beta = info.get('beta3Year') or info.get('beta')
         if beta is not None:
-            regime = _volatility_regime(beta)
+            regime = _volatility_regime(float(beta))
             if regime != 'unknown':
                 atoms.append(RawAtom(
                     subject=symbol, predicate='volatility_regime', object=regime,
                     confidence=0.75, source=src,
                     metadata={'beta': beta, 'etf': True},
+                    upsert=True,
                 ))
 
-        # 52-week performance → momentum signal
         high_52 = info.get('fiftyTwoWeekHigh')
-        low_52 = info.get('fiftyTwoWeekLow')
-        price = info.get('regularMarketPrice') or info.get('navPrice')
+        low_52  = info.get('fiftyTwoWeekLow')
+        price   = current_price or info.get('regularMarketPrice') or info.get('navPrice')
         if high_52 and low_52 and price:
-            pct_from_high = round((price - high_52) / high_52 * 100, 1)
+            pct_from_high = round((float(price) - float(high_52)) / float(high_52) * 100, 1)
             momentum = 'near_high' if pct_from_high > -5 else ('near_low' if pct_from_high < -20 else 'mid_range')
             atoms.append(RawAtom(
                 subject=symbol, predicate='signal_direction', object=momentum,
                 confidence=0.60, source=src,
                 metadata={'pct_from_52w_high': pct_from_high, 'as_of': now_iso},
+                upsert=True,
             ))
 
         return atoms

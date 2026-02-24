@@ -152,6 +152,48 @@ def ingest_status():
     })
 
 
+@app.route('/ingest/run-all', methods=['POST'])
+def ingest_run_all():
+    """
+    Trigger an immediate out-of-schedule run of ALL registered ingest adapters.
+
+    Useful for:
+      - Seeding a fresh DB quickly
+      - Forcing a refresh after a long downtime
+      - CI/CD pipeline warm-up
+
+    Body (optional):
+      { "adapters": ["yfinance", "rss_news"] }   — limit to named adapters
+      {}                                          — run all adapters
+
+    Returns immediately; runs are dispatched to background threads.
+    """
+    if not _ingest_scheduler:
+        return jsonify({'error': 'scheduler not running'}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    requested = data.get('adapters')  # None = all
+
+    status = _ingest_scheduler.get_status()
+    dispatched = []
+    skipped    = []
+
+    for name in status:
+        if requested and name not in requested:
+            continue
+        ok = _ingest_scheduler.run_now(name)
+        if ok:
+            dispatched.append(name)
+        else:
+            skipped.append(name)
+
+    return jsonify({
+        'dispatched': dispatched,
+        'skipped':    skipped,
+        'note':       'runs are async — poll /ingest/status to track progress',
+    })
+
+
 @app.route('/stats', methods=['GET'])
 def stats():
     base = _kg.get_stats()

@@ -59,21 +59,23 @@ class TradingKnowledgeGraph:
         """Return a per-thread SQLite connection. Safe for use in Flask request handlers."""
         conn = getattr(self._local, 'conn', None)
         if conn is None:
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
             conn.row_factory = sqlite3.Row
             conn.execute('PRAGMA journal_mode=WAL')
             conn.execute('PRAGMA synchronous=NORMAL')
+            conn.execute('PRAGMA busy_timeout=30000')
             self._local.conn = conn
         return conn
     
     def _initialize_db(self):
         """Create database with WAL mode and taxonomy"""
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
         self.conn.row_factory = sqlite3.Row
         
         # Enable WAL mode for better performance
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.execute('PRAGMA synchronous=NORMAL')
+        self.conn.execute('PRAGMA busy_timeout=30000')
         self.conn.execute('PRAGMA cache_size=-64000')  # 64MB cache
         
         cursor = self.conn.cursor()
@@ -172,28 +174,79 @@ class TradingKnowledgeGraph:
     
     def add_fact(self, subject: str, predicate: str, object: str,
                  confidence: float = 0.5, source: str = 'unknown',
-                 metadata: Optional[Dict] = None) -> bool:
-        """Add fact to knowledge graph"""
+                 metadata: Optional[Dict] = None,
+                 upsert: bool = False) -> bool:
+        """
+        Add fact to knowledge graph.
+
+        upsert=True: key on (subject, predicate, source) — updates object,
+        confidence and timestamp if a matching row already exists.  Use this
+        for time-series predicates (last_price, price_target, signal_direction)
+        where each ingest run should replace the previous value from the same
+        source rather than appending a new row.
+
+        upsert=False (default): key on (subject, predicate, object) — the
+        existing insert-or-update-confidence behaviour is preserved.
+        """
         conn = self.thread_local_conn()
         cursor = conn.cursor()
 
         subj = subject.lower().strip()
         pred = predicate.lower().strip()
         obj  = object.lower().strip()
+        now  = datetime.now().isoformat()
+        meta_str = json.dumps(metadata) if metadata else None
 
         new_id = None
         is_new = False
+
+        if upsert:
+            # ── Source-keyed upsert: update if (subj, pred, source) exists ──
+            cursor.execute("""
+                SELECT id FROM facts WHERE subject = ? AND predicate = ? AND source = ?
+            """, (subj, pred, source))
+            row = cursor.fetchone()
+
+            if row:
+                existing_id = row['id']
+                # Check if another row already has this exact (subj, pred, obj) value
+                cursor.execute("""
+                    SELECT id FROM facts
+                    WHERE subject = ? AND predicate = ? AND object = ? AND id != ?
+                """, (subj, pred, obj, existing_id))
+                collision = cursor.fetchone()
+                if collision:
+                    # New value already exists in another row — delete our stale row
+                    # and update the colliding row with the better confidence/timestamp
+                    cursor.execute('DELETE FROM facts WHERE id = ?', (existing_id,))
+                    cursor.execute('DELETE FROM facts_fts WHERE rowid = ?', (existing_id,))
+                    cursor.execute("""
+                        UPDATE facts SET confidence = MAX(confidence, ?), timestamp = ?, metadata = ?
+                        WHERE id = ?
+                    """, (confidence, now, meta_str, collision['id']))
+                else:
+                    cursor.execute("""
+                        UPDATE facts
+                        SET object = ?, confidence = ?, timestamp = ?, metadata = ?
+                        WHERE id = ?
+                    """, (obj, confidence, now, meta_str, existing_id))
+                    # Refresh FTS index
+                    cursor.execute('DELETE FROM facts_fts WHERE rowid = ?', (existing_id,))
+                    cursor.execute("""
+                        INSERT INTO facts_fts (rowid, subject, predicate, object)
+                        VALUES (?, ?, ?, ?)
+                    """, (existing_id, subj, pred, obj))
+                conn.commit()
+                return False  # updated, not new
+            # No row for this source yet — fall through to INSERT below.
+            # If (subj, pred, obj) already exists under a different source, the
+            # IntegrityError handler below will update confidence/timestamp safely.
+
         try:
             cursor.execute("""
                 INSERT INTO facts (subject, predicate, object, confidence, source, timestamp, metadata)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                subj, pred, obj,
-                confidence,
-                source,
-                datetime.now().isoformat(),
-                json.dumps(metadata) if metadata else None
-            ))
+            """, (subj, pred, obj, confidence, source, now, meta_str))
             new_id = cursor.lastrowid
             is_new = True
 
@@ -215,7 +268,7 @@ class TradingKnowledgeGraph:
                 UPDATE facts
                 SET confidence = MAX(confidence, ?), timestamp = ?
                 WHERE subject = ? AND predicate = ? AND object = ?
-            """, (confidence, datetime.now().isoformat(), subj, pred, obj))
+            """, (confidence, now, subj, pred, obj))
 
             if existing_id is not None:
                 cursor.execute('DELETE FROM facts_fts WHERE rowid = ?', (existing_id,))

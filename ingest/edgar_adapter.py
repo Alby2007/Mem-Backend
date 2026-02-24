@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -47,9 +48,21 @@ _RELEVANT_FORMS = {
 
 # Default tickers to monitor
 _DEFAULT_TICKERS = [
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA',
-    'JPM', 'V', 'UNH', 'XOM', 'JNJ', 'WMT',
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'AVGO',
+    'JPM', 'V', 'MA', 'BAC', 'GS', 'MS',
+    'UNH', 'JNJ', 'LLY', 'ABBV', 'PFE', 'MRK',
+    'XOM', 'CVX', 'COP',
+    'WMT', 'COST', 'MCD',
+    'CAT', 'HON', 'RTX',
+    'DIS', 'NFLX',
+    'AMD', 'INTC', 'QCOM', 'CRM', 'ADBE', 'NOW',
+    'BLK', 'SCHW', 'AXP',
+    'NEE', 'AMT',
 ]
+
+# Max parallel workers — stay well under SEC 10 req/s limit
+_EDGAR_WORKERS = 6
+_EDGAR_REQ_DELAY = 0.12  # seconds between requests per thread
 
 # CIK lookup cache (ticker → CIK)
 _CIK_CACHE: Dict[str, str] = {}
@@ -142,29 +155,44 @@ class EDGARAdapter(BaseIngestAdapter):
         self.tickers = tickers or _DEFAULT_TICKERS
 
     def fetch(self) -> List[RawAtom]:
-        atoms: List[RawAtom] = []
         now_iso = datetime.now(timezone.utc).isoformat()
-        source = 'regulatory_filing_sec'
+        source  = 'regulatory_filing_sec'
 
-        for symbol in self.tickers:
-            try:
-                cik = _ticker_to_cik(symbol)
-                if not cik:
-                    self._logger.debug('No CIK found for %s', symbol)
-                    continue
+        # ── Pre-populate the CIK cache in one request (fast) ──────────────
+        _ticker_to_cik(self.tickers[0])  # side-effect: fills _CIK_CACHE for all tickers
 
-                filings = _fetch_recent_filings(cik)
-                for filing in filings:
-                    atoms.extend(
-                        self._filing_to_atoms(symbol, filing, source, now_iso)
-                    )
+        # ── Parallel filing fetch ─────────────────────────────────────────
+        all_atoms: List[RawAtom] = []
+        with ThreadPoolExecutor(
+            max_workers=_EDGAR_WORKERS, thread_name_prefix='edgar'
+        ) as ex:
+            futures = {
+                ex.submit(self._fetch_symbol, sym, source, now_iso): sym
+                for sym in self.tickers
+            }
+            for future in as_completed(futures):
+                sym = futures[future]
+                try:
+                    all_atoms.extend(future.result(timeout=20))
+                except Exception as e:
+                    self._logger.warning('Failed to process %s: %s', sym, e)
 
-                # Respect SEC rate limit (10 req/sec)
-                time.sleep(0.15)
+        return all_atoms
 
-            except Exception as e:
-                self._logger.warning('Failed to process %s: %s', symbol, e)
+    def _fetch_symbol(
+        self, symbol: str, source: str, now_iso: str
+    ) -> List[RawAtom]:
+        """Fetch filings for one ticker and convert to atoms."""
+        atoms: List[RawAtom] = []
+        cik = _ticker_to_cik(symbol)
+        if not cik:
+            self._logger.debug('No CIK found for %s', symbol)
+            return atoms
 
+        time.sleep(_EDGAR_REQ_DELAY)  # per-thread rate limit respect
+        filings = _fetch_recent_filings(cik)
+        for filing in filings:
+            atoms.extend(self._filing_to_atoms(symbol, filing, source, now_iso))
         return atoms
 
     def _filing_to_atoms(
