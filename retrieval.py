@@ -61,6 +61,7 @@ _HIGH_VALUE_PREDICATES = (
     'volatility_30d', 'volatility_90d', 'drawdown_from_52w_high',
     'return_vs_spy_1m', 'return_vs_spy_3m',
     'invalidation_price', 'invalidation_distance', 'thesis_risk_level',
+    'conviction_tier', 'volatility_scalar', 'position_size_pct',
 )
 
 # Query keyword → predicate boost mapping
@@ -91,7 +92,14 @@ _KEYWORD_PREDICATE_BOOST: dict = {
     'momentum':    ('signal_direction', 'price_regime', 'signal_quality', 'return_1m', 'return_3m'),
     'extended':    ('signal_quality', 'price_regime'),
     'conflict':    ('signal_quality', 'macro_confirmation'),
-    'conviction':  ('signal_quality', 'upside_pct', 'macro_confirmation', 'thesis_risk_level'),
+    'conviction':  ('conviction_tier', 'signal_quality', 'upside_pct', 'macro_confirmation', 'thesis_risk_level'),
+    'size':        ('position_size_pct', 'conviction_tier', 'volatility_scalar'),
+    'sizing':      ('position_size_pct', 'conviction_tier', 'volatility_scalar'),
+    'allocat':     ('position_size_pct', 'conviction_tier', 'volatility_scalar'),
+    'kelly':       ('position_size_pct', 'conviction_tier', 'upside_pct', 'invalidation_distance'),
+    'weight':      ('position_size_pct', 'conviction_tier', 'upside_pct', 'invalidation_distance'),
+    'portfolio':   ('position_size_pct', 'conviction_tier', 'upside_pct', 'invalidation_distance'),
+    'avoid':       ('conviction_tier', 'thesis_risk_level', 'signal_quality'),
     'invalidat':   ('invalidation_price', 'invalidation_distance', 'thesis_risk_level'),
     'stop':        ('invalidation_price', 'invalidation_distance'),
     'wrong':       ('invalidation_price', 'thesis_risk_level', 'signal_quality'),
@@ -265,6 +273,7 @@ def retrieve(
         'volatility_30d', 'volatility_90d', 'drawdown_from_52w_high',
         'return_vs_spy_1m', 'return_vs_spy_3m',
         'invalidation_price', 'invalidation_distance', 'thesis_risk_level',
+        'conviction_tier', 'volatility_scalar', 'position_size_pct',
     )
     _pin_ph = ','.join('?' * len(_PINNED_PREDICATES))
     for ticker in tickers:
@@ -323,7 +332,8 @@ def retrieve(
         'return_1w', 'drawdown_from_52w_high',
         'volatility_30d', 'volatility_90d', 'upside_pct',
         'invalidation_distance',
-        # Note: thesis_risk_level is intentionally excluded — it is a
+        'position_size_pct',
+        # Note: thesis_risk_level and conviction_tier are intentionally excluded — it is a
         # categorical predicate (tight/moderate/wide) and cannot be
         # meaningfully sorted numerically. It is fetched via the
         # non-ranking branch when 'thesis', 'tight', 'risk' etc appear.
@@ -568,6 +578,8 @@ def retrieve(
         src = r['source']
         if pred in ('invalidation_price', 'invalidation_distance', 'thesis_risk_level'):
             invalidation.append(r)
+        elif pred in ('conviction_tier', 'volatility_scalar', 'position_size_pct'):
+            invalidation.append(r)  # group with invalidation — same [Conviction & Sizing] context
         elif pred in ('signal_quality', 'macro_confirmation', 'price_regime',
                       'upside_pct', 'signal_direction', 'signal_confidence'):
             quality.append(r)
@@ -590,8 +602,8 @@ def retrieve(
         return f"  {r['subject']} | {r['predicate']} | {r['object']}"
 
     if invalidation:
-        lines.append('[Invalidation & Risk]')
-        lines.extend(_fmt(r) for r in invalidation[:15])
+        lines.append('[Conviction, Sizing & Invalidation]')
+        lines.extend(_fmt(r) for r in invalidation[:20])
     if quality:
         lines.append('[Signal Quality & Regime]')
         lines.extend(_fmt(r) for r in quality[:15])

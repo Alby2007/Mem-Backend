@@ -148,7 +148,8 @@ def _read_kb_atoms(
             WHERE predicate IN (
                 'last_price', 'price_target', 'signal_direction',
                 'volatility_regime', 'market_cap_tier', 'sector',
-                'earnings_quality', 'low_52w', 'volatility_30d'
+                'earnings_quality', 'low_52w', 'volatility_30d',
+                'signal_quality', 'thesis_risk_level', 'macro_confirmation'
             )
             ORDER BY subject, predicate, confidence DESC
         """)
@@ -175,6 +176,14 @@ def _read_kb_atoms(
 
 # ── Classification logic ───────────────────────────────────────────────────────
 
+# ── Position sizing constants ─────────────────────────────────────────────────
+# Base allocations by conviction tier (% of portfolio, pre-vol-adjustment)
+_CT_BASE_ALLOC: dict = {'high': 5.0, 'medium': 3.0, 'low': 1.5, 'avoid': 0.0}
+# Reference volatility: SPY long-run realised annualised vol (~20%)
+_VOL_REF           = 20.0
+_VOL_SCALAR_FLOOR  = 0.2   # extreme vol names still get a minimal non-zero output
+_VOL_SCALAR_CAP    = 1.0   # low vol never inflates above base allocation
+
 # ── Invalidation thresholds ───────────────────────────────────────────────────
 # IP2/IP3: percentage-floor used when price is already near 52w low
 _NEAR_LOW_BUFFER     = 1.15   # price within 15% above low_52w → use floor
@@ -188,6 +197,147 @@ _TIGHT_VOL_THRESH    =  50.0  # annualised vol threshold for secondary tight rul
 _MOD_ABS             = -30.0  # Rule R-MODERATE primary: < 30% gap
 _MOD_VOL_DIST        = -40.0  # Rule R-MODERATE secondary: < 40% gap with med-high vol
 _MOD_VOL_THRESH      =  35.0  # annualised vol threshold for secondary moderate rule
+
+
+def _compute_position_sizing_atoms(
+    ticker: str,
+    signal_quality: str,
+    thesis_risk_level: str,
+    macro_confirmation: str,
+    vol_30d: Optional[float],
+    src_base: str,
+    meta: dict,
+) -> List[RawAtom]:
+    """
+    Compute conviction_tier, volatility_scalar, position_size_pct.
+
+    CONVICTION TIER RULES (priority order, first match wins):
+      CT-AVOID:
+        CT-A1: signal_quality=weak   AND thesis_risk_level=tight
+        CT-A2: signal_quality=conflicted (any risk level)
+      CT-LOW:
+        CT-L1: signal_quality=weak   (any risk level)
+        CT-L2: thesis_risk_level=tight (any signal quality)
+        CT-L3: macro_confirmation=unconfirmed (any signal quality)
+      CT-MEDIUM:
+        CT-M1: signal_quality=confirmed (any risk level)
+        CT-M2: signal_quality=strong AND thesis_risk_level=tight
+      CT-HIGH:
+        CT-H1: signal_quality=strong
+               AND thesis_risk_level IN (moderate, wide)
+               AND macro_confirmation IN (confirmed, partial)
+      no_data: any required dependency atom missing from KB
+
+    VOLATILITY SCALAR:
+      scalar = min(1.0, max(0.2, 20.0 / volatility_30d))
+      Missing vol_30d → emit no_data, skip scalar and position_size_pct.
+
+    POSITION SIZE PCT:
+      base = {high: 5.0, medium: 3.0, low: 1.5, avoid: 0.0}[conviction_tier]
+      size = round(base * scalar, 2)
+      avoid always → 0.0 (not multiplied, hard-zeroed).
+    """
+    from ingest.base import RawAtom  # local to avoid circular import at module level
+    atoms: List[RawAtom] = []
+
+    sq  = signal_quality.lower()   if signal_quality   else ''
+    rl  = thesis_risk_level.lower() if thesis_risk_level else ''
+    mc  = macro_confirmation.lower() if macro_confirmation else ''
+
+    # no_data guard: skip if any core dependency is missing
+    if not sq or not rl:
+        return atoms
+
+    # ── Classify conviction_tier ───────────────────────────────────────────────
+    # CT-AVOID (highest priority)
+    if sq == 'conflicted':
+        tier = 'avoid'
+        ct_rule = 'CT-A2_conflicted'
+    elif sq == 'weak' and rl == 'tight':
+        tier = 'avoid'
+        ct_rule = 'CT-A1_weak_tight'
+    # CT-LOW (single-bad-dimension cases)
+    elif sq == 'weak':
+        tier = 'low'
+        ct_rule = 'CT-L1_weak'
+    # CT-MEDIUM is checked BEFORE CT-L2 so that strong+tight → medium not low
+    elif sq == 'strong' and rl == 'tight':
+        tier = 'medium'
+        ct_rule = 'CT-M2_strong_tight'
+    elif sq == 'confirmed':
+        tier = 'medium'
+        ct_rule = 'CT-M1_confirmed'
+    # CT-LOW continued (tight but not strong, or macro unconfirmed)
+    elif rl == 'tight':
+        tier = 'low'
+        ct_rule = 'CT-L2_tight_risk'
+    elif mc == 'unconfirmed':
+        tier = 'low'
+        ct_rule = 'CT-L3_macro_unconfirmed'
+    # CT-HIGH
+    elif sq == 'strong' and rl in ('moderate', 'wide') and mc in ('confirmed', 'partial'):
+        tier = 'high'
+        ct_rule = 'CT-H1_strong_moderate_wide_macro'
+    # Residual: strong signal but macro missing or no_data → medium
+    else:
+        tier = 'medium'
+        ct_rule = 'CT-M_residual'
+
+    # ── Compute volatility_scalar ──────────────────────────────────────────────
+    if vol_30d is None or vol_30d <= 0:
+        # Can't compute scalar — emit conviction_tier only
+        ct_meta = {**meta, 'ct_rule': ct_rule, 'vol_30d': 'missing'}
+        atoms.append(RawAtom(
+            subject    = ticker,
+            predicate  = 'conviction_tier',
+            object     = tier,
+            confidence = 0.70,
+            source     = f'{src_base}_conviction',
+            metadata   = ct_meta,
+            upsert     = True,
+        ))
+        return atoms
+
+    scalar = round(min(_VOL_SCALAR_CAP, max(_VOL_SCALAR_FLOOR, _VOL_REF / vol_30d)), 4)
+
+    # ── Compute position_size_pct ──────────────────────────────────────────────
+    if tier == 'avoid':
+        size = 0.0
+    else:
+        size = round(_CT_BASE_ALLOC[tier] * scalar, 2)
+
+    ps_meta = {**meta, 'ct_rule': ct_rule, 'vol_scalar': str(scalar),
+               'base_alloc': str(_CT_BASE_ALLOC.get(tier, 0.0)),
+               'vol_30d_input': str(vol_30d)}
+
+    atoms.append(RawAtom(
+        subject    = ticker,
+        predicate  = 'conviction_tier',
+        object     = tier,
+        confidence = 0.70,
+        source     = f'{src_base}_conviction',
+        metadata   = ps_meta,
+        upsert     = True,
+    ))
+    atoms.append(RawAtom(
+        subject    = ticker,
+        predicate  = 'volatility_scalar',
+        object     = str(scalar),
+        confidence = 0.75,
+        source     = f'{src_base}_vol_scalar',
+        metadata   = ps_meta,
+        upsert     = True,
+    ))
+    atoms.append(RawAtom(
+        subject    = ticker,
+        predicate  = 'position_size_pct',
+        object     = str(size),
+        confidence = 0.75,
+        source     = f'{src_base}_position_size',
+        metadata   = ps_meta,
+        upsert     = True,
+    ))
+    return atoms
 
 
 def _compute_invalidation_atoms(
@@ -624,6 +774,21 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                 ticker, last_price, low_52w, vol_30d, price_regime, src_base, meta
             )
             atoms.extend(inv_atoms)
+
+            # ── Position sizing atoms ──────────────────────────────────────
+            # Depends on: signal_quality (just computed), thesis_risk_level
+            # (freshly emitted by inv_atoms above or KB round-trip if present),
+            # macro_confirmation (just computed), and volatility_30d.
+            # thesis_risk_level: prefer the freshly computed value from inv_atoms
+            # (inv_atoms[2].object) — falls back to KB round-trip via preds.
+            thesis_rl = (
+                inv_atoms[2].object if len(inv_atoms) >= 3
+                else preds.get('thesis_risk_level', '')
+            )
+            pos_atoms = _compute_position_sizing_atoms(
+                ticker, sig_quality, thesis_rl, macro_conf, vol_30d, src_base, meta
+            )
+            atoms.extend(pos_atoms)
 
             enriched += 1
 
