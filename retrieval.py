@@ -182,39 +182,9 @@ def retrieve(
         except Exception:
             pass
 
-    # ── 3. Direct ticker / subject match ──────────────────────────────────────
-    for ticker in tickers:
-        try:
-            c.execute("""
-                SELECT subject, predicate, object, source, confidence
-                FROM facts
-                WHERE LOWER(subject) LIKE ?
-                AND predicate NOT IN ('source_code','has_title','has_section','has_content')
-                ORDER BY confidence DESC LIMIT 12
-            """, (f'%{ticker.lower()}%',))
-            _add(c.fetchall())
-        except Exception:
-            pass
-
-    # ── 4. High-value signal predicates for matched terms ────────────────────
-    if terms:
-        term = terms[0]
-        try:
-            pred_placeholders = ','.join('?' * len(_HIGH_VALUE_PREDICATES))
-            c.execute(f"""
-                SELECT subject, predicate, object, source, confidence
-                FROM facts
-                WHERE predicate IN ({pred_placeholders})
-                AND (LOWER(subject) LIKE ? OR LOWER(object) LIKE ?)
-                ORDER BY confidence DESC LIMIT 12
-            """, (*_HIGH_VALUE_PREDICATES, f'%{term}%', f'%{term}%'))
-            _add(c.fetchall())
-        except Exception:
-            pass
-
-    # ── 4b. Predicate keyword boost ───────────────────────────────────────────
-    # When query contains intent words (upside, target, sector, regime...) fetch
-    # atoms with those exact predicates for all matched tickers/terms.
+    # ── 3. Predicate keyword boost (intent-aware) ───────────────────────────
+    # Run BEFORE bulk ticker match so high-value atoms (price_target,
+    # signal_direction, sector, regime...) are collected first.
     boosted_predicates: set = set()
     for term in terms:
         for kw, preds in _KEYWORD_PREDICATE_BOOST.items():
@@ -237,7 +207,6 @@ def retrieve(
                 except Exception:
                     pass
         else:
-            # No explicit tickers — fetch top boosted-predicate atoms globally
             try:
                 c.execute(f"""
                     SELECT subject, predicate, object, source, confidence
@@ -248,6 +217,36 @@ def retrieve(
                 _add(c.fetchall())
             except Exception:
                 pass
+
+    # ── 4. Direct ticker / subject match ──────────────────────────────────────
+    for ticker in tickers:
+        try:
+            c.execute("""
+                SELECT subject, predicate, object, source, confidence
+                FROM facts
+                WHERE LOWER(subject) LIKE ?
+                AND predicate NOT IN ('source_code','has_title','has_section','has_content')
+                ORDER BY confidence DESC LIMIT 6
+            """, (f'%{ticker.lower()}%',))
+            _add(c.fetchall())
+        except Exception:
+            pass
+
+    # ── 5a. High-value signal predicates for matched terms ────────────────────
+    if terms:
+        term = terms[0]
+        try:
+            pred_placeholders = ','.join('?' * len(_HIGH_VALUE_PREDICATES))
+            c.execute(f"""
+                SELECT subject, predicate, object, source, confidence
+                FROM facts
+                WHERE predicate IN ({pred_placeholders})
+                AND (LOWER(subject) LIKE ? OR LOWER(object) LIKE ?)
+                ORDER BY confidence DESC LIMIT 12
+            """, (*_HIGH_VALUE_PREDICATES, f'%{term}%', f'%{term}%'))
+            _add(c.fetchall())
+        except Exception:
+            pass
 
     # ── 5. Fallback: top-confidence atoms ─────────────────────────────────────
     if len(results) < 8:
