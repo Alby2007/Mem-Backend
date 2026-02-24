@@ -91,7 +91,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date as _date, datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from ingest.base import BaseIngestAdapter, RawAtom
@@ -149,7 +149,8 @@ def _read_kb_atoms(
                 'last_price', 'price_target', 'signal_direction',
                 'volatility_regime', 'market_cap_tier', 'sector',
                 'earnings_quality', 'low_52w', 'volatility_30d',
-                'signal_quality', 'thesis_risk_level', 'macro_confirmation'
+                'signal_quality', 'thesis_risk_level', 'macro_confirmation',
+                'next_earnings'
             )
             ORDER BY subject, predicate, confidence DESC
         """)
@@ -625,7 +626,216 @@ def _classify_macro_confirmation(
         return 'unconfirmed'
 
 
-# ── Adapter ───────────────────────────────────────────────────────────────────
+# ── Market regime constants ───────────────────────────────────────────────────
+
+# Additional macro proxy tickers for regime model
+_GOLD_PROXY  = 'gld'   # gold — near_high = inflation / risk-off hedge bid
+_USD_PROXY   = 'uup'   # US dollar index — near_high = strong USD (risk-off)
+
+# Regime labels
+_REGIME_RISK_ON_EXPANSION   = 'risk_on_expansion'
+_REGIME_RISK_OFF_CONTRACTION = 'risk_off_contraction'
+_REGIME_STAGFLATION         = 'stagflation'
+_REGIME_RECOVERY            = 'recovery'
+_REGIME_NO_DATA             = 'no_data'
+
+
+def _classify_market_regime(
+    macro_signals: Dict[str, str],
+    ticker_atoms:  Dict[str, Dict[str, str]],
+) -> str:
+    """
+    Classify the current market into one of four macro regimes.
+
+    Uses existing KB atoms — no external API calls.
+
+    INPUTS
+    ======
+    Proxy signals (from ticker_atoms):
+      SPY  — broad equity market:   near_high/long = bullish equity
+      HYG  — credit spreads:        near_high = tight spreads = risk-on
+      TLT  — long-duration rates:   near_high = rates falling = risk-off
+      GLD  — gold:                  near_high = inflation / risk-off hedge
+      UUP  — US dollar:             near_high = strong USD = risk-off
+
+    REGIME DECISION MATRIX (priority order, first match wins)
+    ==========================================================
+    RISK_ON_EXPANSION:
+      SPY=bullish + HYG=bullish + TLT≠bullish
+      "Equities up, credit tight, rates not collapsing — normal expansion"
+
+    RISK_OFF_CONTRACTION:
+      SPY=bearish + HYG=bearish
+      "Equities down AND credit selling off — genuine risk-off"
+
+    STAGFLATION:
+      GLD=bullish + SPY≠bullish
+      "Gold bidding without equity support — inflation / stagflation regime"
+
+    RECOVERY:
+      SPY=bullish + HYG=bullish + TLT=bullish
+      "Equities up + credit tight + rates falling — early recovery / Fed pivot"
+      Note: TLT bullish here distinguishes recovery from expansion (rates still
+      easing in early recovery).
+
+    NO_DATA:
+      Insufficient proxy signals in KB (SPY and HYG both missing)
+
+    RESIDUAL (no rule matches):
+      Returns 'recovery' as the neutral/uncertain state.
+
+    Returns
+    -------
+    str — one of: risk_on_expansion | risk_off_contraction |
+                  stagflation | recovery | no_data
+    """
+    # Build extended proxy signals (macro_signals has SPY/HYG/TLT; add GLD/USD)
+    spy_sig = macro_signals.get(_MARKET_PROXY, '')
+    hyg_sig = macro_signals.get(_CREDIT_PROXY, '')
+    tlt_sig = macro_signals.get(_RATES_PROXY, '')
+    gld_sig = ticker_atoms.get(_GOLD_PROXY, {}).get('signal_direction', '')
+    uup_sig = ticker_atoms.get(_USD_PROXY,  {}).get('signal_direction', '')
+
+    if not spy_sig and not hyg_sig:
+        return _REGIME_NO_DATA
+
+    spy_bull = spy_sig in _BULLISH_SIGNALS
+    spy_bear = spy_sig in _BEARISH_SIGNALS
+    hyg_bull = hyg_sig in _BULLISH_SIGNALS
+    hyg_bear = hyg_sig in _BEARISH_SIGNALS
+    tlt_bull = tlt_sig in _BULLISH_SIGNALS
+    gld_bull = gld_sig in _BULLISH_SIGNALS
+
+    # RECOVERY: equities up + credit tight + rates falling (Fed-pivot / early cycle)
+    if spy_bull and hyg_bull and tlt_bull:
+        return _REGIME_RECOVERY
+
+    # RISK_ON_EXPANSION: equities up + credit tight + rates NOT falling
+    if spy_bull and hyg_bull and not tlt_bull:
+        return _REGIME_RISK_ON_EXPANSION
+
+    # RISK_OFF_CONTRACTION: equities down + credit selling off
+    if spy_bear and hyg_bear:
+        return _REGIME_RISK_OFF_CONTRACTION
+
+    # STAGFLATION: gold bidding without equity support
+    if gld_bull and not spy_bull:
+        return _REGIME_STAGFLATION
+
+    # Residual: equities up but mixed credit, or data too thin
+    if spy_bull:
+        return _REGIME_RISK_ON_EXPANSION
+
+    return _REGIME_RECOVERY
+
+
+def _classify_earnings_proximity(next_earnings_str: Optional[str]) -> Optional[str]:
+    """
+    Classify how close today is to the next earnings event.
+
+    Uses the earnings_quality atom value which yfinance stores as an ISO date
+    string (e.g. "2026-04-30").  Computes calendar days from today UTC.
+
+    Values (first match wins):
+      pre_earnings_3d  — earnings in ≤ 3 calendar days  (binary event risk)
+      pre_earnings_2w  — earnings in 4–14 days           (event risk window)
+      pre_earnings_8w  — earnings in 15–56 days          (approaching)
+      post_earnings    — earnings date is in the past    (catalyst clear)
+      no_catalyst      — no earnings date in KB          (or date unparseable)
+
+    Returns None when earnings date missing so the caller can skip emission.
+    """
+    if not next_earnings_str:
+        return None
+    try:
+        earnings_date = _date.fromisoformat(str(next_earnings_str).strip())
+    except (ValueError, TypeError):
+        return None
+    today = datetime.now(timezone.utc).date()
+    delta = (earnings_date - today).days
+    if delta < 0:
+        return 'post_earnings'
+    if delta <= 3:
+        return 'pre_earnings_3d'
+    if delta <= 14:
+        return 'pre_earnings_2w'
+    if delta <= 56:
+        return 'pre_earnings_8w'
+    return 'no_catalyst'
+
+
+# Minimum LLM atoms required before emitting a sentiment atom
+_SENTIMENT_MIN_ATOMS = 3
+
+# Predicates that carry a bullish lean when present in LLM-extracted atoms
+_SENTIMENT_BULLISH_PREDS = frozenset({
+    'catalyst', 'earnings_beat', 'revenue_beat', 'guidance_raised',
+    'buyback', 'dividend_increase', 'new_product', 'market_share_gain',
+})
+# Predicates that carry a bearish lean
+_SENTIMENT_BEARISH_PREDS = frozenset({
+    'risk_factor', 'earnings_miss', 'revenue_miss', 'guidance_lowered',
+    'restructuring', 'investigation', 'litigation', 'leadership_change',
+})
+
+
+def _compute_news_sentiment(
+    ticker: str,
+    db_path: str,
+) -> Optional[str]:
+    """
+    Derive news_sentiment from the most recent LLM-extracted atoms for ticker.
+
+    Reads up to 10 most recent facts rows where source LIKE 'llm_extracted_%'
+    for this ticker, ordered by timestamp DESC.  Scores each row by predicate:
+      bullish predicate → +confidence
+      bearish predicate → -confidence
+      other predicate   → +0  (no contribution)
+
+    Net score:
+      > +0.5  → 'bullish'
+      < -0.5  → 'bearish'
+      else    → 'neutral'
+
+    Returns None if fewer than _SENTIMENT_MIN_ATOMS rows found, so the caller
+    can skip emission rather than emit a noisy neutral on thin data.
+    """
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT predicate, confidence
+            FROM facts
+            WHERE subject = ?
+              AND source LIKE 'llm_extracted_%'
+            ORDER BY timestamp DESC
+            LIMIT 10
+        """, (ticker.lower(),))
+        rows = c.fetchall()
+    finally:
+        conn.close()
+
+    if len(rows) < _SENTIMENT_MIN_ATOMS:
+        return None
+
+    score = 0.0
+    for pred, conf in rows:
+        pred_lower = (pred or '').lower()
+        try:
+            w = float(conf) if conf is not None else 0.5
+        except (ValueError, TypeError):
+            w = 0.5
+        if pred_lower in _SENTIMENT_BULLISH_PREDS:
+            score += w
+        elif pred_lower in _SENTIMENT_BEARISH_PREDS:
+            score -= w
+
+    if score > 0.5:
+        return 'bullish'
+    if score < -0.5:
+        return 'bearish'
+    return 'neutral'
+
 
 class SignalEnrichmentAdapter(BaseIngestAdapter):
     """
@@ -790,7 +1000,60 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
             )
             atoms.extend(pos_atoms)
 
+            # ── Earnings proximity atom ────────────────────────────────────
+            # Reads earnings_quality (ISO date) OR next_earnings atom.
+            # Emits earnings_proximity only when a parseable date exists.
+            next_earn = preds.get('next_earnings') or preds.get('earnings_quality')
+            ep = _classify_earnings_proximity(next_earn)
+            if ep is not None:
+                atoms.append(RawAtom(
+                    subject    = ticker,
+                    predicate  = 'earnings_proximity',
+                    object     = ep,
+                    confidence = 0.90,   # deterministic date math
+                    source     = f'{src_base}_earnings_proximity',
+                    metadata   = {**meta, 'next_earnings': str(next_earn)},
+                    upsert     = True,
+                ))
+
+            # ── News sentiment atom ────────────────────────────────────────
+            # Skipped if fewer than _SENTIMENT_MIN_ATOMS LLM atoms for ticker.
+            # Only called for equity tickers that have signal_direction set
+            # to avoid DB queries for ETF/macro proxy subjects.
+            if signal_dir:
+                ns = _compute_news_sentiment(ticker, self._db_path)
+                if ns is not None:
+                    atoms.append(RawAtom(
+                        subject    = ticker,
+                        predicate  = 'news_sentiment',
+                        object     = ns,
+                        confidence = 0.60,   # soft signal from LLM extractions
+                        source     = f'{src_base}_news_sentiment',
+                        metadata   = meta,
+                        upsert     = True,
+                    ))
+
             enriched += 1
+
+        # ── Market regime atom (single, subject='market') ─────────────────
+        # Emitted once per enrichment cycle — not per-ticker.
+        # Uses the same macro_signals and ticker_atoms already loaded above.
+        regime = _classify_market_regime(macro_signals, ticker_atoms)
+        atoms.append(RawAtom(
+            subject    = 'market',
+            predicate  = 'market_regime',
+            object     = regime,
+            confidence = 0.70,
+            source     = 'derived_signal_regime',
+            metadata   = {
+                'as_of':       now_iso,
+                'spy':         macro_signals.get(_MARKET_PROXY, ''),
+                'hyg':         macro_signals.get(_CREDIT_PROXY, ''),
+                'tlt':         macro_signals.get(_RATES_PROXY, ''),
+                'gld':         ticker_atoms.get(_GOLD_PROXY, {}).get('signal_direction', ''),
+            },
+            upsert     = True,
+        ))
 
         _logger.info(
             '[signal_enrichment] enriched %d tickers (%d atoms), skipped %d subjects',

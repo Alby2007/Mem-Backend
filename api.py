@@ -44,6 +44,7 @@ try:
     from ingest.historical_adapter import HistoricalBackfillAdapter
     from ingest.llm_extraction_adapter import LLMExtractionAdapter
     from ingest.edgar_realtime_adapter import EDGARRealtimeAdapter
+    from ingest.options_adapter import OptionsAdapter
     HAS_INGEST = True
 except ImportError:
     HAS_INGEST = False
@@ -51,6 +52,7 @@ except ImportError:
 try:
     from analytics.backtest import run_backtest, take_snapshot, list_snapshots
     from analytics.portfolio import build_portfolio_summary
+    from analytics.alerts import AlertMonitor, get_alerts, mark_alerts_seen
     HAS_ANALYTICS = True
 except ImportError:
     HAS_ANALYTICS = False
@@ -129,6 +131,7 @@ if HAS_INGEST:
         _ingest_scheduler.register(LLMExtractionAdapter(db_path=_DB_PATH),   interval_sec=300)    # 5 min, drains queue
         _ingest_scheduler.register(EDGARAdapter(db_path=_DB_PATH),           interval_sec=21600)  # 6 hours
         _ingest_scheduler.register(EDGARRealtimeAdapter(db_path=_DB_PATH),   interval_sec=180)    # 3 min real-time 8-K
+        _ingest_scheduler.register(OptionsAdapter(),                          interval_sec=1800)   # 30 min options chain
         _ingest_scheduler.register(FREDAdapter(),                             interval_sec=86400)  # 24 hours
         _ingest_scheduler.start()
     except Exception as _e:
@@ -1221,6 +1224,55 @@ def chat_models():
 
 
 # ── Analytics endpoints ──────────────────────────────────────────────────────
+
+@app.route('/alerts', methods=['GET'])
+def alerts_list():
+    """
+    List alerts.
+
+    Query params:
+      all    — if 'true', return all alerts (default: unseen only)
+      since  — ISO-8601 datetime, only return alerts triggered after this
+      limit  — max rows (default 200)
+
+    Returns:
+      { "alerts": [...], "count": N }
+    """
+    if not HAS_ANALYTICS:
+        return jsonify({'error': 'analytics module not available'}), 503
+
+    try:
+        unseen_only = request.args.get('all', '').lower() != 'true'
+        since_iso   = request.args.get('since') or None
+        limit       = int(request.args.get('limit', 200))
+        rows = get_alerts(_DB_PATH, unseen_only=unseen_only,
+                          since_iso=since_iso, limit=limit)
+        return jsonify({'alerts': rows, 'count': len(rows)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/alerts/mark-seen', methods=['POST'])
+def alerts_mark_seen():
+    """
+    Mark alerts as seen.
+
+    Body: { "ids": [1, 2, 3] }
+
+    Returns:
+      { "updated": N }
+    """
+    if not HAS_ANALYTICS:
+        return jsonify({'error': 'analytics module not available'}), 503
+
+    try:
+        body = request.get_json(force=True) or {}
+        ids  = [int(i) for i in body.get('ids', [])]
+        updated = mark_alerts_seen(_DB_PATH, ids)
+        return jsonify({'updated': updated})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/analytics/snapshot', methods=['POST'])
 def analytics_snapshot():
