@@ -7,7 +7,8 @@ Yahoo Finance via the yfinance library. No API key required.
 Atoms produced:
   - {TICKER} | last_price        | {price}
   - {TICKER} | price_target      | {mean analyst target}
-  - {TICKER} | signal_direction  | {long/short/neutral}  (derived from price vs target)
+  - {TICKER} | signal_direction  | {long/short/neutral}  (derived from price vs target, equities only)
+  - {TICKER} | price_regime      | {near_high/mid_range/near_low}  (ETFs only — 52w position)
   - {TICKER} | sector            | {sector}
   - {TICKER} | market_cap_tier   | {mega/large/mid/small/micro}
   - {TICKER} | earnings_quality  | {next earnings date}
@@ -470,9 +471,9 @@ class YFinanceAdapter(BaseIngestAdapter):
         price   = current_price or info.get('regularMarketPrice') or info.get('navPrice')
         if high_52 and low_52 and price:
             pct_from_high = round((float(price) - float(high_52)) / float(high_52) * 100, 1)
-            momentum = 'near_high' if pct_from_high > -5 else ('near_low' if pct_from_high < -20 else 'mid_range')
+            regime = 'near_high' if pct_from_high > -5 else ('near_low' if pct_from_high < -20 else 'mid_range')
             atoms.append(RawAtom(
-                subject=symbol, predicate='signal_direction', object=momentum,
+                subject=symbol, predicate='price_regime', object=regime,
                 confidence=0.60, source=src,
                 metadata={'pct_from_52w_high': pct_from_high, 'as_of': now_iso},
                 upsert=True,
