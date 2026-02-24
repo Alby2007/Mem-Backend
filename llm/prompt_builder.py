@@ -30,17 +30,20 @@ context directly states.
 picking a side.
 5. Be concise. Lead with the most actionable insight from the context.
 6. Do NOT reproduce metadata tags, stress scores, or diagnostic labels in your answer — \
-they are instructions for you, not content for the user.\
+they are instructions for you, not content for the user.
+7. If an atom contains a date or event without associated names or details, cite only \
+what the atom states. Do not infer or generate names, people, or specific details \
+not present in the context.\
 """
 
 _SYSTEM_THIN_COVERAGE = (
-    "\n7. IMPORTANT: KB coverage is thin for this topic. "
+    "\n8. IMPORTANT: KB coverage is thin for this topic. "
     "Say so explicitly at the start of your answer and qualify every claim accordingly. "
     "Do not speculate beyond what the context states."
 )
 
 _SYSTEM_DIAGNOSIS_SUFFIX = (
-    "\n8. The knowledge base has a structural gap ({primary_type}) for this topic. "
+    "\n9. The knowledge base has a structural gap ({primary_type}) for this topic. "
     "Acknowledge the gap and indicate what additional data would improve the answer."
 )
 
