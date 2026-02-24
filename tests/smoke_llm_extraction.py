@@ -3,10 +3,12 @@ Smoke test: LLM extraction adapter — unit tests only, no Ollama required.
 
 Tests:
   - _parse_llm_atoms: valid JSON, markdown-fenced JSON, prose-wrapped JSON,
-    invalid JSON, empty array, bad predicate filtering, confidence clamping,
-    signal_direction value validation, failed_attempts logic
+    invalid JSON, empty array, bad predicate filtering, subject constraint
+    (invalid subjects filtered, valid ticker+macro pass),
+    confidence always equals fallback_confidence (LLM field ignored),
+    signal_direction value validation
   - _confidence_from_language: hedge-word calibration
-  - _build_prompt: structure and content
+  - _build_prompt: structure, content, no confidence field in schema
   - _ensure_extraction_queue: table creation idempotency
   - Adapter fetch() graceful degradation when Ollama unreachable
 
@@ -17,6 +19,7 @@ import sys, sqlite3, os, json, tempfile; sys.path.insert(0, '.')
 
 from ingest.llm_extraction_adapter import (
     _parse_llm_atoms, _confidence_from_language, _build_prompt, MAX_FAILURES,
+    _VALID_MACRO_ENTITIES,
 )
 from ingest.rss_adapter import _ensure_extraction_queue
 
@@ -51,23 +54,25 @@ print("\n=== LLM Extraction Smoke Test ===\n")
 
 # ── 1. _parse_llm_atoms: valid JSON ──────────────────────────────────────────
 print("[1] Valid JSON response")
+FALLBACK = 0.65
 resp = json.dumps([
-    {"subject": "NVDA", "predicate": "catalyst", "object": "q4_earnings_beat", "confidence": 0.82},
-    {"subject": "fed", "predicate": "forward_guidance", "object": "two_cuts_2026", "confidence": 0.73},
+    {"subject": "NVDA", "predicate": "catalyst", "object": "q4_earnings_beat", "reasoning": "beat Q4"},
+    {"subject": "fed", "predicate": "forward_guidance", "object": "two_cuts_2026", "reasoning": "signals"},
 ])
-atoms, success = _parse_llm_atoms(resp, SRC, 0.65, NOW)
+atoms, success = _parse_llm_atoms(resp, SRC, FALLBACK, NOW)
 check("valid_json.success", success, True)
 check("valid_json.count", len(atoms), 2)
 check("valid_json.subject_0", atoms[0].subject, "nvda")
 check("valid_json.predicate_0", atoms[0].predicate, "catalyst")
 check("valid_json.object_0", atoms[0].object, "q4_earnings_beat")
-check_approx("valid_json.confidence_0", atoms[0].confidence, 0.82)
+# Confidence is always fallback_confidence — LLM field is ignored
+check_approx("valid_json.confidence_uses_fallback", atoms[0].confidence, FALLBACK)
 check("valid_json.subject_1", atoms[1].subject, "fed")
 check("valid_json.predicate_1", atoms[1].predicate, "forward_guidance")
 
 # ── 2. Markdown-fenced JSON ───────────────────────────────────────────────────
 print("\n[2] Markdown-fenced JSON (model wraps in ```json)")
-resp = '```json\n[{"subject": "AAPL", "predicate": "rating_change", "object": "upgraded_to_buy", "confidence": 0.75}]\n```'
+resp = '```json\n[{"subject": "AAPL", "predicate": "rating_change", "object": "upgraded_to_buy", "reasoning": "analyst upgrade"}]\n```'
 atoms, success = _parse_llm_atoms(resp, SRC, 0.65, NOW)
 check("fenced.success", success, True)
 check("fenced.count", len(atoms), 1)
@@ -75,7 +80,7 @@ check("fenced.predicate", atoms[0].predicate, "rating_change")
 
 # ── 3. Prose-wrapped JSON ─────────────────────────────────────────────────────
 print("\n[3] Prose-wrapped JSON (model adds explanation before the array)")
-resp = 'Here are the extracted facts:\n[{"subject": "MSFT", "predicate": "key_finding", "object": "azure_growth_beat", "confidence": 0.78}]'
+resp = 'Here are the extracted facts:\n[{"subject": "MSFT", "predicate": "key_finding", "object": "azure_growth_beat", "reasoning": "beat"}]'
 atoms, success = _parse_llm_atoms(resp, SRC, 0.65, NOW)
 check("prose_wrap.success", success, True)
 check("prose_wrap.count", len(atoms), 1)
@@ -121,16 +126,17 @@ check("sig_dir.success", success, True)
 check("sig_dir.count", len(atoms), 1)
 check("sig_dir.object", atoms[0].object, "long")
 
-# ── 9. Confidence clamping ────────────────────────────────────────────────────
-print("\n[9] Confidence clamped to [0.50, 0.85]")
+# ── 9. Confidence always uses fallback (LLM confidence field ignored) ─────────
+print("\n[9] Confidence always equals fallback_confidence regardless of LLM field")
+FB = 0.72
 resp = json.dumps([
     {"subject": "GS", "predicate": "key_finding", "object": "deal_announced", "confidence": 0.99},
     {"subject": "GS", "predicate": "key_finding", "object": "deal_rumoured", "confidence": 0.10},
 ])
-atoms, success = _parse_llm_atoms(resp, SRC, 0.65, NOW)
-check("clamp.count", len(atoms), 2)
-check_approx("clamp.high_clamped", atoms[0].confidence, 0.85)
-check_approx("clamp.low_clamped", atoms[1].confidence, 0.50)
+atoms, success = _parse_llm_atoms(resp, SRC, FB, NOW)
+check("conf_fallback.count", len(atoms), 2)
+check_approx("conf_fallback.atom0", atoms[0].confidence, FB)
+check_approx("conf_fallback.atom1", atoms[1].confidence, FB)
 
 # ── 10. Object truncated at 250 chars ─────────────────────────────────────────
 print("\n[10] Object truncated at 250 chars")
@@ -164,9 +170,14 @@ check("prompt.count", len(msgs), 2)
 check("prompt.roles", [m['role'] for m in msgs], ['system', 'user'])
 assert 'catalyst' in msgs[0]['content'], "system prompt missing predicate list"
 assert 'NVDA' in msgs[1]['content'], "user prompt missing article text"
-assert 'NVDA' in msgs[1]['content'] or 'nvda' in msgs[1]['content'].lower()
 ok("prompt.system_has_predicates")
 ok("prompt.user_has_text")
+# confidence must NOT appear in the schema — we don't want LLM hallucinating it
+assert 'confidence' not in msgs[0]['content'], "system prompt should not request confidence field"
+ok("prompt.no_confidence_field")
+# subject constraint must be explicit in the prompt
+assert 'fed' in msgs[0]['content'], "system prompt missing macro entity list"
+ok("prompt.has_macro_entity_list")
 
 # Text truncated to 800 chars
 long_text = "x" * 1000
@@ -220,6 +231,32 @@ try:
                 _oc.is_available = orig
 finally:
     os.unlink(tmp_db2)
+
+# ── 16. Subject constraint — invalid subjects filtered ───────────────────────
+print("\n[16] Subject constraint — invalid subjects filtered")
+resp = json.dumps([
+    {"subject": "none",     "predicate": "key_finding", "object": "some_fact"},
+    {"subject": "tariffs",  "predicate": "risk_factor",  "object": "trade_war"},
+    {"subject": "global",   "predicate": "regime_label", "object": "uncertainty"},
+    {"subject": "individual companies/sectors", "predicate": "key_finding", "object": "impacted"},
+    {"subject": "NVDA",     "predicate": "catalyst",    "object": "valid_ticker"},
+    {"subject": "fed",      "predicate": "forward_guidance", "object": "valid_macro"},
+    {"subject": "us_macro", "predicate": "regime_label", "object": "valid_macro2"},
+])
+atoms, success = _parse_llm_atoms(resp, SRC, 0.65, NOW)
+check("subj_constraint.success", success, True)
+check("subj_constraint.count", len(atoms), 3)  # only NVDA, fed, us_macro survive
+check("subj_constraint.ticker",  atoms[0].subject, "nvda")
+check("subj_constraint.macro1",  atoms[1].subject, "fed")
+check("subj_constraint.macro2",  atoms[2].subject, "us_macro")
+
+# ── 17. _VALID_MACRO_ENTITIES set is correct ──────────────────────────────────
+print("\n[17] _VALID_MACRO_ENTITIES content")
+for entity in ('fed', 'ecb', 'treasury', 'us_macro', 'us_labor', 'us_yields', 'us_credit'):
+    if entity not in _VALID_MACRO_ENTITIES:
+        fail(f"macro_entities.{entity}", "missing from _VALID_MACRO_ENTITIES")
+    else:
+        ok(f"macro_entities.{entity}")
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 print()

@@ -45,6 +45,9 @@ _VALID_PREDICATES = {
 
 _VALID_DIRECTIONS = {'long', 'short', 'neutral'}
 
+# Exact lowercase macro entity names the parser accepts as valid subjects
+_VALID_MACRO_ENTITIES = {'fed', 'ecb', 'treasury', 'us_macro', 'us_labor', 'us_yields', 'us_credit'}
+
 # Watchlist for ticker context hint in the prompt
 _WATCHLIST_HINT = (
     'AAPL MSFT GOOGL AMZN NVDA META TSLA AVGO JPM V MA BAC GS '
@@ -67,22 +70,19 @@ You are a financial knowledge extraction system. Your only job is to extract \
 structured facts from financial news and return them as a JSON array.
 
 Each fact in the array must have exactly these keys:
-  "subject"    — ticker symbol (e.g. "NVDA") or macro entity (e.g. "fed", "ecb", "treasury")
+  "subject"    — MUST be a 2-5 character uppercase ticker symbol (e.g. AAPL, NVDA, JPM)
+                 OR one of these exact macro entities: fed, ecb, treasury, us_macro,
+                 us_labor, us_yields, us_credit
+                 If no valid subject exists, return []
   "predicate"  — one of: catalyst, risk_factor, signal_direction, forward_guidance,
                   earnings_result, rating_change, price_target, insider_transaction,
                   key_finding, regime_label, central_bank_stance, inflation_environment
   "object"     — concise snake_case fact, max 80 characters
-  "confidence" — float 0.50–0.85 based on language certainty
-
-Confidence calibration:
-  0.80–0.85 — "confirmed", "announced", "reported", "filed", "beats/beat"
-  0.70–0.75 — "expects", "signals", "plans", "raises", "guides"
-  0.55–0.65 — "may", "could", "considering", "potentially", "reportedly"
+  "reasoning"  — one sentence explaining why this fact was extracted
 
 Rules:
 - Return ONLY a valid JSON array. No prose, no markdown, no explanation.
-- Return [] if no clear structured facts can be extracted.
-- subject must be a ticker (uppercase 2-5 chars) or lowercase macro entity.
+- Return [] if no valid ticker or macro entity subject exists in the text.
 - object must be snake_case, no spaces, max 80 chars.
 - Do not invent facts not present in the text.\
 """
@@ -164,12 +164,21 @@ def _parse_llm_atoms(
         if not isinstance(item, dict):
             continue
 
-        subject   = str(item.get('subject', '')).strip().lower()
+        subject   = str(item.get('subject', '')).strip()
         predicate = str(item.get('predicate', '')).strip().lower()
         obj       = str(item.get('object', '')).strip()
 
         if not (subject and predicate and obj):
             continue
+
+        # Enforce subject constraint: valid ticker (2-5 uppercase chars)
+        # or known macro entity (lowercase exact match)
+        subj_lower = subject.lower()
+        is_valid_ticker = bool(re.match(r'^[A-Z]{2,5}$', subject))
+        is_valid_macro  = subj_lower in _VALID_MACRO_ENTITIES
+        if not (is_valid_ticker or is_valid_macro):
+            continue
+        subject = subj_lower  # normalise to lowercase for KB consistency
 
         # Validate predicate is in our known vocab
         if predicate not in _VALID_PREDICATES:
@@ -179,12 +188,8 @@ def _parse_llm_atoms(
         if predicate == 'signal_direction' and obj.lower() not in _VALID_DIRECTIONS:
             continue
 
-        # Clamp confidence to reasonable range
-        try:
-            conf = float(item.get('confidence', fallback_confidence))
-            conf = max(0.50, min(0.85, conf))
-        except (TypeError, ValueError):
-            conf = fallback_confidence
+        # Confidence: computed purely from language heuristic — LLM field ignored
+        conf = fallback_confidence
 
         # Truncate object to 250 chars
         obj = obj[:250]
