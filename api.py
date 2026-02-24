@@ -49,7 +49,7 @@ except ImportError:
     HAS_INGEST = False
 
 try:
-    from analytics.backtest import run_backtest
+    from analytics.backtest import run_backtest, take_snapshot, list_snapshots
     from analytics.portfolio import build_portfolio_summary
     HAS_ANALYTICS = True
 except ImportError:
@@ -1221,6 +1221,54 @@ def chat_models():
 
 
 # ── Analytics endpoints ──────────────────────────────────────────────────────
+
+@app.route('/analytics/snapshot', methods=['POST'])
+def analytics_snapshot():
+    """
+    Capture the current KB conviction state into the signal_snapshots table.
+
+    One row per ticker with today's UTC date as snapshot_date. Idempotent
+    within a calendar day (repeated calls on the same day are no-ops).
+
+    Returns:
+      { "inserted": N, "skipped": M, "snapshot_date": "YYYY-MM-DD",
+        "snapshot_count": K, "snapshots": ["YYYY-MM-DD", ...] }
+
+    Run this today. Run it again in 4 weeks. After two snapshots exist,
+    GET /analytics/backtest switches from backward-looking to forward-looking.
+    """
+    if not HAS_ANALYTICS:
+        return jsonify({'error': 'analytics module not available'}), 503
+
+    try:
+        result   = take_snapshot(_DB_PATH)
+        snaps    = list_snapshots(_DB_PATH)
+        result['snapshot_count'] = len(snaps)
+        result['snapshots']      = snaps
+        return jsonify(result)
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('snapshot failed: %s', e)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/analytics/snapshot', methods=['GET'])
+def analytics_snapshot_list():
+    """
+    List all recorded signal snapshot dates.
+
+    Returns:
+      { "snapshot_count": K, "snapshots": ["YYYY-MM-DD", ...] }
+    """
+    if not HAS_ANALYTICS:
+        return jsonify({'error': 'analytics module not available'}), 503
+
+    try:
+        snaps = list_snapshots(_DB_PATH)
+        return jsonify({'snapshot_count': len(snaps), 'snapshots': snaps})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/analytics/backtest', methods=['GET'])
 def analytics_backtest():
