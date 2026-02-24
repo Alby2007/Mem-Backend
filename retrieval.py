@@ -60,6 +60,7 @@ _HIGH_VALUE_PREDICATES = (
     'return_1m', 'return_3m', 'return_6m', 'return_1y',
     'volatility_30d', 'volatility_90d', 'drawdown_from_52w_high',
     'return_vs_spy_1m', 'return_vs_spy_3m',
+    'invalidation_price', 'invalidation_distance', 'thesis_risk_level',
 )
 
 # Query keyword → predicate boost mapping
@@ -75,7 +76,7 @@ _KEYWORD_PREDICATE_BOOST: dict = {
     'long':        ('signal_direction', 'signal_quality'),
     'short':       ('signal_direction', 'signal_quality'),
     'catalyst':    ('catalyst',),
-    'risk':        ('risk_factor', 'signal_quality', 'macro_confirmation'),
+    'risk':        ('risk_factor', 'signal_quality', 'macro_confirmation', 'thesis_risk_level', 'invalidation_distance'),
     'earnings':    ('earnings_quality',),
     'confirm':     ('macro_confirmation', 'signal_quality'),
     'confirmed':   ('macro_confirmation', 'signal_quality'),
@@ -90,7 +91,18 @@ _KEYWORD_PREDICATE_BOOST: dict = {
     'momentum':    ('signal_direction', 'price_regime', 'signal_quality', 'return_1m', 'return_3m'),
     'extended':    ('signal_quality', 'price_regime'),
     'conflict':    ('signal_quality', 'macro_confirmation'),
-    'conviction':  ('signal_quality', 'upside_pct', 'macro_confirmation'),
+    'conviction':  ('signal_quality', 'upside_pct', 'macro_confirmation', 'thesis_risk_level'),
+    'invalidat':   ('invalidation_price', 'invalidation_distance', 'thesis_risk_level'),
+    'stop':        ('invalidation_price', 'invalidation_distance'),
+    'wrong':       ('invalidation_price', 'thesis_risk_level', 'signal_quality'),
+    'thesis':      ('thesis_risk_level', 'signal_quality', 'invalidation_price'),
+    'asymmet':     ('upside_pct', 'invalidation_distance', 'thesis_risk_level'),
+    'reward':      ('upside_pct', 'invalidation_distance', 'thesis_risk_level'),
+    'tightest':    ('invalidation_distance', 'thesis_risk_level'),
+    'widest':      ('invalidation_distance', 'thesis_risk_level'),
+    'tight':       ('thesis_risk_level', 'invalidation_distance', 'invalidation_price'),
+    'wide':        ('thesis_risk_level', 'invalidation_distance', 'upside_pct'),
+    'moderate':    ('thesis_risk_level', 'invalidation_distance'),
     'return':      ('return_1m', 'return_3m', 'return_6m', 'return_1y', 'return_vs_spy_1m'),
     'performance': ('return_1m', 'return_3m', 'return_6m', 'return_1y', 'return_vs_spy_3m'),
     'drawdown':    ('drawdown_from_52w_high', 'price_regime', 'volatility_90d'),
@@ -252,6 +264,7 @@ def retrieve(
         'return_1m', 'return_3m', 'return_6m', 'return_1y',
         'volatility_30d', 'volatility_90d', 'drawdown_from_52w_high',
         'return_vs_spy_1m', 'return_vs_spy_3m',
+        'invalidation_price', 'invalidation_distance', 'thesis_risk_level',
     )
     _pin_ph = ','.join('?' * len(_PINNED_PREDICATES))
     for ticker in tickers:
@@ -309,6 +322,11 @@ def retrieve(
         'return_1m', 'return_3m', 'return_6m', 'return_1y',
         'return_1w', 'drawdown_from_52w_high',
         'volatility_30d', 'volatility_90d', 'upside_pct',
+        'invalidation_distance',
+        # Note: thesis_risk_level is intentionally excluded — it is a
+        # categorical predicate (tight/moderate/wide) and cannot be
+        # meaningfully sorted numerically. It is fetched via the
+        # non-ranking branch when 'thesis', 'tight', 'risk' etc appear.
     })
 
     if boosted_predicates:
@@ -329,15 +347,14 @@ def retrieve(
                     pass
 
         # ── 3b. Cross-ticker ranking fetch ──────────────────────────────────
-        # Runs unconditionally when ranking predicates are in the boost set,
-        # regardless of whether tickers were named. Without this, queries like
-        # "which tickers outperformed SPY" fail because SPY is extracted as a
-        # ticker but is the benchmark, not the subjects of comparison.
-        # Fetches ALL atoms for each ranking predicate ordered by CAST(object
-        # AS REAL) DESC — gives the LLM a pre-sorted cross-ticker list.
-        # The seen-set (_add) deduplicates with the per-ticker fetch above.
+        # Fires when ranking predicates are in the boost set AND fewer than 2
+        # real equity tickers are named (open-ended screens like "which tickers
+        # outperformed SPY"). When 2+ tickers are named, the pinned pre-fetch
+        # already guarantees coverage — running Step 3b here would fill the
+        # result slots with irrelevant cross-ticker rows, pushing out
+        # thesis_risk_level / signal_quality for the named tickers.
         ranking_boost = boosted_predicates & _RANKING_PREDICATES
-        if ranking_boost:
+        if ranking_boost and len(tickers) < 2:
             for pred in ranking_boost:
                 try:
                     c.execute("""
@@ -345,12 +362,56 @@ def retrieve(
                         FROM facts
                         WHERE predicate = ?
                         ORDER BY CAST(object AS REAL) DESC
-                        LIMIT 30
+                        LIMIT 20
                     """, (pred,))
                     _add(c.fetchall())
                 except Exception:
                     pass
-        elif not tickers:
+        # Categorical boost predicates (not in RANKING) — fetch top subjects.
+        # Runs unconditionally when categorical predicates are boosted so that
+        # cross-ticker screens like "which have thesis_risk_level=tight" work
+        # even when spurious tokens (e.g. 'KB') are extracted as tickers.
+        #
+        # Special case: if a categorical predicate value appears as a query
+        # term (e.g. 'tight', 'wide', 'moderate', 'strong', 'confirmed'),
+        # fetch ALL atoms for that predicate WHERE object = that value so
+        # the LLM gets the filtered cross-ticker list, not random rows.
+        _CATEGORICAL_VALUES = frozenset({
+            'tight', 'moderate', 'wide',                     # thesis_risk_level
+            'strong', 'confirmed', 'extended', 'conflicted', 'weak',  # signal_quality
+            'confirmed', 'partial', 'unconfirmed',           # macro_confirmation
+            'near_52w_high', 'near_52w_low', 'mid_range',    # price_regime
+        })
+        cat_boost = boosted_predicates - _RANKING_PREDICATES
+        if cat_boost:
+            cat_ph = ','.join('?' * len(cat_boost))
+            # Check if any query term is a categorical value
+            value_filter = [t for t in terms if t in _CATEGORICAL_VALUES]
+            if value_filter:
+                for val in value_filter[:2]:  # max 2 value filters
+                    try:
+                        c.execute(f"""
+                            SELECT subject, predicate, object, source, confidence
+                            FROM facts
+                            WHERE predicate IN ({cat_ph})
+                            AND LOWER(object) = ?
+                            ORDER BY confidence DESC LIMIT 30
+                        """, (*cat_boost, val))
+                        _add(c.fetchall())
+                    except Exception:
+                        pass
+            else:
+                try:
+                    c.execute(f"""
+                        SELECT subject, predicate, object, source, confidence
+                        FROM facts
+                        WHERE predicate IN ({cat_ph})
+                        ORDER BY confidence DESC LIMIT 20
+                    """, (*cat_boost,))
+                    _add(c.fetchall())
+                except Exception:
+                    pass
+        if not tickers and not ranking_boost and not cat_boost:
             try:
                 c.execute(f"""
                     SELECT subject, predicate, object, source, confidence
@@ -409,11 +470,30 @@ def retrieve(
         return '', []
 
     # ── Re-rank by epistemic strength ─────────────────────────────────────────
+    # Interpretive derived predicates get a rank boost so they survive the
+    # results[:limit] truncation. Without this, high-confidence raw data atoms
+    # (e.g. last_price conf=0.95, risk_factor conf=0.85 from EDGAR) consistently
+    # push out signal_quality/thesis_risk_level (conf=0.70) that the LLM needs.
+    _INTERPRETIVE_PREDICATES = frozenset({
+        'signal_quality', 'thesis_risk_level', 'macro_confirmation',
+        'price_regime', 'signal_direction', 'upside_pct',
+        'invalidation_price', 'invalidation_distance',
+        'price_target', 'signal_confidence',
+    })
+
+    def _rank_key(atom: dict) -> float:
+        base = _effective_score(atom) if HAS_AUTHORITY else atom.get('confidence', 0.5)
+        if atom.get('predicate') in _INTERPRETIVE_PREDICATES:
+            return base + 0.15   # lift interpretive atoms above raw data
+        return base
+
     if HAS_AUTHORITY:
         try:
-            results.sort(key=_effective_score, reverse=True)
+            results.sort(key=_rank_key, reverse=True)
         except Exception:
             pass
+    else:
+        results.sort(key=lambda a: a.get('confidence', 0.5), reverse=True)
 
     results = results[:limit]
 

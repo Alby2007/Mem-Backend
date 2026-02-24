@@ -139,14 +139,16 @@ def _read_kb_atoms(
     c = conn.cursor()
 
     try:
-        # Fetch all relevant predicates ordered so highest confidence wins
+        # Fetch all relevant predicates ordered so highest confidence wins.
+        # low_52w and volatility_30d come from HistoricalBackfillAdapter —
+        # present after first backfill run; fallback rules fire if absent.
         c.execute("""
             SELECT subject, predicate, object, confidence
             FROM facts
             WHERE predicate IN (
                 'last_price', 'price_target', 'signal_direction',
                 'volatility_regime', 'market_cap_tier', 'sector',
-                'earnings_quality'
+                'earnings_quality', 'low_52w', 'volatility_30d'
             )
             ORDER BY subject, predicate, confidence DESC
         """)
@@ -172,6 +174,140 @@ def _read_kb_atoms(
 
 
 # ── Classification logic ───────────────────────────────────────────────────────
+
+# ── Invalidation thresholds ───────────────────────────────────────────────────
+# IP2/IP3: percentage-floor used when price is already near 52w low
+_NEAR_LOW_BUFFER     = 1.15   # price within 15% above low_52w → use floor
+_FLOOR_NEAR_LOW      = 0.85   # 15% below current price when near low
+_FLOOR_FALLBACK      = 0.80   # 20% below current price when low_52w missing
+
+# thesis_risk_level distance thresholds (invalidation_distance is always negative)
+_TIGHT_ABS           = -15.0  # Rule R-TIGHT primary: < 15% gap
+_TIGHT_VOL_DIST      = -25.0  # Rule R-TIGHT secondary: < 25% gap with high vol
+_TIGHT_VOL_THRESH    =  50.0  # annualised vol threshold for secondary tight rule
+_MOD_ABS             = -30.0  # Rule R-MODERATE primary: < 30% gap
+_MOD_VOL_DIST        = -40.0  # Rule R-MODERATE secondary: < 40% gap with med-high vol
+_MOD_VOL_THRESH      =  35.0  # annualised vol threshold for secondary moderate rule
+
+
+def _compute_invalidation_atoms(
+    ticker: str,
+    last_price: Optional[float],
+    low_52w: Optional[float],
+    vol_30d: Optional[float],
+    price_regime: str,
+    src_base: str,
+    meta: dict,
+) -> List[RawAtom]:
+    """
+    Compute invalidation_price, invalidation_distance, thesis_risk_level.
+
+    INVALIDATION PRICE RULES (priority order):
+      IP1 — 52w low anchor: if low_52w available AND price is not already
+            within _NEAR_LOW_BUFFER (15%) of that low, use low_52w.
+            This is the structural support level; break below it invalidates
+            the long thesis definitively.
+      IP2 — Near-low floor: if price IS within 15% of low_52w (already near
+            support), use last_price * _FLOOR_NEAR_LOW (15% below current).
+            Avoids setting an invalidation level that's already nearly breached.
+      IP3 — Fallback: low_52w not in KB yet (pre-backfill). Use
+            last_price * _FLOOR_FALLBACK (20% below current).
+
+    THESIS RISK LEVEL RULES (priority order, first match wins):
+      R-TIGHT:
+        - invalidation_distance > _TIGHT_ABS (-15%)                 [R-T1]
+        - OR distance > _TIGHT_VOL_DIST (-25%) AND vol > 50%        [R-T2]
+        - OR price_regime == near_52w_low                           [R-T3]
+      R-MODERATE:
+        - distance > _MOD_ABS (-30%)                                [R-M1]
+        - OR distance > _MOD_VOL_DIST (-40%) AND vol > 35%          [R-M2]
+      R-WIDE: all remaining cases                                   [R-W1]
+    """
+    from ingest.base import RawAtom  # local to avoid circular import at module level
+    atoms: List[RawAtom] = []
+
+    if last_price is None or last_price <= 0:
+        return atoms
+
+    # ── Compute invalidation_price ─────────────────────────────────────────────
+    if low_52w is not None and low_52w > 0:
+        if last_price > low_52w * _NEAR_LOW_BUFFER:
+            # Rule IP1: structural 52w low anchor
+            inv_price = round(low_52w, 2)
+            inv_rule  = 'IP1_52w_low'
+        else:
+            # Rule IP2: near-low floor (15% below current)
+            inv_price = round(last_price * _FLOOR_NEAR_LOW, 2)
+            inv_rule  = 'IP2_near_low_floor'
+    else:
+        # Rule IP3: no 52w low in KB yet — 20% floor
+        inv_price = round(last_price * _FLOOR_FALLBACK, 2)
+        inv_rule  = 'IP3_fallback_floor'
+
+    # ── Compute invalidation_distance ──────────────────────────────────────────
+    inv_dist = round((inv_price - last_price) / last_price * 100, 2)
+
+    # ── Classify thesis_risk_level ─────────────────────────────────────────────
+    vol = vol_30d  # annualised %, may be None
+
+    # Rule R-T3: already near 52w low — always tight regardless of distance
+    if price_regime == 'near_52w_low':
+        risk_level = 'tight'
+        risk_rule  = 'R-T3_near_52w_low'
+    # Rule R-T1: very close to invalidation
+    elif inv_dist > _TIGHT_ABS:
+        risk_level = 'tight'
+        risk_rule  = 'R-T1_dist_lt15pct'
+    # Rule R-T2: moderate distance but very high vol closes gap quickly
+    elif inv_dist > _TIGHT_VOL_DIST and vol is not None and vol > _TIGHT_VOL_THRESH:
+        risk_level = 'tight'
+        risk_rule  = 'R-T2_vol_gt50_dist_lt25pct'
+    # Rule R-M1: meaningful but not large distance
+    elif inv_dist > _MOD_ABS:
+        risk_level = 'moderate'
+        risk_rule  = 'R-M1_dist_lt30pct'
+    # Rule R-M2: larger distance but elevated vol can close it within weeks
+    elif inv_dist > _MOD_VOL_DIST and vol is not None and vol > _MOD_VOL_THRESH:
+        risk_level = 'moderate'
+        risk_rule  = 'R-M2_vol_gt35_dist_lt40pct'
+    # Rule R-W1: wide invalidation
+    else:
+        risk_level = 'wide'
+        risk_rule  = 'R-W1_wide'
+
+    inv_meta = {**meta, 'inv_rule': inv_rule, 'risk_rule': risk_rule,
+                'inv_price': str(inv_price), 'inv_dist': str(inv_dist),
+                'vol_30d': str(vol)}
+
+    atoms.append(RawAtom(
+        subject    = ticker,
+        predicate  = 'invalidation_price',
+        object     = str(inv_price),
+        confidence = 0.80,
+        source     = f'{src_base}_invalidation_price',
+        metadata   = inv_meta,
+        upsert     = True,
+    ))
+    atoms.append(RawAtom(
+        subject    = ticker,
+        predicate  = 'invalidation_distance',
+        object     = str(inv_dist),
+        confidence = 0.80,
+        source     = f'{src_base}_invalidation_dist',
+        metadata   = inv_meta,
+        upsert     = True,
+    ))
+    atoms.append(RawAtom(
+        subject    = ticker,
+        predicate  = 'thesis_risk_level',
+        object     = risk_level,
+        confidence = 0.70,
+        source     = f'{src_base}_thesis_risk',
+        metadata   = inv_meta,
+        upsert     = True,
+    ))
+    return atoms
+
 
 def _classify_price_regime(
     last_price: Optional[float],
@@ -388,6 +524,8 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
             last_price: Optional[float] = None
             price_target: Optional[float] = None
             upside_pct_val: Optional[float] = None
+            low_52w: Optional[float] = None
+            vol_30d: Optional[float] = None
 
             try:
                 last_price = float(preds['last_price'])
@@ -396,6 +534,16 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
 
             try:
                 price_target = float(preds['price_target'])
+            except (KeyError, ValueError, TypeError):
+                pass
+
+            try:
+                low_52w = float(preds['low_52w'])
+            except (KeyError, ValueError, TypeError):
+                pass
+
+            try:
+                vol_30d = float(preds['volatility_30d'])
             except (KeyError, ValueError, TypeError):
                 pass
 
@@ -467,6 +615,15 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                     metadata   = meta,
                     upsert     = True,
                 ))
+
+            # ── Invalidation layer atoms ───────────────────────────────────
+            # Requires last_price; emits invalidation_price, invalidation_distance,
+            # thesis_risk_level. Uses low_52w from HistoricalBackfillAdapter if
+            # present, otherwise falls back to percentage-based floors.
+            inv_atoms = _compute_invalidation_atoms(
+                ticker, last_price, low_52w, vol_30d, price_regime, src_base, meta
+            )
+            atoms.extend(inv_atoms)
 
             enriched += 1
 
