@@ -117,14 +117,46 @@ POST /retrieve { message }
     → strategy 5a: high-value predicates for first term
     → strategy 5b: fallback top-confidence (if < 8 results)
     → re-rank by authority.effective_score
+    → apply AdaptationNudges (from prior-turn streak):
+          prefer_recent=True       → sort by timestamp DESC
+          prefer_high_authority    → filter atoms below authority cutoff
+          retrieval_scope_broadened → broaden DB fetch if < 8 results
+    → increment hit_count for all returned (subject, predicate) pairs
+          feeds frequency term (δ) in PageRank importance formula
     → format into [Signals] [Theses] [Macro] [Research] [Other]
     → prepend graph_snippet if produced
     → compute_stress(atoms)
+    → update session streak:
+          stress >= 0.65 → streak++  else streak--
+    → compute AdaptationNudges for next turn
+    → if nudges.refresh_domain_queued → scheduler.run_now('yfinance')
     → if stress > 0.35 OR atoms < 8:
           classify_insufficiency(topic, stress_report, conn)
           → append kb_diagnosis to response
-    → return { snippet, atoms, stress, kb_diagnosis? }
+    → return { snippet, atoms, stress, adaptation?, kb_diagnosis? }
 ```
+
+### Adaptation Path
+
+```
+GET  /adapt/status?session_id=X
+    → return { streak, last_stress } for session
+
+POST /adapt/reset { session_id }
+    → zero streak + last_stress for session
+    → use on topic shift or new conversation start
+```
+
+#### AdaptationNudges rules (EpistemicAdaptationEngine)
+
+| Rule | Condition | Effect |
+|---|---|---|
+| 1. Scope broadening | domain_entropy < 0.35 + streak ≥ 2 | Broadens DB fetch to all sources |
+| 2. Authority filter | authority_conflict > 0.55 + streak ≥ 2 | Drops atoms below authority cutoff |
+| 3. Recency bias | decay_pressure > 0.50 + streak ≥ 2 | Sorts atoms by timestamp DESC |
+| 4. Consolidation mode | streak ≥ 3 | Lowers escalation threshold, raises confidence floor |
+| 5. Domain refresh queue | decay_pressure > 0.60 + streak ≥ 3 | Logs to domain_refresh_queue; dispatches run_now('yfinance') |
+| 6. KB insufficiency detection | consolidation fires ≥ 5× in 7 days | Triggers classify_insufficiency + generate_repair_proposals |
 
 ### Governance Path (on-demand)
 

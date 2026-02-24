@@ -136,6 +136,40 @@ class IngestScheduler:
         """
         return {name: status.to_dict() for name, status in self._status.items()}
 
+    def run_now(self, adapter_name: str) -> bool:
+        """
+        Trigger an out-of-schedule immediate run for a named adapter.
+
+        Used by the domain_refresh_queue when decay_pressure is sustained and
+        the EpistemicAdaptationEngine queues a refresh.
+
+        Returns True if the adapter was found and dispatched, False otherwise.
+        """
+        target = None
+        for adapter, interval_sec in self._adapters:
+            if adapter.name == adapter_name:
+                target = (adapter, interval_sec)
+                break
+
+        if target is None:
+            _logger.warning('run_now: adapter %r not found', adapter_name)
+            return False
+
+        adapter, interval_sec = target
+        if self._status[adapter_name].is_running:
+            _logger.info('run_now: %r already running, skipping', adapter_name)
+            return False
+
+        thread = threading.Thread(
+            target=self._run_adapter,
+            args=(adapter, interval_sec),
+            daemon=True,
+            name=f'ingest-now-{adapter.name}',
+        )
+        thread.start()
+        _logger.info('run_now: dispatched %r out-of-schedule', adapter_name)
+        return True
+
     def _schedule(
         self,
         adapter: BaseIngestAdapter,

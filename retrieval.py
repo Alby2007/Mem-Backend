@@ -120,9 +120,15 @@ def retrieve(
     message: str,
     conn: sqlite3.Connection,
     limit: int = 30,
+    nudges=None,   # AdaptationNudges | None — from EpistemicAdaptationEngine
 ) -> Tuple[str, List[dict]]:
     """
     Smart multi-strategy retrieval for the Trading KB.
+
+    nudges: optional AdaptationNudges from EpistemicAdaptationEngine.
+      - prefer_recent=True  → ORDER BY timestamp DESC in direct ticker match
+      - prefer_high_authority=True → post-filter atoms below authority cutoff
+      - retrieval_scope_broadened=True → also fetch atoms from all sources (no source filter)
 
     Returns:
         (formatted_snippet, raw_atom_list)
@@ -328,6 +334,68 @@ def retrieve(
             pass
 
     results = results[:limit]
+
+    # ── Apply adaptation nudges ────────────────────────────────────────────────
+    if nudges is not None:
+        # Recency bias: sort by timestamp DESC (prefer freshest atoms)
+        if getattr(nudges, 'prefer_recent', False) and results:
+            try:
+                from datetime import datetime as _dt
+                def _ts(a):
+                    m = a.get('metadata') or {}
+                    t = (m.get('as_of') or m.get('timestamp') or '') if isinstance(m, dict) else ''
+                    return t or '0'
+                results.sort(key=_ts, reverse=True)
+            except Exception:
+                pass
+
+        # Authority filter: drop atoms below cutoff when in high-conflict mode
+        if getattr(nudges, 'prefer_high_authority', False):
+            try:
+                if HAS_AUTHORITY:
+                    from knowledge.epistemic_adaptation import AUTHORITY_FILTER_CUTOFF
+                    from knowledge.authority import get_authority
+                    filtered = [a for a in results
+                                if _effective_score(a['confidence'], a['source'])
+                                >= AUTHORITY_FILTER_CUTOFF * 0.5
+                                or get_authority(a['source']) >= AUTHORITY_FILTER_CUTOFF]
+                    if len(filtered) >= 5:
+                        results = filtered
+            except Exception:
+                pass
+
+        # Scope broadening: if fewer than 8 results, broaden via all-source fallback
+        if getattr(nudges, 'retrieval_scope_broadened', False) and len(results) < 8:
+            try:
+                for term in terms[:2]:
+                    c.execute("""
+                        SELECT subject, predicate, object, source, confidence
+                        FROM facts
+                        WHERE (LOWER(subject) LIKE ? OR LOWER(object) LIKE ?)
+                        AND predicate NOT IN ('source_code','has_title','has_section','has_content')
+                        ORDER BY confidence DESC LIMIT 20
+                    """, (f'%{term}%', f'%{term}%'))
+                    _add(c.fetchall())
+                results = results[:limit]
+            except Exception:
+                pass
+
+    # ── Increment hit_count for returned atoms ─────────────────────────────────
+    # Feeds the frequency term (δ) in the PageRank importance formula.
+    # Best-effort: failure must not affect the response.
+    if results:
+        try:
+            subj_pred_pairs = list({
+                (a['subject'], a['predicate']) for a in results
+            })
+            for subj, pred in subj_pred_pairs:
+                c.execute("""
+                    UPDATE facts SET hit_count = COALESCE(hit_count, 0) + 1
+                    WHERE subject = ? AND predicate = ?
+                """, (subj, pred))
+            conn.commit()
+        except Exception:
+            pass
 
     # ── Format output ──────────────────────────────────────────────────────────
     lines = ['=== TRADING KNOWLEDGE CONTEXT ===']

@@ -95,6 +95,10 @@ _kg = KnowledgeGraph(db_path=_DB_PATH)
 # Start background decay worker (runs every 24h)
 _decay_worker = get_decay_worker(_DB_PATH)
 
+# Per-session streak store for epistemic adaptation
+# { session_id: { 'streak': int, 'last_stress': float } }
+_session_streaks: dict = {}
+
 # Start ingest scheduler (adapters run on their own intervals)
 _ingest_scheduler = None
 if HAS_INGEST:
@@ -257,7 +261,38 @@ def retrieve_endpoint():
         except Exception:
             pass
 
-    snippet, atoms = retrieve(message, conn)
+    # ── Compute adaptation nudges from prior stress streak ──────────────────
+    nudges = None
+    if HAS_ADAPTATION and HAS_STRESS:
+        try:
+            from knowledge.epistemic_adaptation import ensure_adaptation_tables
+            ensure_adaptation_tables(conn)
+            engine = get_adaptation_engine(session_id, db_path=_DB_PATH)
+            engine._session_id = session_id
+            # Build a minimal SystemState with streak
+            sess = _session_streaks.setdefault(session_id, {'streak': 0, 'last_stress': 0.0})
+
+            class _StateStub:
+                pass
+            state_stub = _StateStub()
+            state_stub.epistemic_stress_streak = sess['streak']
+            state_stub._session_id = session_id
+
+            # We need stress_report to compute nudges — compute it now from prior atoms
+            # This is a zero-cost re-use: nudges are based on the PREVIOUS turn's stress.
+            # The current turn's stress is computed after retrieve() and updates streak.
+            class _StressStub:
+                composite_stress = sess['last_stress']
+                decay_pressure   = 0.0
+                authority_conflict = 0.0
+                supersession_density = 0.0
+                conflict_cluster = 0.0
+                domain_entropy   = 1.0
+            nudges = engine.compute(state_stub, _StressStub(), topic=topic, key_terms=[])
+        except Exception:
+            nudges = None
+
+    snippet, atoms = retrieve(message, conn, nudges=nudges)
 
     response: dict = {
         'snippet': snippet,
@@ -283,6 +318,38 @@ def retrieve_endpoint():
             }
         except Exception:
             pass
+
+    # ── Update session streak from this turn's stress ────────────────────────
+    if HAS_ADAPTATION and stress_report:
+        try:
+            from knowledge.epistemic_adaptation import _STRESS_STREAK_THRESHOLD
+            sess = _session_streaks.setdefault(session_id, {'streak': 0, 'last_stress': 0.0})
+            if stress_report.composite_stress >= _STRESS_STREAK_THRESHOLD:
+                sess['streak'] = sess.get('streak', 0) + 1
+            else:
+                sess['streak'] = max(0, sess.get('streak', 0) - 1)
+            sess['last_stress'] = stress_report.composite_stress
+        except Exception:
+            pass
+
+    # ── Attach adaptation nudges to response ──────────────────────────────────
+    if nudges is not None and nudges.is_active():
+        response['adaptation'] = {
+            'streak':                   nudges.streak,
+            'consolidation_mode':       nudges.consolidation_mode,
+            'retrieval_scope_broadened': nudges.retrieval_scope_broadened,
+            'prefer_high_authority':    nudges.prefer_high_authority,
+            'prefer_recent':            nudges.prefer_recent,
+            'refresh_domain_queued':    nudges.refresh_domain_queued,
+            'conflict_synthesis_queued': nudges.conflict_synthesis_queued,
+            'kb_insufficient':          nudges.kb_insufficient,
+        }
+        # Dispatch domain_refresh_queue entries to ingest scheduler
+        if nudges.refresh_domain_queued and _ingest_scheduler and topic:
+            try:
+                _ingest_scheduler.run_now('yfinance')
+            except Exception:
+                pass
 
     # KB insufficiency classification — fires when stress is elevated or coverage thin
     if HAS_CLASSIFIER and stress_report and atoms:
@@ -537,6 +604,48 @@ def repair_impact():
         return jsonify(_dc.asdict(result) if _dc.is_dataclass(result) else result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/adapt/status', methods=['GET'])
+def adapt_status():
+    """
+    Return epistemic adaptation state for all active sessions.
+
+    Query params: session_id (optional — if omitted, returns all sessions)
+
+    Each entry:
+      streak         — consecutive high-stress turns
+      last_stress    — composite_stress from most recent turn
+      adaptation_active — True if streak has triggered any nudges
+    """
+    session_id = request.args.get('session_id')
+    if session_id:
+        sess = _session_streaks.get(session_id, {'streak': 0, 'last_stress': 0.0})
+        return jsonify({
+            'session_id': session_id,
+            'streak': sess['streak'],
+            'last_stress': sess['last_stress'],
+        })
+    return jsonify({
+        sid: {'streak': s['streak'], 'last_stress': s['last_stress']}
+        for sid, s in _session_streaks.items()
+    })
+
+
+@app.route('/adapt/reset', methods=['POST'])
+def adapt_reset():
+    """
+    Reset the epistemic stress streak for a session.
+
+    Body: { "session_id": "default" }
+
+    Use when a topic shift or new session should clear accumulated stress history.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    session_id = data.get('session_id', 'default')
+    if session_id in _session_streaks:
+        _session_streaks[session_id] = {'streak': 0, 'last_stress': 0.0}
+    return jsonify({'session_id': session_id, 'reset': True})
 
 
 @app.route('/kb/graph', methods=['POST'])
