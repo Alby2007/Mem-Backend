@@ -518,7 +518,7 @@ def retrieve(
                     from knowledge.epistemic_adaptation import AUTHORITY_FILTER_CUTOFF
                     from knowledge.authority import get_authority
                     filtered = [a for a in results
-                                if _effective_score(a['confidence'], a['source'])
+                                if _effective_score(a)
                                 >= AUTHORITY_FILTER_CUTOFF * 0.5
                                 or get_authority(a['source']) >= AUTHORITY_FILTER_CUTOFF]
                     if len(filtered) >= 5:
