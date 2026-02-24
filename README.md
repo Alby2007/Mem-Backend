@@ -4,6 +4,8 @@ A persistent, epistemically-governed knowledge base for trading intelligence.
 Provides signal storage, contradiction detection, confidence decay, and smart
 retrieval — all zero-LLM, pure Python, sub-2ms per operation.
 
+> **Ingest team:** see [CONTRIBUTING.md](CONTRIBUTING.md) for the full quickstart, adapter contract, predicate vocabulary, and source naming guide.
+
 ---
 
 ## Architecture
@@ -19,13 +21,15 @@ trading-galaxy/
 │   ├── epistemic_adaptation.py  # Adaptive retrieval when stress is sustained
 │   ├── working_state.py         # Cross-session persistent memory (goal, topic, threads)
 │   ├── kb_domain_schemas.py     # Trading predicate ontology (instrument, thesis, macro...)
-│   ├── graph_retrieval.py       # Graph traversal: PageRank, BFS paths, clusters
-│   └── kb_validation.py         # Atom validation layers
+│   ├── graph_retrieval.py       # Graph traversal: PageRank, BFS, clusters (built, not in API path yet)
+│   ├── kb_validation.py         # Atom validation layers (not yet wired)
+│   └── graph_v2.py              # Async graph with versioning (requires aiosqlite, not yet wired)
 ├── retrieval.py                 # Smart multi-strategy retrieval engine
 ├── api.py                       # Flask REST API
 ├── ingest/
 │   ├── base.py                  # BaseIngestAdapter + RawAtom contract (START HERE)
-│   └── __init__.py
+│   └── __init__.py              # exports BaseIngestAdapter, RawAtom
+├── CONTRIBUTING.md              # Ingest team guide
 └── requirements.txt
 ```
 
@@ -80,8 +84,18 @@ Response: `{ "ingested": 2, "skipped": 0 }`
 ### `POST /retrieve` — Smart retrieval for a query
 
 ```json
-{ "message": "What is the current signal on AAPL?", "session_id": "session_abc" }
+{
+  "message":    "What is the current signal on AAPL?",
+  "session_id": "session_abc",
+  "goal":       "optional — persist current working goal",
+  "topic":      "optional — persist current topic",
+  "turn_count": 0
+}
 ```
+
+`turn_count=0` injects `prior_context` from the last session into the response.
+`turn_count=1` anchors the session immediately (crash-safe).
+State is persisted on explicit `goal`/`topic` or every 5 turns.
 
 Response:
 ```json
@@ -138,10 +152,10 @@ GET /context/fed_rate_hike_2024
 
 ## Building an Ingest Adapter
 
-Subclass `BaseIngestAdapter` from `ingest/base.py`:
+Subclass `BaseIngestAdapter` from `ingest/`:
 
 ```python
-from ingest.base import BaseIngestAdapter, RawAtom
+from ingest import BaseIngestAdapter, RawAtom
 
 class MySignalFeed(BaseIngestAdapter):
     def __init__(self):

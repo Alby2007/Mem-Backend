@@ -3,17 +3,28 @@ Enhanced Knowledge Graph with Versioning and Conflict Resolution
 Addresses: versioning, deletion, confidence decay, conflict resolution, async safety
 """
 
-import sqlite3
-import aiosqlite
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
 import json
+import logging
+import sqlite3
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+from typing import List, Dict, Optional, Tuple
 
-from ..utils.logger import get_logger
+try:
+    import aiosqlite
+    HAS_AIOSQLITE = True
+except ImportError:
+    HAS_AIOSQLITE = False
+    aiosqlite = None  # type: ignore
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
+
+if not HAS_AIOSQLITE:
+    raise ImportError(
+        "graph_v2.py requires 'aiosqlite' (pip install aiosqlite). "
+        "This module is not used in the live request path — see knowledge/__init__.py."
+    )
 
 class KnowledgeGraphV2:
     """
