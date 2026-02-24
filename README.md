@@ -69,6 +69,75 @@ python api.py
 
 ---
 
+## Docker (recommended for sharing / collaboration)
+
+### One-command startup
+
+```bash
+git clone <repo>
+cd trading-galaxy
+cp .env.example .env
+# Optional: fill in FRED_API_KEY in .env for macro data
+docker-compose up
+```
+
+This starts two containers:
+- **`trading-galaxy`** — the API server + all ingest schedulers, DB at `/data/trading_knowledge.db` (persisted in the `kb-data` volume)
+- **`ollama`** — the LLM backend sidecar (official `ollama/ollama` image)
+
+The API is live at `http://localhost:5050` once both containers are healthy.
+
+### Pull a model into Ollama (first boot only)
+
+The Ollama container starts with no models. Pull your chosen model once:
+
+```bash
+docker-compose exec ollama ollama pull llama3.2
+```
+
+Set `OLLAMA_MODEL=llama3.2` (or whichever model you pulled) in `.env` — this is already the default in `.env.example`.
+
+### Seed the KB on a fresh instance
+
+After first boot the KB is empty. Trigger a full ingest immediately without waiting for the scheduler:
+
+```bash
+curl -X POST http://localhost:5050/ingest/run-all
+
+# Then run the historical backfill for returns / volatility / drawdown data:
+curl -X POST http://localhost:5050/ingest/historical
+```
+
+### Environment variables
+
+All variables are documented in `.env.example`. Key ones:
+
+| Variable | Default | Required | Purpose |
+|---|---|---|---|
+| `FRED_API_KEY` | *(empty)* | No | Free key from [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html). FRED adapter skips gracefully if unset. |
+| `OLLAMA_MODEL` | `llama3.2` | No | Model name — must match what you pulled with `ollama pull`. |
+| `OLLAMA_BASE_URL` | `http://ollama:11434` | No | Set in `docker-compose.yml`. Only change if running Ollama on a remote host. |
+| `TRADING_KB_DB` | `/data/trading_knowledge.db` | No | DB path inside the container. Mapped to the `kb-data` named volume. |
+| `PORT` | `5050` | No | Host port for the API. |
+| `EDGAR_USER_AGENT` | `TradingGalaxyKB admin@tradinggalaxy.dev` | No | SEC requires a contact string in the User-Agent header. |
+
+### Without the Ollama sidecar
+
+If you run Ollama locally outside Docker, set `OLLAMA_BASE_URL` in `.env` to point at your host:
+
+```bash
+# .env
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+```
+
+Then remove the `depends_on` clause from `docker-compose.yml` and start only the API container:
+
+```bash
+docker-compose up trading-galaxy
+```
+
+---
+
 ## Automated Ingest
 
 On startup, `api.py` launches a background scheduler that runs five ingest adapters automatically:

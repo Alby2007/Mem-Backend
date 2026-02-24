@@ -1,0 +1,36 @@
+services:
+  trading-galaxy:
+    build: .
+    ports:
+      - "${PORT:-5050}:5050"
+    env_file:
+      - .env
+    environment:
+      TRADING_KB_DB: /data/trading_knowledge.db
+      OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - kb-data:/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  kb-data:
+    driver: local
+  ollama-models:
+    driver: local
