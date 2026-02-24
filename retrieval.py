@@ -249,8 +249,8 @@ def retrieve(
     _PINNED_PREDICATES = (
         'last_price', 'price_target', 'signal_direction', 'earnings_quality',
         'signal_quality', 'macro_confirmation', 'price_regime', 'upside_pct',
-        'return_1m', 'return_3m', 'return_1y',
-        'volatility_30d', 'drawdown_from_52w_high',
+        'return_1m', 'return_3m', 'return_6m', 'return_1y',
+        'volatility_30d', 'volatility_90d', 'drawdown_from_52w_high',
         'return_vs_spy_1m', 'return_vs_spy_3m',
     )
     _pin_ph = ','.join('?' * len(_PINNED_PREDICATES))

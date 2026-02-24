@@ -31,6 +31,7 @@ trading-galaxy/
 │   ├── scheduler.py                     # Background scheduler (threading.Timer)
 │   ├── yfinance_adapter.py              # Yahoo Finance: price, fundamentals, targets
 │   ├── signal_enrichment_adapter.py     # Second-order KB signals (no external API)
+│   ├── historical_adapter.py            # 1y OHLCV summary backfill (returns, vol, drawdown)
 │   ├── fred_adapter.py                  # FRED: macro regime atoms (requires FRED_API_KEY)
 │   ├── edgar_adapter.py                 # SEC EDGAR: filings, insider transactions
 │   ├── rss_adapter.py                   # RSS: BBC, CNBC, MarketWatch, Yahoo Finance
