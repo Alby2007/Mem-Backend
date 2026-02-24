@@ -446,3 +446,107 @@ class TestEdgeCases:
         d = check(get("/search", params={"q":"NVDA & (fed OR macro)"}),
                   keys=["results"], label="edge-search-special")
         assert isinstance(d["results"], list)
+
+
+# ─── 9. CHAT / LLM LAYER ─────────────────────────────────────────────────────
+
+class TestChatLayer:
+    """
+    Tests for POST /chat and GET /chat/models.
+
+    Ollama may or may not be running locally.  All tests are written to pass
+    in BOTH states:
+      - Ollama available  → HTTP 200, answer is a non-empty string
+      - Ollama unavailable → HTTP 503, but snippet + atoms_used are still present
+    """
+
+    def test_chat_models_endpoint_shape(self):
+        """GET /chat/models always returns a dict with 'models' and 'available'."""
+        r = get("/chat/models")
+        assert r.status_code in (200, 503)
+        d = r.json()
+        assert "models" in d
+        assert "available" in d
+        assert isinstance(d["models"], list)
+
+    def test_chat_missing_message_400(self):
+        r = post("/chat", {"session_id": "test"})
+        assert r.status_code == 400
+
+    def test_chat_empty_message_400(self):
+        r = post("/chat", {"message": "", "session_id": "test"})
+        assert r.status_code == 400
+
+    def test_chat_malformed_json_400(self):
+        r = requests.post(f"{BASE}/chat", data="not-json",
+                          headers={"Content-Type": "application/json"})
+        assert r.status_code in (400, 200)
+
+    def test_chat_always_returns_snippet(self):
+        """
+        snippet and atoms_used are always populated, whether Ollama is up or not.
+        This verifies the KB-context-always-returned contract.
+        """
+        r = post("/chat", {"message": "What is the current signal on NVDA?",
+                           "session_id": "chat_test"})
+        assert r.status_code in (200, 503)
+        d = r.json()
+        assert "snippet" in d,    "snippet missing from /chat response"
+        assert "atoms_used" in d, "atoms_used missing from /chat response"
+        assert isinstance(d["atoms_used"], int) and d["atoms_used"] >= 0
+        assert isinstance(d["snippet"], str)
+
+    def test_chat_always_returns_model_field(self):
+        r = post("/chat", {"message": "macro regime inflation fed"})
+        assert r.status_code in (200, 503)
+        d = r.json()
+        assert "model" in d
+        assert isinstance(d["model"], str) and len(d["model"]) > 0
+
+    def test_chat_stress_block_when_atoms_present(self):
+        r = post("/chat", {"message": "NVDA META GOOGL signals price target",
+                           "session_id": "chat_stress_test"})
+        assert r.status_code in (200, 503)
+        d = r.json()
+        if d.get("atoms_used", 0) > 0:
+            assert "stress" in d, "stress block missing despite atoms being returned"
+            s = d["stress"]
+            for k in ("composite_stress", "decay_pressure", "authority_conflict"):
+                assert k in s, f"stress.{k} missing"
+            assert 0.0 <= s["composite_stress"] <= 1.0
+
+    def test_chat_answer_is_string_when_ollama_available(self):
+        """If Ollama IS available (200), answer must be a non-empty string."""
+        r = post("/chat", {"message": "What is the current macro regime?",
+                           "session_id": "chat_answer_test"})
+        if r.status_code == 200:
+            d = r.json()
+            assert "answer" in d
+            assert isinstance(d["answer"], str) and len(d["answer"]) > 0
+
+    def test_chat_503_when_ollama_unavailable_has_error_field(self):
+        """If Ollama is NOT available (503), response must have 'error' field."""
+        r = post("/chat", {"message": "NVDA signal"})
+        if r.status_code == 503:
+            d = r.json()
+            assert "error" in d, "503 response missing error field"
+            assert isinstance(d["error"], str) and len(d["error"]) > 0
+
+    def test_chat_atoms_used_matches_context_quality(self):
+        """atoms_used should be >= 0 and consistent across similar queries."""
+        r1 = post("/chat", {"message": "NVDA latest price and signal direction"})
+        r2 = post("/chat", {"message": "NVDA latest price and signal direction"})
+        assert r1.status_code in (200, 503)
+        assert r2.status_code in (200, 503)
+        d1, d2 = r1.json(), r2.json()
+        # Same query should return same atom count (deterministic retrieval)
+        assert d1.get("atoms_used") == d2.get("atoms_used"), \
+            f"atoms_used not deterministic: {d1.get('atoms_used')} vs {d2.get('atoms_used')}"
+
+    def test_chat_model_override(self):
+        """Caller can pass a custom model name; it should be echoed back."""
+        r = post("/chat", {"message": "AAPL sector", "model": "mistral"})
+        assert r.status_code in (200, 503)
+        d = r.json()
+        assert d.get("model") == "mistral", \
+            f"model not echoed back correctly: {d.get('model')}"

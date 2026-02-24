@@ -23,6 +23,13 @@ from typing import List, Optional
 
 from flask import Flask, request, jsonify
 
+try:
+    from llm.ollama_client import chat as ollama_chat, list_models, is_available, DEFAULT_MODEL
+    from llm.prompt_builder import build as build_prompt
+    HAS_LLM = True
+except ImportError:
+    HAS_LLM = False
+
 from knowledge import KnowledgeGraph
 from knowledge.decay import get_decay_worker
 from retrieval import retrieve
@@ -903,6 +910,221 @@ def kb_refresh_queue():
         result['kb_insufficient_log'] = []
 
     return jsonify(result)
+
+
+# ── LLM / Chat endpoints ─────────────────────────────────────────────────────
+
+@app.route('/chat', methods=['POST'])
+def chat_endpoint():
+    """
+    KB-grounded chat. Retrieves structured context, builds a KB-aware prompt,
+    and calls the local Ollama model to produce an answer.
+
+    Body:
+      {
+        "message":    "What is the current signal on NVDA?",
+        "session_id": "optional",
+        "model":      "llama3.2",  // optional — defaults to OLLAMA_MODEL env or llama3.2
+        "stream":     false
+      }
+
+    Returns:
+      {
+        "answer":     "...",          // null if Ollama unavailable
+        "model":      "llama3.2",
+        "stress":     { ... },
+        "atoms_used": 14,
+        "snippet":    "=== TRADING KNOWLEDGE CONTEXT ===...",
+        "kb_diagnosis": { ... },      // only if fired
+        "adaptation":   { ... }       // only if active
+      }
+
+    If Ollama is unavailable, returns HTTP 503 with the KB context still populated
+    so callers can render it even without an LLM answer.
+    """
+    data = request.get_json(force=True, silent=True)
+    if not data:
+        return jsonify({'error': 'invalid JSON'}), 400
+
+    message    = data.get('message', '').strip()
+    if not message:
+        return jsonify({'error': 'message is required'}), 400
+
+    session_id = data.get('session_id', 'default')
+    model      = data.get('model', DEFAULT_MODEL if HAS_LLM else 'llama3.2')
+    goal       = data.get('goal')
+    topic      = data.get('topic')
+    turn_count = int(data.get('turn_count', 1))
+    limit      = int(data.get('limit', 30))
+
+    conn = _kg.thread_local_conn()
+
+    # ── Prior session context (working_state) ──────────────────────────────
+    prior_context = None
+    if HAS_WORKING_STATE:
+        try:
+            ws = get_working_state_store(_DB_PATH)
+            if turn_count == 0:
+                prior_context = ws.format_prior_context(session_id) or None
+            ws.maybe_persist(session_id, turn_count, goal=goal, topic=topic,
+                             force=(turn_count == 1))
+        except Exception:
+            pass
+
+    # ── Adaptation nudges (from prior streak) ──────────────────────────────
+    nudges = None
+    if HAS_ADAPTATION and HAS_STRESS:
+        try:
+            from knowledge.epistemic_adaptation import ensure_adaptation_tables
+            ensure_adaptation_tables(conn)
+            engine = get_adaptation_engine(session_id, db_path=_DB_PATH)
+            engine._session_id = session_id
+            sess = _session_streaks.setdefault(session_id, {'streak': 0, 'last_stress': 0.0})
+
+            class _StateStub:
+                pass
+            state_stub = _StateStub()
+            state_stub.epistemic_stress_streak = sess['streak']
+            state_stub._session_id = session_id
+
+            class _StressStub:
+                composite_stress     = sess['last_stress']
+                decay_pressure       = 0.0
+                authority_conflict   = 0.0
+                supersession_density = 0.0
+                conflict_cluster     = 0.0
+                domain_entropy       = 1.0
+            nudges = engine.compute(state_stub, _StressStub(), topic=topic, key_terms=[])
+        except Exception:
+            nudges = None
+
+    # ── Retrieve KB context ────────────────────────────────────────────────
+    snippet, atoms = retrieve(message, conn, limit=limit, nudges=nudges)
+
+    # ── Epistemic stress ───────────────────────────────────────────────────
+    stress_report = None
+    stress_dict   = None
+    if HAS_STRESS and atoms:
+        try:
+            words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_/-]{1,}\b', message)
+            key_terms = list({w.lower() for w in words if len(w) > 2})[:10]
+            stress_report = compute_stress(atoms, key_terms, conn)
+            stress_dict = {
+                'composite_stress':     stress_report.composite_stress,
+                'decay_pressure':       stress_report.decay_pressure,
+                'authority_conflict':   stress_report.authority_conflict,
+                'supersession_density': stress_report.supersession_density,
+                'conflict_cluster':     stress_report.conflict_cluster,
+                'domain_entropy':       stress_report.domain_entropy,
+            }
+        except Exception:
+            pass
+
+    # ── Update session streak ──────────────────────────────────────────────
+    if HAS_ADAPTATION and stress_report:
+        try:
+            from knowledge.epistemic_adaptation import _STRESS_STREAK_THRESHOLD
+            sess = _session_streaks.setdefault(session_id, {'streak': 0, 'last_stress': 0.0})
+            if stress_report.composite_stress >= _STRESS_STREAK_THRESHOLD:
+                sess['streak'] = sess.get('streak', 0) + 1
+            else:
+                sess['streak'] = max(0, sess.get('streak', 0) - 1)
+            sess['last_stress'] = stress_report.composite_stress
+        except Exception:
+            pass
+
+    # ── KB insufficiency diagnosis ─────────────────────────────────────────
+    kb_diagnosis = None
+    if HAS_CLASSIFIER and stress_report and atoms:
+        try:
+            import re as _re
+            _tickers = [t for t in _re.findall(r'\b[A-Z]{2,5}\b', message)
+                        if t not in {'THE','IS','AT','ON','AN','AND','OR','FOR','IN','OF',
+                                     'TO','THAT','THIS','WITH','FROM','BY','ARE','WAS','BE',
+                                     'HAS','HAVE','HAD','ITS','DO','DID','WHAT','HOW','WHY',
+                                     'WHEN','WHERE','WHO','CAN','WILL','NOT','BUT','ALL'}]
+            _terms = [w.lower() for w in _re.findall(r'\b[a-zA-Z][a-zA-Z0-9]{2,}\b', message)]
+            composite  = getattr(stress_report, 'composite_stress', 0.0)
+            atom_count = len(atoms)
+            if composite > 0.35 or atom_count < 8:
+                topic_hint = (topic or
+                              (_tickers[0] if _tickers else None) or
+                              (_terms[0] if _terms else None) or
+                              message[:40])
+                diag = classify_insufficiency(topic_hint, stress_report, conn)
+                kb_diagnosis = {
+                    'topic':         diag.topic,
+                    'types':         [t.value for t in diag.types],
+                    'primary_type':  diag.primary_type().value,
+                    'confidence':    diag.confidence,
+                    'matched_rules': diag.matched_rules,
+                    'signals':       diag.signals,
+                }
+        except Exception:
+            pass
+
+    # ── Build response skeleton (always returned) ──────────────────────────
+    response: dict = {
+        'answer':     None,
+        'model':      model,
+        'atoms_used': len(atoms),
+        'snippet':    snippet,
+    }
+    if stress_dict:
+        response['stress'] = stress_dict
+    if kb_diagnosis:
+        response['kb_diagnosis'] = kb_diagnosis
+    if nudges is not None and nudges.is_active():
+        response['adaptation'] = {
+            'streak':                    nudges.streak,
+            'consolidation_mode':        nudges.consolidation_mode,
+            'retrieval_scope_broadened': nudges.retrieval_scope_broadened,
+            'prefer_high_authority':     nudges.prefer_high_authority,
+            'prefer_recent':             nudges.prefer_recent,
+        }
+
+    # ── Call Ollama ────────────────────────────────────────────────────────
+    if not HAS_LLM:
+        response['error'] = 'llm package not available'
+        return jsonify(response), 503
+
+    if not is_available():
+        response['error'] = 'Ollama not reachable — KB context returned without LLM answer'
+        return jsonify(response), 503
+
+    messages = build_prompt(
+        user_message=message,
+        snippet=snippet,
+        stress=stress_dict,
+        kb_diagnosis=kb_diagnosis,
+        prior_context=prior_context,
+    )
+
+    answer = ollama_chat(messages, model=model)
+    if answer is None:
+        response['error'] = 'Ollama returned no response'
+        return jsonify(response), 503
+
+    response['answer'] = answer
+    return jsonify(response)
+
+
+@app.route('/chat/models', methods=['GET'])
+def chat_models():
+    """
+    List locally available Ollama models.
+    Returns { "models": ["llama3.2", "mistral", ...], "default": "llama3.2" }
+    Returns { "models": [], "available": false } if Ollama is unreachable.
+    """
+    if not HAS_LLM:
+        return jsonify({'models': [], 'available': False,
+                        'error': 'llm package not available'}), 503
+    models = list_models()
+    return jsonify({
+        'models':    models,
+        'default':   DEFAULT_MODEL,
+        'available': bool(models),
+    })
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
