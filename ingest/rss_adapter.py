@@ -37,11 +37,12 @@ _logger = logging.getLogger(__name__)
 # ── RSS feed URLs ─────────────────────────────────────────────────────────────
 
 _DEFAULT_FEEDS: Dict[str, str] = {
-    'reuters_business': 'https://feeds.reuters.com/reuters/businessNews',
-    'reuters_markets':  'https://feeds.reuters.com/reuters/financialsNews',
-    'bbc_business':     'http://feeds.bbci.co.uk/news/business/rss.xml',
-    'cnbc_finance':     'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664',
-    'marketwatch':      'http://feeds.marketwatch.com/marketwatch/topstories/',
+    'yahoo_finance_news': 'https://feeds.finance.yahoo.com/rss/2.0/headline?region=US&lang=en-US',
+    'ft_home':            'https://www.ft.com/rss/home',
+    'investing_com':      'https://www.investing.com/rss/news.rss',
+    'bbc_business':       'http://feeds.bbci.co.uk/news/business/rss.xml',
+    'cnbc_finance':       'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664',
+    'marketwatch':        'http://feeds.marketwatch.com/marketwatch/topstories/',
 }
 
 
