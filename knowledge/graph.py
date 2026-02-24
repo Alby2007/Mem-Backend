@@ -25,6 +25,21 @@ except ImportError:
     HAS_CONTRADICTION = False
 
 
+def _ensure_hit_count_column(conn: sqlite3.Connection) -> None:
+    """
+    Idempotent migration: add `hit_count` column to facts table if absent.
+    hit_count will be incremented on retrieval by the hit-tracking PR.
+    Used as the frequency term (δ) in the graph importance formula.
+    Safe to call on every startup.
+    """
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(facts)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if 'hit_count' not in columns:
+        cursor.execute("ALTER TABLE facts ADD COLUMN hit_count INTEGER DEFAULT 0")
+        conn.commit()
+
+
 class TradingKnowledgeGraph:
     """
     Trading KB RDF triple store with:
@@ -126,6 +141,10 @@ class TradingKnowledgeGraph:
                 ensure_conflicts_table(self.conn)
             except Exception:
                 pass
+        try:
+            _ensure_hit_count_column(self.conn)
+        except Exception:
+            pass
     
     def _init_taxonomy(self, cursor):
         """Initialize trading domain taxonomy"""

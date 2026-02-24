@@ -7,6 +7,19 @@ clustering to produce a graph-structured context for synthesis.
 
 Useful for surfacing cross-instrument relationships, regime–signal chains,
 and thesis–evidence connectivity.
+
+Importance formula (Krish's weighted score):
+    importance[i] = α·pagerank[i] + β·degree[i] + γ·recency[i]
+                  + δ·frequency[i] + ε·confidence[i]
+
+    α=0.30  PageRank structural centrality
+    β=0.20  Degree centrality (hub-ness)
+    γ=0.25  Recency — confidence_effective (decay-adjusted) if available
+    δ=0.10  Frequency — hit_count / max_hit_count (stub until hit tracking PR)
+    ε=0.15  Base confidence
+
+δ is a stub: hit_count column exists in schema but stays 0 until the
+hit-tracking PR lands. When it does, no formula change is needed.
 """
 
 import re
@@ -18,6 +31,68 @@ try:
     HAS_NUMPY = True
 except ImportError:
     HAS_NUMPY = False
+
+# ── Importance weights ─────────────────────────────────────────────────────────
+_W_PAGERANK   = 0.30
+_W_DEGREE     = 0.20
+_W_RECENCY    = 0.25
+_W_FREQUENCY  = 0.10  # stub — requires hit_count column (see hit-tracking PR)
+_W_CONFIDENCE = 0.15
+
+
+# ============================================================
+# Per-node epistemic score helpers
+# ============================================================
+
+def _build_node_scores(
+    atoms: List[Dict],
+    node_to_idx: Dict[str, int],
+) -> Tuple[Dict[int, float], Dict[int, float], Dict[int, float]]:
+    """
+    Derive per-node recency, frequency, and confidence scores from atoms.
+
+    recency[i]    — max confidence_effective across atoms whose subject/object
+                    maps to node i. Falls back to base confidence if
+                    confidence_effective is absent (decay worker not yet run).
+    frequency[i]  — normalised hit_count. Stub: returns 0.0 until the
+                    hit-tracking PR adds hit_count increments on retrieval.
+    confidence[i] — max base confidence across atoms mapped to node i.
+
+    All three dicts are normalised to [0, 1] relative to their max value.
+    """
+    recency_raw:    Dict[int, float] = defaultdict(float)
+    frequency_raw:  Dict[int, float] = defaultdict(float)
+    confidence_raw: Dict[int, float] = defaultdict(float)
+
+    for atom in atoms:
+        subj = atom.get('subject', '').strip()
+        obj  = atom.get('object',  '').strip()
+        if len(obj) > 80:
+            obj = obj[:80].rsplit(' ', 1)[0]
+
+        base_conf = float(atom.get('confidence', 0.5) or 0.5)
+        eff_conf  = float(atom.get('confidence_effective') or base_conf)
+        hit_count = float(atom.get('hit_count', 0) or 0)
+
+        for node in (subj, obj):
+            if node not in node_to_idx:
+                continue
+            idx = node_to_idx[node]
+            recency_raw[idx]    = max(recency_raw[idx],    eff_conf)
+            frequency_raw[idx]  = max(frequency_raw[idx],  hit_count)
+            confidence_raw[idx] = max(confidence_raw[idx], base_conf)
+
+    def _normalise(d: Dict[int, float]) -> Dict[int, float]:
+        mx = max(d.values()) if d else 1.0
+        if mx == 0:
+            return {k: 0.0 for k in d}
+        return {k: v / mx for k, v in d.items()}
+
+    return (
+        _normalise(recency_raw),
+        _normalise(frequency_raw),
+        _normalise(confidence_raw),
+    )
 
 
 # ============================================================
@@ -242,9 +317,20 @@ def build_graph_context(atoms: List[Dict], user_message: str,
     pagerank = compute_pagerank(nodes, edges)
     degree = compute_degree_centrality(nodes, edges)
 
-    # Combined importance score
-    importance = {i: pagerank.get(i, 0) * 0.6 + degree.get(i, 0) * 0.4
-                  for i in range(len(nodes))}
+    # Per-node epistemic scores (recency, frequency stub, base confidence)
+    recency, frequency, confidence_score = _build_node_scores(atoms, node_to_idx)
+
+    # Combined importance score (α/β/γ/δ/ε weighted formula)
+    importance = {
+        i: (
+            _W_PAGERANK   * pagerank.get(i, 0)
+            + _W_DEGREE     * degree.get(i, 0)
+            + _W_RECENCY    * recency.get(i, 0)
+            + _W_FREQUENCY  * frequency.get(i, 0)
+            + _W_CONFIDENCE * confidence_score.get(i, 0)
+        )
+        for i in range(len(nodes))
+    }
 
     # Top central nodes
     top_nodes = sorted(importance.items(), key=lambda x: x[1], reverse=True)
