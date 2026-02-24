@@ -54,6 +54,36 @@ try:
 except ImportError:
     HAS_WORKING_STATE = False
 
+try:
+    from knowledge.kb_insufficiency_classifier import classify_insufficiency
+    HAS_CLASSIFIER = True
+except ImportError:
+    HAS_CLASSIFIER = False
+
+try:
+    from knowledge.kb_repair_proposals import generate_repair_proposals, ensure_repair_proposals_table
+    HAS_PROPOSALS = True
+except ImportError:
+    HAS_PROPOSALS = False
+
+try:
+    from knowledge.kb_repair_executor import execute_repair, rollback_repair, repair_impact_score
+    HAS_EXECUTOR = True
+except ImportError:
+    HAS_EXECUTOR = False
+
+try:
+    from knowledge.kb_validation import validate_all, governance_verdict
+    HAS_VALIDATION = True
+except ImportError:
+    HAS_VALIDATION = False
+
+try:
+    from knowledge.graph_retrieval import build_graph_context, what_do_i_know_about
+    HAS_GRAPH_RETRIEVAL = True
+except ImportError:
+    HAS_GRAPH_RETRIEVAL = False
+
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -237,19 +267,50 @@ def retrieve_endpoint():
         response['prior_context'] = prior_context
 
     # Attach epistemic stress if available
+    stress_report = None
     if HAS_STRESS and atoms:
         try:
             words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_/-]{1,}\b', message)
             key_terms = list({w.lower() for w in words if len(w) > 2})[:10]
-            stress = compute_stress(atoms, key_terms, conn)
+            stress_report = compute_stress(atoms, key_terms, conn)
             response['stress'] = {
-                'composite_stress':    stress.composite_stress,
-                'decay_pressure':      stress.decay_pressure,
-                'authority_conflict':  stress.authority_conflict,
-                'supersession_density': stress.supersession_density,
-                'conflict_cluster':    stress.conflict_cluster,
-                'domain_entropy':      stress.domain_entropy,
+                'composite_stress':    stress_report.composite_stress,
+                'decay_pressure':      stress_report.decay_pressure,
+                'authority_conflict':  stress_report.authority_conflict,
+                'supersession_density': stress_report.supersession_density,
+                'conflict_cluster':    stress_report.conflict_cluster,
+                'domain_entropy':      stress_report.domain_entropy,
             }
+        except Exception:
+            pass
+
+    # KB insufficiency classification — fires when stress is elevated or coverage thin
+    if HAS_CLASSIFIER and stress_report and atoms:
+        try:
+            import re as _re
+            _tickers = [t for t in _re.findall(r'\b[A-Z]{2,5}\b', message)
+                        if t not in {'THE','IS','AT','ON','AN','AND','OR','FOR','IN','OF',
+                                     'TO','THAT','THIS','WITH','FROM','BY','ARE','WAS','BE',
+                                     'HAS','HAVE','HAD','ITS','DO','DID','WHAT','HOW','WHY',
+                                     'WHEN','WHERE','WHO','CAN','WILL','NOT','BUT','ALL'}]
+            _terms = [w.lower() for w in _re.findall(r'\b[a-zA-Z][a-zA-Z0-9]{2,}\b', message)]
+            composite = getattr(stress_report, 'composite_stress', 0.0)
+            atom_count = len(atoms)
+            # Classify when stress elevated (>0.35) or very few atoms returned (<8)
+            if composite > 0.35 or atom_count < 8:
+                topic_hint = (topic or
+                              (_tickers[0] if _tickers else None) or
+                              (_terms[0] if _terms else None) or
+                              message[:40])
+                diagnosis = classify_insufficiency(topic_hint, stress_report, conn)
+                response['kb_diagnosis'] = {
+                    'topic':         diagnosis.topic,
+                    'types':         [t.value for t in diagnosis.types],
+                    'primary_type':  diagnosis.primary_type().value,
+                    'confidence':    diagnosis.confidence,
+                    'matched_rules': diagnosis.matched_rules,
+                    'signals':       diagnosis.signals,
+                }
         except Exception:
             pass
 
@@ -283,6 +344,279 @@ def context(entity: str):
     """
     facts = _kg.get_context(entity)
     return jsonify({'entity': entity, 'facts': facts, 'count': len(facts)})
+
+
+# ── Governance / Repair endpoints ─────────────────────────────────────────────
+
+@app.route('/repair/diagnose', methods=['POST'])
+def repair_diagnose():
+    """
+    Run KB insufficiency classification for a topic.
+
+    Body: { "topic": "NVDA" }
+
+    Returns an InsufficiencyDiagnosis: types, signals, confidence.
+    Does NOT modify any data.
+    """
+    if not HAS_CLASSIFIER:
+        return jsonify({'error': 'kb_insufficiency_classifier not available'}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    topic = data.get('topic', '').strip()
+    if not topic:
+        return jsonify({'error': 'topic is required'}), 400
+
+    conn = _kg.thread_local_conn()
+
+    # Build a minimal stress_report stub for the classifier
+    class _StressStub:
+        conflict_cluster      = 0.0
+        supersession_density  = 0.0
+        authority_conflict    = 0.0
+        domain_entropy        = 1.0
+
+    # Use real stress if available
+    stress_stub = _StressStub()
+    if HAS_STRESS:
+        try:
+            from retrieval import retrieve as _retrieve
+            _, atoms = _retrieve(topic, conn, limit=50)
+            if atoms:
+                from knowledge.epistemic_stress import compute_stress
+                stress_stub = compute_stress(atoms, [topic], conn)
+        except Exception:
+            pass
+
+    try:
+        diagnosis = classify_insufficiency(topic, stress_stub, conn)
+        return jsonify({
+            'topic':         diagnosis.topic,
+            'types':         [t.value for t in diagnosis.types],
+            'primary_type':  diagnosis.primary_type().value,
+            'confidence':    diagnosis.confidence,
+            'matched_rules': diagnosis.matched_rules,
+            'total_rules':   diagnosis.total_rules,
+            'signals':       diagnosis.signals,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/repair/proposals', methods=['POST'])
+def repair_proposals():
+    """
+    Generate repair proposals for a topic.
+
+    Body: { "topic": "NVDA" }
+
+    Returns a list of repair proposals (never executed here).
+    Requires kb_repair_proposals to be available.
+    """
+    if not HAS_PROPOSALS:
+        return jsonify({'error': 'kb_repair_proposals not available'}), 503
+    if not HAS_CLASSIFIER:
+        return jsonify({'error': 'kb_insufficiency_classifier not available'}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    topic = data.get('topic', '').strip()
+    if not topic:
+        return jsonify({'error': 'topic is required'}), 400
+
+    conn = _kg.thread_local_conn()
+
+    class _StressStub:
+        conflict_cluster      = 0.0
+        supersession_density  = 0.0
+        authority_conflict    = 0.0
+        domain_entropy        = 1.0
+
+    stress_stub = _StressStub()
+    if HAS_STRESS:
+        try:
+            from retrieval import retrieve as _retrieve
+            _, atoms = _retrieve(topic, conn, limit=50)
+            if atoms:
+                from knowledge.epistemic_stress import compute_stress
+                stress_stub = compute_stress(atoms, [topic], conn)
+        except Exception:
+            pass
+
+    try:
+        diagnosis = classify_insufficiency(topic, stress_stub, conn)
+        proposals = generate_repair_proposals(diagnosis, conn)
+        return jsonify({
+            'topic':     topic,
+            'diagnosis': {
+                'types':      [t.value for t in diagnosis.types],
+                'confidence': diagnosis.confidence,
+            },
+            'proposals': [
+                {
+                    'id':          p.proposal_id,
+                    'strategy':    p.strategy.value if hasattr(p.strategy, 'value') else str(p.strategy),
+                    'description': p.description,
+                    'is_primary':  p.is_primary,
+                    'preview':     p.preview.to_dict() if hasattr(p.preview, 'to_dict') else {},
+                    'simulation':  p.simulation.to_dict() if hasattr(p.simulation, 'to_dict') else {},
+                    'validation':  p.validation.to_dict() if hasattr(p.validation, 'to_dict') else {},
+                }
+                for p in (proposals if isinstance(proposals, list) else [])
+            ],
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/repair/execute', methods=['POST'])
+def repair_execute():
+    """
+    Execute a repair proposal by ID.
+
+    Body: { "proposal_id": "<uuid>", "dry_run": true }
+
+    dry_run=true (default) returns what would change without modifying data.
+    Set dry_run=false to apply the repair — irreversible until rollback.
+
+    This endpoint is human-gated. Always inspect proposals via /repair/proposals first.
+    """
+    if not HAS_EXECUTOR:
+        return jsonify({'error': 'kb_repair_executor not available'}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    proposal_id = data.get('proposal_id', '').strip()
+    dry_run     = bool(data.get('dry_run', True))
+
+    if not proposal_id:
+        return jsonify({'error': 'proposal_id is required'}), 400
+
+    try:
+        import dataclasses as _dc
+        result = execute_repair(proposal_id, _DB_PATH, dry_run=dry_run)
+        return jsonify(_dc.asdict(result) if _dc.is_dataclass(result) else result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/repair/rollback', methods=['POST'])
+def repair_rollback():
+    """
+    Roll back a previously executed repair.
+
+    Body: { "proposal_id": "<uuid>" }
+    """
+    if not HAS_EXECUTOR:
+        return jsonify({'error': 'kb_repair_executor not available'}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    proposal_id = data.get('proposal_id', '').strip()
+    if not proposal_id:
+        return jsonify({'error': 'proposal_id is required'}), 400
+
+    try:
+        import dataclasses as _dc
+        result = rollback_repair(proposal_id, _DB_PATH)
+        return jsonify(_dc.asdict(result) if _dc.is_dataclass(result) else result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/repair/impact', methods=['GET'])
+def repair_impact():
+    """
+    Aggregate repair calibration metrics across all executed repairs.
+
+    Query params: strategy (optional filter)
+    """
+    if not HAS_EXECUTOR:
+        return jsonify({'error': 'kb_repair_executor not available'}), 503
+
+    strategy = request.args.get('strategy')
+    try:
+        import dataclasses as _dc
+        result = repair_impact_score(strategy, _DB_PATH)
+        return jsonify(_dc.asdict(result) if _dc.is_dataclass(result) else result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/kb/graph', methods=['POST'])
+def kb_graph():
+    """
+    Graph-structured context for a topic or query.
+
+    Body: { "message": "How does Fed policy affect tech stocks?" }
+
+    Returns PageRank centrality, concept clusters, BFS paths between query concepts,
+    and key relationships — the relational layer above flat atom retrieval.
+    """
+    if not HAS_GRAPH_RETRIEVAL:
+        return jsonify({'error': 'graph_retrieval not available'}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    message = data.get('message', '').strip()
+    if not message:
+        return jsonify({'error': 'message is required'}), 400
+
+    conn = _kg.thread_local_conn()
+    try:
+        from retrieval import retrieve as _retrieve
+        _, atoms = _retrieve(message, conn, limit=100)
+        if not atoms:
+            return jsonify({'graph_context': '', 'atom_count': 0})
+
+        graph_ctx = build_graph_context(atoms, message, max_nodes_in_context=150)
+        return jsonify({
+            'graph_context': graph_ctx,
+            'atom_count':    len(atoms),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/kb/traverse', methods=['POST'])
+def kb_traverse():
+    """
+    Relational traversal — what does the KB know about a topic?
+
+    Body: { "topic": "fed_policy" }
+
+    Returns BFS-expanded connected concepts + direct facts from the knowledge graph.
+    Surfaces relational importance rather than keyword matches.
+    """
+    if not HAS_GRAPH_RETRIEVAL:
+        return jsonify({'error': 'graph_retrieval not available'}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    topic = data.get('topic', '').strip()
+    if not topic:
+        return jsonify({'error': 'topic is required'}), 400
+
+    conn = _kg.thread_local_conn()
+    try:
+        # Broad fetch for the topic
+        c = conn.cursor()
+        c.execute("""
+            SELECT subject, predicate, object, source, confidence
+            FROM facts
+            WHERE (LOWER(subject) LIKE ? OR LOWER(object) LIKE ?)
+            AND predicate NOT IN ('source_code','has_title','has_section','has_content')
+            ORDER BY confidence DESC LIMIT 200
+        """, (f'%{topic.lower()}%', f'%{topic.lower()}%'))
+        rows = c.fetchall()
+        atoms = [
+            {'subject': str(r[0]), 'predicate': str(r[1]),
+             'object': str(r[2])[:200], 'source': str(r[3] or ''),
+             'confidence': float(r[4] or 0.5)}
+            for r in rows
+        ]
+        traversal = what_do_i_know_about(topic, atoms)
+        return jsonify({
+            'topic':     topic,
+            'traversal': traversal,
+            'atom_count': len(atoms),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

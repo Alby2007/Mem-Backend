@@ -58,7 +58,8 @@ The system is designed to feed a copilot or LLM layer with accurate, ranked, non
 │                    retrieval.py                                  │
 │                                                                  │
 │  Multi-strategy retrieve():                                      │
-│  1. GNN atoms (cross-asset queries)                              │
+│  0. Graph-relational context (PageRank + clustering + BFS paths) │
+│  1. Cross-asset GNN atoms                                         │
 │  2. FTS on key terms (skipped when tickers+intent present)       │
 │  3. Predicate keyword boost (intent-aware predicate fetch)       │
 │  4. Direct ticker/subject match                                  │
@@ -75,6 +76,9 @@ The system is designed to feed a copilot or LLM layer with accurate, ranked, non
 │  POST /ingest          POST /retrieve      GET /query            │
 │  GET  /search          GET  /context/:e    GET  /stats           │
 │  GET  /health          GET  /ingest/status                       │
+│  POST /repair/diagnose POST /repair/proposals                    │
+│  POST /repair/execute  POST /repair/rollback GET /repair/impact  │
+│  POST /kb/graph        POST /kb/traverse                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -103,6 +107,9 @@ POST /retrieve { message }
     → _extract_key_terms()     # lowercase, stopword-filtered
     → _extract_tickers()       # uppercase 2-5 char sequences
     → pre-compute boosted_predicates from _KEYWORD_PREDICATE_BOOST
+    → strategy 0: graph-relational context (PageRank+clustering+BFS)
+                  fires on relational/explanatory queries or no tickers
+                  builds graph_snippet prepended to final output
     → strategy 1: GNN atoms (if cross-asset query)
     → strategy 2: FTS (skipped if tickers + intent keywords present)
     → strategy 3: predicate boost per ticker
@@ -111,8 +118,46 @@ POST /retrieve { message }
     → strategy 5b: fallback top-confidence (if < 8 results)
     → re-rank by authority.effective_score
     → format into [Signals] [Theses] [Macro] [Research] [Other]
+    → prepend graph_snippet if produced
     → compute_stress(atoms)
-    → return { snippet, atoms, stress }
+    → if stress > 0.35 OR atoms < 8:
+          classify_insufficiency(topic, stress_report, conn)
+          → append kb_diagnosis to response
+    → return { snippet, atoms, stress, kb_diagnosis? }
+```
+
+### Governance Path (on-demand)
+
+```
+POST /repair/diagnose { topic }
+    → retrieve(topic) → compute_stress(atoms)
+    → classify_insufficiency(topic, stress, conn)
+    → return InsufficiencyDiagnosis { types, signals, confidence }
+
+POST /repair/proposals { topic }
+    → diagnose(topic)
+    → generate_repair_proposals(diagnosis, conn)
+    → governance_verdict(validate_all(topic)) — applies confidence penalty
+    → return proposals[] { strategy, preview, simulation, validation }
+
+POST /repair/execute { proposal_id, dry_run=true }
+    → fetch proposal from repair_proposals table
+    → _snapshot_signals() before
+    → apply mutations atomically (BEGIN IMMEDIATE)
+    → _snapshot_signals() after
+    → auto-rollback if stress worsens by > 0.05
+    → write execution_log
+    → return ExecutionResult { before, after, divergence, mutations_applied }
+
+POST /kb/graph { message }
+    → retrieve(message, limit=100)
+    → build_graph_context(atoms) → PageRank + clusters + BFS paths
+    → return graph-structured context string
+
+POST /kb/traverse { topic }
+    → broad DB fetch for topic (LIMIT 200)
+    → what_do_i_know_about(topic, atoms) → BFS expansion depth 3
+    → return traversal string + connected concept list
 ```
 
 ---
@@ -152,16 +197,49 @@ Authority weights are assigned by source prefix (see `knowledge/authority.py`). 
 
 ---
 
-## Built but Not Yet Wired
+## Governance Stack (now live)
 
-These modules exist in `knowledge/` but are not active in the request path:
+The JARVIS epistemic governance stack is fully wired:
+
+| Module | Where wired | Role |
+|---|---|---|
+| `graph_retrieval.py` | `retrieval.py` strategy 0 | PageRank centrality, community clusters, BFS concept paths |
+| `kb_insufficiency_classifier.py` | `POST /retrieve` + `POST /repair/diagnose` | 9-rule insufficiency classifier — fires on elevated stress or thin coverage |
+| `kb_validation.py` | `POST /repair/proposals` (governance hook) | 3-layer governance: schema, semantic, cross-topic validation |
+| `kb_repair_proposals.py` | `POST /repair/proposals` | Generates repair proposals with preview + simulation + validation target |
+| `kb_repair_executor.py` | `POST /repair/execute`, `/rollback`, `/impact` | Human-gated atomic execution with auto-rollback and divergence tracking |
+
+### Insufficiency Types (9 rules)
+
+| Type | Condition |
+|---|---|
+| `coverage_gap` | < 10 atoms AND narrow sourcing |
+| `representation_inconsistency` | High conflict + high supersession |
+| `authority_imbalance` | High authority conflict AND > 60% low-auth atoms |
+| `semantic_duplication` | Many atoms + high Jaccard similarity |
+| `granularity_too_fine` | Many atoms + low predicate diversity + short objects |
+| `missing_schema` | Required predicates absent for detected domain |
+| `domain_boundary_collapse` | High entropy + many source prefixes (topic too broad) |
+| `semantic_incoherence` | Validation Layer 2 severity > 0.5 |
+| `cross_topic_drift` | Validation Layer 3 severity > 0.4 |
+
+### Repair Strategies
+
+| Strategy | When proposed |
+|---|---|
+| `ingest_missing` | Coverage gap detected |
+| `resolve_conflicts` | Representation inconsistency |
+| `merge_atoms` | Semantic duplication |
+| `introduce_predicates` | Missing schema predicates |
+| `reweight_sources` | Authority imbalance |
+| `deduplicate` | Semantic duplication (alt) |
+| `split_domain` | Domain boundary collapse |
+| `restore_atoms` | Entropy collapse after prior repair |
+| `manual_review` | Unknown / no automated strategy |
+
+## Still Dormant
 
 | Module | Purpose |
 |---|---|
 | `graph_v2.py` | Extended graph with richer traversal |
 | `graph_enhanced.py` | Extensions to graph_v2 |
-| `graph_retrieval.py` | PageRank / BFS / cluster traversal |
-| `kb_validation.py` | Atom validation layers |
-| `kb_insufficiency_classifier.py` | KB gap detection |
-| `kb_repair_proposals.py` | Repair suggestion engine |
-| `kb_repair_executor.py` | Repair execution engine |

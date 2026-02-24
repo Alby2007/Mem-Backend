@@ -12,12 +12,12 @@ __all__ = ['KnowledgeGraph']
 #   epistemic_adaptation.py — adaptive retrieval under sustained stress
 #   working_state.py      — cross-session goal/topic/thread memory
 #   kb_domain_schemas.py  — predicate ontology (reference only, not imported)
+#   graph_retrieval.py    — PageRank / BFS / cluster traversal (strategy 0 in retrieval.py)
+#   kb_insufficiency_classifier.py — KB gap detection (wired into /retrieve)
+#   kb_validation.py      — governance validation (wired into /repair endpoints)
+#   kb_repair_proposals.py — repair proposal generator (wired into /repair/proposals)
+#   kb_repair_executor.py  — repair execution engine (wired into /repair/execute)
 #
-# NOT YET WIRED (built, under review):
+# NOT YET WIRED:
 #   graph_v2.py           — extended graph with richer traversal
 #   graph_enhanced.py     — graph_v2 extensions
-#   graph_retrieval.py    — PageRank / BFS / cluster traversal
-#   kb_validation.py      — atom validation layers
-#   kb_insufficiency_classifier.py — KB gap detection
-#   kb_repair_proposals.py — repair suggestion engine
-#   kb_repair_executor.py  — repair execution engine

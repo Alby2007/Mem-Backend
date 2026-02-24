@@ -26,12 +26,25 @@ try:
 except ImportError:
     HAS_AUTHORITY = False
 
+try:
+    from knowledge.graph_retrieval import build_graph_context, what_do_i_know_about
+    HAS_GRAPH_RETRIEVAL = True
+except ImportError:
+    HAS_GRAPH_RETRIEVAL = False
+
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 _CROSS_ASSET_KW = (
     'compare', 'versus', 'vs', 'correlat', 'relation', 'between',
     'and ', 'all ', 'portfolio', 'cross', 'relative',
+)
+
+# Queries that benefit from relational graph traversal rather than keyword lookup
+_GRAPH_TRAVERSAL_KW = (
+    'why', 'how', 'explain', 'driven', 'affect', 'impact', 'related',
+    'connected', 'exposure', 'sensitive', 'through', 'chain', 'path',
+    'what do you know', 'tell me about', 'overview', 'summary',
 )
 
 _NOISE_PREDICATES = {
@@ -159,6 +172,44 @@ def retrieve(
         for kw, preds in _KEYWORD_PREDICATE_BOOST.items():
             if kw in term or term in kw:
                 boosted_predicates.update(preds)
+
+    # ── 0. Graph-relational context (PageRank + clustering + BFS paths) ───────
+    # Fires on relational/explanatory queries and when no explicit tickers present.
+    # Fetches a broad atom set for the topic then runs graph analysis over it.
+    graph_snippet: str = ''
+    is_graph_query = any(kw in msg_lower for kw in _GRAPH_TRAVERSAL_KW)
+    if HAS_GRAPH_RETRIEVAL and (is_graph_query or (not tickers and terms)):
+        try:
+            # Broad fetch: all atoms for the first two key terms, up to 200
+            graph_atoms: list = []
+            for term in terms[:2]:
+                c.execute("""
+                    SELECT subject, predicate, object, source, confidence
+                    FROM facts
+                    WHERE (LOWER(subject) LIKE ? OR LOWER(object) LIKE ?)
+                    AND predicate NOT IN ('source_code','has_title','has_section','has_content')
+                    ORDER BY confidence DESC LIMIT 100
+                """, (f'%{term}%', f'%{term}%'))
+                for r in c.fetchall():
+                    graph_atoms.append({
+                        'subject':    str(r[0]).strip(),
+                        'predicate':  str(r[1]).strip(),
+                        'object':     str(r[2])[:200].strip(),
+                        'source':     str(r[3]).strip() if r[3] else '',
+                        'confidence': float(r[4]) if r[4] else 0.5,
+                    })
+            # Deduplicate
+            seen_ga: set = set()
+            unique_graph_atoms = []
+            for a in graph_atoms:
+                k = (a['subject'], a['predicate'], a['object'][:60])
+                if k not in seen_ga:
+                    seen_ga.add(k)
+                    unique_graph_atoms.append(a)
+            if len(unique_graph_atoms) >= 5:
+                graph_snippet = build_graph_context(unique_graph_atoms, message, max_nodes_in_context=80)
+        except Exception:
+            pass
 
     # ── 1. Cross-asset / portfolio queries → GNN atoms ────────────────────────
     is_cross_asset = any(kw in msg_lower for kw in _CROSS_ASSET_KW)
@@ -319,4 +370,12 @@ def retrieve(
         lines.append('[Other]')
         lines.extend(_fmt(r) for r in other[:6])
 
-    return '\n'.join(lines), results
+    flat_snippet = '\n'.join(lines)
+
+    # Prepend graph-structured context when it was produced (relational queries)
+    if graph_snippet:
+        full_snippet = graph_snippet + '\n\n' + flat_snippet
+    else:
+        full_snippet = flat_snippet
+
+    return full_snippet, results
