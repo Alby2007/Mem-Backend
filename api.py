@@ -27,6 +27,16 @@ from knowledge.decay import get_decay_worker
 from retrieval import retrieve
 
 try:
+    from ingest.scheduler import IngestScheduler
+    from ingest.yfinance_adapter import YFinanceAdapter
+    from ingest.fred_adapter import FREDAdapter
+    from ingest.edgar_adapter import EDGARAdapter
+    from ingest.rss_adapter import RSSAdapter
+    HAS_INGEST = True
+except ImportError:
+    HAS_INGEST = False
+
+try:
     from knowledge.epistemic_stress import compute_stress
     HAS_STRESS = True
 except ImportError:
@@ -55,12 +65,49 @@ _kg = KnowledgeGraph(db_path=_DB_PATH)
 # Start background decay worker (runs every 24h)
 _decay_worker = get_decay_worker(_DB_PATH)
 
+# Start ingest scheduler (adapters run on their own intervals)
+_ingest_scheduler = None
+if HAS_INGEST:
+    try:
+        _ingest_scheduler = IngestScheduler(_kg)
+        _ingest_scheduler.register(YFinanceAdapter(),  interval_sec=900)    # 15 min
+        _ingest_scheduler.register(RSSAdapter(),       interval_sec=1800)   # 30 min
+        _ingest_scheduler.register(EDGARAdapter(),     interval_sec=21600)  # 6 hours
+        _ingest_scheduler.register(FREDAdapter(),      interval_sec=86400)  # 24 hours
+        _ingest_scheduler.start()
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('Failed to start ingest scheduler: %s', _e)
+        _ingest_scheduler = None
+
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok', 'db': _DB_PATH})
+
+
+@app.route('/ingest/status', methods=['GET'])
+def ingest_status():
+    """
+    Health check for the ingest scheduler.
+
+    Returns per-adapter status: last run time, atom count, errors.
+    Use this to detect silent failures (e.g. missing FRED_API_KEY,
+    yfinance rate limits, network errors).
+    """
+    if not _ingest_scheduler:
+        return jsonify({
+            'scheduler': 'not_running',
+            'reason': 'ingest dependencies not installed or scheduler failed to start',
+            'adapters': {},
+        })
+
+    return jsonify({
+        'scheduler': 'running',
+        'adapters': _ingest_scheduler.get_status(),
+    })
 
 
 @app.route('/stats', methods=['GET'])

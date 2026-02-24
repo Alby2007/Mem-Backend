@@ -27,8 +27,13 @@ trading-galaxy/
 ├── retrieval.py                 # Smart multi-strategy retrieval engine
 ├── api.py                       # Flask REST API
 ├── ingest/
-│   ├── base.py                  # BaseIngestAdapter + RawAtom contract (START HERE)
-│   └── __init__.py              # exports BaseIngestAdapter, RawAtom
+│   ├── base.py                  # BaseIngestAdapter + RawAtom contract
+│   ├── scheduler.py             # Background scheduler (threading.Timer)
+│   ├── yfinance_adapter.py      # Yahoo Finance: price, fundamentals, targets
+│   ├── fred_adapter.py          # FRED: macro regime atoms (requires FRED_API_KEY)
+│   ├── edgar_adapter.py         # SEC EDGAR: filings, insider transactions
+│   ├── rss_adapter.py           # RSS: Reuters, BBC, CNBC, MarketWatch headlines
+│   └── __init__.py              # exports all adapters + scheduler
 ├── CONTRIBUTING.md              # Ingest team guide
 └── requirements.txt
 ```
@@ -43,10 +48,37 @@ python api.py
 # API running at http://localhost:5050
 ```
 
-Override the DB path:
+### Environment Variables
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `TRADING_KB_DB` | No | `trading_knowledge.db` | SQLite database path |
+| `PORT` | No | `5050` | Flask server port |
+| `FRED_API_KEY` | No | *(skip FRED adapter)* | Free key from [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html) |
+| `EDGAR_USER_AGENT` | No | `TradingGalaxyKB admin@tradinggalaxy.dev` | SEC requires contact info in User-Agent |
+
 ```bash
-TRADING_KB_DB=/data/trading_knowledge.db python api.py
+# Full startup with all features:
+FRED_API_KEY=your_key_here python api.py
+
+# Without FRED (adapter skips gracefully):
+python api.py
 ```
+
+---
+
+## Automated Ingest
+
+On startup, `api.py` launches a background scheduler that runs four ingest adapters automatically:
+
+| Adapter | Source | Interval | API Key? | Authority |
+|---|---|---|---|---|
+| **YFinance** | Yahoo Finance (price, fundamentals, analyst targets) | 15 min | No | 1.00 |
+| **RSS News** | Reuters, BBC, CNBC, MarketWatch headlines | 30 min | No | 0.60 |
+| **EDGAR** | SEC filings (8-K, 10-Q, insider transactions) | 6 hours | No | 0.95 |
+| **FRED** | Fed funds rate, CPI, GDP, yield curve | 24 hours | Yes (free) | 0.80 |
+
+All adapters are fault-tolerant — if one fails (missing key, rate limit, network error), the others continue. Check adapter health via `GET /ingest/status`.
 
 ---
 
@@ -147,6 +179,24 @@ GET /context/fed_rate_hike_2024
 ```json
 { "total_facts": 14832, "unique_subjects": 512, "unique_predicates": 43 }
 ```
+
+---
+
+### `GET /ingest/status` — Ingest scheduler health
+
+```json
+{
+  "scheduler": "running",
+  "adapters": {
+    "yfinance":  { "last_run_at": "...", "last_success_at": "...", "total_atoms": 142, "total_errors": 0 },
+    "rss_news":  { "last_run_at": "...", "total_atoms": 58, "last_error": null },
+    "edgar":     { "last_run_at": "...", "total_atoms": 23, "total_errors": 0 },
+    "fred":      { "last_run_at": null, "last_error": "FRED_API_KEY not set", "total_errors": 1 }
+  }
+}
+```
+
+Use this to detect when an adapter is silently failing.
 
 ---
 
