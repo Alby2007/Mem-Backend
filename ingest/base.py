@@ -29,6 +29,15 @@ Use predicates from knowledge/kb_domain_schemas.py. Key ones:
     signal_quality      strong | confirmed | extended | conflicted | weak
     macro_confirmation  confirmed | partial | unconfirmed | no_data
 
+  Historical summaries (computed by HistoricalBackfillAdapter from 1y OHLCV):
+    return_1w / 1m / 3m / 6m / 1y    % return over standard windows
+    volatility_30d / 90d              annualised realised vol (% per year)
+    drawdown_from_52w_high            % drawdown from 52-week high close
+    high_52w / low_52w                52-week high / low close levels
+    price_6m_ago / price_1y_ago       anchoring reference prices
+    avg_volume_30d                    mean daily volume (30 trading days)
+    return_vs_spy_1m / 3m             excess return vs SPY benchmark
+
   Market theses:
     premise, supporting_evidence, contradicting_evidence,
     entry_condition, exit_condition, invalidated_by,
