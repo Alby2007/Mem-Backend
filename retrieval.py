@@ -153,6 +153,13 @@ def retrieve(
     terms = _extract_key_terms(message)
     tickers = _extract_tickers(message)
 
+    # Pre-compute boost predicates so FTS can be skipped when not needed
+    boosted_predicates: set = set()
+    for term in terms:
+        for kw, preds in _KEYWORD_PREDICATE_BOOST.items():
+            if kw in term or term in kw:
+                boosted_predicates.update(preds)
+
     # ── 1. Cross-asset / portfolio queries → GNN atoms ────────────────────────
     is_cross_asset = any(kw in msg_lower for kw in _CROSS_ASSET_KW)
     if is_cross_asset:
@@ -167,7 +174,11 @@ def retrieve(
             pass
 
     # ── 2. FTS on key terms ────────────────────────────────────────────────────
-    if terms:
+    # Skip FTS when explicit tickers + intent keywords are both present —
+    # the boost (step 3) gives more precise results and FTS would flood seen-set
+    # with low-value sector/price atoms before price_target atoms get added.
+    use_fts = not (tickers and boosted_predicates)
+    if use_fts and terms:
         fts_query = ' OR '.join(terms[:6])
         try:
             c.execute("""
@@ -183,13 +194,7 @@ def retrieve(
             pass
 
     # ── 3. Predicate keyword boost (intent-aware) ───────────────────────────
-    # Run BEFORE bulk ticker match so high-value atoms (price_target,
-    # signal_direction, sector, regime...) are collected first.
-    boosted_predicates: set = set()
-    for term in terms:
-        for kw, preds in _KEYWORD_PREDICATE_BOOST.items():
-            if kw in term or term in kw:
-                boosted_predicates.update(preds)
+    # Runs BEFORE bulk ticker match. Fetches exact predicate atoms for tickers.
 
     if boosted_predicates:
         pred_ph = ','.join('?' * len(boosted_predicates))
