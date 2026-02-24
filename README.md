@@ -102,11 +102,22 @@ Set `OLLAMA_MODEL=llama3.2` (or whichever model you pulled) in `.env` — this i
 After first boot the KB is empty. Trigger a full ingest immediately without waiting for the scheduler:
 
 ```bash
+# bash / WSL / Git Bash / macOS:
 curl -X POST http://localhost:5050/ingest/run-all
-
-# Then run the historical backfill for returns / volatility / drawdown data:
 curl -X POST http://localhost:5050/ingest/historical
 ```
+
+```powershell
+# PowerShell (Windows) — curl is aliased to Invoke-WebRequest, use curl.exe or Invoke-RestMethod:
+curl.exe -X POST http://localhost:5050/ingest/run-all
+curl.exe -X POST http://localhost:5050/ingest/historical
+
+# Or with native PowerShell syntax:
+Invoke-RestMethod -Method POST http://localhost:5050/ingest/run-all
+Invoke-RestMethod -Method POST http://localhost:5050/ingest/historical
+```
+
+> **Note:** The first `docker-compose up` is slow because it pulls `python:3.11-slim` (~200 MB) and `ollama/ollama` (~2 GB). Subsequent startups use cached images and are near-instant.
 
 ### Environment variables
 
