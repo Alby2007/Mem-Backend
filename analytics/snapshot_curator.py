@@ -161,6 +161,8 @@ def _score_opportunity(
     sector_affinity: List[str],
     risk_tolerance: str,
     existing_tickers: List[str],
+    personal_context: Optional[object] = None,
+    calibration: Optional[object] = None,
 ) -> float:
     """
     Score an opportunity for relevance to a user profile.
@@ -201,6 +203,38 @@ def _score_opportunity(
         score += 0.10
     elif macro_conf == 'partial':
         score += 0.05
+
+    # ── Personal context adjustments ──────────────────────────────────────────
+    if personal_context is not None:
+        try:
+            # Preferred pattern match: check if any open pattern for this ticker
+            # matches the user's preferred pattern
+            preferred_pattern = getattr(personal_context, 'preferred_pattern', None)
+            if preferred_pattern and atoms.get('pattern_type') == preferred_pattern:
+                score += 0.15
+
+            # Preferred upside minimum
+            preferred_upside_min = getattr(personal_context, 'preferred_upside_min', None)
+            if preferred_upside_min is not None:
+                try:
+                    upside = float(atoms.get('upside_pct', 0) or 0)
+                    if upside < preferred_upside_min:
+                        score -= 0.30
+                except (ValueError, TypeError):
+                    pass
+        except Exception:
+            pass
+
+    # ── Calibration adjustment ─────────────────────────────────────────────────
+    if calibration is not None:
+        try:
+            conf = getattr(calibration, 'calibration_confidence', 0.0) or 0.0
+            hr2  = getattr(calibration, 'hit_rate_t2', None)
+            if conf >= 0.30 and hr2 is not None:
+                # Scale ±0.20 around the neutral 0.50 baseline
+                score += (hr2 - 0.50) * 0.40
+        except Exception:
+            pass
 
     return score
 
@@ -346,10 +380,22 @@ def curate_snapshot(user_id: str, db_path: str) -> CuratedSnapshot:
 
     Uses portfolio-derived user model when available;
     falls back to onboarding preferences otherwise.
+    Incorporates personal context and expanded universe when available.
     """
     from users.user_store import (
         get_user_model, get_portfolio, get_user, ensure_user_tables
     )
+
+    # ── Load personal context and expanded universe (graceful no-op if absent) ─
+    personal_context = None
+    expanded_tickers: List[str] = []
+    try:
+        from users.personal_kb import get_context_document
+        from ingest.dynamic_watchlist import DynamicWatchlistManager
+        personal_context = get_context_document(user_id, db_path)
+        expanded_tickers = DynamicWatchlistManager.get_user_tickers(user_id, db_path)
+    except Exception:
+        pass
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -388,12 +434,18 @@ def curate_snapshot(user_id: str, db_path: str) -> CuratedSnapshot:
         }
         existing_tickers = [h['ticker'].upper() for h in holdings]
 
+        # ── Merge expanded universe into opportunity pool ───────────────────────
+        all_candidate_tickers = set(all_atoms.keys())
+        for et in expanded_tickers:
+            all_candidate_tickers.add(et.lower())
+
         # ── Curate opportunities ───────────────────────────────────────────────
         allowed_tiers = _RISK_PROFILE_TIER_FILTER.get(risk_tolerance, {'high', 'medium'})
         avoid_list    = []
         candidates    = []
 
-        for ticker_lower, atoms in all_atoms.items():
+        for ticker_lower in all_candidate_tickers:
+            atoms = all_atoms.get(ticker_lower, {})
             tier = atoms.get('conviction_tier', '')
             if not tier:
                 continue
@@ -412,8 +464,23 @@ def curate_snapshot(user_id: str, db_path: str) -> CuratedSnapshot:
             if tier not in allowed_tiers:
                 continue
 
+            # Fetch calibration for this ticker (None = < 10 samples, skip calibration branch)
+            calibration = None
+            try:
+                from analytics.signal_calibration import get_calibration
+                calibration = get_calibration(
+                    ticker=ticker_lower,
+                    pattern_type=atoms.get('pattern_type', 'fvg'),
+                    timeframe=atoms.get('timeframe', '1h'),
+                    db_path=db_path,
+                    market_regime=macro.get('market_regime'),
+                )
+            except Exception:
+                pass
+
             score = _score_opportunity(
-                ticker_lower, atoms, sector_affinity, risk_tolerance, existing_tickers
+                ticker_lower, atoms, sector_affinity, risk_tolerance,
+                existing_tickers, personal_context, calibration,
             )
             candidates.append((ticker_lower, atoms, score))
 

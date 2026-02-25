@@ -93,6 +93,13 @@ from typing import Dict, List, Optional
 from ingest.base import BaseIngestAdapter, RawAtom
 
 try:
+    from ingest.dynamic_watchlist import DynamicWatchlistManager
+    _HAS_DYNAMIC_WATCHLIST = True
+except ImportError:
+    _HAS_DYNAMIC_WATCHLIST = False
+    DynamicWatchlistManager = None  # type: ignore
+
+try:
     import yfinance as yf
     import pandas as pd
     import numpy as np
@@ -177,10 +184,12 @@ class HistoricalBackfillAdapter(BaseIngestAdapter):
     Not registered in the scheduler; call run_and_push() directly or via API.
     """
 
-    def __init__(self, tickers: Optional[List[str]] = None):
+    def __init__(self, tickers: Optional[List[str]] = None, db_path: Optional[str] = None):
         super().__init__(name='historical_backfill')
         if tickers:
             self.tickers = [t.upper() for t in tickers]
+        elif _HAS_DYNAMIC_WATCHLIST and db_path:
+            self.tickers = DynamicWatchlistManager.get_active_tickers(db_path)
         else:
             # Import default list from yfinance adapter to stay in sync
             try:

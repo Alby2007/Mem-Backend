@@ -762,6 +762,195 @@ def get_user_tier(db_path: str, user_id: str) -> str:
         conn.close()
 
 
+# ── Hybrid build tables ────────────────────────────────────────────────────────
+
+_DDL_UNIVERSE_TICKERS = """
+CREATE TABLE IF NOT EXISTS universe_tickers (
+    ticker          TEXT PRIMARY KEY,
+    requested_by    TEXT,
+    sector_label    TEXT,
+    coverage_count  INTEGER DEFAULT 1,
+    added_to_ingest INTEGER DEFAULT 0,
+    added_at        TEXT NOT NULL
+)
+"""
+
+_DDL_TICKER_STAGING = """
+CREATE TABLE IF NOT EXISTS ticker_staging (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker           TEXT NOT NULL,
+    user_id          TEXT NOT NULL,
+    requested_at     TEXT NOT NULL,
+    coverage_count   INTEGER DEFAULT 1,
+    promoted         INTEGER DEFAULT 0,
+    promoted_at      TEXT,
+    rejection_reason TEXT
+)
+"""
+
+_DDL_USER_UNIVERSE_EXPANSIONS = """
+CREATE TABLE IF NOT EXISTS user_universe_expansions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       TEXT NOT NULL,
+    description   TEXT NOT NULL,
+    sector_label  TEXT,
+    tickers       TEXT DEFAULT '[]',
+    etfs          TEXT DEFAULT '[]',
+    keywords      TEXT DEFAULT '[]',
+    causal_edges  TEXT DEFAULT '[]',
+    status        TEXT DEFAULT 'active',
+    requested_at  TEXT NOT NULL,
+    activated_at  TEXT
+)
+"""
+
+_DDL_USER_KB_CONTEXT = """
+CREATE TABLE IF NOT EXISTS user_kb_context (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT NOT NULL,
+    subject     TEXT NOT NULL,
+    predicate   TEXT NOT NULL,
+    object      TEXT NOT NULL,
+    confidence  REAL DEFAULT 1.0,
+    source      TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    UNIQUE(user_id, subject, predicate)
+)
+"""
+
+_DDL_USER_ENGAGEMENT_EVENTS = """
+CREATE TABLE IF NOT EXISTS user_engagement_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      TEXT NOT NULL,
+    event_type   TEXT NOT NULL,
+    ticker       TEXT,
+    pattern_type TEXT,
+    sector       TEXT,
+    timestamp    TEXT NOT NULL
+)
+"""
+
+_DDL_SIGNAL_CALIBRATION = """
+CREATE TABLE IF NOT EXISTS signal_calibration (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker                  TEXT NOT NULL,
+    pattern_type            TEXT NOT NULL,
+    timeframe               TEXT NOT NULL,
+    market_regime           TEXT,
+    sample_size             INTEGER DEFAULT 0,
+    hit_rate_t1             REAL,
+    hit_rate_t2             REAL,
+    hit_rate_t3             REAL,
+    stopped_out_rate        REAL,
+    avg_time_to_target_hours REAL,
+    calibration_confidence  REAL DEFAULT 0.0,
+    last_updated            TEXT NOT NULL,
+    UNIQUE(ticker, pattern_type, timeframe, market_regime)
+)
+"""
+
+
+def ensure_hybrid_tables(conn: sqlite3.Connection) -> None:
+    """Create all hybrid build tables if they do not exist. Idempotent."""
+    conn.execute(_DDL_UNIVERSE_TICKERS)
+    conn.execute(_DDL_TICKER_STAGING)
+    conn.execute(_DDL_USER_UNIVERSE_EXPANSIONS)
+    conn.execute(_DDL_USER_KB_CONTEXT)
+    conn.execute(_DDL_USER_ENGAGEMENT_EVENTS)
+    conn.execute(_DDL_SIGNAL_CALIBRATION)
+    conn.commit()
+
+
+# ── Universe tickers store helpers ─────────────────────────────────────────────
+
+def get_universe_tickers(db_path: str) -> List[dict]:
+    """Return all promoted universe_tickers rows."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_hybrid_tables(conn)
+        rows = conn.execute(
+            """SELECT ticker, requested_by, sector_label, coverage_count,
+                      added_to_ingest, added_at
+               FROM universe_tickers ORDER BY coverage_count DESC"""
+        ).fetchall()
+        cols = ['ticker', 'requested_by', 'sector_label', 'coverage_count',
+                'added_to_ingest', 'added_at']
+        return [dict(zip(cols, r)) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_staged_tickers(db_path: str, user_id: Optional[str] = None) -> List[dict]:
+    """Return ticker_staging rows, optionally filtered by user."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_hybrid_tables(conn)
+        if user_id:
+            rows = conn.execute(
+                """SELECT id, ticker, user_id, requested_at, coverage_count,
+                          promoted, promoted_at, rejection_reason
+                   FROM ticker_staging WHERE user_id = ? ORDER BY requested_at DESC""",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT id, ticker, user_id, requested_at, coverage_count,
+                          promoted, promoted_at, rejection_reason
+                   FROM ticker_staging ORDER BY requested_at DESC"""
+            ).fetchall()
+        cols = ['id', 'ticker', 'user_id', 'requested_at', 'coverage_count',
+                'promoted', 'promoted_at', 'rejection_reason']
+        return [dict(zip(cols, r)) for r in rows]
+    finally:
+        conn.close()
+
+
+def log_engagement_event(
+    db_path: str,
+    user_id: str,
+    event_type: str,
+    ticker: Optional[str] = None,
+    pattern_type: Optional[str] = None,
+    sector: Optional[str] = None,
+) -> None:
+    """Insert a user engagement event row."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_hybrid_tables(conn)
+        conn.execute(
+            """INSERT INTO user_engagement_events
+               (user_id, event_type, ticker, pattern_type, sector, timestamp)
+               VALUES (?,?,?,?,?,?)""",
+            (user_id, event_type, ticker, pattern_type, sector, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_engagement_events(
+    db_path: str, user_id: str, limit: int = 100
+) -> List[dict]:
+    """Return recent engagement events for a user."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_hybrid_tables(conn)
+        rows = conn.execute(
+            """SELECT id, user_id, event_type, ticker, pattern_type, sector, timestamp
+               FROM user_engagement_events WHERE user_id = ?
+               ORDER BY timestamp DESC LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
+        cols = ['id', 'user_id', 'event_type', 'ticker', 'pattern_type', 'sector', 'timestamp']
+        return [dict(zip(cols, r)) for r in rows]
+    finally:
+        conn.close()
+
+
+# ── tip_feedback ────────────────────────────────────────────────────────────────
+
 _DDL_TIP_FEEDBACK = """
 CREATE TABLE IF NOT EXISTS tip_feedback (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,

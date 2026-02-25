@@ -178,6 +178,7 @@ def format_tip(
     position:    Optional[PositionRecommendation],
     tier:        str = 'basic',
     skew_filter: Optional[dict] = None,
+    calibration: Optional[object] = None,
 ) -> str:
     """
     Render a complete Telegram MarkdownV2 tip message.
@@ -262,7 +263,7 @@ def format_tip(
                 f'{_escape_mdv2(size_note)}{stop_note}',
             ]
 
-    lines += [
+    kb_lines = [
         '',
         '━━━━━━━━━━━━━━━',
         f'📊 *KB CONTEXT*',
@@ -273,6 +274,23 @@ def format_tip(
         f'Pattern score: {_escape_mdv2(f"{pattern.quality_score:.2f}/1.0")}',
     ]
 
+    # Calibration hit rate line — only shown if calibration_confidence >= 0.50
+    if calibration is not None:
+        try:
+            conf = getattr(calibration, 'calibration_confidence', 0.0) or 0.0
+            if conf >= 0.50:
+                hr2  = getattr(calibration, 'hit_rate_t2', None)
+                n    = getattr(calibration, 'sample_size', 0)
+                regime = getattr(calibration, 'market_regime', None) or 'all regimes'
+                if hr2 is not None:
+                    kb_lines.append(
+                        f'Historical hit rate: {_escape_mdv2(f"{hr2*100:.0f}%")} to T2 '
+                        f'\\({_escape_mdv2(str(n))} trades, {_escape_mdv2(regime.replace("_"," "))}\\)'
+                    )
+        except Exception:
+            pass
+
+    lines += kb_lines
     return '\n'.join(lines)
 
 

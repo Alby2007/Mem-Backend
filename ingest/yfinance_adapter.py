@@ -35,6 +35,13 @@ from typing import Dict, List, Optional
 from ingest.base import BaseIngestAdapter, RawAtom
 
 try:
+    from ingest.dynamic_watchlist import DynamicWatchlistManager
+    _HAS_DYNAMIC_WATCHLIST = True
+except ImportError:
+    _HAS_DYNAMIC_WATCHLIST = False
+    DynamicWatchlistManager = None  # type: ignore
+
+try:
     import yfinance as yf
     HAS_YFINANCE = True
 except ImportError:
@@ -164,12 +171,18 @@ class YFinanceAdapter(BaseIngestAdapter):
     the existing row from the same source rather than appending new rows.
     """
 
-    def __init__(self, tickers: Optional[List[str]] = None):
+    def __init__(self, tickers: Optional[List[str]] = None, db_path: Optional[str] = None):
         super().__init__(name='yfinance')
+        # If no explicit tickers, use DynamicWatchlistManager (falls back to _DEFAULT_TICKERS)
+        if tickers is None:
+            if _HAS_DYNAMIC_WATCHLIST and db_path:
+                tickers = DynamicWatchlistManager.get_active_tickers(db_path)
+            else:
+                tickers = _DEFAULT_TICKERS
         # Deduplicate while preserving order
         seen: set = set()
         self.tickers: List[str] = []
-        for t in (tickers or _DEFAULT_TICKERS):
+        for t in tickers:
             if t not in seen:
                 seen.add(t)
                 self.tickers.append(t)

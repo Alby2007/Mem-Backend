@@ -78,6 +78,8 @@ def _pick_best_pattern(
       - timeframe is in user's allowed timeframes (tier-gated)
       - pattern_type is in user's allowed types (tier-gated, optionally filtered)
       - user_id not already in alerted_users
+      - passes calibration filter (if both personal hit_rate < 0.40 AND
+        collective hit_rate_t2 < 0.45, skip it)
     """
     from notifications.tip_formatter import TIER_LIMITS, pattern_allowed_for_tier, timeframe_allowed_for_tier
     from users.user_store import get_open_patterns
@@ -85,6 +87,21 @@ def _pick_best_pattern(
     limits = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
     allowed_patterns   = tip_pattern_types or limits['patterns']
     allowed_timeframes = tip_timeframes or limits['timeframes']
+
+    # Load personal pattern hit rates once
+    personal_hit_rates: dict = {}
+    try:
+        from users.personal_kb import read_atoms
+        atoms = read_atoms(user_id, db_path)
+        for a in atoms:
+            if a['predicate'].endswith('_hit_rate'):
+                ptype = a['predicate'][:-len('_hit_rate')]
+                try:
+                    personal_hit_rates[ptype] = float(a['object'])
+                except (ValueError, TypeError):
+                    pass
+    except Exception:
+        pass
 
     candidates = get_open_patterns(db_path, min_quality=0.0, limit=200)
     for row in candidates:
@@ -99,6 +116,28 @@ def _pick_best_pattern(
         alerted = row.get('alerted_users') or []
         if user_id in alerted:
             continue
+
+        # Calibration filter: skip only if BOTH personal AND collective are weak
+        ptype = row['pattern_type']
+        personal_rate = personal_hit_rates.get(ptype)
+        if personal_rate is not None and personal_rate < 0.40:
+            try:
+                from analytics.signal_calibration import get_calibration
+                cal = get_calibration(
+                    ticker=row['ticker'],
+                    pattern_type=ptype,
+                    timeframe=row['timeframe'],
+                    db_path=db_path,
+                )
+                if cal is not None and cal.hit_rate_t2 is not None and cal.hit_rate_t2 < 0.45:
+                    _log.debug(
+                        'TipScheduler: skipping %s %s — personal %.2f + collective %.2f both weak',
+                        row['ticker'], ptype, personal_rate, cal.hit_rate_t2,
+                    )
+                    continue
+            except Exception:
+                pass
+
         return row
     return None
 
@@ -149,7 +188,21 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict) -> None:
         )
 
         position = calculate_position(sig, user_prefs)
-        message  = format_tip(sig, position, tier=tier)
+
+        # Fetch calibration to pass to formatter (None is safe — graceful no-op)
+        calibration = None
+        try:
+            from analytics.signal_calibration import get_calibration
+            calibration = get_calibration(
+                ticker=pattern_row['ticker'],
+                pattern_type=pattern_row['pattern_type'],
+                timeframe=pattern_row['timeframe'],
+                db_path=db_path,
+            )
+        except Exception:
+            pass
+
+        message  = format_tip(sig, position, tier=tier, calibration=calibration)
 
         notifier = TelegramNotifier()
         sent     = notifier.send(chat_id, message)

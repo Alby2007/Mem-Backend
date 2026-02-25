@@ -96,6 +96,13 @@ from typing import List, Optional, Tuple
 from ingest.base import BaseIngestAdapter, RawAtom
 
 try:
+    from ingest.dynamic_watchlist import DynamicWatchlistManager
+    _HAS_DYNAMIC_WATCHLIST = True
+except ImportError:
+    _HAS_DYNAMIC_WATCHLIST = False
+    DynamicWatchlistManager = None  # type: ignore
+
+try:
     import yfinance as yf
     HAS_YFINANCE = True
 except ImportError:
@@ -422,9 +429,23 @@ class OptionsAdapter(BaseIngestAdapter):
         self,
         tickers: Optional[List[str]] = None,
         sleep_sec: float = _DEFAULT_SLEEP_SEC,
+        db_path: Optional[str] = None,
     ):
         super().__init__(name='options')
-        self._tickers  = [t.upper() for t in tickers] if tickers else _OPTIONS_TICKERS
+        if tickers:
+            self._tickers = [t.upper() for t in tickers]
+        elif _HAS_DYNAMIC_WATCHLIST and db_path:
+            # Filter active tickers to equity-only (exclude ETFs/macro proxies)
+            active = DynamicWatchlistManager.get_active_tickers(db_path)
+            _etf_prefixes = {'XL', 'SP', 'QQ', 'IW', 'DI', 'VT'}
+            _macro = {'GLD', 'SLV', 'TLT', 'HYG', 'LQD', 'UUP', 'SPY', 'QQQ',
+                      'IWM', 'DIA', 'VTI', 'USO'}
+            self._tickers = [
+                t.upper() for t in active
+                if t.upper() not in _macro and not t.upper().startswith('XL')
+            ]
+        else:
+            self._tickers = _OPTIONS_TICKERS
         self._sleep_sec = sleep_sec
 
     def fetch(self) -> List[RawAtom]:

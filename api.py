@@ -168,6 +168,30 @@ try:
 except ImportError:
     HAS_GRAPH_RETRIEVAL = False
 
+try:
+    from ingest.dynamic_watchlist import DynamicWatchlistManager
+    from analytics.universe_expander import (
+        resolve_interest, validate_tickers, seed_causal_edges,
+        bootstrap_ticker_async, estimate_bootstrap_seconds,
+    )
+    from analytics.signal_calibration import get_calibration, update_calibration
+    from analytics.network_effect_engine import (
+        compute_coverage_tier, promote_to_shared_kb, update_refresh_schedule,
+        detect_cohort_consensus, compute_trending_markets, compute_network_health,
+    )
+    from users.personal_kb import (
+        get_context_document, infer_and_write_from_portfolio,
+        update_from_feedback, update_from_engagement, write_universe_atoms,
+    )
+    from users.user_store import (
+        get_universe_tickers, get_staged_tickers,
+        log_engagement_event, get_engagement_events,
+        ensure_hybrid_tables,
+    )
+    HAS_HYBRID = True
+except ImportError:
+    HAS_HYBRID = False
+
 
 # ── Middleware imports ────────────────────────────────────────────────────────
 
@@ -267,6 +291,16 @@ try:
     _auth_conn.close()
 except Exception:
     pass
+
+# Ensure hybrid build tables exist (Phase 1)
+if HAS_HYBRID:
+    try:
+        import sqlite3 as _sqlite3
+        _hybrid_conn = _sqlite3.connect(_DB_PATH)
+        ensure_hybrid_tables(_hybrid_conn)
+        _hybrid_conn.close()
+    except Exception:
+        pass
 
 # Start delivery scheduler (checks every 60s for due briefings)
 _delivery_scheduler = None
@@ -1953,6 +1987,12 @@ def user_portfolio_submit(user_id):
                         ip_address=request.remote_addr,
                         user_agent=request.user_agent.string,
                         outcome='success', detail={'count': len(holdings)})
+        # Wire personal KB inference from portfolio (Phase 3) — non-fatal
+        if HAS_HYBRID:
+            try:
+                infer_and_write_from_portfolio(user_id, _DB_PATH)
+            except Exception:
+                pass
         return jsonify(result), 201
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -3095,6 +3135,30 @@ def submit_feedback():
     try:
         row = log_tip_feedback(_DB_PATH, user_id, outcome,
                                tip_id=tip_id, pattern_id=pattern_id)
+
+        # Wire calibration update (Phase 4) — non-fatal if hybrid layer absent
+        if HAS_HYBRID and pattern_id is not None:
+            try:
+                import sqlite3 as _sq
+                _conn = _sq.connect(_DB_PATH, timeout=5)
+                try:
+                    prow = _conn.execute(
+                        "SELECT ticker, pattern_type, timeframe, kb_regime FROM pattern_signals WHERE id=?",
+                        (pattern_id,),
+                    ).fetchone()
+                finally:
+                    _conn.close()
+                if prow:
+                    update_calibration(
+                        ticker=prow[0], pattern_type=prow[1],
+                        timeframe=prow[2], market_regime=prow[3] or None,
+                        outcome=outcome, db_path=_DB_PATH,
+                    )
+                    update_from_feedback(user_id,
+                        {'pattern_type': prow[1], 'outcome': outcome}, _DB_PATH)
+            except Exception:
+                pass
+
         return jsonify({'id': row['id'], 'recorded': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -3135,6 +3199,408 @@ def user_alerts(user_id: str):
             rows = [a for a in rows if a.get('ticker') in tickers]
         rows = rows[:limit]
         return jsonify({'alerts': rows, 'count': len(rows)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Hybrid Build Endpoints ────────────────────────────────────────────────────
+
+@app.route('/users/<user_id>/expand-universe', methods=['POST'])
+@require_auth
+def expand_universe(user_id: str):
+    """
+    POST /users/<user_id>/expand-universe
+
+    Resolve interest → validate tickers → register → bootstrap.
+
+    Body: { "description": "uranium miners", "market_type": "equities" }
+    Returns: { expansion_id, resolved_tickers, rejected_tickers,
+               staging_tickers, causal_edges_seeded, estimated_bootstrap_seconds }
+    """
+    err = assert_self(user_id)
+    if err: return err
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    description = str(data.get('description', '')).strip()
+    market_type = str(data.get('market_type', 'equities')).strip()
+
+    if len(description) < 3:
+        return jsonify({'error': 'description must be at least 3 characters'}), 400
+    if not market_type:
+        return jsonify({'error': 'market_type is required'}), 400
+
+    # Tier limit check
+    tier = 'basic'
+    try:
+        from users.user_store import get_user_tier
+        tier = get_user_tier(_DB_PATH, user_id)
+    except Exception:
+        pass
+    max_universe = 100 if tier == 'pro' else 20
+    current_count = len(DynamicWatchlistManager.get_user_tickers(user_id, _DB_PATH))
+    if current_count >= max_universe:
+        return jsonify({'error': f'universe limit reached ({max_universe} tickers for {tier} tier)'}), 400
+
+    try:
+        # 1. Resolve via LLM
+        expansion = resolve_interest(description, market_type, user_id, _DB_PATH)
+
+        if expansion.error == 'llm_unavailable':
+            return jsonify({'resolved_tickers': [], 'rejected_tickers': [],
+                            'staging_tickers': [], 'causal_edges_seeded': 0,
+                            'estimated_bootstrap_seconds': 0,
+                            'error': 'llm_unavailable'}), 200
+
+        # 2. Validate tickers
+        all_candidates = expansion.tickers[:_MAX_TICKERS_PER_REQUEST]
+        validation = validate_tickers(all_candidates, market_region=market_type)
+
+        # 3. Write universe_expansions row
+        import sqlite3 as _sqlite3
+        import json as _json
+        now = datetime.now(timezone.utc).isoformat()
+        conn = _sqlite3.connect(_DB_PATH, timeout=10)
+        try:
+            ensure_hybrid_tables(conn)
+            cur = conn.execute(
+                """INSERT INTO user_universe_expansions
+                   (user_id, description, sector_label, tickers, etfs, keywords,
+                    causal_edges, status, requested_at, activated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (user_id, description, expansion.sector_label,
+                 _json.dumps(validation.valid),
+                 _json.dumps(expansion.etfs),
+                 _json.dumps(expansion.keywords),
+                 _json.dumps(expansion.causal_relationships),
+                 'active', now, now),
+            )
+            expansion_id = cur.lastrowid
+            conn.commit()
+        finally:
+            conn.close()
+
+        # 4. Add tickers to watchlist
+        result = DynamicWatchlistManager.add_tickers(
+            validation.valid, user_id, _DB_PATH,
+            sector_label=expansion.sector_label,
+        )
+        promoted = result['promoted']
+        staged   = result['staged']
+
+        # 5. Seed causal edges
+        edges_seeded = seed_causal_edges(expansion.causal_relationships, _DB_PATH)
+
+        # 6. Bootstrap newly promoted tickers async
+        for t in promoted:
+            bootstrap_ticker_async(t, _DB_PATH)
+
+        # 7. Write personal KB atoms
+        write_universe_atoms(user_id, validation.valid, description, _DB_PATH)
+
+        # 8. Estimate bootstrap time
+        est_seconds = estimate_bootstrap_seconds(len(promoted), _DB_PATH)
+
+        return jsonify({
+            'expansion_id':               expansion_id,
+            'resolved_tickers':           validation.valid,
+            'rejected_tickers':           validation.rejected,
+            'staging_tickers':            staged,
+            'causal_edges_seeded':        edges_seeded,
+            'estimated_bootstrap_seconds': est_seconds,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+_MAX_TICKERS_PER_REQUEST = 20
+
+
+@app.route('/users/<user_id>/universe', methods=['GET'])
+@require_auth
+def get_user_universe(user_id: str):
+    """GET /users/<user_id>/universe — current expanded watchlist + coverage tiers."""
+    err = assert_self(user_id)
+    if err: return err
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    try:
+        tickers = DynamicWatchlistManager.get_user_tickers(user_id, _DB_PATH)
+        result = []
+        for t in tickers:
+            ct = compute_coverage_tier(t, _DB_PATH)
+            result.append({
+                'ticker':       t,
+                'coverage_tier': ct.tier if ct else 'unknown',
+                'coverage_count': ct.coverage_count if ct else 0,
+            })
+        return jsonify({'tickers': result, 'count': len(result)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/universe/<ticker>', methods=['DELETE'])
+@require_auth
+def remove_universe_ticker(user_id: str, ticker: str):
+    """DELETE /users/<user_id>/universe/<ticker> — remove from personal universe."""
+    err = assert_self(user_id)
+    if err: return err
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    try:
+        removed = DynamicWatchlistManager.remove_ticker(ticker, user_id, _DB_PATH)
+        if not removed:
+            return jsonify({'error': 'ticker not found or not owned by this user'}), 404
+        return jsonify({'removed': ticker.upper(), 'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/universe/bootstrap-status', methods=['GET'])
+@require_auth
+def universe_bootstrap_status(user_id: str):
+    """GET /users/<user_id>/universe/bootstrap-status — per-ticker bootstrap completion."""
+    err = assert_self(user_id)
+    if err: return err
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    try:
+        status = DynamicWatchlistManager.get_bootstrap_status(user_id, _DB_PATH)
+        return jsonify(status)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/universe/staging', methods=['GET'])
+@require_auth
+def user_universe_staging(user_id: str):
+    """GET /users/<user_id>/universe/staging — user's staged (not yet promoted) tickers."""
+    err = assert_self(user_id)
+    if err: return err
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    try:
+        rows = get_staged_tickers(_DB_PATH, user_id=user_id)
+        return jsonify({'staging': rows, 'count': len(rows)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/preferences/focus', methods=['POST'])
+@require_auth
+def set_user_focus(user_id: str):
+    """
+    POST /users/<user_id>/preferences/focus — explicit preference overrides.
+    Body: { "preferred_upside_min": 15.0, "preferred_pattern": "fvg" }
+    """
+    err = assert_self(user_id)
+    if err: return err
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        from users.personal_kb import write_atom as pkb_write
+        written = []
+        if 'preferred_upside_min' in data:
+            pkb_write(user_id, user_id, 'preferred_upside_min',
+                      str(float(data['preferred_upside_min'])), 0.9, 'user_override', _DB_PATH)
+            written.append('preferred_upside_min')
+        if 'preferred_pattern' in data:
+            pkb_write(user_id, user_id, 'preferred_pattern',
+                      str(data['preferred_pattern']), 0.9, 'user_override', _DB_PATH)
+            written.append('preferred_pattern')
+        return jsonify({'updated': written, 'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/engagement', methods=['POST'])
+@require_auth
+def log_user_engagement(user_id: str):
+    """
+    POST /users/<user_id>/engagement — log an engagement event.
+    Body: { "event_type": "tip_opened", "ticker": "NVDA", "pattern_type": "fvg", "sector": "technology" }
+    """
+    err = assert_self(user_id)
+    if err: return err
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    event_type = str(data.get('event_type', '')).strip()
+    if not event_type:
+        return jsonify({'error': 'event_type is required'}), 400
+    try:
+        log_engagement_event(
+            _DB_PATH, user_id, event_type,
+            ticker=data.get('ticker'),
+            pattern_type=data.get('pattern_type'),
+            sector=data.get('sector'),
+        )
+        update_from_engagement(user_id, _DB_PATH)
+        return jsonify({'logged': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/kb-context', methods=['GET'])
+@require_auth
+def user_kb_context(user_id: str):
+    """GET /users/<user_id>/kb-context — personal KB atoms."""
+    err = assert_self(user_id)
+    if err: return err
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    try:
+        from users.personal_kb import read_atoms as pkb_read
+        atoms = pkb_read(user_id, _DB_PATH)
+        return jsonify({'atoms': atoms, 'count': len(atoms)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/preferences/inferred', methods=['GET'])
+@require_auth
+def user_inferred_preferences(user_id: str):
+    """GET /users/<user_id>/preferences/inferred — what system has inferred."""
+    err = assert_self(user_id)
+    if err: return err
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    try:
+        ctx = get_context_document(user_id, _DB_PATH)
+        return jsonify({
+            'sector_affinity':         ctx.sector_affinity,
+            'risk_tolerance':          ctx.risk_tolerance,
+            'holding_style':           ctx.holding_style,
+            'portfolio_beta':          ctx.portfolio_beta,
+            'preferred_pattern':       ctx.preferred_pattern,
+            'avg_win_rate':            ctx.avg_win_rate,
+            'high_engagement_sector':  ctx.high_engagement_sector,
+            'low_engagement_sector':   ctx.low_engagement_sector,
+            'preferred_upside_min':    ctx.preferred_upside_min,
+            'active_universe':         ctx.active_universe,
+            'pattern_hit_rates':       ctx.pattern_hit_rates,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/universe/trending', methods=['GET'])
+def universe_trending():
+    """GET /universe/trending — fastest-growing coverage tickers (7d)."""
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    try:
+        trending = compute_trending_markets(_DB_PATH)
+        return jsonify({
+            'trending': [
+                {
+                    'ticker':         t.ticker,
+                    'coverage_count': t.coverage_count,
+                    'coverage_7d_ago': t.coverage_7d_ago,
+                    'growth_rate':    t.growth_rate,
+                    'sector_label':   t.sector_label,
+                }
+                for t in trending
+            ]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/universe/coverage', methods=['GET'])
+def universe_coverage():
+    """GET /universe/coverage — full coverage leaderboard."""
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    try:
+        rows = get_universe_tickers(_DB_PATH)
+        return jsonify({'tickers': rows, 'count': len(rows)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/universe/staging/global', methods=['GET'])
+def universe_staging_global():
+    """GET /universe/staging/global — all staged (not yet promoted) tickers."""
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    try:
+        rows = get_staged_tickers(_DB_PATH)
+        return jsonify({'staging': rows, 'count': len(rows)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/network/health', methods=['GET'])
+def network_health():
+    """GET /network/health — flywheel velocity, coverage distribution."""
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    try:
+        report = compute_network_health(_DB_PATH)
+        return jsonify({
+            'total_tickers':          report.total_tickers,
+            'total_users':            report.total_users,
+            'tickers_by_tier':        report.tickers_by_tier,
+            'coverage_distribution':  report.coverage_distribution,
+            'flywheel_velocity':      report.flywheel_velocity,
+            'cohort_signals_active':  report.cohort_signals_active,
+            'generated_at':           report.generated_at,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/network/calibration/<ticker>', methods=['GET'])
+def network_calibration(ticker: str):
+    """GET /network/calibration/<ticker> — collective hit rates for ticker."""
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    pattern_type = request.args.get('pattern_type', 'fvg')
+    timeframe    = request.args.get('timeframe', '1h')
+    try:
+        cal = get_calibration(ticker, pattern_type, timeframe, _DB_PATH)
+        if cal is None:
+            return jsonify({'calibration': None,
+                            'reason': 'insufficient_samples (< 10)'}), 200
+        return jsonify({
+            'ticker':                   cal.ticker,
+            'pattern_type':             cal.pattern_type,
+            'timeframe':                cal.timeframe,
+            'market_regime':            cal.market_regime,
+            'sample_size':              cal.sample_size,
+            'hit_rate_t1':              cal.hit_rate_t1,
+            'hit_rate_t2':              cal.hit_rate_t2,
+            'hit_rate_t3':              cal.hit_rate_t3,
+            'stopped_out_rate':         cal.stopped_out_rate,
+            'calibration_confidence':   cal.calibration_confidence,
+            'confidence_label':         cal.confidence_label,
+            'last_updated':             cal.last_updated,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/network/cohort/<ticker>', methods=['GET'])
+def network_cohort(ticker: str):
+    """GET /network/cohort/<ticker> — cohort consensus + stop cluster."""
+    if not HAS_HYBRID:
+        return jsonify({'error': 'hybrid layer not available'}), 503
+    try:
+        signal = detect_cohort_consensus(ticker, _DB_PATH)
+        if signal is None:
+            return jsonify({'cohort_signal': None,
+                            'reason': 'insufficient_cohort (< 10 users)'}), 200
+        return jsonify({
+            'ticker':               signal.ticker,
+            'cohort_size':          signal.cohort_size,
+            'consensus_direction':  signal.consensus_direction,
+            'consensus_strength':   signal.consensus_strength,
+            'stop_cluster':         signal.stop_cluster,
+            'contrarian_flag':      signal.contrarian_flag,
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
