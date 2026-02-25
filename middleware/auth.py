@@ -9,16 +9,18 @@ Provides:
 
 Environment variables
 ---------------------
-  JWT_SECRET_KEY   — required in production; defaults to an insecure dev value
-  JWT_EXPIRY_HOURS — token lifetime in hours (default 24)
+  JWT_SECRET_KEY            — required in production; defaults to an insecure dev value
+  JWT_EXPIRY_HOURS          — access token lifetime in hours (default 24)
+  JWT_REFRESH_EXPIRY_DAYS   — refresh token lifetime in days (default 30)
 
-DB table: user_auth (see _DDL_USER_AUTH below)
+DB tables: user_auth, refresh_tokens (see DDL constants below)
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import secrets as _secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -28,8 +30,9 @@ from flask import g, jsonify, request
 
 _log = logging.getLogger(__name__)
 
-_SECRET_KEY   = os.environ.get('JWT_SECRET_KEY', 'dev-insecure-key-change-in-production')
-_EXPIRY_HOURS = int(os.environ.get('JWT_EXPIRY_HOURS', '24'))
+_SECRET_KEY           = os.environ.get('JWT_SECRET_KEY', 'dev-insecure-key-change-in-production')
+_EXPIRY_HOURS         = int(os.environ.get('JWT_EXPIRY_HOURS', '24'))
+_REFRESH_EXPIRY_DAYS  = int(os.environ.get('JWT_REFRESH_EXPIRY_DAYS', '30'))
 
 _LOCKOUT_MINUTES  = 15
 _MAX_FAILED_ATTEMPTS = 5
@@ -49,6 +52,16 @@ except ImportError:
     HAS_BCRYPT = False
 
 
+_DDL_REFRESH_TOKENS = """
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    token_id    TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    issued_at   TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    revoked     INTEGER DEFAULT 0
+)
+"""
+
 _DDL_USER_AUTH = """
 CREATE TABLE IF NOT EXISTS user_auth (
     user_id         TEXT PRIMARY KEY,
@@ -64,27 +77,114 @@ CREATE TABLE IF NOT EXISTS user_auth (
 
 def ensure_user_auth_table(conn: sqlite3.Connection) -> None:
     conn.execute(_DDL_USER_AUTH)
+    conn.execute(_DDL_REFRESH_TOKENS)
     conn.commit()
 
 
 # ── Token helpers ──────────────────────────────────────────────────────────────
 
-def _make_token(user_id: str, email: str) -> str:
+def _make_access_token(user_id: str, email: str) -> str:
     if not HAS_JWT:
         raise RuntimeError('PyJWT is not installed — run: pip install PyJWT')
     payload = {
+        'sub':     user_id,
         'user_id': user_id,
         'email':   email,
+        'type':    'access',
         'exp':     datetime.now(timezone.utc) + timedelta(hours=_EXPIRY_HOURS),
         'iat':     datetime.now(timezone.utc),
     }
     return _jwt.encode(payload, _SECRET_KEY, algorithm='HS256')
 
 
+def _make_token(user_id: str, email: str) -> str:
+    return _make_access_token(user_id, email)
+
+
 def _decode_token(token: str) -> dict:
     if not HAS_JWT:
         raise RuntimeError('PyJWT is not installed')
     return _jwt.decode(token, _SECRET_KEY, algorithms=['HS256'])
+
+
+# ── Refresh token helpers ──────────────────────────────────────────────────────
+
+
+def issue_refresh_token(db_path: str, user_id: str) -> dict:
+    """
+    Generate a cryptographically random refresh token, persist it, and return
+    { refresh_token, expires_at }.
+    """
+    token_id   = _secrets.token_urlsafe(48)
+    now        = datetime.now(timezone.utc)
+    expires_at = now + timedelta(days=_REFRESH_EXPIRY_DAYS)
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_auth_table(conn)
+        conn.execute(
+            """INSERT INTO refresh_tokens (token_id, user_id, issued_at, expires_at)
+               VALUES (?, ?, ?, ?)""",
+            (token_id, user_id, now.isoformat(), expires_at.isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {'refresh_token': token_id, 'expires_at': expires_at.isoformat()}
+
+
+def rotate_refresh_token(db_path: str, refresh_token: str) -> dict:
+    """
+    Validate an existing refresh token, revoke it, issue a new access token +
+    refresh token pair (rotation).  Raises ValueError if invalid/expired/revoked.
+    Returns { access_token, refresh_token, token_type, expires_in, user_id }.
+    """
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_auth_table(conn)
+        row = conn.execute(
+            """SELECT user_id, expires_at, revoked
+               FROM refresh_tokens WHERE token_id = ?""",
+            (refresh_token,),
+        ).fetchone()
+
+        if row is None:
+            raise ValueError('invalid refresh token')
+
+        user_id, expires_at_str, revoked = row
+
+        if revoked:
+            raise ValueError('refresh token has been revoked')
+
+        expires_at = datetime.fromisoformat(expires_at_str)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires_at:
+            raise ValueError('refresh token has expired — please log in again')
+
+        # Revoke the old token (rotation: one-time use)
+        conn.execute(
+            "UPDATE refresh_tokens SET revoked = 1 WHERE token_id = ?",
+            (refresh_token,),
+        )
+        conn.commit()
+
+        # Fetch email for the new access token
+        email_row = conn.execute(
+            "SELECT email FROM user_auth WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        email = email_row[0] if email_row else ''
+    finally:
+        conn.close()
+
+    access_token  = _make_access_token(user_id, email)
+    refresh_data  = issue_refresh_token(db_path, user_id)
+    return {
+        'access_token':  access_token,
+        'refresh_token': refresh_data['refresh_token'],
+        'token_type':    'Bearer',
+        'expires_in':    _EXPIRY_HOURS * 3600,
+        'user_id':       user_id,
+    }
 
 
 # ── Password helpers ───────────────────────────────────────────────────────────

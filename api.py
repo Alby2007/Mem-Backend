@@ -174,7 +174,7 @@ except ImportError:
 try:
     from middleware.auth import (
         require_auth, assert_self, register_user, authenticate_user,
-        ensure_user_auth_table,
+        ensure_user_auth_table, issue_refresh_token, rotate_refresh_token,
     )
     HAS_AUTH = True
 except ImportError:
@@ -2454,7 +2454,85 @@ def auth_token():
                     ip_address=request.remote_addr,
                     user_agent=request.user_agent.string,
                     outcome='success')
+    try:
+        refresh_data = issue_refresh_token(_DB_PATH, token_data['user_id'])
+        token_data['refresh_token']         = refresh_data['refresh_token']
+        token_data['refresh_token_expires'] = refresh_data['expires_at']
+    except Exception:
+        pass
     return jsonify(token_data)
+
+
+@app.route('/auth/refresh', methods=['POST'])
+@rate_limit('auth')
+def auth_refresh():
+    """
+    POST /auth/refresh
+
+    Exchange a valid refresh token for a new access token + refresh token pair.
+    The old refresh token is revoked immediately (rotation — single-use).
+
+    Body: { "refresh_token": "<opaque token string>" }
+    Returns: { access_token, refresh_token, token_type, expires_in, user_id }
+
+    Error responses:
+      400  — missing refresh_token field
+      401  — token invalid, expired, or already revoked
+    """
+    if not HAS_AUTH:
+        return jsonify({'error': 'auth not available'}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    refresh_token = data.get('refresh_token', '').strip()
+    if not refresh_token:
+        return jsonify({'error': 'refresh_token is required'}), 400
+    try:
+        result = rotate_refresh_token(_DB_PATH, refresh_token)
+        log_audit_event(_DB_PATH, action='token_refresh', user_id=result['user_id'],
+                        ip_address=request.remote_addr,
+                        user_agent=request.user_agent.string,
+                        outcome='success')
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': 'token_expired' if 'expired' in str(e) else 'invalid_token',
+                        'detail': str(e)}), 401
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/auth/logout', methods=['POST'])
+@require_auth
+def auth_logout():
+    """
+    POST /auth/logout
+
+    Revoke the refresh token supplied in the body.  The access token cannot
+    be server-side revoked (it expires naturally per JWT_EXPIRY_HOURS).
+    Frontend must discard the access token from storage on receipt of 200.
+
+    Body: { "refresh_token": "<opaque token string>" }  (optional)
+    Returns: { "logged_out": true }
+    """
+    if not HAS_AUTH:
+        return jsonify({'error': 'auth not available'}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    refresh_token = data.get('refresh_token', '').strip()
+    if refresh_token:
+        try:
+            import sqlite3 as _sqlite3
+            conn = _sqlite3.connect(_DB_PATH, timeout=10)
+            conn.execute(
+                "UPDATE refresh_tokens SET revoked = 1 WHERE token_id = ? AND user_id = ?",
+                (refresh_token, g.user_id),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+    log_audit_event(_DB_PATH, action='logout', user_id=g.user_id,
+                    ip_address=request.remote_addr,
+                    user_agent=request.user_agent.string,
+                    outcome='success')
+    return jsonify({'logged_out': True})
 
 
 @app.route('/auth/me', methods=['GET'])
