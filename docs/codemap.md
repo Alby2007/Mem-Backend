@@ -321,14 +321,22 @@ Defines allowed predicates per domain: `INSTRUMENT_PREDICATES`, `THESIS_PREDICAT
 
 ---
 
-### Not-Yet-Wired Modules
+### Knowledge Extension Module Status
 
-| File | Purpose |
-|---|---|
-| `graph_v2.py` | Extended graph with richer traversal methods |
-| `graph_enhanced.py` | Additions to graph_v2 |
-| `graph_retrieval.py` | PageRank, BFS, community-cluster traversal |
-| `kb_validation.py` | Multi-layer atom validation pipeline |
-| `kb_insufficiency_classifier.py` | Detects gaps / missing knowledge in the KB |
-| `kb_repair_proposals.py` | Generates repair suggestions for KB gaps |
-| `kb_repair_executor.py` | Executes approved repair proposals |
+Status taxonomy used below:
+
+- **Live** — imported and executed in startup/request path
+- **Partial** — schema/API wiring is live, but downstream decision logic is not yet integrated
+- **Dormant** — file exists but is not wired into live runtime path
+
+| File | Status | Notes |
+|---|---|---|
+| `graph_v2.py` | Dormant | Requires `aiosqlite`; not imported in live startup/request path |
+| `graph_enhanced.py` | Dormant | Standalone class; not wired into `api.py` or `retrieval.py` |
+| `confidence_intervals.py` | Partial | `ensure_confidence_columns()` runs at startup and `GET /kb/confidence` is live; interval not yet fed into `position_size_pct` |
+| `causal_graph.py` | Live | `ensure_causal_edges_table()` runs at startup; used by overlay traversal and `/kb/causal-chain`, `/kb/causal-edge`, `/kb/causal-edges` endpoints |
+| `graph_retrieval.py` | Live | PageRank, BFS, community-cluster traversal in retrieval strategy 0 |
+| `kb_validation.py` | Live | Governance validation hook in repair proposal flow |
+| `kb_insufficiency_classifier.py` | Live | KB insufficiency detection in retrieve/diagnose paths |
+| `kb_repair_proposals.py` | Live | Generates repair proposals for diagnosed gaps |
+| `kb_repair_executor.py` | Live | Executes approved repair proposals with rollback/impact support |

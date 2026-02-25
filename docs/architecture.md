@@ -236,6 +236,7 @@ The JARVIS epistemic governance stack is fully wired:
 | Module | Where wired | Role |
 |---|---|---|
 | `graph_retrieval.py` | `retrieval.py` strategy 0 | PageRank centrality, community clusters, BFS concept paths |
+| `causal_graph.py` | Startup + overlay path + API | `ensure_causal_edges_table()` at startup, `traverse_causal()` via overlay builder, `/kb/causal-edge` + `/kb/causal-edges` endpoints |
 | `kb_insufficiency_classifier.py` | `POST /retrieve` + `POST /repair/diagnose` | 9-rule insufficiency classifier — fires on elevated stress or thin coverage |
 | `kb_validation.py` | `POST /repair/proposals` (governance hook) | 3-layer governance: schema, semantic, cross-topic validation |
 | `kb_repair_proposals.py` | `POST /repair/proposals` | Generates repair proposals with preview + simulation + validation target |
@@ -269,9 +270,23 @@ The JARVIS epistemic governance stack is fully wired:
 | `restore_atoms` | Entropy collapse after prior repair |
 | `manual_review` | Unknown / no automated strategy |
 
-## Still Dormant
+## Module Status
 
-| Module | Purpose |
-|---|---|
-| `graph_v2.py` | Extended graph with richer traversal |
-| `graph_enhanced.py` | Extensions to graph_v2 |
+Status taxonomy used below:
+
+- **Live** — imported and executed in startup/request path
+- **Partial** — schema/API wiring is live, but downstream decision logic is not yet integrated
+- **Dormant** — file exists but is not wired into live runtime path
+
+### Dormant (not wired)
+
+| Module | Status | Evidence |
+|---|---|---|
+| `graph_v2.py` | Still dormant — requires `aiosqlite` and is not imported in the live request/startup path | Runtime uses `knowledge.graph` via `KnowledgeGraph`; `graph_v2.py` is never imported in `api.py`/`retrieval.py` |
+| `graph_enhanced.py` | Still dormant — standalone class, not wired into `api.py` or `retrieval.py` | No startup/request-path import and no endpoint/retrieval integration |
+
+### Partially wired
+
+| Module | Live today | Pending |
+|---|---|---|
+| `confidence_intervals.py` | `ensure_confidence_columns()` runs at startup; `GET /kb/confidence` endpoint is exposed | Interval output does not yet feed back into `position_size_pct` (planned v2) |
