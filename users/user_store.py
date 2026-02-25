@@ -457,6 +457,13 @@ def get_delivery_history(
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         ensure_user_tables(conn)
+        try:
+            conn.execute(
+                "ALTER TABLE snapshot_delivery_log ADD COLUMN delivered_at_local_date TEXT"
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
         rows = conn.execute(
             """SELECT id, user_id, delivered_at, delivered_at_local_date,
                       success, message_length,

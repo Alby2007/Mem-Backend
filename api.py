@@ -21,7 +21,7 @@ import re
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from flask import Flask, request, jsonify
+from flask import Flask, g, request, jsonify
 
 try:
     from llm.ollama_client import chat as ollama_chat, list_models, is_available, DEFAULT_MODEL
@@ -2359,11 +2359,12 @@ def tip_history(user_id: str):
 
 @app.after_request
 def security_headers(response):
-    response.headers['X-Content-Type-Options']  = 'nosniff'
-    response.headers['X-Frame-Options']          = 'DENY'
-    response.headers['X-XSS-Protection']         = '1; mode=block'
-    response.headers['Strict-Transport-Security'] = 'max-age=31536000'
-    response.headers['Content-Security-Policy']  = "default-src 'none'"
+    response.headers['X-Content-Type-Options']       = 'nosniff'
+    response.headers['X-Frame-Options']              = 'DENY'
+    response.headers['X-XSS-Protection']             = '1; mode=block'
+    response.headers['Referrer-Policy']              = 'strict-origin-when-cross-origin'
+    response.headers['Strict-Transport-Security']    = 'max-age=31536000'
+    response.headers['Content-Security-Policy']      = "default-src 'none'"
     return response
 
 
