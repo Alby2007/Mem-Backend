@@ -169,9 +169,55 @@ except ImportError:
     HAS_GRAPH_RETRIEVAL = False
 
 
+# ── Middleware imports ────────────────────────────────────────────────────────
+
+try:
+    from middleware.auth import (
+        require_auth, assert_self, register_user, authenticate_user,
+        ensure_user_auth_table,
+    )
+    HAS_AUTH = True
+except ImportError:
+    HAS_AUTH = False
+    def require_auth(f):      # type: ignore
+        return f
+    def assert_self(uid):     # type: ignore  # noqa: E306
+        return None
+
+try:
+    from middleware.validators import (
+        validate_portfolio_submission, validate_onboarding, validate_tip_config,
+        validate_ingest_atom, validate_feedback, validate_register,
+    )
+    HAS_VALIDATORS = True
+except ImportError:
+    HAS_VALIDATORS = False
+
+try:
+    from middleware.rate_limiter import limiter, rate_limit
+    HAS_LIMITER = True
+except ImportError:
+    HAS_LIMITER = False
+    def rate_limit(cls):      # type: ignore
+        def decorator(f):
+            return f
+        return decorator
+
+try:
+    from middleware.audit import log_audit_event, get_audit_log, ensure_audit_table
+    HAS_AUDIT = True
+except ImportError:
+    HAS_AUDIT = False
+    def log_audit_event(*a, **kw): pass  # type: ignore
+
+
 # ── App setup ─────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
+
+# Attach rate limiter
+if HAS_LIMITER:
+    limiter.init_app(app)
 
 _DB_PATH = os.environ.get('TRADING_KB_DB', 'trading_knowledge.db')
 _kg = KnowledgeGraph(db_path=_DB_PATH)
@@ -208,6 +254,19 @@ if HAS_PRODUCT_LAYER:
         _user_conn.close()
     except Exception:
         pass
+
+# Ensure auth + audit tables exist
+try:
+    import sqlite3 as _sqlite3
+    _auth_conn = _sqlite3.connect(_DB_PATH)
+    if HAS_AUTH:
+        ensure_user_auth_table(_auth_conn)
+    if HAS_AUDIT:
+        ensure_audit_table(_auth_conn)
+    _auth_conn.commit()
+    _auth_conn.close()
+except Exception:
+    pass
 
 # Start delivery scheduler (checks every 60s for due briefings)
 _delivery_scheduler = None
@@ -1865,6 +1924,8 @@ def portfolio_summary():
 # ── Product layer — User management + Daily Briefing endpoints ───────────────
 
 @app.route('/users/<user_id>/portfolio', methods=['POST'])
+@require_auth
+@rate_limit('portfolio')
 def user_portfolio_submit(user_id):
     """
     Submit or replace a user's portfolio holdings.
@@ -1872,27 +1933,40 @@ def user_portfolio_submit(user_id):
     Body: { "holdings": [{"ticker": "AAPL", "quantity": 10, "avg_cost": 150.0, "sector": "Technology"}, ...] }
     Returns: { "user_id": "...", "count": N, "submitted_at": "...", "model": {...} }
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PRODUCT_LAYER:
         return jsonify({'error': 'product layer not available'}), 503
     data = request.get_json(force=True, silent=True) or {}
     holdings = data.get('holdings', [])
+    if HAS_VALIDATORS:
+        vr = validate_portfolio_submission(holdings)
+        if not vr.valid:
+            return jsonify({'error': 'validation_failed', 'details': vr.errors}), 400
     if not isinstance(holdings, list):
         return jsonify({'error': 'holdings must be a list'}), 400
     try:
         result = upsert_portfolio(_DB_PATH, user_id, holdings)
         model  = build_user_model(user_id, _DB_PATH)
         result['model'] = model
+        log_audit_event(_DB_PATH, action='portfolio_submit', user_id=user_id,
+                        ip_address=request.remote_addr,
+                        user_agent=request.user_agent.string,
+                        outcome='success', detail={'count': len(holdings)})
         return jsonify(result), 201
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/users/<user_id>/portfolio', methods=['GET'])
+@require_auth
 def user_portfolio_get(user_id):
     """
     Get current portfolio holdings for a user.
     Returns: { "user_id": "...", "holdings": [...], "count": N }
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PRODUCT_LAYER:
         return jsonify({'error': 'product layer not available'}), 503
     try:
@@ -1903,11 +1977,14 @@ def user_portfolio_get(user_id):
 
 
 @app.route('/users/<user_id>/model', methods=['GET'])
+@require_auth
 def user_model_get(user_id):
     """
     Get the derived user model for a user.
     Returns the user_models row or 404 if no model exists yet.
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PRODUCT_LAYER:
         return jsonify({'error': 'product layer not available'}), 503
     try:
@@ -1920,6 +1997,7 @@ def user_model_get(user_id):
 
 
 @app.route('/users/<user_id>/onboarding', methods=['POST'])
+@require_auth
 def user_onboarding(user_id):
     """
     Set onboarding preferences (fallback path — no portfolio required).
@@ -1934,9 +2012,15 @@ def user_onboarding(user_id):
       }
     Returns: updated user_preferences row.
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PRODUCT_LAYER:
         return jsonify({'error': 'product layer not available'}), 503
     data = request.get_json(force=True, silent=True) or {}
+    if HAS_VALIDATORS:
+        vr = validate_onboarding(data)
+        if not vr.valid:
+            return jsonify({'error': 'validation_failed', 'details': vr.errors}), 400
     try:
         prefs = update_preferences(
             _DB_PATH, user_id,
@@ -1947,12 +2031,17 @@ def user_onboarding(user_id):
             timezone_str=data.get('timezone'),
             onboarding_complete=1,
         )
+        log_audit_event(_DB_PATH, action='onboarding_update', user_id=user_id,
+                        ip_address=request.remote_addr,
+                        user_agent=request.user_agent.string,
+                        outcome='success')
         return jsonify(prefs)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/users/<user_id>/snapshot/preview', methods=['GET'])
+@require_auth
 def user_snapshot_preview(user_id):
     """
     Generate a personalised snapshot as JSON without sending it to Telegram.
@@ -1960,6 +2049,8 @@ def user_snapshot_preview(user_id):
 
     Returns: full CuratedSnapshot as a dict.
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PRODUCT_LAYER:
         return jsonify({'error': 'product layer not available'}), 503
     try:
@@ -1970,6 +2061,8 @@ def user_snapshot_preview(user_id):
 
 
 @app.route('/users/<user_id>/snapshot/send-now', methods=['POST'])
+@require_auth
+@rate_limit('snapshot')
 def user_snapshot_send_now(user_id):
     """
     Trigger an immediate snapshot delivery to the user's Telegram chat ID.
@@ -1977,6 +2070,8 @@ def user_snapshot_send_now(user_id):
 
     Returns: { "sent": true/false, "opportunities": N, "regime": "...", "error": "..." }
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PRODUCT_LAYER:
         return jsonify({'error': 'product layer not available'}), 503
     try:
@@ -2011,12 +2106,15 @@ def user_snapshot_send_now(user_id):
 
 
 @app.route('/users/<user_id>/delivery-history', methods=['GET'])
+@require_auth
 def user_delivery_history(user_id):
     """
     Get past delivery log entries for a user.
     Query param: limit (default 30)
     Returns: { "user_id": "...", "history": [...], "count": N }
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PRODUCT_LAYER:
         return jsonify({'error': 'product layer not available'}), 503
     limit = int(request.args.get('limit', 30))
@@ -2087,6 +2185,7 @@ def patterns_live():
 
 
 @app.route('/users/<user_id>/tip/preview', methods=['GET'])
+@require_auth
 def tip_preview(user_id: str):
     """
     GET /users/<user_id>/tip/preview
@@ -2095,6 +2194,8 @@ def tip_preview(user_id: str):
     (highest eligible pattern + position sizing), without actually sending.
     Respects tier gating.
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PATTERN_LAYER:
         return jsonify({'error': 'pattern layer not available'}), 503
     try:
@@ -2157,6 +2258,7 @@ def tip_preview(user_id: str):
 
 
 @app.route('/users/<user_id>/tip-config', methods=['GET', 'POST'])
+@require_auth
 def tip_config(user_id: str):
     """
     GET  /users/<user_id>/tip-config          — Return current tip configuration.
@@ -2173,6 +2275,8 @@ def tip_config(user_id: str):
       account_currency       "GBP"
       tier                   "basic" | "pro"
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PATTERN_LAYER:
         return jsonify({'error': 'pattern layer not available'}), 503
 
@@ -2205,6 +2309,10 @@ def tip_config(user_id: str):
 
     # POST
     data = request.get_json(force=True, silent=True) or {}
+    if HAS_VALIDATORS:
+        vr = validate_tip_config(data)
+        if not vr.valid:
+            return jsonify({'error': 'validation_failed', 'details': vr.errors}), 400
     try:
         updated = update_tip_config(
             _DB_PATH,
@@ -2225,12 +2333,15 @@ def tip_config(user_id: str):
 
 
 @app.route('/users/<user_id>/tip/history', methods=['GET'])
+@require_auth
 def tip_history(user_id: str):
     """
     GET /users/<user_id>/tip/history?limit=30
 
     Returns recent tip_delivery_log rows for this user, newest first.
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PATTERN_LAYER:
         return jsonify({'error': 'pattern layer not available'}), 503
     try:
@@ -2240,6 +2351,128 @@ def tip_history(user_id: str):
     try:
         history = get_tip_history(_DB_PATH, user_id, limit=limit)
         return jsonify({'history': history, 'count': len(history)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Security headers ─────────────────────────────────────────────────────────
+
+@app.after_request
+def security_headers(response):
+    response.headers['X-Content-Type-Options']  = 'nosniff'
+    response.headers['X-Frame-Options']          = 'DENY'
+    response.headers['X-XSS-Protection']         = '1; mode=block'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000'
+    response.headers['Content-Security-Policy']  = "default-src 'none'"
+    return response
+
+
+# ── Auth endpoints ────────────────────────────────────────────────────────────
+
+@app.route('/auth/register', methods=['POST'])
+@rate_limit('auth')
+def auth_register():
+    """
+    POST /auth/register
+
+    Body: { "user_id": "alice", "email": "alice@example.com", "password": "..." }
+    Returns: { "user_id": "...", "email": "...", "created_at": "..." }
+
+    Also creates the user_preferences row so all product-layer endpoints
+    are immediately usable after registration.
+    """
+    if not HAS_AUTH:
+        return jsonify({'error': 'auth not available — install PyJWT and bcrypt'}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+
+    if HAS_VALIDATORS:
+        result = validate_register(data)
+        if not result.valid:
+            return jsonify({'error': 'validation_failed', 'details': result.errors}), 400
+
+    user_id = str(data.get('user_id', '')).strip()
+    email   = str(data.get('email', '')).strip()
+    password = str(data.get('password', ''))
+
+    try:
+        row = register_user(_DB_PATH, user_id, email, password)
+    except ValueError as e:
+        log_audit_event(_DB_PATH, action='register',
+                        ip_address=request.remote_addr,
+                        user_agent=request.user_agent.string,
+                        outcome='failure', detail={'reason': str(e)})
+        return jsonify({'error': str(e)}), 409
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    # Create user_preferences row if product layer available
+    if HAS_PRODUCT_LAYER:
+        try:
+            create_user(_DB_PATH, user_id)
+        except Exception:
+            pass
+
+    log_audit_event(_DB_PATH, action='register', user_id=user_id,
+                    ip_address=request.remote_addr,
+                    user_agent=request.user_agent.string,
+                    outcome='success')
+    return jsonify(row), 201
+
+
+@app.route('/auth/token', methods=['POST'])
+@rate_limit('auth')
+def auth_token():
+    """
+    POST /auth/token
+
+    Body: { "email": "alice@example.com", "password": "..." }
+    Returns: { "access_token": "eyJ...", "token_type": "Bearer", "expires_in": 86400 }
+    """
+    if not HAS_AUTH:
+        return jsonify({'error': 'auth not available — install PyJWT and bcrypt'}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    email    = str(data.get('email', '')).strip()
+    password = str(data.get('password', ''))
+
+    if not email or not password:
+        return jsonify({'error': 'email and password are required'}), 400
+
+    try:
+        token_data = authenticate_user(_DB_PATH, email, password)
+    except ValueError as e:
+        log_audit_event(_DB_PATH, action='login_failure',
+                        ip_address=request.remote_addr,
+                        user_agent=request.user_agent.string,
+                        outcome='failure', detail={'email': email, 'reason': str(e)})
+        return jsonify({'error': str(e)}), 401
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    log_audit_event(_DB_PATH, action='login_success', user_id=token_data['user_id'],
+                    ip_address=request.remote_addr,
+                    user_agent=request.user_agent.string,
+                    outcome='success')
+    return jsonify(token_data)
+
+
+@app.route('/auth/me', methods=['GET'])
+@require_auth
+def auth_me():
+    """
+    GET /auth/me
+
+    Returns the authenticated user's profile from user_preferences.
+    Requires Authorization: Bearer {token}.
+    """
+    from flask import g as _g
+    user_id = _g.user_id
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'user_id': user_id})
+    try:
+        user = get_user(_DB_PATH, user_id)
+        return jsonify(user or {'user_id': user_id})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -2431,6 +2664,7 @@ def ticker_summary(ticker: str):
 
 
 @app.route('/users/<user_id>/watchlist/signals', methods=['GET'])
+@require_auth
 def watchlist_signals(user_id: str):
     """
     GET /users/<user_id>/watchlist/signals
@@ -2438,6 +2672,8 @@ def watchlist_signals(user_id: str):
     Signal summary for every ticker in the user's portfolio — conviction tier,
     pattern count, last tip date — in one call.
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PRODUCT_LAYER:
         return jsonify({'error': 'product layer not available'}), 503
 
@@ -2505,6 +2741,7 @@ def watchlist_signals(user_id: str):
 
 
 @app.route('/users/<user_id>/alerts/unread-count', methods=['GET'])
+@require_auth
 def user_alerts_unread_count(user_id: str):
     """
     GET /users/<user_id>/alerts/unread-count
@@ -2513,6 +2750,8 @@ def user_alerts_unread_count(user_id: str):
     alerts for tickers in this user's portfolio.  If the user has no portfolio,
     returns the global unseen count.
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_ANALYTICS:
         return jsonify({'error': 'analytics module not available'}), 503
 
@@ -2531,6 +2770,7 @@ def user_alerts_unread_count(user_id: str):
 
 
 @app.route('/users/<user_id>/onboarding-status', methods=['GET'])
+@require_auth
 def user_onboarding_status(user_id: str):
     """
     GET /users/<user_id>/onboarding-status
@@ -2539,6 +2779,8 @@ def user_onboarding_status(user_id: str):
     so the frontend can route users through the flow without inferring state
     from multiple responses.
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PRODUCT_LAYER:
         return jsonify({'error': 'product layer not available'}), 503
 
@@ -2596,6 +2838,7 @@ def user_onboarding_status(user_id: str):
 
 
 @app.route('/users/<user_id>/telegram/verify', methods=['POST'])
+@require_auth
 def user_telegram_verify(user_id: str):
     """
     POST /users/<user_id>/telegram/verify
@@ -2603,6 +2846,8 @@ def user_telegram_verify(user_id: str):
     Sends a test message to the user's stored telegram_chat_id.
     Returns {"sent": true/false}.  No body required.
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PRODUCT_LAYER:
         return jsonify({'error': 'product layer not available'}), 503
 
@@ -2708,6 +2953,7 @@ def pattern_detail(pattern_id: int):
 
 
 @app.route('/users/<user_id>/performance', methods=['GET'])
+@require_auth
 def user_performance(user_id: str):
     """
     GET /users/<user_id>/performance
@@ -2715,6 +2961,8 @@ def user_performance(user_id: str):
     Performance summary derived from tip_delivery_log + tip_feedback:
     tips sent, outcome breakdown, win rate, recent history.
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_PATTERN_LAYER:
         return jsonify({'error': 'pattern layer not available'}), 503
 
@@ -2771,6 +3019,7 @@ def submit_feedback():
 
 
 @app.route('/users/<user_id>/alerts', methods=['GET'])
+@require_auth
 def user_alerts(user_id: str):
     """
     GET /users/<user_id>/alerts?all=false&limit=50
@@ -2782,6 +3031,8 @@ def user_alerts(user_id: str):
       all   — 'true' returns seen + unseen (default: unseen only)
       limit — max rows (default 50)
     """
+    err = assert_self(user_id)
+    if err: return err
     if not HAS_ANALYTICS:
         return jsonify({'error': 'analytics module not available'}), 503
 

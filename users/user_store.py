@@ -18,6 +18,12 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+try:
+    from middleware.encryption import encrypt_field, decrypt_field
+except ImportError:
+    def encrypt_field(v): return v   # type: ignore
+    def decrypt_field(v): return v   # type: ignore
+
 
 # ── Schema ─────────────────────────────────────────────────────────────────────
 
@@ -165,7 +171,7 @@ def create_user(
             """INSERT OR IGNORE INTO user_preferences
                (user_id, telegram_chat_id, delivery_time, timezone)
                VALUES (?, ?, ?, ?)""",
-            (user_id, telegram_chat_id, delivery_time, timezone_str),
+            (user_id, encrypt_field(telegram_chat_id), delivery_time, timezone_str),
         )
         conn.commit()
         return get_user(db_path, user_id) or {}
@@ -193,6 +199,7 @@ def get_user(db_path: str, user_id: str) -> Optional[dict]:
             d['selected_sectors'] = json.loads(d['selected_sectors'] or '[]')
         except (json.JSONDecodeError, TypeError):
             d['selected_sectors'] = []
+        d['telegram_chat_id'] = decrypt_field(d.get('telegram_chat_id'))
         return d
     finally:
         conn.close()
@@ -233,7 +240,7 @@ def update_preferences(
         if telegram_chat_id is not None:
             conn.execute(
                 "UPDATE user_preferences SET telegram_chat_id = ? WHERE user_id = ?",
-                (telegram_chat_id, user_id),
+                (encrypt_field(telegram_chat_id), user_id),
             )
         if delivery_time is not None:
             conn.execute(
