@@ -81,7 +81,8 @@ try:
     from users.user_store import (
         get_open_patterns, upsert_pattern_signal,
         get_tip_history, update_tip_config, get_user_tier,
-        already_tipped_today,
+        already_tipped_today, log_tip_feedback, get_tip_performance,
+        get_user_watchlist_tickers, ensure_tip_feedback_table,
     )
     from analytics.pattern_detector import detect_all_patterns, OHLCV
     from analytics.position_calculator import calculate_position
@@ -2239,6 +2240,568 @@ def tip_history(user_id: str):
     try:
         history = get_tip_history(_DB_PATH, user_id, limit=limit)
         return jsonify({'history': history, 'count': len(history)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Frontend-Ready endpoints ──────────────────────────────────────────────────
+
+@app.route('/health/detailed', methods=['GET'])
+def health_detailed():
+    """
+    GET /health/detailed
+
+    Extended liveness check: KB stats, per-adapter ingest status, epistemic
+    stress score, and scheduler states.  Always available (no feature guard).
+    """
+    import sqlite3 as _sqlite3
+    result: dict = {'status': 'ok', 'db': _DB_PATH}
+
+    try:
+        conn = _sqlite3.connect(_DB_PATH, timeout=5)
+        row = conn.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT subject), COUNT(DISTINCT predicate) FROM facts"
+        ).fetchone()
+        conn.close()
+        result['kb_stats'] = {
+            'total_facts':        row[0],
+            'unique_subjects':    row[1],
+            'unique_predicates':  row[2],
+        }
+    except Exception:
+        result['kb_stats'] = None
+
+    if HAS_STRESS:
+        try:
+            conn2 = _sqlite3.connect(_DB_PATH, timeout=5)
+            sample_atoms = conn2.execute(
+                "SELECT subject, predicate, object, confidence, source, timestamp "
+                "FROM facts ORDER BY confidence DESC LIMIT 50"
+            ).fetchall()
+            conn2.close()
+            cols = ['subject', 'predicate', 'object', 'confidence', 'source', 'timestamp']
+            atoms = [dict(zip(cols, r)) for r in sample_atoms]
+            stress = compute_stress(atoms)
+            result['kb_stress'] = stress.get('composite_stress')
+        except Exception:
+            result['kb_stress'] = None
+
+    if HAS_INGEST and _ingest_scheduler:
+        try:
+            result['adapters'] = _ingest_scheduler.status()
+        except Exception:
+            result['adapters'] = None
+
+    result['tip_scheduler']      = 'running' if (_tip_scheduler and getattr(_tip_scheduler, '_thread', None) and _tip_scheduler._thread.is_alive()) else 'stopped'
+    result['delivery_scheduler'] = 'running' if (_delivery_scheduler and getattr(_delivery_scheduler, '_thread', None) and _delivery_scheduler._thread.is_alive()) else 'stopped'
+
+    return jsonify(result)
+
+
+@app.route('/markets/overview', methods=['GET'])
+def markets_overview():
+    """
+    GET /markets/overview
+
+    Single-call market snapshot: regime, top 3 high-conviction tickers,
+    macro summary, KB stress, and unread alert count.
+    """
+    if not HAS_ANALYTICS:
+        return jsonify({'error': 'analytics module not available'}), 503
+
+    import sqlite3 as _sqlite3
+    result: dict = {'as_of': datetime.now(timezone.utc).isoformat()}
+
+    try:
+        summary = build_portfolio_summary(_DB_PATH)
+        top = [
+            {
+                'ticker':           t.get('ticker'),
+                'conviction_tier':  t.get('conviction_tier'),
+                'upside_pct':       t.get('upside_pct'),
+                'position_size_pct': t.get('position_size_pct'),
+            }
+            for t in summary.get('top_conviction', [])[:3]
+        ]
+        result['top_conviction'] = top
+        result['regime']         = summary.get('macro_regime')
+        result['macro_summary']  = summary.get('macro_summary')
+    except Exception as e:
+        result['top_conviction'] = []
+        result['regime']         = None
+        result['macro_summary']  = None
+
+    if HAS_STRESS:
+        try:
+            conn = _sqlite3.connect(_DB_PATH, timeout=5)
+            sample = conn.execute(
+                "SELECT subject,predicate,object,confidence,source,timestamp "
+                "FROM facts ORDER BY confidence DESC LIMIT 50"
+            ).fetchall()
+            conn.close()
+            cols = ['subject','predicate','object','confidence','source','timestamp']
+            atoms = [dict(zip(cols, r)) for r in sample]
+            stress = compute_stress(atoms)
+            result['kb_stress'] = stress.get('composite_stress')
+        except Exception:
+            result['kb_stress'] = None
+
+    try:
+        unread = get_alerts(_DB_PATH, unseen_only=True, limit=500)
+        result['unread_alerts'] = len(unread)
+    except Exception:
+        result['unread_alerts'] = 0
+
+    return jsonify(result)
+
+
+@app.route('/tickers/<ticker>/summary', methods=['GET'])
+def ticker_summary(ticker: str):
+    """
+    GET /tickers/<ticker>/summary
+
+    Full KB signal profile for a single ticker: conviction, signal quality,
+    upside, invalidation, position sizing, open patterns, recent alerts.
+    """
+    ticker = ticker.upper()
+    import sqlite3 as _sqlite3
+
+    conn = _sqlite3.connect(_DB_PATH, timeout=10)
+    try:
+        rows = conn.execute(
+            """SELECT predicate, object, confidence, source, timestamp
+               FROM facts
+               WHERE UPPER(subject) = ?
+               ORDER BY confidence DESC""",
+            (ticker,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    atoms: dict = {}
+    for pred, obj, conf, src, ts in rows:
+        if pred not in atoms:
+            atoms[pred] = obj
+
+    signal_preds = [
+        'conviction_tier', 'signal_quality', 'upside_pct',
+        'invalidation_distance', 'position_size_pct', 'options_regime',
+        'macro_confirmation', 'thesis_risk_level', 'signal_direction',
+        'volatility_regime', 'price_target', 'last_price',
+    ]
+    profile = {p: atoms.get(p) for p in signal_preds}
+    profile['ticker'] = ticker
+
+    if HAS_STRESS:
+        try:
+            cols = ['subject','predicate','object','confidence','source','timestamp']
+            ticker_atoms = [dict(zip(cols, r)) for r in
+                _sqlite3.connect(_DB_PATH, timeout=5).execute(
+                    "SELECT subject,predicate,object,confidence,source,timestamp "
+                    "FROM facts WHERE UPPER(subject) = ? ORDER BY confidence DESC LIMIT 30",
+                    (ticker,),
+                ).fetchall()]
+            profile['kb_stress'] = compute_stress(ticker_atoms).get('composite_stress')
+        except Exception:
+            profile['kb_stress'] = None
+
+    if HAS_PATTERN_LAYER:
+        try:
+            patterns = get_open_patterns(_DB_PATH, ticker=ticker, limit=5)
+            profile['open_patterns'] = [
+                {k: p[k] for k in ('pattern_type','direction','quality_score','timeframe','status')}
+                for p in patterns
+            ]
+        except Exception:
+            profile['open_patterns'] = []
+    else:
+        profile['open_patterns'] = []
+
+    if HAS_ANALYTICS:
+        try:
+            recent_alerts = get_alerts(_DB_PATH, unseen_only=False, limit=200)
+            profile['recent_alerts'] = [a for a in recent_alerts if a.get('ticker') == ticker][:5]
+        except Exception:
+            profile['recent_alerts'] = []
+    else:
+        profile['recent_alerts'] = []
+
+    profile['as_of'] = datetime.now(timezone.utc).isoformat()
+    return jsonify(profile)
+
+
+@app.route('/users/<user_id>/watchlist/signals', methods=['GET'])
+def watchlist_signals(user_id: str):
+    """
+    GET /users/<user_id>/watchlist/signals
+
+    Signal summary for every ticker in the user's portfolio — conviction tier,
+    pattern count, last tip date — in one call.
+    """
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+
+    import sqlite3 as _sqlite3
+
+    try:
+        tickers = get_user_watchlist_tickers(_DB_PATH, user_id)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    if not tickers:
+        return jsonify({'signals': [], 'count': 0})
+
+    conn = _sqlite3.connect(_DB_PATH, timeout=10)
+    try:
+        placeholders = ','.join('?' for _ in tickers)
+        rows = conn.execute(
+            f"""SELECT UPPER(subject) as ticker, predicate, object
+                FROM facts
+                WHERE UPPER(subject) IN ({placeholders})
+                  AND predicate IN ('conviction_tier','signal_quality','upside_pct','position_size_pct')
+                ORDER BY UPPER(subject), predicate""",
+            tickers,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    by_ticker: dict = {t: {} for t in tickers}
+    for ticker, pred, obj in rows:
+        if ticker in by_ticker and pred not in by_ticker[ticker]:
+            by_ticker[ticker][pred] = obj
+
+    if HAS_PATTERN_LAYER:
+        for ticker in tickers:
+            try:
+                pats = get_open_patterns(_DB_PATH, ticker=ticker, limit=100)
+                by_ticker[ticker]['pattern_count'] = len(pats)
+            except Exception:
+                by_ticker[ticker]['pattern_count'] = 0
+
+    if HAS_ANALYTICS:
+        try:
+            tip_logs = {}
+            import sqlite3 as _sq
+            c = _sq.connect(_DB_PATH, timeout=5)
+            log_rows = c.execute(
+                """SELECT ps.ticker, MAX(t.delivered_at)
+                   FROM tip_delivery_log t
+                   JOIN pattern_signals ps ON ps.id = t.pattern_signal_id
+                   WHERE t.user_id = ? AND t.success = 1
+                   GROUP BY ps.ticker""",
+                (user_id,),
+            ).fetchall()
+            c.close()
+            for t, dt in log_rows:
+                tip_logs[t.upper()] = dt
+        except Exception:
+            tip_logs = {}
+
+        for ticker in tickers:
+            by_ticker[ticker]['last_tip_date'] = tip_logs.get(ticker)
+
+    signals = [{'ticker': t, **v} for t, v in by_ticker.items()]
+    return jsonify({'signals': signals, 'count': len(signals)})
+
+
+@app.route('/users/<user_id>/alerts/unread-count', methods=['GET'])
+def user_alerts_unread_count(user_id: str):
+    """
+    GET /users/<user_id>/alerts/unread-count
+
+    Lightweight polling endpoint. Returns {"count": N} — the number of unseen
+    alerts for tickers in this user's portfolio.  If the user has no portfolio,
+    returns the global unseen count.
+    """
+    if not HAS_ANALYTICS:
+        return jsonify({'error': 'analytics module not available'}), 503
+
+    try:
+        if HAS_PRODUCT_LAYER:
+            tickers = get_user_watchlist_tickers(_DB_PATH, user_id)
+        else:
+            tickers = []
+
+        unseen = get_alerts(_DB_PATH, unseen_only=True, limit=10000)
+        if tickers:
+            unseen = [a for a in unseen if a.get('ticker') in tickers]
+        return jsonify({'count': len(unseen)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/onboarding-status', methods=['GET'])
+def user_onboarding_status(user_id: str):
+    """
+    GET /users/<user_id>/onboarding-status
+
+    Returns a structured object of which onboarding steps are complete,
+    so the frontend can route users through the flow without inferring state
+    from multiple responses.
+    """
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+
+    import sqlite3 as _sqlite3
+    try:
+        conn = _sqlite3.connect(_DB_PATH, timeout=10)
+        row = conn.execute(
+            """SELECT onboarding_complete, telegram_chat_id, tip_delivery_time,
+                      tip_delivery_timezone, account_size, selected_sectors
+               FROM user_preferences WHERE user_id = ?""",
+            (user_id,),
+        ).fetchone()
+        portfolio_count = conn.execute(
+            "SELECT COUNT(*) FROM user_portfolios WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
+        conn.close()
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    if row is None:
+        return jsonify({'error': 'user not found'}), 404
+
+    onboarding_complete, chat_id, tip_time, tip_tz, account_size, sectors = row
+
+    telegram_connected = bool(chat_id and chat_id.strip())
+    portfolio_submitted = portfolio_count > 0
+
+    tip_config_set = bool(
+        tip_time and tip_time != '08:00' or
+        tip_tz and tip_tz != 'UTC'
+    )
+    account_size_set = account_size is not None and float(account_size or 0) > 0
+
+    import json as _json
+    try:
+        sector_list = _json.loads(sectors or '[]')
+    except Exception:
+        sector_list = []
+    preferences_set = len(sector_list) > 0
+
+    all_complete = all([
+        portfolio_submitted, telegram_connected,
+        tip_config_set, account_size_set,
+    ])
+
+    return jsonify({
+        'portfolio_submitted': portfolio_submitted,
+        'telegram_connected':  telegram_connected,
+        'tip_config_set':      tip_config_set,
+        'account_size_set':    account_size_set,
+        'preferences_set':     preferences_set,
+        'complete':            all_complete,
+    })
+
+
+@app.route('/users/<user_id>/telegram/verify', methods=['POST'])
+def user_telegram_verify(user_id: str):
+    """
+    POST /users/<user_id>/telegram/verify
+
+    Sends a test message to the user's stored telegram_chat_id.
+    Returns {"sent": true/false}.  No body required.
+    """
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+
+    try:
+        user = get_user(_DB_PATH, user_id)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    if user is None:
+        return jsonify({'error': 'user not found'}), 404
+
+    chat_id = (user.get('telegram_chat_id') or '').strip()
+    if not chat_id:
+        return jsonify({'error': 'no telegram_chat_id on record — use POST /users/{id}/onboarding to set it'}), 400
+
+    try:
+        notifier = TelegramNotifier()
+        sent = notifier.send_test(chat_id)
+        return jsonify({'sent': sent})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/patterns/<int:pattern_id>', methods=['GET'])
+def pattern_detail(pattern_id: int):
+    """
+    GET /patterns/<id>?user_id=<uid>
+
+    Full detail for a single pattern signal.  If user_id query param is
+    provided and the user has account_size set, also returns a position
+    recommendation.
+    """
+    if not HAS_PATTERN_LAYER:
+        return jsonify({'error': 'pattern layer not available'}), 503
+
+    import sqlite3 as _sqlite3
+    try:
+        conn = _sqlite3.connect(_DB_PATH, timeout=10)
+        row = conn.execute(
+            """SELECT id, ticker, pattern_type, direction, zone_high, zone_low,
+                      zone_size_pct, timeframe, formed_at, status, filled_at,
+                      quality_score, kb_conviction, kb_regime, kb_signal_dir,
+                      alerted_users, detected_at
+               FROM pattern_signals WHERE id = ?""",
+            (pattern_id,),
+        ).fetchone()
+        conn.close()
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    if row is None:
+        return jsonify({'error': 'pattern not found'}), 404
+
+    import json as _json
+    cols = ['id','ticker','pattern_type','direction','zone_high','zone_low',
+            'zone_size_pct','timeframe','formed_at','status','filled_at',
+            'quality_score','kb_conviction','kb_regime','kb_signal_dir',
+            'alerted_users','detected_at']
+    pattern = dict(zip(cols, row))
+    try:
+        pattern['alerted_users'] = _json.loads(pattern['alerted_users'] or '[]')
+    except Exception:
+        pattern['alerted_users'] = []
+
+    position = None
+    user_id = request.args.get('user_id')
+    if user_id:
+        try:
+            from analytics.pattern_detector import PatternSignal
+            import sqlite3 as _sq
+            c = _sq.connect(_DB_PATH, timeout=5)
+            pref_row = c.execute(
+                """SELECT account_size, max_risk_per_trade_pct, account_currency
+                   FROM user_preferences WHERE user_id = ?""",
+                (user_id,),
+            ).fetchone()
+            c.close()
+            if pref_row:
+                prefs = dict(zip(['account_size','max_risk_per_trade_pct','account_currency'], pref_row))
+                sig = PatternSignal(
+                    pattern_type  = pattern['pattern_type'],
+                    ticker        = pattern['ticker'],
+                    direction     = pattern['direction'],
+                    zone_high     = pattern['zone_high'],
+                    zone_low      = pattern['zone_low'],
+                    zone_size_pct = pattern['zone_size_pct'],
+                    timeframe     = pattern['timeframe'],
+                    formed_at     = pattern['formed_at'],
+                    quality_score = pattern['quality_score'] or 0.0,
+                    status        = pattern['status'],
+                    kb_conviction = pattern.get('kb_conviction', ''),
+                    kb_regime     = pattern.get('kb_regime', ''),
+                    kb_signal_dir = pattern.get('kb_signal_dir', ''),
+                )
+                pos = calculate_position(sig, prefs)
+                if pos is not None:
+                    from dataclasses import asdict
+                    position = asdict(pos)
+        except Exception:
+            position = None
+
+    return jsonify({'pattern': pattern, 'position': position})
+
+
+@app.route('/users/<user_id>/performance', methods=['GET'])
+def user_performance(user_id: str):
+    """
+    GET /users/<user_id>/performance
+
+    Performance summary derived from tip_delivery_log + tip_feedback:
+    tips sent, outcome breakdown, win rate, recent history.
+    """
+    if not HAS_PATTERN_LAYER:
+        return jsonify({'error': 'pattern layer not available'}), 503
+
+    try:
+        perf = get_tip_performance(_DB_PATH, user_id)
+        return jsonify(perf)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/feedback', methods=['POST'])
+def submit_feedback():
+    """
+    POST /feedback
+
+    Record a user-reported tip outcome.
+
+    Body:
+      {
+        "user_id":    "alice",
+        "tip_id":     4,          -- tip_delivery_log.id (optional)
+        "pattern_id": 42,         -- pattern_signals.id (optional)
+        "outcome":    "hit_t2"    -- hit_t1|hit_t2|hit_t3|stopped_out|pending|skipped
+      }
+
+    Returns: { "id": 7, "recorded": true }
+    """
+    if not HAS_PATTERN_LAYER:
+        return jsonify({'error': 'pattern layer not available'}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    user_id = str(data.get('user_id', '')).strip()
+    outcome = str(data.get('outcome', '')).strip()
+
+    if not user_id:
+        return jsonify({'error': 'user_id is required'}), 400
+
+    _VALID_OUTCOMES = {'hit_t1','hit_t2','hit_t3','stopped_out','pending','skipped'}
+    if outcome not in _VALID_OUTCOMES:
+        return jsonify({'error': f'outcome must be one of: {", ".join(sorted(_VALID_OUTCOMES))}'}), 400
+
+    try:
+        tip_id     = int(data['tip_id'])     if data.get('tip_id')     is not None else None
+        pattern_id = int(data['pattern_id']) if data.get('pattern_id') is not None else None
+    except (TypeError, ValueError) as e:
+        return jsonify({'error': f'tip_id and pattern_id must be integers: {e}'}), 400
+
+    try:
+        row = log_tip_feedback(_DB_PATH, user_id, outcome,
+                               tip_id=tip_id, pattern_id=pattern_id)
+        return jsonify({'id': row['id'], 'recorded': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/alerts', methods=['GET'])
+def user_alerts(user_id: str):
+    """
+    GET /users/<user_id>/alerts?all=false&limit=50
+
+    Alerts scoped to tickers in the user's portfolio.  Falls back to the
+    global alert list if the user has no portfolio holdings.
+
+    Query params:
+      all   — 'true' returns seen + unseen (default: unseen only)
+      limit — max rows (default 50)
+    """
+    if not HAS_ANALYTICS:
+        return jsonify({'error': 'analytics module not available'}), 503
+
+    try:
+        unseen_only = request.args.get('all', '').lower() != 'true'
+        limit       = int(request.args.get('limit', 50))
+    except (TypeError, ValueError):
+        limit = 50
+
+    try:
+        if HAS_PRODUCT_LAYER:
+            tickers = get_user_watchlist_tickers(_DB_PATH, user_id)
+        else:
+            tickers = []
+
+        rows = get_alerts(_DB_PATH, unseen_only=unseen_only, limit=10000)
+        if tickers:
+            rows = [a for a in rows if a.get('ticker') in tickers]
+        rows = rows[:limit]
+        return jsonify({'alerts': rows, 'count': len(rows)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

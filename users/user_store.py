@@ -748,6 +748,122 @@ def get_user_tier(db_path: str, user_id: str) -> str:
         conn.close()
 
 
+_DDL_TIP_FEEDBACK = """
+CREATE TABLE IF NOT EXISTS tip_feedback (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      TEXT NOT NULL,
+    tip_id       INTEGER,
+    pattern_id   INTEGER,
+    outcome      TEXT NOT NULL,
+    submitted_at TEXT NOT NULL
+)
+"""
+
+
+def ensure_tip_feedback_table(conn: sqlite3.Connection) -> None:
+    conn.execute(_DDL_TIP_FEEDBACK)
+    conn.commit()
+
+
+def log_tip_feedback(
+    db_path: str,
+    user_id: str,
+    outcome: str,
+    tip_id: Optional[int] = None,
+    pattern_id: Optional[int] = None,
+) -> dict:
+    """Record a user-reported tip outcome. Returns the inserted row."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_tip_feedback_table(conn)
+        cur = conn.execute(
+            """INSERT INTO tip_feedback (user_id, tip_id, pattern_id, outcome, submitted_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (user_id, tip_id, pattern_id, outcome, now),
+        )
+        conn.commit()
+        return {
+            'id':           cur.lastrowid,
+            'user_id':      user_id,
+            'tip_id':       tip_id,
+            'pattern_id':   pattern_id,
+            'outcome':      outcome,
+            'submitted_at': now,
+        }
+    finally:
+        conn.close()
+
+
+def get_tip_performance(db_path: str, user_id: str) -> dict:
+    """
+    Return a simple performance summary for a user by joining tip_delivery_log
+    with tip_feedback.
+
+    Returns counts by outcome and a win_rate based on resolved tips.
+    """
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_tables(conn)
+        ensure_tip_feedback_table(conn)
+
+        tips_sent = conn.execute(
+            "SELECT COUNT(*) FROM tip_delivery_log WHERE user_id = ? AND success = 1",
+            (user_id,),
+        ).fetchone()[0]
+
+        rows = conn.execute(
+            """SELECT outcome, COUNT(*) FROM tip_feedback
+               WHERE user_id = ? GROUP BY outcome""",
+            (user_id,),
+        ).fetchall()
+
+        by_outcome: Dict[str, int] = {r[0]: r[1] for r in rows}
+
+        hit_t1 = by_outcome.get('hit_t1', 0)
+        hit_t2 = by_outcome.get('hit_t2', 0)
+        hit_t3 = by_outcome.get('hit_t3', 0)
+        stopped_out = by_outcome.get('stopped_out', 0)
+        pending = by_outcome.get('pending', 0)
+        skipped = by_outcome.get('skipped', 0)
+
+        wins = hit_t1 + hit_t2 + hit_t3
+        resolved = wins + stopped_out
+        win_rate = round(wins / resolved * 100, 1) if resolved > 0 else None
+
+        history = conn.execute(
+            """SELECT f.id, f.tip_id, f.pattern_id, f.outcome, f.submitted_at,
+                      p.ticker, p.pattern_type
+               FROM tip_feedback f
+               LEFT JOIN pattern_signals p ON p.id = f.pattern_id
+               WHERE f.user_id = ?
+               ORDER BY f.submitted_at DESC
+               LIMIT 50""",
+            (user_id,),
+        ).fetchall()
+        history_cols = ['id', 'tip_id', 'pattern_id', 'outcome', 'submitted_at', 'ticker', 'pattern_type']
+
+        return {
+            'tips_sent':    tips_sent,
+            'hit_t1':       hit_t1,
+            'hit_t2':       hit_t2,
+            'hit_t3':       hit_t3,
+            'stopped_out':  stopped_out,
+            'pending':      pending,
+            'skipped':      skipped,
+            'win_rate_pct': win_rate,
+            'history':      [dict(zip(history_cols, r)) for r in history],
+        }
+    finally:
+        conn.close()
+
+
+def get_user_watchlist_tickers(db_path: str, user_id: str) -> List[str]:
+    """Return the list of ticker strings in the user's portfolio (upper-case)."""
+    holdings = get_portfolio(db_path, user_id)
+    return list({h['ticker'].upper() for h in holdings if h.get('ticker')})
+
+
 def update_tip_config(
     db_path: str,
     user_id: str,
