@@ -138,19 +138,59 @@ def timeframe_allowed_for_tier(timeframe: str, tier: str) -> bool:
 
 # ── Formatter ──────────────────────────────────────────────────────────────────
 
+def _parse_skew_filter(skew_filter: Optional[dict]) -> Optional[dict]:
+    """
+    Normalise the skew_filter argument into a usable dict.
+
+    Accepts either:
+      - A dict with keys: multiplier, stop_tighten_pct, reason
+      - A dict with key 'skew_filter' whose value is the pipe-encoded string
+        "multiplier|stop_tighten_pct|reason" from the KB atom
+
+    Returns None when not active (multiplier == 1.0 or no data).
+    Never raises.
+    """
+    if not skew_filter:
+        return None
+    try:
+        # If the dict contains the raw KB atom string
+        encoded = skew_filter.get('skew_filter', '')
+        if encoded and '|' in encoded:
+            parts = encoded.split('|')
+            if len(parts) >= 3:
+                multiplier   = float(parts[0])
+                stop_tighten = float(parts[1])
+                reason       = parts[2]
+                skew_filter  = {'multiplier': multiplier,
+                                'stop_tighten_pct': stop_tighten,
+                                'reason': reason}
+
+        multiplier = float(skew_filter.get('multiplier', 1.0))
+        if multiplier >= 1.0:
+            return None  # no reduction — filter not active
+        return skew_filter
+    except Exception:
+        return None
+
+
 def format_tip(
-    pattern:  PatternSignal,
-    position: Optional[PositionRecommendation],
-    tier:     str = 'basic',
+    pattern:     PatternSignal,
+    position:    Optional[PositionRecommendation],
+    tier:        str = 'basic',
+    skew_filter: Optional[dict] = None,
 ) -> str:
     """
     Render a complete Telegram MarkdownV2 tip message.
 
     Parameters
     ----------
-    pattern   The best PatternSignal for this user's tip.
-    position  PositionRecommendation (None if account_size not configured).
-    tier      'basic' or 'pro' — controls T3 visibility.
+    pattern      The best PatternSignal for this user's tip.
+    position     PositionRecommendation (None if account_size not configured).
+    tier         'basic' or 'pro' — controls T3 visibility.
+    skew_filter  Optional dict from KB skew_filter atom or
+                 _compute_skew_filter_atoms output.  When active (multiplier
+                 < 1.0), appends a warning block showing why position was
+                 sized down.  Accepts pipe-encoded KB string or plain dict.
 
     Returns
     -------
@@ -165,6 +205,9 @@ def format_tip(
     direction_label = pattern.direction.title()
 
     now_str = datetime.now(timezone.utc).strftime('%A %d %b, %H:%M UTC')
+
+    # Normalise skew_filter — None when not active
+    active_skew = _parse_skew_filter(skew_filter)
 
     lines = [
         f'⚡ *YOUR DAILY TIP — {_escape_mdv2(pattern.ticker)}*',
@@ -199,6 +242,25 @@ def format_tip(
             )
         else:
             lines.append('_Target 3: Pro tier only_')
+
+        # ── Skew filter warning block ─────────────────────────────────────
+        # Only rendered when skew_filter is active (multiplier < 1.0).
+        if active_skew:
+            multiplier   = active_skew.get('multiplier', 1.0)
+            stop_tighten = active_skew.get('stop_tighten_pct', 0.0)
+            reason       = active_skew.get('reason', 'skew_filter')
+            reason_label = reason.replace('_', ' ').title()
+
+            size_note = ('Position blocked' if multiplier == 0.0
+                         else f'Size reduced {int((1.0 - multiplier) * 100)}%')
+            stop_note = (f' \\| Stop tightened {int(stop_tighten)}%'
+                         if stop_tighten > 0 else '')
+
+            lines += [
+                '',
+                f'⚠️ *Skew filter active — {_escape_mdv2(reason_label)}*',
+                f'{_escape_mdv2(size_note)}{stop_note}',
+            ]
 
     lines += [
         '',

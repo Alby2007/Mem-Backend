@@ -26,6 +26,7 @@ from ingest.signal_enrichment_adapter import (
     _classify_earnings_proximity,
     _classify_market_regime,
     _compute_news_sentiment,
+    _compute_skew_filter_atoms,
     _SENTIMENT_MIN_ATOMS,
     _SENTIMENT_BULLISH_PREDS,
     _SENTIMENT_BEARISH_PREDS,
@@ -34,6 +35,9 @@ from ingest.signal_enrichment_adapter import (
     _REGIME_STAGFLATION,
     _REGIME_RECOVERY,
     _REGIME_NO_DATA,
+    _SKEW_FILTER_ELEVATED_MULTIPLIER,
+    _SKEW_FILTER_SPIKE_MULTIPLIER,
+    _SKEW_FILTER_STOP_TIGHTEN_PCT,
     SignalEnrichmentAdapter,
 )
 
@@ -467,3 +471,101 @@ class TestClassifyMarketRegime:
         for ms, ta in combos:
             r = _classify_market_regime(ms, ta)
             assert r in valid, f"Unexpected regime: {r}"
+
+
+# ── _compute_skew_filter_atoms ────────────────────────────────────────────────
+
+_SKEW_META = {'as_of': '2026-01-01T00:00:00+00:00'}
+
+
+def _skew_filter(ticker='nvda', preds=None, market=None, direction='long'):
+    """Helper to call _compute_skew_filter_atoms with minimal boilerplate."""
+    return _compute_skew_filter_atoms(
+        ticker       = ticker,
+        preds        = preds or {},
+        market_atoms = market or {},
+        signal_direction = direction,
+        src_base     = f'derived_signal_{ticker}',
+        meta         = _SKEW_META,
+    )
+
+
+class TestComputeSkewFilterAtoms:
+    def test_spike_skew_blocks_long(self):
+        atoms = _skew_filter(preds={'skew_regime': 'spike'}, direction='long')
+        assert len(atoms) == 1
+        parts = atoms[0].object.split('|')
+        assert float(parts[0]) == _SKEW_FILTER_SPIKE_MULTIPLIER   # 0.0
+        assert parts[2] == 'spike_skew'
+
+    def test_elevated_skew_reduces_long(self):
+        atoms = _skew_filter(preds={'skew_regime': 'elevated'}, direction='long')
+        assert len(atoms) == 1
+        parts = atoms[0].object.split('|')
+        assert float(parts[0]) == _SKEW_FILTER_ELEVATED_MULTIPLIER  # 0.5
+        assert float(parts[1]) == _SKEW_FILTER_STOP_TIGHTEN_PCT     # 20.0
+        assert parts[2] == 'elevated_skew'
+
+    def test_spike_skew_does_not_affect_short(self):
+        atoms = _skew_filter(preds={'skew_regime': 'spike'}, direction='short')
+        assert atoms == []
+
+    def test_normal_skew_no_filter(self):
+        atoms = _skew_filter(preds={'skew_regime': 'normal'}, direction='long')
+        assert atoms == []
+
+    def test_no_skew_data_no_filter(self):
+        # Neither ticker skew nor market tail_risk present — options_adapter
+        # hasn't run yet; must not emit any filter atom
+        atoms = _skew_filter(preds={}, market={}, direction='long')
+        assert atoms == []
+
+    def test_market_tail_risk_extreme_blocks_long(self):
+        atoms = _skew_filter(
+            preds={'skew_regime': 'normal'},
+            market={'tail_risk': 'extreme'},
+            direction='long',
+        )
+        assert len(atoms) == 1
+        parts = atoms[0].object.split('|')
+        assert float(parts[0]) == _SKEW_FILTER_SPIKE_MULTIPLIER   # 0.0
+        assert parts[2] == 'market_tail_risk_extreme'
+
+    def test_market_tail_risk_elevated_reduces_long(self):
+        atoms = _skew_filter(
+            preds={},
+            market={'tail_risk': 'elevated'},
+            direction='long',
+        )
+        assert len(atoms) == 1
+        parts = atoms[0].object.split('|')
+        assert float(parts[0]) == _SKEW_FILTER_ELEVATED_MULTIPLIER  # 0.5
+        assert parts[2] == 'market_tail_risk_elevated'
+
+    def test_ticker_spike_beats_market_elevated(self):
+        # Worst case wins: spike takes priority over market elevated
+        atoms = _skew_filter(
+            preds={'skew_regime': 'spike'},
+            market={'tail_risk': 'elevated'},
+            direction='long',
+        )
+        assert len(atoms) == 1
+        parts = atoms[0].object.split('|')
+        assert float(parts[0]) == _SKEW_FILTER_SPIKE_MULTIPLIER   # 0.0
+
+    def test_encoded_value_is_pipe_delimited(self):
+        atoms = _skew_filter(preds={'skew_regime': 'elevated'}, direction='long')
+        assert len(atoms) == 1
+        parts = atoms[0].object.split('|')
+        assert len(parts) == 3
+        float(parts[0])   # multiplier parseable as float
+        float(parts[1])   # stop_tighten_pct parseable as float
+        assert parts[2]   # reason non-empty string
+
+    def test_predicate_is_skew_filter(self):
+        atoms = _skew_filter(preds={'skew_regime': 'spike'}, direction='long')
+        assert atoms[0].predicate == 'skew_filter'
+
+    def test_upsert_true(self):
+        atoms = _skew_filter(preds={'skew_regime': 'elevated'}, direction='long')
+        assert atoms[0].upsert is True

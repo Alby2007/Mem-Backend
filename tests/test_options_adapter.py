@@ -26,12 +26,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from ingest.options_adapter import (
     OptionsAdapter,
     _classify_options_regime,
+    _classify_skew_regime,
+    _classify_tail_risk,
+    _compute_skew,
     _detect_sweep,
     _iv_rank_from_chain,
     _put_call_ratio,
     _IV_RANK_COMPRESSED,
     _IV_RANK_ELEVATED,
+    _SKEW_ELEVATED,
+    _SKEW_SPIKE,
     _SWEEP_VOLUME_RATIO,
+    _TAIL_ELEVATED,
+    _TAIL_EXTREME,
+    _TAIL_MODERATE,
 )
 
 
@@ -353,3 +361,241 @@ class TestOptionsAdapterFetch:
             adapter = OptionsAdapter(tickers=['AAPL'], sleep_sec=0)
             atoms = adapter.fetch()
             assert atoms == []
+
+
+# ── helpers for skew tests ────────────────────────────────────────────────────
+
+def _make_skew_chain(atm_price=100.0, atm_iv=0.25, otm_put_iv=0.32, otm_call_iv=0.22):
+    """Build minimal calls/puts DataFrames for skew calculation."""
+    strikes = [atm_price * 0.90, atm_price * 0.95, atm_price, atm_price * 1.05, atm_price * 1.10]
+    call_ivs = [otm_put_iv + 0.05, otm_put_iv, atm_iv, otm_call_iv, otm_call_iv - 0.02]
+    put_ivs  = [otm_put_iv + 0.05, otm_put_iv, atm_iv, otm_call_iv, otm_call_iv - 0.02]
+    calls = pd.DataFrame({'strike': strikes, 'impliedVolatility': call_ivs})
+    puts  = pd.DataFrame({'strike': strikes, 'impliedVolatility': put_ivs})
+    return calls, puts
+
+
+# ── _compute_skew ─────────────────────────────────────────────────────────────
+
+class TestComputeSkew:
+    def test_normal_calculation(self):
+        calls, puts = _make_skew_chain(atm_price=100.0, atm_iv=0.25,
+                                       otm_put_iv=0.32, otm_call_iv=0.22)
+        result = _compute_skew(calls, puts, current_price=100.0)
+        assert result is not None
+        assert result['skew_ratio'] > 1.0
+        assert 'atm_iv' in result
+        assert 'otm_put_iv' in result
+        assert 'otm_call_iv' in result
+        assert 'skew_25d' in result
+
+    def test_skew_ratio_correct(self):
+        calls, puts = _make_skew_chain(atm_price=100.0, atm_iv=0.25,
+                                       otm_put_iv=0.32, otm_call_iv=0.22)
+        result = _compute_skew(calls, puts, current_price=100.0)
+        assert result is not None
+        expected_ratio = round(0.32 / 0.25, 4)
+        assert abs(result['skew_ratio'] - expected_ratio) < 0.01
+
+    def test_empty_calls_returns_none(self):
+        puts = pd.DataFrame({'strike': [95.0, 100.0], 'impliedVolatility': [0.30, 0.25]})
+        result = _compute_skew(pd.DataFrame(), puts, current_price=100.0)
+        assert result is None
+
+    def test_empty_puts_returns_none(self):
+        calls = pd.DataFrame({'strike': [100.0, 105.0], 'impliedVolatility': [0.25, 0.22]})
+        result = _compute_skew(calls, pd.DataFrame(), current_price=100.0)
+        assert result is None
+
+    def test_none_dataframes_return_none(self):
+        assert _compute_skew(None, None, current_price=100.0) is None
+
+    def test_zero_current_price_returns_none(self):
+        calls, puts = _make_skew_chain()
+        assert _compute_skew(calls, puts, current_price=0.0) is None
+
+    def test_zero_atm_iv_returns_none(self):
+        calls = pd.DataFrame({'strike': [100.0], 'impliedVolatility': [0.0]})
+        puts  = pd.DataFrame({'strike': [95.0],  'impliedVolatility': [0.30]})
+        result = _compute_skew(calls, puts, current_price=100.0)
+        assert result is None
+
+    def test_missing_columns_returns_none(self):
+        calls = pd.DataFrame({'strike': [100.0]})  # no impliedVolatility
+        puts  = pd.DataFrame({'strike': [95.0], 'impliedVolatility': [0.30]})
+        result = _compute_skew(calls, puts, current_price=100.0)
+        assert result is None
+
+
+# ── _classify_skew_regime ─────────────────────────────────────────────────────
+
+class TestClassifySkewRegime:
+    def test_normal_below_elevated_threshold(self):
+        assert _classify_skew_regime(1.0) == 'normal'
+        assert _classify_skew_regime(_SKEW_ELEVATED) == 'normal'   # boundary: not >
+
+    def test_elevated_between_thresholds(self):
+        assert _classify_skew_regime(_SKEW_ELEVATED + 0.01) == 'elevated'
+        assert _classify_skew_regime(1.3) == 'elevated'
+        assert _classify_skew_regime(_SKEW_SPIKE) == 'elevated'    # boundary: not >
+
+    def test_spike_above_threshold(self):
+        assert _classify_skew_regime(_SKEW_SPIKE + 0.01) == 'spike'
+        assert _classify_skew_regime(2.0) == 'spike'
+
+
+# ── _classify_tail_risk ───────────────────────────────────────────────────────
+
+class TestClassifyTailRisk:
+    def test_normal(self):
+        assert _classify_tail_risk(1.0) == 'normal'
+        assert _classify_tail_risk(_TAIL_MODERATE) == 'normal'     # boundary: not >
+
+    def test_moderate(self):
+        assert _classify_tail_risk(_TAIL_MODERATE + 0.01) == 'moderate'
+        assert _classify_tail_risk(_TAIL_ELEVATED) == 'moderate'   # boundary: not >
+
+    def test_elevated(self):
+        assert _classify_tail_risk(_TAIL_ELEVATED + 0.01) == 'elevated'
+        assert _classify_tail_risk(_TAIL_EXTREME) == 'elevated'    # boundary: not >
+
+    def test_extreme(self):
+        assert _classify_tail_risk(_TAIL_EXTREME + 0.01) == 'extreme'
+        assert _classify_tail_risk(2.0) == 'extreme'
+
+
+# ── skew atoms emitted by _fetch_one ─────────────────────────────────────────
+
+class TestFetchOneSkewAtoms:
+    @patch('ingest.options_adapter.yf')
+    def test_skew_atoms_emitted_when_price_available(self, mock_yf):
+        calls, puts = _make_skew_chain(atm_price=150.0, atm_iv=0.25,
+                                       otm_put_iv=0.32, otm_call_iv=0.22)
+        chain = SimpleNamespace(calls=calls, puts=puts)
+
+        ticker_mock = MagicMock()
+        ticker_mock.options = ['2026-03-21']
+        ticker_mock.option_chain.return_value = chain
+        ticker_mock.info = {'regularMarketPrice': 150.0}
+        mock_yf.Ticker.return_value = ticker_mock
+
+        adapter = OptionsAdapter(tickers=['NVDA'], sleep_sec=0)
+        atoms = adapter._fetch_one('NVDA')
+
+        preds = {a.predicate for a in atoms}
+        assert 'iv_skew_ratio' in preds
+        assert 'iv_skew_25d' in preds
+        assert 'skew_regime' in preds
+
+    @patch('ingest.options_adapter.yf')
+    def test_skew_atoms_skipped_when_price_zero(self, mock_yf):
+        calls, puts = _make_skew_chain(atm_price=150.0)
+        chain = SimpleNamespace(calls=calls, puts=puts)
+
+        ticker_mock = MagicMock()
+        ticker_mock.options = ['2026-03-21']
+        ticker_mock.option_chain.return_value = chain
+        ticker_mock.info = {'regularMarketPrice': 0.0, 'currentPrice': None, 'previousClose': None}
+        mock_yf.Ticker.return_value = ticker_mock
+
+        adapter = OptionsAdapter(tickers=['NVDA'], sleep_sec=0)
+        atoms = adapter._fetch_one('NVDA')
+
+        preds = {a.predicate for a in atoms}
+        assert 'iv_skew_ratio' not in preds
+        assert 'skew_regime' not in preds
+
+    @patch('ingest.options_adapter.yf')
+    def test_skew_regime_values_valid(self, mock_yf):
+        calls, puts = _make_skew_chain(atm_price=100.0, atm_iv=0.25,
+                                       otm_put_iv=0.32, otm_call_iv=0.22)
+        chain = SimpleNamespace(calls=calls, puts=puts)
+
+        ticker_mock = MagicMock()
+        ticker_mock.options = ['2026-03-21']
+        ticker_mock.option_chain.return_value = chain
+        ticker_mock.info = {'regularMarketPrice': 100.0}
+        mock_yf.Ticker.return_value = ticker_mock
+
+        adapter = OptionsAdapter(tickers=['AAPL'], sleep_sec=0)
+        atoms = adapter._fetch_one('AAPL')
+
+        regimes = [a.object for a in atoms if a.predicate == 'skew_regime']
+        assert len(regimes) == 1
+        assert regimes[0] in ('normal', 'elevated', 'spike')
+
+
+# ── SPY market-level skew atoms ───────────────────────────────────────────────
+
+class TestSpySkewMarketAtoms:
+    @patch('ingest.options_adapter.yf')
+    def test_spy_skew_emits_three_market_atoms(self, mock_yf):
+        calls, puts = _make_skew_chain(atm_price=500.0, atm_iv=0.18,
+                                       otm_put_iv=0.23, otm_call_iv=0.16)
+        chain = SimpleNamespace(calls=calls, puts=puts)
+
+        ticker_mock = MagicMock()
+        ticker_mock.options = ['2026-03-21']
+        ticker_mock.option_chain.return_value = chain
+        ticker_mock.info = {'regularMarketPrice': 500.0}
+        mock_yf.Ticker.return_value = ticker_mock
+
+        adapter = OptionsAdapter(tickers=['AAPL'], sleep_sec=0)
+        atoms = adapter._fetch_spy_skew()
+
+        assert len(atoms) == 3
+        preds = {a.predicate for a in atoms}
+        assert 'spy_skew_ratio' in preds
+        assert 'spy_skew_regime' in preds
+        assert 'tail_risk' in preds
+
+    @patch('ingest.options_adapter.yf')
+    def test_spy_market_atoms_subject_is_market(self, mock_yf):
+        calls, puts = _make_skew_chain(atm_price=500.0)
+        chain = SimpleNamespace(calls=calls, puts=puts)
+
+        ticker_mock = MagicMock()
+        ticker_mock.options = ['2026-03-21']
+        ticker_mock.option_chain.return_value = chain
+        ticker_mock.info = {'regularMarketPrice': 500.0}
+        mock_yf.Ticker.return_value = ticker_mock
+
+        adapter = OptionsAdapter(tickers=['AAPL'], sleep_sec=0)
+        atoms = adapter._fetch_spy_skew()
+
+        for a in atoms:
+            assert a.subject == 'market'
+
+    @patch('ingest.options_adapter.yf')
+    def test_spy_skew_returns_empty_when_price_missing(self, mock_yf):
+        calls, puts = _make_skew_chain(atm_price=500.0)
+        chain = SimpleNamespace(calls=calls, puts=puts)
+
+        ticker_mock = MagicMock()
+        ticker_mock.options = ['2026-03-21']
+        ticker_mock.option_chain.return_value = chain
+        ticker_mock.info = {'regularMarketPrice': 0.0, 'currentPrice': None, 'previousClose': None}
+        mock_yf.Ticker.return_value = ticker_mock
+
+        adapter = OptionsAdapter(tickers=['AAPL'], sleep_sec=0)
+        atoms = adapter._fetch_spy_skew()
+
+        assert atoms == []
+
+    @patch('ingest.options_adapter.yf')
+    def test_spy_included_in_full_fetch(self, mock_yf):
+        calls, puts = _make_skew_chain(atm_price=150.0)
+        chain = SimpleNamespace(calls=calls, puts=puts)
+
+        ticker_mock = MagicMock()
+        ticker_mock.options = ['2026-03-21']
+        ticker_mock.option_chain.return_value = chain
+        ticker_mock.info = {'regularMarketPrice': 150.0}
+        mock_yf.Ticker.return_value = ticker_mock
+
+        adapter = OptionsAdapter(tickers=['AAPL'], sleep_sec=0)
+        atoms = adapter.fetch()
+
+        market_atoms = [a for a in atoms if a.subject == 'market']
+        preds = {a.predicate for a in market_atoms}
+        assert 'tail_risk' in preds

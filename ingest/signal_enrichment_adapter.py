@@ -142,6 +142,8 @@ def _read_kb_atoms(
         # Fetch all relevant predicates ordered so highest confidence wins.
         # low_52w and volatility_30d come from HistoricalBackfillAdapter —
         # present after first backfill run; fallback rules fire if absent.
+        # skew_regime / iv_skew_ratio come from OptionsAdapter (1800s interval)
+        # — may be absent on startup; skew filter is skipped when missing.
         c.execute("""
             SELECT subject, predicate, object, confidence
             FROM facts
@@ -150,7 +152,9 @@ def _read_kb_atoms(
                 'volatility_regime', 'market_cap_tier', 'sector',
                 'earnings_quality', 'low_52w', 'volatility_30d',
                 'signal_quality', 'thesis_risk_level', 'macro_confirmation',
-                'next_earnings'
+                'next_earnings',
+                'skew_regime', 'iv_skew_ratio',
+                'tail_risk', 'spy_skew_regime', 'spy_skew_ratio'
             )
             ORDER BY subject, predicate, confidence DESC
         """)
@@ -198,6 +202,108 @@ _TIGHT_VOL_THRESH    =  50.0  # annualised vol threshold for secondary tight rul
 _MOD_ABS             = -30.0  # Rule R-MODERATE primary: < 30% gap
 _MOD_VOL_DIST        = -40.0  # Rule R-MODERATE secondary: < 40% gap with med-high vol
 _MOD_VOL_THRESH      =  35.0  # annualised vol threshold for secondary moderate rule
+
+
+# ── Skew filter constants ─────────────────────────────────────────────────────
+# Applied when skew_regime or market tail_risk indicates elevated put demand.
+# Encoded as pipe-delimited string: "multiplier|stop_tighten_pct|reason"
+# Parseable by position_calculator.py in future without schema change.
+
+_SKEW_FILTER_SPIKE_MULTIPLIER    = 0.0    # block long entirely
+_SKEW_FILTER_ELEVATED_MULTIPLIER = 0.5    # halve long size
+_SKEW_FILTER_STOP_TIGHTEN_PCT    = 20.0   # tighten stop by 20%
+
+# Market tail_risk levels that trigger filter regardless of per-ticker skew
+_TAIL_RISK_BLOCK  = {'extreme'}           # same as spike — full block on longs
+_TAIL_RISK_REDUCE = {'elevated'}          # same as elevated — half size + tighten
+
+
+def _compute_skew_filter_atoms(
+    ticker: str,
+    preds: Dict[str, str],
+    market_atoms: Dict[str, str],
+    signal_direction: str,
+    src_base: str,
+    meta: dict,
+) -> List[RawAtom]:
+    """
+    Compute skew_filter atom for a ticker based on per-ticker and market skew.
+
+    Encoding: "multiplier|stop_tighten_pct|reason"  (pipe-delimited)
+      e.g.  "0.5|20.0|elevated_skew"
+            "0.0|0.0|spike_skew"
+            "0.0|0.0|market_tail_risk_extreme"
+
+    Priority (worst case wins):
+      1. Market tail_risk == extreme  → block all longs  (0.0|0.0|market_tail_risk_extreme)
+      2. ticker skew_regime == spike  → block long       (0.0|0.0|spike_skew)
+      3. Market tail_risk == elevated → reduce long      (0.5|20.0|market_tail_risk_elevated)
+      4. ticker skew_regime == elevated → reduce long    (0.5|20.0|elevated_skew)
+
+    Filter only applies to long/bullish directions — short positions are
+    unaffected (elevated put demand can confirm bearish thesis).
+
+    Returns empty list when:
+      - No skew_regime atom exists for this ticker AND market tail_risk is normal
+        (scheduler order: options_adapter may not have run yet — no false signals)
+      - direction is not long/bullish
+    """
+    from ingest.base import RawAtom  # local to avoid circular import
+
+    is_long = signal_direction in ('long', 'near_high', 'near_52w_high')
+
+    ticker_skew = preds.get('skew_regime', '')       # '' = not yet computed
+    tail_risk   = market_atoms.get('tail_risk', '')  # '' = not yet computed
+
+    # No skew data at all → skip (options_adapter hasn't run yet)
+    if not ticker_skew and not tail_risk:
+        return []
+
+    # Only filter long directions
+    if not is_long:
+        return []
+
+    # Determine worst-case filter (priority order)
+    multiplier    = 1.0
+    stop_tighten  = 0.0
+    reason        = ''
+
+    if tail_risk in _TAIL_RISK_BLOCK:
+        multiplier   = _SKEW_FILTER_SPIKE_MULTIPLIER
+        stop_tighten = 0.0
+        reason       = 'market_tail_risk_extreme'
+    elif ticker_skew == 'spike':
+        multiplier   = _SKEW_FILTER_SPIKE_MULTIPLIER
+        stop_tighten = 0.0
+        reason       = 'spike_skew'
+    elif tail_risk in _TAIL_RISK_REDUCE:
+        multiplier   = _SKEW_FILTER_ELEVATED_MULTIPLIER
+        stop_tighten = _SKEW_FILTER_STOP_TIGHTEN_PCT
+        reason       = 'market_tail_risk_elevated'
+    elif ticker_skew == 'elevated':
+        multiplier   = _SKEW_FILTER_ELEVATED_MULTIPLIER
+        stop_tighten = _SKEW_FILTER_STOP_TIGHTEN_PCT
+        reason       = 'elevated_skew'
+    else:
+        # Both normal — no filter needed
+        return []
+
+    encoded = f'{multiplier}|{stop_tighten}|{reason}'
+    filter_meta = {
+        **meta,
+        'ticker_skew_regime': ticker_skew,
+        'market_tail_risk':   tail_risk,
+        'signal_direction':   signal_direction,
+    }
+    return [RawAtom(
+        subject    = ticker,
+        predicate  = 'skew_filter',
+        object     = encoded,
+        confidence = 0.70,
+        source     = f'{src_base}_skew_filter',
+        metadata   = filter_meta,
+        upsert     = True,
+    )]
 
 
 def _compute_position_sizing_atoms(
@@ -864,6 +970,12 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
 
         ticker_atoms, macro_signals = _read_kb_atoms(self._db_path)
 
+        # Extract market-level atoms (subject='market') for skew filter.
+        # tail_risk and spy_skew_regime are written by OptionsAdapter — may be
+        # absent on startup (1800s interval vs 300s here).  Empty dict is safe;
+        # _compute_skew_filter_atoms handles missing keys gracefully.
+        market_atoms: Dict[str, str] = ticker_atoms.get('market', {})
+
         atoms: List[RawAtom] = []
         enriched = 0
         skipped  = 0
@@ -1016,7 +1128,16 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                     upsert     = True,
                 ))
 
-            # ── News sentiment atom ────────────────────────────────────────
+            # ── Skew filter atom ───────────────────────────────────────────
+            # Only emitted when skew data exists (options_adapter may not have
+            # run yet on startup — skipped cleanly when no skew atoms present).
+            if signal_dir:
+                skew_atoms = _compute_skew_filter_atoms(
+                    ticker, preds, market_atoms, signal_dir, src_base, meta
+                )
+                atoms.extend(skew_atoms)
+
+            # ── News sentiment atom ────────────────────────────────────────────
             # Skipped if fewer than _SENTIMENT_MIN_ATOMS LLM atoms for ticker.
             # Only called for equity tickers that have signal_direction set
             # to avoid DB queries for ETF/macro proxy subjects.
