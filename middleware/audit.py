@@ -41,6 +41,7 @@ _VALID_OUTCOMES = frozenset({'success', 'failure', 'blocked'})
 
 _VALID_ACTIONS = frozenset({
     'register', 'login_success', 'login_failure', 'login_locked',
+    'logout', 'token_refresh',
     'portfolio_submit', 'snapshot_send', 'tip_send', 'feedback_submit',
     'tip_config_update', 'onboarding_update', 'telegram_verify',
     'pattern_query', 'alert_mark_seen',

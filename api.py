@@ -2403,7 +2403,9 @@ def auth_register():
                         ip_address=request.remote_addr,
                         user_agent=request.user_agent.string,
                         outcome='failure', detail={'reason': str(e)})
-        return jsonify({'error': str(e)}), 409
+        # 409 for duplicate email, 400 for validation errors (weak password etc.)
+        status_code = 409 if 'already registered' in str(e) else 400
+        return jsonify({'error': str(e)}), status_code
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -2593,14 +2595,14 @@ def health_detailed():
             conn2.close()
             cols = ['subject', 'predicate', 'object', 'confidence', 'source', 'timestamp']
             atoms = [dict(zip(cols, r)) for r in sample_atoms]
-            stress = compute_stress(atoms)
-            result['kb_stress'] = stress.get('composite_stress')
+            sr = compute_stress(atoms, [], None)
+            result['kb_stress'] = sr.composite_stress
         except Exception:
             result['kb_stress'] = None
 
     if HAS_INGEST and _ingest_scheduler:
         try:
-            result['adapters'] = _ingest_scheduler.status()
+            result['adapters'] = _ingest_scheduler.get_status()
         except Exception:
             result['adapters'] = None
 
@@ -2653,8 +2655,8 @@ def markets_overview():
             conn.close()
             cols = ['subject','predicate','object','confidence','source','timestamp']
             atoms = [dict(zip(cols, r)) for r in sample]
-            stress = compute_stress(atoms)
-            result['kb_stress'] = stress.get('composite_stress')
+            sr = compute_stress(atoms, [], None)
+            result['kb_stress'] = sr.composite_stress
         except Exception:
             result['kb_stress'] = None
 
@@ -2713,7 +2715,8 @@ def ticker_summary(ticker: str):
                     "FROM facts WHERE UPPER(subject) = ? ORDER BY confidence DESC LIMIT 30",
                     (ticker,),
                 ).fetchall()]
-            profile['kb_stress'] = compute_stress(ticker_atoms).get('composite_stress')
+            sr = compute_stress(ticker_atoms, [ticker.lower()], None)
+            profile['kb_stress'] = sr.composite_stress
         except Exception:
             profile['kb_stress'] = None
 
@@ -2889,8 +2892,8 @@ def user_onboarding_status(user_id: str):
     portfolio_submitted = portfolio_count > 0
 
     tip_config_set = bool(
-        tip_time and tip_time != '08:00' or
-        tip_tz and tip_tz != 'UTC'
+        (tip_time and tip_time != '08:00') or
+        (tip_tz and tip_tz != 'UTC')
     )
     account_size_set = account_size is not None and float(account_size or 0) > 0
 
