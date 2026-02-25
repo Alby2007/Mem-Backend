@@ -22,3 +22,9 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Secrets
+.env
+
+# Nested repos / local tools
+Mem-Backend/

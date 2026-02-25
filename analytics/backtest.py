@@ -89,16 +89,53 @@ CREATE TABLE IF NOT EXISTS signal_snapshots (
     upside_pct        REAL,
     last_price        REAL,
     thesis_risk_level TEXT,
+    market_regime     TEXT,
     UNIQUE(ticker, snapshot_date)
 )
 """
 
+_VALID_REGIMES = frozenset({
+    'risk_on_expansion',
+    'risk_off_contraction',
+    'stagflation',
+    'recovery',
+    'no_data',
+})
+
 
 def _ensure_snapshot_table(conn: sqlite3.Connection) -> None:
     conn.execute(_CREATE_SNAPSHOTS)
+    # Idempotent migration: add market_regime column if the table pre-existed
+    # without it (ALTER TABLE is a no-op if column already present via
+    # the CREATE statement above, but needed for existing DBs).
+    try:
+        conn.execute("ALTER TABLE signal_snapshots ADD COLUMN market_regime TEXT")
+    except Exception:
+        pass  # column already exists
     conn.commit()
 
 # ── Snapshot functions ───────────────────────────────────────────────────────
+
+
+def _read_current_market_regime(conn: sqlite3.Connection) -> Optional[str]:
+    """
+    Read the most recently written market_regime atom from the facts table.
+    Returns the regime string (e.g. 'risk_on_expansion') or None.
+    """
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT object FROM facts
+            WHERE subject = 'market' AND predicate = 'market_regime'
+            ORDER BY id DESC LIMIT 1
+        """)
+        row = c.fetchone()
+        if row:
+            val = str(row[0]).strip()
+            return val if val in _VALID_REGIMES else val  # pass through unknown regimes too
+        return None
+    except Exception:
+        return None
 
 
 def take_snapshot(db_path: str) -> dict:
@@ -108,11 +145,14 @@ def take_snapshot(db_path: str) -> dict:
     Reads conviction_tier, signal_quality, position_size_pct, upside_pct,
     last_price, thesis_risk_level from the facts table and writes one row
     per ticker with today's UTC date (YYYY-MM-DD) as snapshot_date.
+    Also records the current market_regime atom on every row so that the
+    regime-conditional backtest can partition cohorts by the regime that
+    was active when each snapshot was taken.
 
     The snapshot_date is truncated to the day so repeated calls on the same
     calendar day are idempotent (INSERT OR IGNORE).
 
-    Returns {'inserted': N, 'skipped': M, 'snapshot_date': '...'}
+    Returns {'inserted': N, 'skipped': M, 'snapshot_date': '...', 'market_regime': '...'}
     """
     snapshot_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     predicates = [
@@ -139,6 +179,9 @@ def take_snapshot(db_path: str) -> dict:
                 ticker_map[subj] = {'ticker': subj.upper()}
             ticker_map[subj][predicate] = obj
 
+        # Read the single market_regime atom active right now
+        market_regime = _read_current_market_regime(conn)
+
         inserted = 0
         skipped  = 0
         for subj, td in ticker_map.items():
@@ -149,8 +192,9 @@ def take_snapshot(db_path: str) -> dict:
                 cur = conn.execute(
                     """INSERT OR IGNORE INTO signal_snapshots
                        (ticker, snapshot_date, conviction_tier, signal_quality,
-                        position_size_pct, upside_pct, last_price, thesis_risk_level)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        position_size_pct, upside_pct, last_price, thesis_risk_level,
+                        market_regime)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         td['ticker'],
                         snapshot_date,
@@ -160,6 +204,7 @@ def take_snapshot(db_path: str) -> dict:
                         _safe_float(td.get('upside_pct')),
                         _safe_float(td.get('last_price')),
                         td.get('thesis_risk_level'),
+                        market_regime,
                     ),
                 )
                 if cur.rowcount > 0:
@@ -172,7 +217,12 @@ def take_snapshot(db_path: str) -> dict:
     finally:
         conn.close()
 
-    return {'inserted': inserted, 'skipped': skipped, 'snapshot_date': snapshot_date}
+    return {
+        'inserted':      inserted,
+        'skipped':       skipped,
+        'snapshot_date': snapshot_date,
+        'market_regime': market_regime,
+    }
 
 
 def list_snapshots(db_path: str) -> List[str]:
@@ -192,21 +242,23 @@ def _load_snapshot(conn: sqlite3.Connection, snapshot_date: str) -> Dict[str, di
     c = conn.cursor()
     c.execute("""
         SELECT ticker, conviction_tier, signal_quality,
-               position_size_pct, upside_pct, last_price, thesis_risk_level
+               position_size_pct, upside_pct, last_price, thesis_risk_level,
+               market_regime
         FROM signal_snapshots
         WHERE snapshot_date = ?
     """, (snapshot_date,))
     result: Dict[str, dict] = {}
     for row in c.fetchall():
-        ticker, ct, sq, pos, up, price, risk = row
+        ticker, ct, sq, pos, up, price, risk, regime = row
         result[ticker.upper()] = {
-            'ticker':           ticker.upper(),
-            'conviction_tier':  ct,
-            'signal_quality':   sq,
+            'ticker':            ticker.upper(),
+            'conviction_tier':   ct,
+            'signal_quality':    sq,
             'position_size_pct': pos,
-            'upside_pct':       up,
-            'last_price':       price,
+            'upside_pct':        up,
+            'last_price':        price,
             'thesis_risk_level': risk,
+            'market_regime':     regime,
         }
     return result
 
@@ -584,3 +636,185 @@ def run_backtest(db_path: str, window: str = '1m') -> dict:
         'ticker_detail':      ticker_detail,
     }
     return result
+
+
+# ── Regime-conditional backtest ───────────────────────────────────────────────
+
+def list_snapshot_regimes(db_path: str) -> Dict[str, Optional[str]]:
+    """
+    Return a mapping of snapshot_date → market_regime for all recorded snapshots.
+    Regime is read from the market_regime column of the FIRST ticker row for
+    that date (all tickers in a snapshot share the same regime).
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        _ensure_snapshot_table(conn)
+        c = conn.cursor()
+        c.execute("""
+            SELECT snapshot_date, market_regime
+            FROM signal_snapshots
+            GROUP BY snapshot_date
+            ORDER BY snapshot_date
+        """)
+        return {row[0]: row[1] for row in c.fetchall()}
+    finally:
+        conn.close()
+
+
+def run_regime_backtest(db_path: str) -> dict:
+    """
+    Regime-conditional cross-sectional backtest.
+
+    Requires >= 2 signal snapshots (same requirement as the forward-looking
+    backtest). For each snapshot pair (snap_start → snap_end) the regime
+    recorded at snap_start is used to partition tickers into regime buckets.
+
+    For each regime bucket the function computes the same cohort stats
+    (high_all, high_strong, medium_all, low_all, avoid) and alpha_signal
+    as run_backtest(), but scoped to tickers whose snap_start regime matches.
+
+    Returns
+    -------
+    dict with keys:
+        snapshot_count        — total distinct snapshot dates
+        snapshot_start        — date of earliest snapshot
+        snapshot_end          — date of most recent snapshot
+        days_between_snapshots
+        as_of
+        methodology           — always 'regime_conditional_forward_looking'
+        warning               — present only when snapshot_count < 2
+        by_regime             — dict keyed by regime name, each value is:
+            {
+              "n_tickers":      int,
+              "cohorts":        {...},    (same shape as run_backtest cohorts)
+              "alpha_signal":   bool,
+              "alpha_explanation": str,
+              "portfolio_return":  float | null,
+              "ticker_detail":  [...],
+            }
+        regimes_observed      — list of distinct regime strings found in snap_start
+        unconditional_cohorts — cohort stats across ALL tickers (same as run_backtest)
+        unconditional_alpha   — bool
+
+    When snapshot_count < 2 the response contains only:
+        snapshot_count, warning, methodology, as_of
+    """
+    now_iso        = datetime.now(timezone.utc).isoformat()
+    snapshots      = list_snapshots(db_path)
+    snapshot_count = len(snapshots)
+
+    if snapshot_count < 2:
+        return {
+            'snapshot_count': snapshot_count,
+            'methodology':    'regime_conditional_forward_looking',
+            'warning':        (
+                'insufficient_snapshots — need >= 2 snapshots for regime-conditional '
+                'backtest. Run POST /analytics/snapshot today and again in 4 weeks.'
+            ),
+            'as_of': now_iso,
+        }
+
+    snap_start = snapshots[0]
+    snap_end   = snapshots[-1]
+
+    conn = sqlite3.connect(db_path)
+    try:
+        start_map = _load_snapshot(conn, snap_start)
+        end_map   = _load_snapshot(conn, snap_end)
+    finally:
+        conn.close()
+
+    # Days between snapshots
+    try:
+        from datetime import date as _date
+        d0 = _date.fromisoformat(snap_start)
+        d1 = _date.fromisoformat(snap_end)
+        days_between = (d1 - d0).days
+    except Exception:
+        days_between = None
+
+    # Build ticker_data with forward returns and regime from snap_start
+    all_ticker_data: List[dict] = []
+    for ticker, start_td in start_map.items():
+        end_td  = end_map.get(ticker)
+        fwd_ret = _forward_return(
+            start_td.get('last_price'),
+            end_td.get('last_price') if end_td else None,
+        )
+        if fwd_ret is None:
+            continue
+        row = {
+            'ticker':            ticker,
+            'conviction_tier':   start_td.get('conviction_tier'),
+            'signal_quality':    start_td.get('signal_quality'),
+            'position_size_pct': start_td.get('position_size_pct'),
+            'upside_pct':        start_td.get('upside_pct'),
+            'sector':            None,
+            'forward_return':    fwd_ret,
+            'market_regime':     start_td.get('market_regime'),  # regime at signal time
+        }
+        all_ticker_data.append(row)
+
+    # Unconditional cohorts (all tickers, same as run_backtest forward path)
+    uncond_cohorts, uncond_detail = _build_cohorts_and_detail(
+        all_ticker_data, 'forward_return', '1m',
+    )
+    uncond_alpha, uncond_alpha_expl = _alpha_result(uncond_cohorts)
+
+    # Regime-conditional partition
+    regimes_observed: List[str] = sorted({
+        td['market_regime'] for td in all_ticker_data
+        if td.get('market_regime')
+    })
+
+    by_regime: Dict[str, dict] = {}
+    for regime in regimes_observed:
+        regime_tickers = [td for td in all_ticker_data if td.get('market_regime') == regime]
+        if not regime_tickers:
+            continue
+        r_cohorts, r_detail = _build_cohorts_and_detail(
+            regime_tickers, 'forward_return', '1m',
+        )
+        r_alpha, r_alpha_expl = _alpha_result(r_cohorts)
+        r_port = _weighted_portfolio_return(regime_tickers, 'forward_return')
+        by_regime[regime] = {
+            'n_tickers':         len(regime_tickers),
+            'cohorts':           r_cohorts,
+            'alpha_signal':      r_alpha,
+            'alpha_explanation': r_alpha_expl,
+            'portfolio_return':  r_port,
+            'ticker_detail':     r_detail,
+        }
+
+    # Tickers with no regime recorded (regime was None at snap_start)
+    no_regime_tickers = [td for td in all_ticker_data if not td.get('market_regime')]
+    if no_regime_tickers:
+        r_cohorts, r_detail = _build_cohorts_and_detail(
+            no_regime_tickers, 'forward_return', '1m',
+        )
+        r_alpha, r_alpha_expl = _alpha_result(r_cohorts)
+        r_port = _weighted_portfolio_return(no_regime_tickers, 'forward_return')
+        by_regime['no_regime_recorded'] = {
+            'n_tickers':         len(no_regime_tickers),
+            'cohorts':           r_cohorts,
+            'alpha_signal':      r_alpha,
+            'alpha_explanation': r_alpha_expl,
+            'portfolio_return':  r_port,
+            'ticker_detail':     r_detail,
+        }
+
+    return {
+        'snapshot_count':           snapshot_count,
+        'snapshot_start':           snap_start,
+        'snapshot_end':             snap_end,
+        'days_between_snapshots':   days_between,
+        'as_of':                    now_iso,
+        'methodology':              'regime_conditional_forward_looking',
+        'alpha_threshold_pp':       ALPHA_THRESHOLD_PP,
+        'regimes_observed':         regimes_observed,
+        'by_regime':                by_regime,
+        'unconditional_cohorts':    uncond_cohorts,
+        'unconditional_alpha':      uncond_alpha,
+        'unconditional_alpha_explanation': uncond_alpha_expl,
+        'total_tickers':            len(all_ticker_data),
+    }

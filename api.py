@@ -50,18 +50,80 @@ except ImportError:
     HAS_INGEST = False
 
 try:
-    from analytics.backtest import run_backtest, take_snapshot, list_snapshots
+    from analytics.backtest import (
+        run_backtest, take_snapshot, list_snapshots,
+        run_regime_backtest, list_snapshot_regimes,
+    )
     from analytics.portfolio import build_portfolio_summary
     from analytics.alerts import AlertMonitor, get_alerts, mark_alerts_seen
+    from analytics.adversarial_stress import run_stress_test, _SCENARIOS as _STRESS_SCENARIOS
+    from analytics.counterfactual import run_counterfactual
     HAS_ANALYTICS = True
 except ImportError:
     HAS_ANALYTICS = False
+
+try:
+    from users.user_store import (
+        ensure_user_tables, create_user, get_user, update_preferences,
+        upsert_portfolio, get_portfolio, get_user_model,
+        get_delivery_history,
+    )
+    from analytics.user_modeller import build_user_model
+    from analytics.snapshot_curator import curate_snapshot
+    from notifications.snapshot_formatter import format_snapshot, snapshot_to_dict
+    from notifications.telegram_notifier import TelegramNotifier
+    from notifications.delivery_scheduler import DeliveryScheduler
+    HAS_PRODUCT_LAYER = True
+except ImportError:
+    HAS_PRODUCT_LAYER = False
+
+try:
+    from users.user_store import (
+        get_open_patterns, upsert_pattern_signal,
+        get_tip_history, update_tip_config, get_user_tier,
+        already_tipped_today,
+    )
+    from analytics.pattern_detector import detect_all_patterns, OHLCV
+    from analytics.position_calculator import calculate_position
+    from notifications.tip_formatter import format_tip, tip_to_dict, TIER_LIMITS
+    from notifications.tip_scheduler import TipScheduler
+    HAS_PATTERN_LAYER = True
+except ImportError:
+    HAS_PATTERN_LAYER = False
+
+try:
+    from llm.overlay_builder import extract_tickers as _extract_overlay_tickers
+    from llm.overlay_builder import build_overlay_cards
+    HAS_OVERLAY = True
+except ImportError:
+    HAS_OVERLAY = False
 
 try:
     from knowledge.epistemic_stress import compute_stress
     HAS_STRESS = True
 except ImportError:
     HAS_STRESS = False
+
+try:
+    from knowledge.confidence_intervals import (
+        ensure_confidence_columns,
+        get_confidence_interval,
+        get_all_confidence_intervals,
+    )
+    HAS_CONF_INTERVALS = True
+except ImportError:
+    HAS_CONF_INTERVALS = False
+
+try:
+    from knowledge.causal_graph import (
+        ensure_causal_edges_table,
+        traverse_causal,
+        add_causal_edge,
+        list_causal_edges,
+    )
+    HAS_CAUSAL_GRAPH = True
+except ImportError:
+    HAS_CAUSAL_GRAPH = False
 
 try:
     from knowledge.epistemic_adaptation import get_adaptation_engine
@@ -115,6 +177,54 @@ _kg = KnowledgeGraph(db_path=_DB_PATH)
 
 # Start background decay worker (runs every 24h)
 _decay_worker = get_decay_worker(_DB_PATH)
+
+# Ensure Bayesian confidence interval columns exist on the facts table
+if HAS_CONF_INTERVALS:
+    try:
+        import sqlite3 as _sqlite3
+        _ci_conn = _sqlite3.connect(_DB_PATH)
+        ensure_confidence_columns(_ci_conn)
+        _ci_conn.close()
+    except Exception:
+        pass
+
+# Seed causal graph edges table (idempotent — INSERT OR IGNORE)
+if HAS_CAUSAL_GRAPH:
+    try:
+        import sqlite3 as _sqlite3
+        _cg_conn = _sqlite3.connect(_DB_PATH)
+        ensure_causal_edges_table(_cg_conn)
+        _cg_conn.close()
+    except Exception:
+        pass
+
+# Ensure user management tables exist
+if HAS_PRODUCT_LAYER:
+    try:
+        import sqlite3 as _sqlite3
+        _user_conn = _sqlite3.connect(_DB_PATH)
+        ensure_user_tables(_user_conn)
+        _user_conn.close()
+    except Exception:
+        pass
+
+# Start delivery scheduler (checks every 60s for due briefings)
+_delivery_scheduler = None
+if HAS_PRODUCT_LAYER:
+    try:
+        _delivery_scheduler = DeliveryScheduler(_DB_PATH, check_interval_sec=60)
+        _delivery_scheduler.start()
+    except Exception:
+        pass
+
+# Start tip scheduler (checks every 60s for due pattern tips)
+_tip_scheduler = None
+if HAS_PATTERN_LAYER:
+    try:
+        _tip_scheduler = TipScheduler(_DB_PATH, interval_sec=60)
+        _tip_scheduler.start()
+    except Exception:
+        pass
 
 # Per-session streak store for epistemic adaptation
 # { session_id: { 'streak': int, 'last_stress': float } }
@@ -953,6 +1063,182 @@ def kb_conflicts():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/kb/confidence', methods=['GET'])
+def kb_confidence():
+    """
+    Return the Bayesian confidence distribution for KB atoms.
+
+    Query params:
+      subject    — required; atom subject (e.g. 'aapl', 'market')
+      predicate  — optional; if omitted, returns all predicates for subject
+      z          — z-score for interval width (default 1.96 = 95%)
+
+    Returns (single predicate):
+      {
+        "subject": "AAPL", "predicate": "conviction_tier", "object": "high",
+        "mean": 0.82, "n": 4, "std": 0.06, "variance": 0.004,
+        "interval_low": 0.70, "interval_high": 0.94, "interval_z": 1.96,
+        "source": "derived_signal_quality_aapl", "authority": 0.65
+      }
+
+    Returns (all predicates):
+      { "subject": "aapl", "count": N, "atoms": [...] }
+
+    Returns 404 if no atom found, 503 if module unavailable.
+    """
+    if not HAS_CONF_INTERVALS:
+        return jsonify({'error': 'confidence_intervals module not available'}), 503
+
+    subject   = request.args.get('subject', '').strip()
+    predicate = request.args.get('predicate', '').strip()
+    try:
+        z = float(request.args.get('z', 1.96))
+    except ValueError:
+        return jsonify({'error': 'z must be a float'}), 400
+
+    if not subject:
+        return jsonify({'error': 'subject parameter is required'}), 400
+
+    conn = _kg.thread_local_conn()
+    try:
+        if predicate:
+            result = get_confidence_interval(conn, subject, predicate, z=z)
+            if result is None:
+                return jsonify({'error': f'no atom found for {subject!r} / {predicate!r}'}), 404
+            return jsonify(result)
+        else:
+            atoms = get_all_confidence_intervals(conn, subject, z=z)
+            if not atoms:
+                return jsonify({'error': f'no atoms found for subject {subject!r}'}), 404
+            return jsonify({'subject': subject, 'count': len(atoms), 'atoms': atoms})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/kb/causal-chain', methods=['POST'])
+def kb_causal_chain():
+    """
+    Traverse the causal graph from a seed concept.
+
+    Body:
+      {
+        "seed":           "fed_rate_hike",   -- required
+        "depth":          3,                 -- optional, default 4, max 6
+        "min_confidence": 0.6               -- optional, default 0.5
+      }
+
+    Returns:
+      {
+        "seed": "fed_rate_hike",
+        "chain": [
+          { "step": 1, "depth": 1, "cause": "fed_rate_hike",
+            "effect": "credit_cost_rises", "mechanism": "debt_service_transmission",
+            "confidence": 0.90 },
+          ...
+        ],
+        "concepts_reached": [...],
+        "affected_tickers": { "equity_multiples_compress": ["MSFT", "GOOGL", ...] },
+        "chain_confidence": 0.72,
+        "paths": 8
+      }
+
+    Returns 400 if seed is missing, 503 if module unavailable.
+    """
+    if not HAS_CAUSAL_GRAPH:
+        return jsonify({'error': 'causal_graph module not available'}), 503
+
+    body = request.get_json(force=True) or {}
+    seed = (body.get('seed') or '').strip()
+    if not seed:
+        return jsonify({'error': 'seed is required'}), 400
+
+    depth          = min(int(body.get('depth', 4)), 6)
+    min_confidence = float(body.get('min_confidence', 0.5))
+
+    conn = _kg.thread_local_conn()
+    try:
+        ensure_causal_edges_table(conn)
+        result = traverse_causal(conn, seed, max_depth=depth,
+                                 min_confidence=min_confidence)
+        return jsonify(result)
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('causal chain traversal failed: %s', e)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/kb/causal-edge', methods=['POST'])
+def kb_causal_edge_add():
+    """
+    Add a new causal edge to the graph.
+
+    Body:
+      {
+        "cause":      "inflation_rises",         -- required
+        "effect":     "tech_capex_freezes",      -- required
+        "mechanism":  "cost_of_capital_squeeze", -- required
+        "confidence": 0.7,                       -- optional, default 0.7
+        "source":     "user_defined"             -- optional
+      }
+
+    Returns:
+      { "inserted": true, "id": 42, "cause": "...", "effect": "...",
+        "mechanism": "...", "confidence": 0.7, "message": "created" }
+
+    Duplicate (cause, effect, mechanism) returns inserted=false.
+    """
+    if not HAS_CAUSAL_GRAPH:
+        return jsonify({'error': 'causal_graph module not available'}), 503
+
+    body = request.get_json(force=True) or {}
+    cause     = (body.get('cause')     or '').strip()
+    effect    = (body.get('effect')    or '').strip()
+    mechanism = (body.get('mechanism') or '').strip()
+
+    if not cause or not effect or not mechanism:
+        return jsonify({'error': 'cause, effect, and mechanism are required'}), 400
+
+    confidence = float(body.get('confidence', 0.7))
+    source     = (body.get('source') or 'user_defined').strip()
+
+    conn = _kg.thread_local_conn()
+    try:
+        ensure_causal_edges_table(conn)
+        result = add_causal_edge(conn, cause, effect, mechanism,
+                                 confidence=confidence, source=source)
+        status = 201 if result['inserted'] else 200
+        return jsonify(result), status
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/kb/causal-edges', methods=['GET'])
+def kb_causal_edges_list():
+    """
+    List all causal edges in the graph.
+
+    Query params:
+      cause  — optional filter substring on cause concept
+      limit  — max rows (default 200)
+
+    Returns:
+      { "count": N, "edges": [ { id, cause, effect, mechanism, confidence, source, created_at } ] }
+    """
+    if not HAS_CAUSAL_GRAPH:
+        return jsonify({'error': 'causal_graph module not available'}), 503
+
+    cause_filter = request.args.get('cause', '').strip() or None
+    limit        = int(request.args.get('limit', 200))
+
+    conn = _kg.thread_local_conn()
+    try:
+        ensure_causal_edges_table(conn)
+        edges = list_causal_edges(conn, cause_filter=cause_filter, limit=limit)
+        return jsonify({'count': len(edges), 'edges': edges})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/kb/refresh-queue', methods=['GET'])
 def kb_refresh_queue():
     """
@@ -1018,22 +1304,29 @@ def chat_endpoint():
 
     Body:
       {
-        "message":    "What is the current signal on NVDA?",
-        "session_id": "optional",
-        "model":      "llama3.2",  // optional — defaults to OLLAMA_MODEL env or llama3.2
-        "stream":     false
+        "message":        "What is the current signal on NVDA?",
+        "session_id":     "optional",
+        "model":          "llama3.2",   // optional — defaults to OLLAMA_MODEL env or llama3.2
+        "stream":         false,
+        "screen_context": "NVDA Daily Chart — Price $192 — RSI 67",  // optional
+        "screen_entities": ["NVDA"],   // optional — explicit tickers to include
+        "overlay_mode":   true         // optional — adds overlay_cards to response
       }
 
     Returns:
       {
-        "answer":     "...",          // null if Ollama unavailable
-        "model":      "llama3.2",
-        "stress":     { ... },
-        "atoms_used": 14,
-        "snippet":    "=== TRADING KNOWLEDGE CONTEXT ===...",
-        "kb_diagnosis": { ... },      // only if fired
-        "adaptation":   { ... }       // only if active
+        "answer":        "...",         // null if Ollama unavailable
+        "model":         "llama3.2",
+        "stress":        { ... },
+        "atoms_used":    14,
+        "snippet":       "=== TRADING KNOWLEDGE CONTEXT ===...",
+        "kb_diagnosis":  { ... },       // only if fired
+        "adaptation":    { ... },       // only if active
+        "overlay_cards": [ ... ]        // only when overlay_mode=true
       }
+
+    overlay_cards contains typed cards: signal_summary (per ticker),
+    causal_context (regime BFS chain), stress_flag (composite stress threshold).
 
     If Ollama is unavailable, returns HTTP 503 with the KB context still populated
     so callers can render it even without an LLM answer.
@@ -1046,12 +1339,15 @@ def chat_endpoint():
     if not message:
         return jsonify({'error': 'message is required'}), 400
 
-    session_id = data.get('session_id', 'default')
-    model      = data.get('model', DEFAULT_MODEL if HAS_LLM else 'llama3.2')
-    goal       = data.get('goal')
-    topic      = data.get('topic')
-    turn_count = int(data.get('turn_count', 1))
-    limit      = int(data.get('limit', 30))
+    session_id      = data.get('session_id', 'default')
+    model           = data.get('model', DEFAULT_MODEL if HAS_LLM else 'llama3.2')
+    goal            = data.get('goal')
+    topic           = data.get('topic')
+    turn_count      = int(data.get('turn_count', 1))
+    limit           = int(data.get('limit', 30))
+    screen_context  = data.get('screen_context', '')
+    screen_entities = data.get('screen_entities') or []
+    overlay_mode    = bool(data.get('overlay_mode', False))
 
     conn = _kg.thread_local_conn()
 
@@ -1159,6 +1455,19 @@ def chat_endpoint():
         except Exception:
             pass
 
+    # ── Overlay cards (active copilot mode) ──────────────────────────────────
+    overlay_cards = None
+    if overlay_mode and HAS_OVERLAY:
+        try:
+            overlay_tickers = _extract_overlay_tickers(
+                screen_context, conn, screen_entities
+            )
+            # If entities extracted from screen but not in message, append to message
+            # for retrieval scoping (non-destructive — message is already used above)
+            overlay_cards = build_overlay_cards(overlay_tickers, conn, stress_dict)
+        except Exception:
+            overlay_cards = []
+
     # ── Build response skeleton (always returned) ──────────────────────────
     response: dict = {
         'answer':     None,
@@ -1166,6 +1475,8 @@ def chat_endpoint():
         'atoms_used': len(atoms),
         'snippet':    snippet,
     }
+    if overlay_cards is not None:
+        response['overlay_cards'] = overlay_cards
     if stress_dict:
         response['stress'] = stress_dict
     if kb_diagnosis:
@@ -1356,6 +1667,171 @@ def analytics_backtest():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/analytics/backtest/regime', methods=['GET'])
+def analytics_backtest_regime():
+    """
+    Regime-conditional cross-sectional KB backtest.
+
+    Partitions forward-looking backtest results by the market_regime that
+    was active at the time each signal snapshot was recorded. Answers the
+    question: "does high-conviction outperform in risk_on_expansion but
+    not in risk_off_contraction?"
+
+    Requires >= 2 signal snapshots (same as GET /analytics/backtest).
+
+    Returns:
+      {
+        "snapshot_count": N,
+        "snapshot_start": "YYYY-MM-DD",
+        "snapshot_end":   "YYYY-MM-DD",
+        "regimes_observed": ["risk_on_expansion", ...],
+        "by_regime": {
+          "risk_on_expansion": {
+            "n_tickers": N,
+            "alpha_signal": true,
+            "alpha_explanation": "...",
+            "portfolio_return": 3.2,
+            "cohorts": {...},
+            "ticker_detail": [...]
+          },
+          ...
+        },
+        "unconditional_cohorts": {...},
+        "unconditional_alpha": bool
+      }
+
+    When snapshot_count < 2:
+      { "snapshot_count": 1, "warning": "insufficient_snapshots ...", ... }
+    """
+    if not HAS_ANALYTICS:
+        return jsonify({'error': 'analytics module not available'}), 503
+
+    try:
+        result = run_regime_backtest(_DB_PATH)
+        return jsonify(result)
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('regime backtest failed: %s', e)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/analytics/stress-test', methods=['POST'])
+def analytics_stress_test():
+    """
+    Adversarial signal stress test.
+
+    Injects pre-committed contradictory atoms into an in-memory KB copy,
+    re-runs signal enrichment, and measures conviction tier degradation.
+
+    Body (all optional):
+      {
+        "scenarios": ["bear_analyst", "risk_off_regime"]
+        -- if omitted, all 6 scenarios run
+      }
+
+    Valid scenarios:
+      bear_analyst, risk_off_regime, earnings_miss,
+      macro_flip, guidance_lowered, credit_downgrade
+
+    Returns:
+      {
+        "as_of": "...",
+        "baseline_tickers": N,
+        "scenarios_run": [...],
+        "results": {
+          "bear_analyst": {
+            "n_tickers_tested": N, "n_degraded": M, "n_robust": K,
+            "fragility_score": 0.42,
+            "ticker_results": [
+              { "ticker": "AAPL", "tier_before": "high",
+                "tier_after": "avoid", "delta": 3, "robust": false },
+              ...
+            ]
+          },
+          ...
+        },
+        "portfolio_fragility": {
+          "most_fragile_ticker": "AAPL",
+          "mean_fragility": 0.38,
+          "scenario_fragility": { "bear_analyst": 0.42, ... }
+        }
+      }
+    """
+    if not HAS_ANALYTICS:
+        return jsonify({'error': 'analytics module not available'}), 503
+
+    body      = request.get_json(force=True) or {}
+    scenarios = body.get('scenarios') or None
+
+    try:
+        result = run_stress_test(_DB_PATH, scenarios=scenarios)
+        return jsonify(result)
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('stress test failed: %s', e)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/analytics/counterfactual', methods=['POST'])
+def analytics_counterfactual():
+    """
+    Counterfactual reasoning — "what if X changed?"
+
+    Applies a simulated macro/signal shift to the current KB state, re-runs
+    conviction tier classification, and returns the delta across all tickers.
+
+    Body:
+      {
+        "scenario": {
+          "spy_signal":      "near_high",          -- direct macro override
+          "hyg_signal":      "near_high",
+          "tlt_signal":      "near_low",
+          "market_regime":   "risk_on_expansion",
+          "fed_funds_rate":  -0.25,                -- scalar: -0.25 = cut 25bps
+          "credit_spreads_bps": 50,                -- scalar: +50bps = spread widening
+          "tickers": {                             -- per-ticker atom overrides
+            "GS": { "thesis_risk_level": "wide" }
+          }
+        }
+      }
+
+    Returns:
+      {
+        "as_of": "...",
+        "scenario_applied": { ... },
+        "causal_propagation": [ { seed, concept, propagated_to, mechanism } ],
+        "baseline_tickers": N,
+        "tier_changes": [
+          { "ticker": "GS", "from": "medium", "to": "high",
+            "delta": 1, "direction": "upgrade" },
+          ...
+        ],
+        "upgrades": N,
+        "downgrades": N,
+        "unchanged": N,
+        "regime_change": { "from": "risk_off_contraction",
+                           "to":   "risk_on_expansion" },
+        "methodology": "direct_override" | "causal_graph_propagation"
+      }
+    """
+    if not HAS_ANALYTICS:
+        return jsonify({'error': 'analytics module not available'}), 503
+
+    body     = request.get_json(force=True) or {}
+    scenario = body.get('scenario') or {}
+
+    if not scenario:
+        return jsonify({'error': 'scenario is required and must not be empty'}), 400
+
+    try:
+        result = run_counterfactual(_DB_PATH, scenario=scenario)
+        return jsonify(result)
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('counterfactual failed: %s', e)
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/portfolio/summary', methods=['GET'])
 def portfolio_summary():
     """
@@ -1382,6 +1858,388 @@ def portfolio_summary():
     except Exception as e:
         import logging as _logging
         _logging.getLogger(__name__).error('portfolio summary failed: %s', e)
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Product layer — User management + Daily Briefing endpoints ───────────────
+
+@app.route('/users/<user_id>/portfolio', methods=['POST'])
+def user_portfolio_submit(user_id):
+    """
+    Submit or replace a user's portfolio holdings.
+
+    Body: { "holdings": [{"ticker": "AAPL", "quantity": 10, "avg_cost": 150.0, "sector": "Technology"}, ...] }
+    Returns: { "user_id": "...", "count": N, "submitted_at": "...", "model": {...} }
+    """
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    holdings = data.get('holdings', [])
+    if not isinstance(holdings, list):
+        return jsonify({'error': 'holdings must be a list'}), 400
+    try:
+        result = upsert_portfolio(_DB_PATH, user_id, holdings)
+        model  = build_user_model(user_id, _DB_PATH)
+        result['model'] = model
+        return jsonify(result), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/portfolio', methods=['GET'])
+def user_portfolio_get(user_id):
+    """
+    Get current portfolio holdings for a user.
+    Returns: { "user_id": "...", "holdings": [...], "count": N }
+    """
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+    try:
+        holdings = get_portfolio(_DB_PATH, user_id)
+        return jsonify({'user_id': user_id, 'holdings': holdings, 'count': len(holdings)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/model', methods=['GET'])
+def user_model_get(user_id):
+    """
+    Get the derived user model for a user.
+    Returns the user_models row or 404 if no model exists yet.
+    """
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+    try:
+        model = get_user_model(_DB_PATH, user_id)
+        if model is None:
+            return jsonify({'error': 'no model found — submit portfolio first'}), 404
+        return jsonify(model)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/onboarding', methods=['POST'])
+def user_onboarding(user_id):
+    """
+    Set onboarding preferences (fallback path — no portfolio required).
+
+    Body:
+      {
+        "selected_sectors": ["technology", "financials"],
+        "risk_tolerance": "moderate",
+        "delivery_time": "08:00",
+        "timezone": "Europe/London",
+        "telegram_chat_id": "123456789"
+      }
+    Returns: updated user_preferences row.
+    """
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        prefs = update_preferences(
+            _DB_PATH, user_id,
+            selected_sectors=data.get('selected_sectors'),
+            selected_risk=data.get('risk_tolerance'),
+            telegram_chat_id=data.get('telegram_chat_id'),
+            delivery_time=data.get('delivery_time'),
+            timezone_str=data.get('timezone'),
+            onboarding_complete=1,
+        )
+        return jsonify(prefs)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/snapshot/preview', methods=['GET'])
+def user_snapshot_preview(user_id):
+    """
+    Generate a personalised snapshot as JSON without sending it to Telegram.
+    Used for UI preview — shows users what their briefing will look like.
+
+    Returns: full CuratedSnapshot as a dict.
+    """
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+    try:
+        snapshot = curate_snapshot(user_id, _DB_PATH)
+        return jsonify(snapshot_to_dict(snapshot))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/snapshot/send-now', methods=['POST'])
+def user_snapshot_send_now(user_id):
+    """
+    Trigger an immediate snapshot delivery to the user's Telegram chat ID.
+    Used for testing and on-demand delivery.
+
+    Returns: { "sent": true/false, "opportunities": N, "regime": "...", "error": "..." }
+    """
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+    try:
+        from users.user_store import get_user, log_delivery
+        user = get_user(_DB_PATH, user_id)
+        chat_id = (user or {}).get('telegram_chat_id')
+        if not chat_id:
+            return jsonify({'error': 'no telegram_chat_id — complete onboarding first'}), 400
+
+        snapshot = curate_snapshot(user_id, _DB_PATH)
+        message  = format_snapshot(snapshot)
+        notifier = TelegramNotifier()
+        sent     = notifier.send(chat_id, message)
+        # Use UTC date as local_date for on-demand sends (no timezone context here)
+        from datetime import datetime as _dt, timezone as _tz
+        local_date = _dt.now(_tz.utc).strftime('%Y-%m-%d')
+        log_delivery(
+            _DB_PATH, user_id,
+            success=sent,
+            message_length=len(message),
+            regime_at_delivery=snapshot.market_regime,
+            opportunities_count=len(snapshot.top_opportunities),
+            local_date=local_date,
+        )
+        return jsonify({
+            'sent':          sent,
+            'opportunities': len(snapshot.top_opportunities),
+            'regime':        snapshot.market_regime,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/delivery-history', methods=['GET'])
+def user_delivery_history(user_id):
+    """
+    Get past delivery log entries for a user.
+    Query param: limit (default 30)
+    Returns: { "user_id": "...", "history": [...], "count": N }
+    """
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+    limit = int(request.args.get('limit', 30))
+    try:
+        history = get_delivery_history(_DB_PATH, user_id, limit=limit)
+        return jsonify({'user_id': user_id, 'history': history, 'count': len(history)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/notify/test', methods=['POST'])
+def notify_test():
+    """
+    Send a test Telegram message to verify bot connection.
+
+    Body: { "chat_id": "123456789" }
+    Returns: { "sent": true/false }
+    """
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    chat_id = str(data.get('chat_id', '')).strip()
+    if not chat_id:
+        return jsonify({'error': 'chat_id is required'}), 400
+    try:
+        notifier = TelegramNotifier()
+        sent = notifier.send_test(chat_id)
+        return jsonify({'sent': sent})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Pattern Tip Pipeline endpoints ────────────────────────────────────────────
+
+@app.route('/patterns/live', methods=['GET'])
+def patterns_live():
+    """
+    GET /patterns/live?ticker=NVDA&pattern_type=fvg&direction=bullish
+                      &timeframe=1h&min_quality=0.5&limit=20
+
+    Returns open/partially-filled pattern signals, sorted by quality desc.
+    Requires HAS_PATTERN_LAYER.
+    """
+    if not HAS_PATTERN_LAYER:
+        return jsonify({'error': 'pattern layer not available'}), 503
+    ticker       = request.args.get('ticker')
+    pattern_type = request.args.get('pattern_type')
+    direction    = request.args.get('direction')
+    timeframe    = request.args.get('timeframe')
+    try:
+        min_quality = float(request.args.get('min_quality', 0.0))
+        limit       = int(request.args.get('limit', 50))
+    except (ValueError, TypeError):
+        return jsonify({'error': 'min_quality and limit must be numeric'}), 400
+    try:
+        patterns = get_open_patterns(
+            _DB_PATH,
+            ticker       = ticker or None,
+            pattern_type = pattern_type or None,
+            direction    = direction or None,
+            timeframe    = timeframe or None,
+            min_quality  = min_quality,
+            limit        = limit,
+        )
+        return jsonify({'patterns': patterns, 'count': len(patterns)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/tip/preview', methods=['GET'])
+def tip_preview(user_id: str):
+    """
+    GET /users/<user_id>/tip/preview
+
+    Returns the tip that would be sent right now for this user
+    (highest eligible pattern + position sizing), without actually sending.
+    Respects tier gating.
+    """
+    if not HAS_PATTERN_LAYER:
+        return jsonify({'error': 'pattern layer not available'}), 503
+    try:
+        import sqlite3 as _sqlite3
+        conn = _sqlite3.connect(_DB_PATH, timeout=10)
+        row = conn.execute(
+            """SELECT tier, tip_timeframes, tip_pattern_types,
+                      account_size, max_risk_per_trade_pct, account_currency
+               FROM user_preferences WHERE user_id = ?""",
+            (user_id,),
+        ).fetchone()
+        conn.close()
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    if row is None:
+        return jsonify({'error': 'user not found'}), 404
+
+    import json as _json
+    cols     = ['tier', 'tip_timeframes', 'tip_pattern_types',
+                'account_size', 'max_risk_per_trade_pct', 'account_currency']
+    prefs    = dict(zip(cols, row))
+    tier     = prefs.get('tier') or 'basic'
+
+    for jcol in ('tip_timeframes', 'tip_pattern_types'):
+        try:
+            prefs[jcol] = _json.loads(prefs[jcol]) if prefs[jcol] else None
+        except Exception:
+            prefs[jcol] = None
+
+    from notifications.tip_formatter import TIER_LIMITS
+    limits          = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
+    tip_timeframes  = prefs.get('tip_timeframes') or limits['timeframes']
+    tip_pattern_tys = prefs.get('tip_pattern_types')
+
+    from notifications.tip_scheduler import _pick_best_pattern
+    pattern_row = _pick_best_pattern(_DB_PATH, user_id, tier, tip_timeframes, tip_pattern_tys)
+    if pattern_row is None:
+        return jsonify({'tip': None, 'reason': 'no eligible patterns'}), 200
+
+    from analytics.pattern_detector import PatternSignal
+    sig = PatternSignal(
+        pattern_type  = pattern_row['pattern_type'],
+        ticker        = pattern_row['ticker'],
+        direction     = pattern_row['direction'],
+        zone_high     = pattern_row['zone_high'],
+        zone_low      = pattern_row['zone_low'],
+        zone_size_pct = pattern_row['zone_size_pct'],
+        timeframe     = pattern_row['timeframe'],
+        formed_at     = pattern_row['formed_at'],
+        quality_score = pattern_row['quality_score'] or 0.0,
+        status        = pattern_row['status'],
+        kb_conviction = pattern_row.get('kb_conviction', ''),
+        kb_regime     = pattern_row.get('kb_regime', ''),
+        kb_signal_dir = pattern_row.get('kb_signal_dir', ''),
+    )
+    position = calculate_position(sig, prefs)
+    tip_dict = tip_to_dict(sig, position, tier=tier)
+    return jsonify({'tip': tip_dict})
+
+
+@app.route('/users/<user_id>/tip-config', methods=['GET', 'POST'])
+def tip_config(user_id: str):
+    """
+    GET  /users/<user_id>/tip-config          — Return current tip configuration.
+    POST /users/<user_id>/tip-config          — Update tip configuration.
+
+    POST body (all optional):
+      tip_delivery_time      "HH:MM"
+      tip_delivery_timezone  IANA timezone string
+      tip_markets            ["equities"]
+      tip_timeframes         ["1h","4h"]
+      tip_pattern_types      ["fvg","order_block"]
+      account_size           12000.0
+      max_risk_per_trade_pct 1.5
+      account_currency       "GBP"
+      tier                   "basic" | "pro"
+    """
+    if not HAS_PATTERN_LAYER:
+        return jsonify({'error': 'pattern layer not available'}), 503
+
+    if request.method == 'GET':
+        try:
+            import sqlite3 as _sqlite3, json as _json
+            conn = _sqlite3.connect(_DB_PATH, timeout=10)
+            row  = conn.execute(
+                """SELECT user_id, tier, tip_delivery_time, tip_delivery_timezone,
+                          tip_markets, tip_timeframes, tip_pattern_types,
+                          account_size, max_risk_per_trade_pct, account_currency
+                   FROM user_preferences WHERE user_id = ?""",
+                (user_id,),
+            ).fetchone()
+            conn.close()
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+        if row is None:
+            return jsonify({'error': 'user not found'}), 404
+        cols = ['user_id', 'tier', 'tip_delivery_time', 'tip_delivery_timezone',
+                'tip_markets', 'tip_timeframes', 'tip_pattern_types',
+                'account_size', 'max_risk_per_trade_pct', 'account_currency']
+        d = dict(zip(cols, row))
+        for jcol in ('tip_markets', 'tip_timeframes', 'tip_pattern_types'):
+            try:
+                d[jcol] = _json.loads(d[jcol]) if d[jcol] else None
+            except Exception:
+                d[jcol] = None
+        return jsonify(d)
+
+    # POST
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        updated = update_tip_config(
+            _DB_PATH,
+            user_id,
+            tip_delivery_time      = data.get('tip_delivery_time'),
+            tip_delivery_timezone  = data.get('tip_delivery_timezone'),
+            tip_markets            = data.get('tip_markets'),
+            tip_timeframes         = data.get('tip_timeframes'),
+            tip_pattern_types      = data.get('tip_pattern_types'),
+            account_size           = data.get('account_size'),
+            max_risk_per_trade_pct = data.get('max_risk_per_trade_pct'),
+            account_currency       = data.get('account_currency'),
+            tier                   = data.get('tier'),
+        )
+        return jsonify(updated)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/tip/history', methods=['GET'])
+def tip_history(user_id: str):
+    """
+    GET /users/<user_id>/tip/history?limit=30
+
+    Returns recent tip_delivery_log rows for this user, newest first.
+    """
+    if not HAS_PATTERN_LAYER:
+        return jsonify({'error': 'pattern layer not available'}), 503
+    try:
+        limit = int(request.args.get('limit', 30))
+    except (ValueError, TypeError):
+        limit = 30
+    try:
+        history = get_tip_history(_DB_PATH, user_id, limit=limit)
+        return jsonify({'history': history, 'count': len(history)})
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 

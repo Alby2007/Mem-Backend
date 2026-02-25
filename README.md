@@ -35,7 +35,24 @@ trading-galaxy/
 │   ├── fred_adapter.py                  # FRED: macro regime atoms (requires FRED_API_KEY)
 │   ├── edgar_adapter.py                 # SEC EDGAR: filings, insider transactions
 │   ├── rss_adapter.py                   # RSS: BBC, CNBC, MarketWatch, Yahoo Finance
+│   ├── pattern_adapter.py               # SMC pattern detection: OHLCV fetch + detect + fill tracking
 │   └── __init__.py                      # exports all adapters + scheduler
+├── analytics/
+│   ├── user_modeller.py         # Portfolio → UserModel (risk, sector affinity, holding style)
+│   ├── snapshot_curator.py      # CuratedSnapshot assembly from KB + user model
+│   ├── pattern_detector.py      # 7 SMC pattern detectors (FVG, IFVG, BPR, OB, Breaker, LV, MB)
+│   └── position_calculator.py   # Account-aware position sizing with R:R targets
+├── notifications/
+│   ├── snapshot_formatter.py    # CuratedSnapshot → Telegram MarkdownV2
+│   ├── telegram_notifier.py     # Telegram Bot API wrapper (graceful degradation)
+│   ├── delivery_scheduler.py    # Daily briefing scheduler (timezone-aware, local-date dedup)
+│   ├── tip_formatter.py         # PatternSignal → Telegram MarkdownV2 tip (tier-gated)
+│   └── tip_scheduler.py         # Daily tip scheduler (per-user time, dedup, tier gating)
+├── llm/
+│   └── overlay_builder.py       # Overlay card assembly + entity extraction
+├── users/
+│   └── user_store.py            # CRUD for 6 tables: portfolios, models, preferences,
+│                                #   snapshot_delivery_log, pattern_signals, tip_delivery_log
 ├── CONTRIBUTING.md              # Ingest team guide
 └── requirements.txt
 ```
@@ -58,6 +75,7 @@ python api.py
 | `PORT` | No | `5050` | Flask server port |
 | `FRED_API_KEY` | No | *(skip FRED adapter)* | Free key from [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html) |
 | `EDGAR_USER_AGENT` | No | `TradingGalaxyKB admin@tradinggalaxy.dev` | SEC requires contact info in User-Agent |
+| `TELEGRAM_BOT_TOKEN` | No | *(no Telegram delivery)* | Bot token from [@BotFather](https://t.me/BotFather) — required for daily briefings and tips |
 
 ```bash
 # Full startup with all features:
@@ -433,3 +451,462 @@ These run automatically — the ingest team doesn't need to manage them:
 - **Confidence decay**: `exchange_feed` atoms decay to near-zero after ~30 minutes. `regulatory_filing` atoms stay valid for a year. Background worker runs every 24h.
 - **Epistemic stress**: the `/retrieve` response includes a `stress` object. `composite_stress > 0.65` means the KB is degraded for this topic — the copilot layer should signal lower confidence.
 - **Cross-session memory**: the KB remembers the last working goal, topic, and open threads across restarts via `working_state`.
+
+---
+
+## Product Layer — Daily Briefing + Copilot Overlay
+
+Two delivery modes built on top of the KB.
+
+### Passive Mode — Scheduled Daily Briefing
+
+A personalised "newspaper" delivered to Telegram at a user-configured time each day. No alerts, no noise — one daily snapshot per user.
+
+#### How it works
+
+```
+POST /users/{id}/portfolio  →  build_user_model()  →  curate_snapshot()  →  format_snapshot()
+                                    ↓
+                           DeliveryScheduler (background thread, 60s tick)
+                                    ↓
+                           TelegramNotifier.send()  →  snapshot_delivery_log
+```
+
+1. User submits portfolio (or onboarding preferences as fallback)
+2. Backend derives a `UserModel` (risk tolerance, sector affinity, holding style)
+3. `curate_snapshot()` assembles a `CuratedSnapshot` — portfolio health, market context, 3–5 scored opportunities
+4. `format_snapshot()` renders Telegram MarkdownV2 (all dynamic strings escaped via `_escape_mdv2`)
+5. `DeliveryScheduler` fires once per day at the user's local `delivery_time` (DST-safe, local-date dedup)
+
+#### Environment variables
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Yes (for delivery) | Bot token from [@BotFather](https://t.me/BotFather) |
+
+#### Passive mode endpoints
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/users/{id}/portfolio` | `POST` | Submit/replace holdings → triggers user model rebuild |
+| `/users/{id}/portfolio` | `GET` | Get current holdings |
+| `/users/{id}/model` | `GET` | Get derived user model (risk tolerance, sector affinity, etc.) |
+| `/users/{id}/onboarding` | `POST` | Set sector preferences + delivery time/timezone (fallback path — no portfolio needed) |
+| `/users/{id}/snapshot/preview` | `GET` | Generate full snapshot as JSON without sending to Telegram |
+| `/users/{id}/snapshot/send-now` | `POST` | Trigger immediate Telegram delivery |
+| `/users/{id}/delivery-history` | `GET` | Past delivery log (success/fail, regime, opportunities count) |
+| `/notify/test` | `POST` | Send test message to a Telegram chat ID (onboarding verification) |
+
+##### `POST /users/{id}/portfolio`
+
+```json
+{
+  "holdings": [
+    {"ticker": "AAPL", "quantity": 10, "avg_cost": 150.0, "sector": "Technology"},
+    {"ticker": "MA",   "quantity": 5,  "avg_cost": 380.0, "sector": "Financials"}
+  ]
+}
+```
+
+Response: `{ "user_id": "...", "count": 2, "submitted_at": "...", "model": { "risk_tolerance": "moderate", ... } }`
+
+##### `POST /users/{id}/onboarding`
+
+```json
+{
+  "selected_sectors": ["technology", "financials"],
+  "risk_tolerance": "moderate",
+  "delivery_time": "08:00",
+  "timezone": "Europe/London",
+  "telegram_chat_id": "123456789"
+}
+```
+
+##### `GET /users/{id}/snapshot/preview`
+
+Returns the full `CuratedSnapshot` as JSON — use this to render a preview UI before the user subscribes.
+
+```json
+{
+  "user_id": "alice",
+  "generated_at": "2026-02-24T08:00:00Z",
+  "portfolio_summary": [...],
+  "holdings_at_risk": ["MSFT"],
+  "holdings_performing": ["MA", "GOOGL"],
+  "market_regime": "risk_on_expansion",
+  "regime_implication": "Risk-On Expansion favours your Financials holdings",
+  "macro_summary": "Fed: on hold | Yield curve: +60bps",
+  "top_opportunities": [
+    {
+      "ticker": "BAC",
+      "thesis": "Strong net interest income growth expected",
+      "conviction_tier": "high",
+      "upside_pct": 23.7,
+      "invalidation_distance": -31.2,
+      "asymmetry_ratio": 1.6,
+      "position_size_pct": 3.81,
+      "relevance_reason": "Financials affinity",
+      "urgency": "immediate"
+    }
+  ],
+  "opportunities_to_avoid": ["INTC"]
+}
+```
+
+##### Opportunity scoring weights
+
+| Signal | Score |
+|---|---|
+| `conviction_tier=high` | +1.0 base |
+| `conviction_tier=medium` | +0.5 base |
+| Sector matches `sector_affinity` | +0.30 |
+| `options_regime=compressed` | +0.15 |
+| `macro_confirmation=confirmed` | +0.10 |
+| Risk profile match | +0.05–0.10 |
+| `conviction_tier=avoid` | excluded |
+
+Minimum score threshold: **0.5**. Top 5 surfaced.
+
+##### User model inference rules
+
+| Field | Rule |
+|---|---|
+| `risk_tolerance=aggressive` | ≥40% holdings in high-beta sectors (tech, biotech, semis) |
+| `risk_tolerance=conservative` | ≥40% holdings in defensive sectors (utilities, staples, healthcare) |
+| `holding_style=value` | avg `upside_pct` across holdings < 10% |
+| `holding_style=momentum` | avg conviction tier score > 0.60 |
+| `concentration_risk=diversified` | holdings span ≥5 distinct sectors |
+| `sector_affinity` | sectors with ≥2 holdings (top-2 if none qualify) |
+
+---
+
+### Active Mode — Copilot Overlay
+
+The existing `POST /chat` endpoint enhanced with screen context awareness. When the user is looking at a chart and asks a question, the overlay extracts the ticker from their screen and returns structured data cards alongside the prose answer.
+
+#### Enhanced `POST /chat`
+
+New optional request fields:
+
+```json
+{
+  "message": "Is this a good setup?",
+  "session_id": "user_abc",
+  "screen_context": "NVDA Daily Chart — Price $192.95 — RSI 67 — Volume spike",
+  "screen_entities": ["NVDA"],
+  "overlay_mode": true
+}
+```
+
+New response field (`overlay_cards`) when `overlay_mode=true`:
+
+```json
+{
+  "answer": "NVDA is currently showing confirmed signal quality...",
+  "overlay_cards": [
+    {
+      "type": "signal_summary",
+      "ticker": "NVDA",
+      "conviction_tier": "medium",
+      "signal_quality": "confirmed",
+      "position_size_pct": 1.60,
+      "upside_pct": 31.7,
+      "invalidation_distance": -51.2,
+      "asymmetry_ratio": 1.6,
+      "options_regime": "normal",
+      "thesis_risk_level": "moderate",
+      "macro_confirmation": "partial"
+    },
+    {
+      "type": "causal_context",
+      "event": "risk_on_expansion",
+      "affected_tickers": ["NVDA", "AMD", "INTC"],
+      "regime": "risk_on_expansion"
+    },
+    {
+      "type": "stress_flag",
+      "composite_stress": 0.21,
+      "flag": null
+    }
+  ],
+  "atoms_used": 14,
+  "model": "llama3.2"
+}
+```
+
+**Card types:**
+- `signal_summary` — one per extracted ticker; all KB signal atoms
+- `causal_context` — current market regime → BFS causal chain → affected tickers
+- `stress_flag` — `composite_stress`; `flag="high_stress"` if > 0.60, else null
+
+**Entity extraction** (`llm/overlay_builder.py`):
+1. Regex `\b[A-Z]{2,5}\b` on `screen_context`
+2. Filter via `_UPPERCASE_STOPWORDS` (covers RSI, GMT, USD, ETF, CEO, EMA, etc.)
+3. Validate against known KB subjects
+4. Merge with explicit `screen_entities` (bypass validation)
+
+All new fields are additive — existing `POST /chat` clients are unaffected.
+
+---
+
+### New files (product layer)
+
+| File | Purpose |
+|---|---|
+| `users/user_store.py` | CRUD for 6 tables: `user_portfolios`, `user_models`, `user_preferences`, `snapshot_delivery_log`, `pattern_signals`, `tip_delivery_log` |
+| `analytics/user_modeller.py` | Portfolio analysis → derived `UserModel` |
+| `analytics/snapshot_curator.py` | `CuratedSnapshot` assembly from KB + user model |
+| `notifications/snapshot_formatter.py` | `CuratedSnapshot` → Telegram MarkdownV2 (with `_escape_mdv2` helper) |
+| `notifications/telegram_notifier.py` | Telegram Bot API wrapper (graceful degradation if token unset) |
+| `notifications/delivery_scheduler.py` | Background thread, timezone-aware, local-date dedup |
+| `llm/overlay_builder.py` | Overlay card assembly + entity extraction |
+| `analytics/pattern_detector.py` | 7 SMC price-action pattern detectors with quality scoring |
+| `analytics/position_calculator.py` | Account-aware position sizing: stop, units, T1/T2/T3 targets |
+| `ingest/pattern_adapter.py` | OHLCV fetch via yfinance → detect patterns → persist + fill tracking |
+| `notifications/tip_formatter.py` | `PatternSignal` + `PositionRecommendation` → Telegram MarkdownV2 (tier-gated) |
+| `notifications/tip_scheduler.py` | Daily tip background thread: per-user time, tier gating, dedup |
+
+---
+
+## Pattern Tip Pipeline
+
+A second delivery mode that sends **one actionable trading tip per day** based on live price-action pattern detection — separate from the daily briefing.
+
+### How it works
+
+```
+PatternAdapter (15 min)  →  pattern_signals table  →  TipScheduler (60s tick)
+     ↓                                                      ↓
+yfinance OHLCV                                    _pick_best_pattern()
+     ↓                                                      ↓
+detect_all_patterns()                             calculate_position()
+     ↓                                                      ↓
+upsert_pattern_signal()                           format_tip()  →  TelegramNotifier.send()
+                                                               ↓
+                                               mark_pattern_alerted() + log_tip_delivery()
+```
+
+1. **`PatternAdapter`** runs every 15 minutes — fetches OHLCV candles for all KB tickers, detects 7 patterns, enriches with KB conviction/regime context, and persists new rows to `pattern_signals` (dedup-guarded). On each run it also re-evaluates open patterns for fill/break status updates.
+2. **`TipScheduler`** checks every 60 seconds — for each onboarded user whose `tip_delivery_time` matches the current local time and who has not yet received a tip today, it picks the highest-quality eligible pattern (tier- and timeframe-gated, not already alerted to this user), sizes the position, formats the tip, and sends it via Telegram.
+3. **Local-date dedup** — same strategy as the briefing scheduler: `tip_delivery_log.delivered_at_local_date` stores the user's local date so DST transitions never cause double-sends.
+
+### Patterns detected
+
+| Pattern | Key | Timeframes | Notes |
+|---|---|---|---|
+| Fair Value Gap | `fvg` | any | 3-candle gap; bullish or bearish |
+| Inverse FVG | `ifvg` | any | FVG that was fully filled — now acts as support/resistance |
+| Balanced Price Range | `bpr` | any | Overlapping bullish + bearish FVGs |
+| Order Block | `order_block` | any | Last opposite-colour candle before a strong move |
+| Breaker Block | `breaker` | any | Order block that was violated — structure flip |
+| Liquidity Void | `liquidity_void` | any | Thin-body candle with large range (≥85% wick) |
+| Mitigation Block | `mitigation` | any | Retest of an order block after displacement |
+
+### Quality scoring
+
+Every `PatternSignal` carries a `quality_score` in [0, 1] derived from:
+
+| Component | Weight | Detail |
+|---|---|---|
+| KB conviction | 0.30 | `high`/`strong`/`confirmed` → full score; `medium` → partial |
+| KB regime alignment | 0.20 | `risk_on*` for bullish, `risk_off*` for bearish |
+| KB signal direction | 0.15 | Direction matches pattern direction |
+| Gap size vs ATR | 0.20 | Larger gap relative to ATR → higher score (capped at 2× ATR) |
+| Recency | 0.15 | Decays by `_RECENCY_DECAY` per candle since formation |
+
+### Position sizing
+
+`calculate_position()` returns `None` if `account_size` is zero or unset — no recommendation without an account. Otherwise:
+
+```
+entry     = (zone_high + zone_low) / 2
+buffer    = zone_size_pct × 0.10
+stop_loss = zone_low  × (1 − buffer/100)   # bullish
+          = zone_high × (1 + buffer/100)   # bearish
+risk_£    = account_size × (max_risk_per_trade_pct / 100)
+units     = risk_£ / (entry − stop_loss)
+target_1  = entry + 1 × (entry − stop_loss)   # 1:1 R
+target_2  = entry + 2 × (entry − stop_loss)   # 1:2 R
+target_3  = entry + 3 × (entry − stop_loss)   # 1:3 R (pro tier only)
+```
+
+### Tier gating
+
+| Feature | Basic | Pro |
+|---|---|---|
+| Patterns | FVG, IFVG | All 7 |
+| Timeframes | 1H | 15M, 1H, 4H, Daily |
+| Target shown | T1, T2 | T1, T2, T3 |
+| Tips per day | 1 | Unlimited |
+
+### Pattern Tip Pipeline endpoints
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/patterns/live` | `GET` | Query open/partially-filled pattern signals |
+| `/users/{id}/tip/preview` | `GET` | Preview today's tip as JSON (no Telegram send) |
+| `/users/{id}/tip-config` | `GET` | Get current tip configuration |
+| `/users/{id}/tip-config` | `POST` | Update tip configuration |
+| `/users/{id}/tip/history` | `GET` | Recent tip delivery log |
+
+##### `GET /patterns/live`
+
+Query parameters (all optional):
+
+| Param | Type | Example | Description |
+|---|---|---|---|
+| `ticker` | string | `NVDA` | Filter by ticker |
+| `pattern_type` | string | `fvg` | Filter by pattern type |
+| `direction` | string | `bullish` | `bullish` or `bearish` |
+| `timeframe` | string | `1h` | `15m`, `1h`, `4h`, `1d` |
+| `min_quality` | float | `0.6` | Minimum quality score (0–1) |
+| `limit` | int | `20` | Max rows returned (default 50) |
+
+```json
+{
+  "patterns": [
+    {
+      "id": 42,
+      "ticker": "NVDA",
+      "pattern_type": "fvg",
+      "direction": "bullish",
+      "zone_high": 192.0,
+      "zone_low": 189.0,
+      "zone_size_pct": 1.587,
+      "timeframe": "1h",
+      "formed_at": "2026-02-25T07:00:00",
+      "status": "open",
+      "quality_score": 0.87,
+      "kb_conviction": "high",
+      "kb_regime": "risk_on_expansion",
+      "kb_signal_dir": "long",
+      "detected_at": "2026-02-25T08:15:00Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+##### `GET /users/{id}/tip/preview`
+
+Returns the tip that would be sent right now for this user — highest eligible pattern + position sizing — without sending to Telegram. Respects tier gating.
+
+```json
+{
+  "tip": {
+    "ticker": "NVDA",
+    "pattern_type": "fvg",
+    "direction": "bullish",
+    "zone_high": 192.0,
+    "zone_low": 189.0,
+    "quality_score": 0.87,
+    "tier": "basic",
+    "position": {
+      "suggested_entry": 190.5,
+      "stop_loss": 188.71,
+      "stop_distance_pct": 0.94,
+      "account_size": 10000.0,
+      "account_currency": "GBP",
+      "risk_pct": 1.0,
+      "risk_amount": 100.0,
+      "position_size_units": 55,
+      "position_value": 10477.5,
+      "target_1": 192.29,
+      "target_2": 194.08,
+      "target_3": null,
+      "expected_profit_t1": 100.0,
+      "expected_profit_t2": 200.0,
+      "expected_profit_t3": null
+    }
+  }
+}
+```
+
+##### `GET|POST /users/{id}/tip-config`
+
+`GET` returns the current tip configuration. `POST` updates it — all fields optional:
+
+```json
+{
+  "tip_delivery_time":      "08:00",
+  "tip_delivery_timezone":  "Europe/London",
+  "tip_markets":            ["equities"],
+  "tip_timeframes":         ["1h", "4h"],
+  "tip_pattern_types":      ["fvg", "order_block"],
+  "account_size":           12000.0,
+  "max_risk_per_trade_pct": 1.5,
+  "account_currency":       "GBP",
+  "tier":                   "pro"
+}
+```
+
+##### `GET /users/{id}/tip/history`
+
+Query param: `limit` (default 30). Returns tip delivery log newest first:
+
+```json
+{
+  "history": [
+    {
+      "id": 7,
+      "user_id": "alice",
+      "pattern_signal_id": 42,
+      "delivered_at": "2026-02-25T08:01:03Z",
+      "delivered_at_local_date": "2026-02-25",
+      "success": 1,
+      "message_length": 812
+    }
+  ],
+  "count": 1
+}
+```
+
+### DB schema additions
+
+Two new tables in the same SQLite DB:
+
+**`pattern_signals`** — one row per detected pattern instance:
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Auto-increment |
+| `ticker` | TEXT | e.g. `NVDA` |
+| `pattern_type` | TEXT | `fvg`, `ifvg`, `bpr`, `order_block`, `breaker`, `liquidity_void`, `mitigation` |
+| `direction` | TEXT | `bullish` or `bearish` |
+| `zone_high` / `zone_low` | REAL | Price zone bounds |
+| `zone_size_pct` | REAL | Zone size as % of `zone_low` |
+| `timeframe` | TEXT | `15m`, `1h`, `4h`, `1d` |
+| `formed_at` | TEXT | ISO timestamp of pattern formation |
+| `status` | TEXT | `open`, `partially_filled`, `filled`, `broken` |
+| `quality_score` | REAL | 0–1 composite score |
+| `kb_conviction` | TEXT | KB conviction atom value |
+| `kb_regime` | TEXT | KB regime atom value |
+| `kb_signal_dir` | TEXT | KB signal direction atom value |
+| `alerted_users` | TEXT | JSON array of user IDs already sent this pattern |
+| `detected_at` | TEXT | ISO timestamp of detection run |
+
+**`tip_delivery_log`** — one row per tip send attempt:
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Auto-increment |
+| `user_id` | TEXT | User ID |
+| `pattern_signal_id` | INTEGER | FK → `pattern_signals.id` |
+| `delivered_at` | TEXT | UTC ISO timestamp |
+| `delivered_at_local_date` | TEXT | `YYYY-MM-DD` in user's local timezone (dedup key) |
+| `success` | INTEGER | 1 = sent, 0 = failed |
+| `message_length` | INTEGER | Characters in rendered message |
+
+**New columns on `user_preferences`:**
+
+| Column | Default | Description |
+|---|---|---|
+| `tier` | `basic` | `basic` or `pro` |
+| `tip_delivery_time` | `08:00` | `HH:MM` in `tip_delivery_timezone` |
+| `tip_delivery_timezone` | `UTC` | IANA timezone string |
+| `tip_markets` | `["equities"]` | JSON array |
+| `tip_timeframes` | `["1h"]` | JSON array of timeframe codes |
+| `tip_pattern_types` | `null` | JSON array (null = all allowed for tier) |
+| `account_size` | `null` | Account size in `account_currency` |
+| `max_risk_per_trade_pct` | `1.0` | Max % of account to risk per trade |
+| `account_currency` | `GBP` | ISO currency code |
