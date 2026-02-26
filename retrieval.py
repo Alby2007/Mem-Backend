@@ -740,12 +740,29 @@ def retrieve(
         except Exception:
             pass
 
+    # ── Prioritise named-ticker atoms, demote unrelated ones ──────────────────
+    # When explicit tickers are present, sort results so those atoms come first.
+    # Unrelated atoms (different subject) are kept only if space remains.
+    if tickers:
+        ticker_set_lower = {t.lower() for t in tickers}
+        primary   = [r for r in results if r['subject'].lower() in ticker_set_lower]
+        secondary = [r for r in results if r['subject'].lower() not in ticker_set_lower]
+        # Only include secondary (unrelated) atoms if primary set is thin
+        secondary_cap = max(0, 8 - len(primary))
+        results = primary + secondary[:secondary_cap]
+
     # ── Format output ──────────────────────────────────────────────────────────
     lines = ['=== TRADING KNOWLEDGE CONTEXT ===']
     if _alias_notes:
         lines.append('[Ticker Aliases Resolved: ' + '; '.join(_alias_notes) + ']')
 
-    signals, invalidation, quality, theses, macro, research, other = [], [], [], [], [], [], []
+    _HIST_PREDICATES = frozenset({
+        'return_1w', 'return_1m', 'return_3m', 'return_6m', 'return_1y',
+        'volatility_30d', 'volatility_90d', 'drawdown_from_52w_high',
+        'return_vs_spy_1m', 'return_vs_spy_3m', 'avg_volume_30d',
+        'high_52w', 'low_52w', 'price_6m_ago',
+    })
+    signals, invalidation, quality, theses, macro, research, historical, other = [], [], [], [], [], [], [], []
     for r in results:
         pred = r['predicate']
         src = r['source']
@@ -768,6 +785,8 @@ def retrieve(
         elif src.startswith('broker_research') or pred in ('rating', 'key_finding',
                                                             'compared_to_consensus'):
             research.append(r)
+        elif pred in _HIST_PREDICATES:
+            historical.append(r)
         else:
             other.append(r)
 
@@ -792,6 +811,9 @@ def retrieve(
     if research:
         lines.append('[Research]')
         lines.extend(_fmt(r) for r in research[:6])
+    if historical:
+        lines.append('[Historical Performance]')
+        lines.extend(_fmt(r) for r in historical[:12])
     if other:
         lines.append('[Other]')
         lines.extend(_fmt(r) for r in other[:6])
