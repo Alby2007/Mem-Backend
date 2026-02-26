@@ -151,15 +151,14 @@ select option { background: var(--surface); }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ── Markets screen ── */
-#screen-markets { display: flex; flex-direction: column; height: calc(100vh - var(--topbar-h) - 48px); }
-#screen-markets.active { display: flex; }
+#screen-markets { display: block; }
 #markets-search-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
-#markets-search-bar input { flex: 1; max-width: 260px; }
+#markets-search-bar input { max-width: 280px; }
 .markets-chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 3px; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-family: var(--mono); font-size: 11px; font-weight: 700; cursor: pointer; transition: all .15s; white-space: nowrap; }
 .markets-chip:hover { border-color: var(--accent); color: var(--accent); background: rgba(245,158,11,.07); }
 .markets-chip.active { border-color: var(--accent); color: var(--accent); background: rgba(245,158,11,.14); }
 #markets-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-#markets-chart-container { flex: 1; min-height: 0; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+#markets-chart-container { width: 100%; height: calc(100vh - var(--topbar-h) - 120px); border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
 
 /* ── Auth screen ── */
 #screen-auth { max-width: 720px; margin: 60px auto; }
@@ -761,6 +760,7 @@ function _renderChart(sym) {
 
   _loadTVScript(() => {
     if (!window.TradingView) return;
+    const c = document.getElementById('markets-chart-container');
     _tvWidget = new TradingView.widget({
       container_id: 'markets-chart-container',
       symbol: sym,
@@ -774,7 +774,8 @@ function _renderChart(sym) {
       hide_side_toolbar: false,
       allow_symbol_change: true,
       save_image: false,
-      autosize: true,
+      width: c.offsetWidth  || '100%',
+      height: c.offsetHeight || 600,
       studies: [],
     });
   });
