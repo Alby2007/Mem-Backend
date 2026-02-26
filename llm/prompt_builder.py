@@ -82,8 +82,11 @@ _SYSTEM_DIAGNOSIS_SUFFIX = (
 _SYSTEM_PORTFOLIO_RULE = (
     "\n10. You have access to the user's portfolio in the USER PORTFOLIO block below. "
     "Use it to personalise every answer. "
-    "When the user asks about their portfolio or holdings, write a NARRATIVE PARAGRAPH for each holding "
-    "(do not skip any ticker listed in Holdings, even if KB data is thin). "
+    "When the user asks about their portfolio or holdings, write a NARRATIVE PARAGRAPH for every single "
+    "ticker listed in Holdings — you MUST cover ALL of them, one paragraph each, no exceptions. "
+    "If a ticker says 'No KB signals available', use your general knowledge of that stock/asset to discuss "
+    "its recent behaviour, sector context, and what a holder should be aware of — clearly stating the KB "
+    "has no signal for it. Never skip or merge holdings. "
     "For each holding the paragraph MUST: "
     "(1) state the current price and what the price_regime means in plain English "
     "(e.g. near_52w_high means the stock is trading close to its highest price of the past year); "

@@ -1759,41 +1759,44 @@ def chat_endpoint():
                             _ticker_atoms[_ht] = _ht_rows
                     except Exception:
                         pass
-                if _ticker_atoms:
-                    _lines.append("\nPer-holding KB signals:")
-                    for _ht, _rows in _ticker_atoms.items():
-                        _d = {p: v for p, v in _rows}
-                        _price    = _d.get('last_price', '?')
-                        _regime   = _d.get('price_regime', '?').replace('_', ' ')
-                        _dir      = _d.get('signal_direction', '?')
-                        _qual     = _d.get('signal_quality', '?')
-                        _macro    = _d.get('macro_confirmation', '?')
-                        _conv     = _d.get('conviction_tier', '?')
-                        _upside   = _d.get('upside_pct', '?')
-                        _ret1m    = _d.get('return_1m', '')
-                        _ret1y    = _d.get('return_1y', '')
-                        _target   = _d.get('price_target', '')
-                        # Compute implied move narrative from price_target vs last_price
-                        _implied = ''
-                        try:
-                            if _target and _price and _price != '?' and _target != '?':
-                                _move = float(_target) - float(_price)
-                                _move_dir = 'up to' if _move >= 0 else 'down to'
-                                _implied = (f" The KB price target is {_target}, implying a move "
-                                            f"{_move_dir} {_target} ({_upside}% from current price).")
-                        except Exception:
-                            pass
-                        _sent = (
-                            f"  {_ht}: Current price {_price} ({_regime} regime). "
-                            f"KB signal direction is {_dir}.{_implied} "
-                            f"Signal quality: {_qual}. Macro confirmation: {_macro}. "
-                            f"Conviction tier: {_conv}."
-                        )
-                        if _ret1m:
-                            _sent += f" 1-month return: {_ret1m}%."
-                        if _ret1y:
-                            _sent += f" 1-year return: {_ret1y}%."
-                        _lines.append(_sent)
+                _lines.append("\nPer-holding KB signals:")
+                for _ht in _holding_tickers:
+                    _rows = _ticker_atoms.get(_ht, [])
+                    if not _rows:
+                        _lines.append(f"  {_ht}: No KB signals available — discuss based on general knowledge of this ticker.")
+                        continue
+                    _d = {p: v for p, v in _rows}
+                    _price    = _d.get('last_price', '?')
+                    _regime   = _d.get('price_regime', '?').replace('_', ' ')
+                    _dir      = _d.get('signal_direction', '?')
+                    _qual     = _d.get('signal_quality', '?')
+                    _macro    = _d.get('macro_confirmation', '?')
+                    _conv     = _d.get('conviction_tier', '?')
+                    _upside   = _d.get('upside_pct', '?')
+                    _ret1m    = _d.get('return_1m', '')
+                    _ret1y    = _d.get('return_1y', '')
+                    _target   = _d.get('price_target', '')
+                    # Compute implied move narrative from price_target vs last_price
+                    _implied = ''
+                    try:
+                        if _target and _price and _price != '?' and _target != '?':
+                            _move = float(_target) - float(_price)
+                            _move_dir = 'up to' if _move >= 0 else 'down to'
+                            _implied = (f" The KB price target is {_target}, implying a move "
+                                        f"{_move_dir} {_target} ({_upside}% from current price).")
+                    except Exception:
+                        pass
+                    _sent = (
+                        f"  {_ht}: Current price {_price} ({_regime} regime). "
+                        f"KB signal direction is {_dir}.{_implied} "
+                        f"Signal quality: {_qual}. Macro confirmation: {_macro}. "
+                        f"Conviction tier: {_conv}."
+                    )
+                    if _ret1m:
+                        _sent += f" 1-month return: {_ret1m}%."
+                    if _ret1y:
+                        _sent += f" 1-year return: {_ret1y}%."
+                    _lines.append(_sent)
 
                 portfolio_context = '\n'.join(_lines)
         except Exception:
