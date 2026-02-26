@@ -166,6 +166,14 @@ select option { background: var(--surface); }
 .msg-bubble { padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.5; }
 .msg-user .msg-bubble { background: var(--accent); color: #000; font-weight: 500; }
 .msg-assistant .msg-bubble { background: var(--card); border: 1px solid var(--border); color: var(--text); }
+.msg-bubble p { margin: 0 0 8px; }
+.msg-bubble p:last-child { margin-bottom: 0; }
+.msg-bubble strong { color: var(--accent); font-weight: 700; }
+.msg-bubble em { color: var(--muted); font-style: italic; }
+.msg-bubble ul, .msg-bubble ol { padding-left: 18px; margin: 6px 0 10px; }
+.msg-bubble li { margin-bottom: 4px; line-height: 1.5; }
+.msg-bubble h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin: 10px 0 4px; }
+.msg-bubble code { font-family: var(--mono); font-size: 11px; background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 3px; }
 .msg-citation { font-family: var(--mono); font-size: 11px; color: var(--accent); background: rgba(245,158,11,.1); padding: 1px 5px; border-radius: 2px; }
 .msg-time { font-size: 10px; color: var(--muted); margin-top: 3px; font-family: var(--mono); }
 .overlay-card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 12px; }
@@ -640,6 +648,33 @@ function fmtDate(iso) {
 }
 function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function mdToHtml(s) {
+  // Escape HTML first, then selectively render markdown
+  let t = escHtml(String(s || ''));
+  // Headers: ### text
+  t = t.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
+  // Bold: **text**
+  t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic: *text* (not preceded/followed by *)
+  t = t.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+  // Inline code: `code`
+  t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Numbered list items
+  t = t.replace(/^(\d+)\.\s+(.+)$/gm, '<li>$2</li>');
+  // Unordered list items: lines starting with * or -
+  t = t.replace(/^[\*\-]\s+(.+)$/gm, '<li>$1</li>');
+  // Wrap consecutive <li> blocks in <ul>
+  t = t.replace(/(<li>.*<\/li>\n?)+/gs, m => `<ul>${m}</ul>`);
+  // Paragraphs: blank-line separated blocks not already in a tag
+  t = t.split(/\n{2,}/).map(block => {
+    block = block.trim();
+    if (!block) return '';
+    if (/^<[hul]/.test(block)) return block;
+    return `<p>${block.replace(/\n/g, ' ')}</p>`;
+  }).join('');
+  return t;
 }
 
 // ── Connection ping ───────────────────────────────────────────────────────────
@@ -1188,7 +1223,7 @@ async function sendChat() {
       body: JSON.stringify({ message: msg, session_id: sessionId, overlay_mode: overlayMode, user_id: state.userId || null })
     });
     if (!d) { thinking.remove(); return; }
-    const answer = escHtml(d.response || d.answer || JSON.stringify(d));
+    const answer = mdToHtml(d.response || d.answer || JSON.stringify(d));
     const overlayHtml = overlayMode ? renderOverlay(d.overlay) : '';
     thinking.querySelector('.msg-bubble').innerHTML = answer + overlayHtml;
   } catch(e) {
