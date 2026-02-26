@@ -61,9 +61,11 @@ and note the currency is unconfirmed.\
 """
 
 _SYSTEM_NO_HALLUCINATION = (
-    "\n9. Do NOT introduce company names, executive names, news headlines, or any "
-    "narrative not present verbatim in the KB atoms. If the KB has no text atoms "
-    "for this topic, say so — do not fill the gap with training-data knowledge."
+    "\n9. Do NOT introduce company names, executive names, news headlines, sector names, "
+    "industry descriptions, or ANY narrative not present verbatim in the KB atoms. "
+    "This includes sector/industry labels like 'insurance', 'banking', 'technology', 'pharma' — "
+    "ONLY use the exact 'sector' atom value from the KB if one exists for that ticker. "
+    "If the KB has no text atoms for this topic, say so — do not fill the gap with training-data knowledge."
 )
 
 _SYSTEM_THIN_COVERAGE = (
