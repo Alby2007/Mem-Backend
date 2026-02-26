@@ -153,15 +153,22 @@ select option { background: var(--surface); }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ── Markets screen ── */
-#screen-markets { display: none; }
-#screen-markets.active { display: block; }
-#markets-search-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
-#markets-search-bar input { max-width: 280px; }
-.markets-chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 3px; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-family: var(--mono); font-size: 11px; font-weight: 700; cursor: pointer; transition: all .15s; white-space: nowrap; }
+#screen-markets { display: none; flex-direction: column; height: calc(100vh - var(--topbar-h) - 32px); }
+#screen-markets.active { display: flex; }
+#markets-header { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-shrink: 0; }
+#markets-header input { max-width: 260px; }
+#markets-header span.mono-amber { margin-left: 4px; }
+/* Category tabs */
+#markets-cat-tabs { display: flex; gap: 4px; margin-bottom: 8px; flex-shrink: 0; flex-wrap: wrap; }
+.mcat-tab { padding: 4px 14px; border-radius: 3px; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-size: 11px; font-weight: 700; cursor: pointer; transition: all .15s; white-space: nowrap; }
+.mcat-tab:hover { border-color: var(--accent); color: var(--accent); }
+.mcat-tab.active { border-color: var(--accent); color: var(--accent); background: rgba(245,158,11,.15); }
+/* Chips row */
+#markets-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; flex-shrink: 0; max-height: 72px; overflow-y: auto; }
+.markets-chip { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 3px; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-family: var(--mono); font-size: 11px; font-weight: 700; cursor: pointer; transition: all .15s; white-space: nowrap; }
 .markets-chip:hover { border-color: var(--accent); color: var(--accent); background: rgba(245,158,11,.07); }
 .markets-chip.active { border-color: var(--accent); color: var(--accent); background: rgba(245,158,11,.14); }
-#markets-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-#markets-chart-container { width: 100%; height: calc(100vh - var(--topbar-h) - 120px); border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+#markets-chart-container { flex: 1 1 0; min-height: 0; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
 
 /* ── Auth screen ── */
 #screen-auth { max-width: 720px; margin: 60px auto; }
@@ -497,23 +504,24 @@ select option { background: var(--surface); }
 
 <!-- MARKETS ───────────────────────────────────────────────────────── -->
 <div class="screen" id="screen-markets">
-  <div style="font-size:16px;font-weight:700;margin-bottom:12px;">Markets</div>
-  <div id="markets-search-bar">
-    <input id="markets-ticker-input" placeholder="Symbol (e.g. BARC.L, SPY, XAUUSD)…" autocomplete="off" style="max-width:280px;" />
+  <div id="markets-header">
+    <span style="font-size:16px;font-weight:700;">Markets</span>
+    <input id="markets-ticker-input" placeholder="Symbol (e.g. BARC.L, SPY, XAUUSD)…" autocomplete="off" />
     <button class="btn btn-primary btn-sm" id="markets-go-btn">Go</button>
-    <span id="markets-current-label" class="mono-amber text-sm" style="margin-left:4px;"></span>
+    <span id="markets-current-label" class="mono-amber text-sm"></span>
   </div>
-  <div id="markets-chips">
-    <span class="markets-chip active" data-sym="LSE:BARC">BARC.L</span>
-    <span class="markets-chip" data-sym="LSE:HSBA">HSBA.L</span>
-    <span class="markets-chip" data-sym="LSE:LLOY">LLOY.L</span>
-    <span class="markets-chip" data-sym="LSE:LSEG">LSEG.L</span>
-    <span class="markets-chip" data-sym="LSE:NWG">NWG.L</span>
-    <span class="markets-chip" data-sym="LSE:STAN">STAN.L</span>
-    <span class="markets-chip" data-sym="AMEX:SPY">SPY</span>
-    <span class="markets-chip" data-sym="OANDA:XAUUSD">XAUUSD</span>
-    <span class="markets-chip" data-sym="BITSTAMP:BTCUSD">BTCUSD</span>
+  <div id="markets-cat-tabs">
+    <span class="mcat-tab active" data-cat="indices">Indices</span>
+    <span class="mcat-tab" data-cat="uk_equities">UK Equities</span>
+    <span class="mcat-tab" data-cat="us_equities">US Equities</span>
+    <span class="mcat-tab" data-cat="eu_equities">EU Equities</span>
+    <span class="mcat-tab" data-cat="commodities">Commodities</span>
+    <span class="mcat-tab" data-cat="forex">Forex</span>
+    <span class="mcat-tab" data-cat="crypto">Crypto</span>
+    <span class="mcat-tab" data-cat="etfs">ETFs</span>
+    <span class="mcat-tab" data-cat="options_etf">Options / Vol</span>
   </div>
+  <div id="markets-chips"></div>
   <div id="markets-chart-container"></div>
 </div>
 
@@ -730,15 +738,203 @@ function mdToHtml(s) {
 }
 
 // ── MARKETS ──────────────────────────────────────────────────────────────────
-let _tvCurrentSym = 'LSE:BARC';
+let _tvCurrentSym  = 'FOREXCOM:SPXUSD';
+let _marketsCat    = 'indices';
+let _marketsInited = false;
+
+const _MARKET_CATS = {
+  indices: [
+    { label: 'S&P 500',    sym: 'FOREXCOM:SPXUSD' },
+    { label: 'NASDAQ 100', sym: 'FOREXCOM:NSXUSD'  },
+    { label: 'DOW 30',     sym: 'FOREXCOM:DJI'     },
+    { label: 'FTSE 100',   sym: 'SPREADEX:FTSE'    },
+    { label: 'DAX 40',     sym: 'XETR:DAX'         },
+    { label: 'CAC 40',     sym: 'EURONEXT:PX1'     },
+    { label: 'Nikkei 225', sym: 'TVC:NI225'        },
+    { label: 'Hang Seng',  sym: 'TVC:HSI'          },
+    { label: 'ASX 200',    sym: 'TVC:ASX'          },
+    { label: 'Euro Stoxx', sym: 'TVC:SX5E'         },
+    { label: 'VIX',        sym: 'TVC:VIX'          },
+    { label: 'FTSE 250',   sym: 'TVC:MCX'          },
+  ],
+  uk_equities: [
+    { label: 'BARC',  sym: 'LSE:BARC'  },
+    { label: 'HSBA',  sym: 'LSE:HSBA'  },
+    { label: 'LLOY',  sym: 'LSE:LLOY'  },
+    { label: 'LSEG',  sym: 'LSE:LSEG'  },
+    { label: 'NWG',   sym: 'LSE:NWG'   },
+    { label: 'STAN',  sym: 'LSE:STAN'  },
+    { label: 'BP',    sym: 'LSE:BP'    },
+    { label: 'SHEL',  sym: 'LSE:SHEL'  },
+    { label: 'AZN',   sym: 'LSE:AZN'   },
+    { label: 'GSK',   sym: 'LSE:GSK'   },
+    { label: 'RIO',   sym: 'LSE:RIO'   },
+    { label: 'AAL',   sym: 'LSE:AAL'   },
+    { label: 'ULVR',  sym: 'LSE:ULVR'  },
+    { label: 'DGE',   sym: 'LSE:DGE'   },
+    { label: 'TSCO',  sym: 'LSE:TSCO'  },
+    { label: 'NG',    sym: 'LSE:NG'    },
+    { label: 'REL',   sym: 'LSE:REL'   },
+    { label: 'CRH',   sym: 'LSE:CRH'   },
+    { label: 'IMB',   sym: 'LSE:IMB'   },
+    { label: 'PRU',   sym: 'LSE:PRU'   },
+    { label: 'EXPN',  sym: 'LSE:EXPN'  },
+    { label: 'SGRO',  sym: 'LSE:SGRO'  },
+    { label: 'ANTO',  sym: 'LSE:ANTO'  },
+    { label: 'MNDI',  sym: 'LSE:MNDI'  },
+  ],
+  us_equities: [
+    { label: 'AAPL',  sym: 'NASDAQ:AAPL'  },
+    { label: 'MSFT',  sym: 'NASDAQ:MSFT'  },
+    { label: 'NVDA',  sym: 'NASDAQ:NVDA'  },
+    { label: 'GOOGL', sym: 'NASDAQ:GOOGL' },
+    { label: 'AMZN',  sym: 'NASDAQ:AMZN'  },
+    { label: 'META',  sym: 'NASDAQ:META'  },
+    { label: 'TSLA',  sym: 'NASDAQ:TSLA'  },
+    { label: 'AVGO',  sym: 'NASDAQ:AVGO'  },
+    { label: 'AMD',   sym: 'NASDAQ:AMD'   },
+    { label: 'INTC',  sym: 'NASDAQ:INTC'  },
+    { label: 'JPM',   sym: 'NYSE:JPM'     },
+    { label: 'BAC',   sym: 'NYSE:BAC'     },
+    { label: 'GS',    sym: 'NYSE:GS'      },
+    { label: 'WFC',   sym: 'NYSE:WFC'     },
+    { label: 'V',     sym: 'NYSE:V'       },
+    { label: 'MA',    sym: 'NYSE:MA'      },
+    { label: 'BRK.B', sym: 'NYSE:BRK.B'  },
+    { label: 'XOM',   sym: 'NYSE:XOM'     },
+    { label: 'CVX',   sym: 'NYSE:CVX'     },
+    { label: 'JNJ',   sym: 'NYSE:JNJ'     },
+    { label: 'UNH',   sym: 'NYSE:UNH'     },
+    { label: 'PFE',   sym: 'NYSE:PFE'     },
+    { label: 'WMT',   sym: 'NYSE:WMT'     },
+    { label: 'COIN',  sym: 'NASDAQ:COIN'  },
+    { label: 'PLTR',  sym: 'NYSE:PLTR'    },
+  ],
+  eu_equities: [
+    { label: 'SAP',     sym: 'XETR:SAP'     },
+    { label: 'SIE',     sym: 'XETR:SIE'     },
+    { label: 'ALV',     sym: 'XETR:ALV'     },
+    { label: 'DTE',     sym: 'XETR:DTE'     },
+    { label: 'BAS',     sym: 'XETR:BAS'     },
+    { label: 'BMW',     sym: 'XETR:BMW'     },
+    { label: 'MBG',     sym: 'XETR:MBG'     },
+    { label: 'VOW3',    sym: 'XETR:VOW3'    },
+    { label: 'ADS',     sym: 'XETR:ADS'     },
+    { label: 'ASML',    sym: 'NASDAQ:ASML'  },
+    { label: 'OR',      sym: 'EURONEXT:OR'  },
+    { label: 'MC',      sym: 'EURONEXT:MC'  },
+    { label: 'BNP',     sym: 'EURONEXT:BNP' },
+    { label: 'SAN',     sym: 'BME:SAN'      },
+    { label: 'BBVA',    sym: 'BME:BBVA'     },
+    { label: 'NOVO B',  sym: 'CPH:NOVO_B'   },
+    { label: 'NESN',    sym: 'SWX:NESN'     },
+    { label: 'ROG',     sym: 'SWX:ROG'      },
+    { label: 'UHR',     sym: 'SWX:UHR'      },
+  ],
+  commodities: [
+    { label: 'Gold',      sym: 'OANDA:XAUUSD'  },
+    { label: 'Silver',    sym: 'OANDA:XAGUSD'  },
+    { label: 'Platinum',  sym: 'OANDA:XPTUSD'  },
+    { label: 'Palladium', sym: 'OANDA:XPDUSD'  },
+    { label: 'Copper',    sym: 'OANDA:XCUUSD'  },
+    { label: 'Crude Oil', sym: 'TVC:USOIL'     },
+    { label: 'Brent',     sym: 'TVC:UKOIL'     },
+    { label: 'Nat Gas',   sym: 'TVC:NATGAS'    },
+    { label: 'Wheat',     sym: 'CBOT:ZW1!'     },
+    { label: 'Corn',      sym: 'CBOT:ZC1!'     },
+    { label: 'Soybeans',  sym: 'CBOT:ZS1!'     },
+    { label: 'Cotton',    sym: 'NYMEX:CT1!'    },
+    { label: 'Coffee',    sym: 'ICEUS:KC1!'    },
+    { label: 'Sugar',     sym: 'ICEUS:SB1!'    },
+    { label: 'Cocoa',     sym: 'ICEUS:CC1!'    },
+    { label: 'Lumber',    sym: 'CME:LB1!'      },
+  ],
+  forex: [
+    { label: 'EUR/USD', sym: 'FX:EURUSD'  },
+    { label: 'GBP/USD', sym: 'FX:GBPUSD'  },
+    { label: 'USD/JPY', sym: 'FX:USDJPY'  },
+    { label: 'GBP/EUR', sym: 'FX:GBPEUR'  },
+    { label: 'USD/CHF', sym: 'FX:USDCHF'  },
+    { label: 'AUD/USD', sym: 'FX:AUDUSD'  },
+    { label: 'USD/CAD', sym: 'FX:USDCAD'  },
+    { label: 'NZD/USD', sym: 'FX:NZDUSD'  },
+    { label: 'EUR/GBP', sym: 'FX:EURGBP'  },
+    { label: 'EUR/JPY', sym: 'FX:EURJPY'  },
+    { label: 'GBP/JPY', sym: 'FX:GBPJPY'  },
+    { label: 'USD/CNH', sym: 'FX:USDCNH'  },
+    { label: 'USD/SGD', sym: 'FX:USDSGD'  },
+    { label: 'DXY',     sym: 'TVC:DXY'    },
+  ],
+  crypto: [
+    { label: 'BTC/USD',  sym: 'BITSTAMP:BTCUSD'  },
+    { label: 'ETH/USD',  sym: 'BITSTAMP:ETHUSD'  },
+    { label: 'BNB/USD',  sym: 'BINANCE:BNBUSD'   },
+    { label: 'SOL/USD',  sym: 'BINANCE:SOLUSDT'  },
+    { label: 'XRP/USD',  sym: 'BITSTAMP:XRPUSD'  },
+    { label: 'ADA/USD',  sym: 'BINANCE:ADAUSDT'  },
+    { label: 'AVAX/USD', sym: 'BINANCE:AVAXUSDT' },
+    { label: 'DOGE/USD', sym: 'BINANCE:DOGEUSDT' },
+    { label: 'DOT/USD',  sym: 'BINANCE:DOTUSDT'  },
+    { label: 'LINK/USD', sym: 'BINANCE:LINKUSDT' },
+    { label: 'LTC/USD',  sym: 'BITSTAMP:LTCUSD'  },
+    { label: 'MATIC',    sym: 'BINANCE:MATICUSDT' },
+    { label: 'UNI/USD',  sym: 'BINANCE:UNIUSDT'  },
+    { label: 'ATOM/USD', sym: 'BINANCE:ATOMUSDT'  },
+  ],
+  etfs: [
+    { label: 'SPY',    sym: 'AMEX:SPY'    },
+    { label: 'QQQ',    sym: 'NASDAQ:QQQ'  },
+    { label: 'IWM',    sym: 'AMEX:IWM'    },
+    { label: 'DIA',    sym: 'AMEX:DIA'    },
+    { label: 'GLD',    sym: 'AMEX:GLD'    },
+    { label: 'SLV',    sym: 'AMEX:SLV'    },
+    { label: 'USO',    sym: 'AMEX:USO'    },
+    { label: 'XLF',    sym: 'AMEX:XLF'    },
+    { label: 'XLE',    sym: 'AMEX:XLE'    },
+    { label: 'XLK',    sym: 'AMEX:XLK'    },
+    { label: 'XLV',    sym: 'AMEX:XLV'    },
+    { label: 'ARKK',   sym: 'AMEX:ARKK'   },
+    { label: 'IBTL',   sym: 'LSE:IBTL'    },
+    { label: 'VWRL',   sym: 'LSE:VWRL'    },
+    { label: 'ISF',    sym: 'LSE:ISF'     },
+    { label: 'CSPX',   sym: 'LSE:CSPX'   },
+    { label: 'IGLT',   sym: 'LSE:IGLT'   },
+    { label: 'EMB',    sym: 'NASDAQ:EMB'  },
+    { label: 'HYG',    sym: 'AMEX:HYG'   },
+    { label: 'TLT',    sym: 'NASDAQ:TLT'  },
+  ],
+  options_etf: [
+    { label: 'VIX',    sym: 'TVC:VIX'     },
+    { label: 'UVXY',   sym: 'AMEX:UVXY'   },
+    { label: 'SVXY',   sym: 'AMEX:SVXY'   },
+    { label: 'VXX',    sym: 'AMEX:VXX'    },
+    { label: 'VIXY',   sym: 'AMEX:VIXY'   },
+    { label: 'SQQQ',   sym: 'NASDAQ:SQQQ' },
+    { label: 'TQQQ',   sym: 'NASDAQ:TQQQ' },
+    { label: 'SPXS',   sym: 'AMEX:SPXS'   },
+    { label: 'SPXL',   sym: 'AMEX:SPXL'   },
+    { label: 'LABD',   sym: 'AMEX:LABD'   },
+    { label: 'LABU',   sym: 'AMEX:LABU'   },
+    { label: 'BOIL',   sym: 'AMEX:BOIL'   },
+    { label: 'KOLD',   sym: 'AMEX:KOLD'   },
+    { label: 'DUST',   sym: 'AMEX:DUST'   },
+    { label: 'NUGT',   sym: 'AMEX:NUGT'   },
+  ],
+};
 
 const _TICKER_MAP = {
   'BARC.L': 'LSE:BARC', 'HSBA.L': 'LSE:HSBA', 'LLOY.L': 'LSE:LLOY',
-  'LSEG.L': 'LSE:LSEG', 'NWG.L':  'LSE:NWG',  'STAN.L': 'LSE:STAN',
+  'LSEG.L': 'LSE:LSEG', 'NWG.L': 'LSE:NWG', 'STAN.L': 'LSE:STAN',
+  'BP.L': 'LSE:BP', 'SHEL.L': 'LSE:SHEL', 'AZN.L': 'LSE:AZN',
   'XAUUSD': 'OANDA:XAUUSD', 'GOLD': 'OANDA:XAUUSD', 'GLD': 'AMEX:GLD',
   'BTCUSD': 'BITSTAMP:BTCUSD', 'BTC': 'BITSTAMP:BTCUSD',
-  'SPY':    'AMEX:SPY',   'QQQ':  'NASDAQ:QQQ', 'AAPL': 'NASDAQ:AAPL',
-  'TSLA':   'NASDAQ:TSLA', 'MSFT': 'NASDAQ:MSFT',
+  'ETHUSD': 'BITSTAMP:ETHUSD', 'ETH': 'BITSTAMP:ETHUSD',
+  'SPY': 'AMEX:SPY', 'QQQ': 'NASDAQ:QQQ', 'IWM': 'AMEX:IWM',
+  'AAPL': 'NASDAQ:AAPL', 'MSFT': 'NASDAQ:MSFT', 'NVDA': 'NASDAQ:NVDA',
+  'TSLA': 'NASDAQ:TSLA', 'GOOGL': 'NASDAQ:GOOGL', 'AMZN': 'NASDAQ:AMZN',
+  'META': 'NASDAQ:META', 'VIX': 'TVC:VIX', 'DXY': 'TVC:DXY',
+  'CRUDE': 'TVC:USOIL', 'OIL': 'TVC:USOIL', 'BRENT': 'TVC:UKOIL',
+  'EURUSD': 'FX:EURUSD', 'GBPUSD': 'FX:GBPUSD', 'USDJPY': 'FX:USDJPY',
 };
 
 function _resolveSymbol(raw) {
@@ -746,20 +942,34 @@ function _resolveSymbol(raw) {
   if (_TICKER_MAP[up]) return _TICKER_MAP[up];
   if (up.includes(':')) return up;
   if (up.endsWith('.L')) return 'LSE:' + up.slice(0, -2);
+  if (/^[A-Z]{6}$/.test(up) && !up.endsWith('USD')) return 'FX:' + up;
   return up;
+}
+
+function _renderChips(cat) {
+  const chips = document.getElementById('markets-chips');
+  chips.innerHTML = '';
+  (_MARKET_CATS[cat] || []).forEach(item => {
+    const el = document.createElement('span');
+    el.className = 'markets-chip' + (item.sym === _tvCurrentSym ? ' active' : '');
+    el.dataset.sym = item.sym;
+    el.textContent = item.label;
+    el.addEventListener('click', () => {
+      _renderChart(item.sym);
+      document.getElementById('markets-ticker-input').value = '';
+    });
+    chips.appendChild(el);
+  });
 }
 
 function _renderChart(sym) {
   _tvCurrentSym = sym;
-  // Update chip active state
   document.querySelectorAll('.markets-chip').forEach(c => {
     c.classList.toggle('active', c.dataset.sym === sym);
   });
-  // Update label
   const label = document.getElementById('markets-current-label');
   if (label) label.textContent = sym;
 
-  // Inject a self-contained srcdoc iframe — the script executes fresh each time
   const container = document.getElementById('markets-chart-container');
   const cfg = JSON.stringify({
     autosize: true,
@@ -795,13 +1005,16 @@ function _renderChart(sym) {
   iframe.contentDocument.close();
 }
 
-let _marketsInited = false;
 function initMarketsScreen() {
   if (!_marketsInited) {
-    document.querySelectorAll('.markets-chip').forEach(chip => {
-      chip.addEventListener('click', () => {
-        _renderChart(chip.dataset.sym);
-        document.getElementById('markets-ticker-input').value = '';
+    document.querySelectorAll('.mcat-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.mcat-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        _marketsCat = tab.dataset.cat;
+        _renderChips(_marketsCat);
+        const first = _MARKET_CATS[_marketsCat]?.[0];
+        if (first) _renderChart(first.sym);
       });
     });
     document.getElementById('markets-go-btn').addEventListener('click', () => {
@@ -814,6 +1027,7 @@ function initMarketsScreen() {
     });
     _marketsInited = true;
   }
+  _renderChips(_marketsCat);
   _renderChart(_tvCurrentSym);
 }
 
