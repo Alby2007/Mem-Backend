@@ -404,6 +404,53 @@ if HAS_INGEST:
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+@app.route('/markets/chart', methods=['GET'])
+@limiter.exempt
+def markets_chart():
+    """
+    Serve a standalone TradingView chart page for a given symbol.
+    Used as the iframe src= so it gets its own CSP header (not inherited
+    from the parent SPA page which blocks external scripts via srcdoc).
+    """
+    from flask import request as _req, make_response as _make_response
+    import json as _json
+    sym = _req.args.get('sym', 'FOREXCOM:SPXUSD')
+    cfg = _json.dumps({
+        'autosize': True, 'symbol': sym, 'interval': 'D',
+        'timezone': 'Europe/London', 'theme': 'dark', 'style': '1',
+        'locale': 'en', 'toolbar_bg': '#111111',
+        'backgroundColor': '#0a0a0a', 'gridColor': '#1a1a1a',
+        'hide_side_toolbar': False, 'allow_symbol_change': True,
+        'enable_publishing': False, 'save_image': False,
+        'support_host': 'https://www.tradingview.com',
+    })
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>*{{margin:0;padding:0;box-sizing:border-box;}}html,body{{width:100%;height:100%;overflow:hidden;background:#0a0a0a;}}</style>
+</head><body>
+<div class="tradingview-widget-container" style="width:100%;height:100%;">
+  <div class="tradingview-widget-container__widget" style="width:100%;height:100%;"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js">
+  {cfg}
+  </script>
+</div>
+</body></html>"""
+    resp = _make_response(html)
+    resp.headers['Content-Type'] = 'text/html; charset=utf-8'
+    resp.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'unsafe-inline' https://s3.tradingview.com https://*.tradingview.com; "
+        "style-src 'unsafe-inline' https://*.tradingview.com; "
+        "connect-src https://*.tradingview.com wss://*.tradingview.com; "
+        "img-src data: blob: https://*.tradingview.com; "
+        "font-src https://*.tradingview.com; "
+        "frame-src https://*.tradingview.com; "
+        "frame-ancestors *"
+    )
+    resp.headers['X-Frame-Options'] = 'ALLOWALL'
+    return resp
+
+
 @app.route('/health', methods=['GET'])
 @limiter.exempt
 def health():
