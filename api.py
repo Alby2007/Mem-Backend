@@ -1656,11 +1656,25 @@ def chat_endpoint():
                 t for t in tickers_in_query[:MAX_ON_DEMAND_TICKERS]
                 if not kb_has_atoms(t, _DB_PATH)
             ]
-            # Commodity/forex/index tickers — always fetch live regardless of
-            # KB atoms because seeded prices go stale within hours
+            # Commodity/forex/index/crypto tickers — always fetch live regardless
+            # of KB atoms because seeded prices go stale within hours.
+            # Catches both: raw KB tickers (XAUUSD in _YF_TICKER_MAP) and
+            # already-resolved yfinance symbols (BTC-USD, GBPUSD=X, GC=F, ^GSPC)
+            _yf_values = set(_YF_TICKER_MAP.values())
+            def _is_live_asset(t: str) -> bool:
+                tu = t.upper()
+                if tu in _YF_TICKER_MAP:
+                    return True
+                if t in _yf_values:
+                    return True
+                # yfinance symbol patterns: BTC-USD, GBPUSD=X, GC=F, ^GSPC, DX-Y.NYB
+                if (t.endswith('-USD') or t.endswith('=X') or t.endswith('=F')
+                        or t.startswith('^') or t.endswith('.NYB')):
+                    return True
+                return False
             live_always = [
                 t for t in tickers_in_query[:MAX_ON_DEMAND_TICKERS]
-                if t.upper() in _YF_TICKER_MAP and t not in missing_from_kb
+                if _is_live_asset(t) and t not in missing_from_kb
             ]
             to_fetch = missing_from_kb + live_always
             if (missing_from_kb and len(atoms) < 8) or live_always:

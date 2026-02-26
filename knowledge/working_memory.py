@@ -121,6 +121,23 @@ _YF_TICKER_MAP: dict[str, str] = {
     'FTSE':   '^FTSE',   'DAX':    '^GDAXI',  'CAC':    '^FCHI',
     'NI225':  '^N225',   'HSI':    '^HSI',    'ASX':    '^AXJO',
     'SX5E':   '^STOXX50E', 'VIX':  '^VIX',   'MCX':    '^MCX',
+    # Crypto (KB ticker → yfinance)
+    'BTC':    'BTC-USD', 'BITCOIN': 'BTC-USD', 'BTCUSD': 'BTC-USD',
+    'ETH':    'ETH-USD', 'ETHEREUM':'ETH-USD', 'ETHUSD': 'ETH-USD',
+    'SOL':    'SOL-USD', 'XRP':    'XRP-USD', 'BNB':    'BNB-USD',
+    'ADA':    'ADA-USD', 'DOGE':   'DOGE-USD','AVAX':   'AVAX-USD',
+    'DOT':    'DOT-USD', 'LINK':   'LINK-USD','MATIC':  'MATIC-USD',
+    'LTC':    'LTC-USD', 'BCH':    'BCH-USD', 'SHIB':   'SHIB-USD',
+    'UNI':    'UNI-USD', 'ATOM':   'ATOM-USD','XLM':    'XLM-USD',
+    # Pass-through: already-resolved yfinance symbols (from TICKER_ALIASES)
+    'BTC-USD':'BTC-USD', 'ETH-USD':'ETH-USD', 'SOL-USD':'SOL-USD',
+    'XRP-USD':'XRP-USD', 'BNB-USD':'BNB-USD', 'ADA-USD':'ADA-USD',
+    'DOGE-USD':'DOGE-USD','AVAX-USD':'AVAX-USD','GBPUSD=X':'GBPUSD=X',
+    'EURUSD=X':'EURUSD=X','GBP=X':  'GBP=X',  'JPY=X':  'JPY=X',
+    'GC=F':   'GC=F',   'SI=F':   'SI=F',    'CL=F':   'CL=F',
+    'BZ=F':   'BZ=F',   'NG=F':   'NG=F',    'PL=F':   'PL=F',
+    '^GSPC':  '^GSPC',  '^NDX':   '^NDX',    '^FTSE':  '^FTSE',
+    '^VIX':   '^VIX',   '^DJI':   '^DJI',
 }
 
 
