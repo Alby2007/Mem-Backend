@@ -477,7 +477,10 @@ def retrieve(
     # Skip FTS when explicit tickers + intent keywords are both present —
     # the boost (step 3) gives more precise results and FTS would flood seen-set
     # with low-value sector/price atoms before price_target atoms get added.
-    use_fts = not (tickers and boosted_predicates)
+    # Skip FTS when explicit tickers are present — generic term matching
+    # floods seen-set with unrelated atoms (e.g. 'market' matches market_cap_tier
+    # for every equity, burying the pinned GLD/SLV atoms we just fetched).
+    use_fts = not tickers
     if use_fts and terms:
         fts_query = ' OR '.join(terms[:6])
         try:
