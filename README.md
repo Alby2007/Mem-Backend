@@ -115,24 +115,49 @@ docker-compose exec ollama ollama pull llama3.2
 
 Set `OLLAMA_MODEL=llama3.2` (or whichever model you pulled) in `.env` — this is already the default in `.env.example`.
 
-### Seed the KB on a fresh instance
+### Seeding the Knowledge Base
 
-After first boot the KB is empty. Trigger a full ingest immediately without waiting for the scheduler:
+The repo ships with a pre-seeded KB snapshot (`tests/fixtures/kb_seed.sql`) containing real shared market intelligence — conviction tiers, patterns, macro regime, causal edges, signal calibration. **This contains NO user data.** Your personal KB is built from your own interactions.
+
+Load the seed after `docker-compose up`:
 
 ```bash
-# bash / WSL / Git Bash / macOS:
-curl -X POST http://localhost:5050/ingest/run-all
-curl -X POST http://localhost:5050/ingest/historical
+bash scripts/load_seed.sh
 ```
 
-```powershell
-# PowerShell (Windows) — curl is aliased to Invoke-WebRequest, use curl.exe or Invoke-RestMethod:
-curl.exe -X POST http://localhost:5050/ingest/run-all
-curl.exe -X POST http://localhost:5050/ingest/historical
+Verify it loaded:
 
-# Or with native PowerShell syntax:
-Invoke-RestMethod -Method POST http://localhost:5050/ingest/run-all
-Invoke-RestMethod -Method POST http://localhost:5050/ingest/historical
+```bash
+# macOS / Linux / WSL / Git Bash:
+curl http://localhost:5050/stats
+
+# PowerShell (Windows):
+curl.exe http://localhost:5050/stats
+```
+
+You should see `total_facts > 2000` immediately.
+
+Then register your test user and build your personal KB:
+
+```bash
+# Register
+curl -s -X POST http://localhost:5050/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id": "alice", "password": "test"}'
+
+# Submit portfolio (builds your personal KB)
+curl -s -X POST http://localhost:5050/users/alice/portfolio \
+  -H 'Content-Type: application/json' \
+  -d '{"holdings": [{"ticker": "RELIANCE.NS", "weight": 0.4}]}'
+```
+
+> **How the collective flywheel works:** every `POST /feedback` call from every team member feeds the shared `signal_calibration` table. By launch day the calibration table already has real hit-rate data from intern testing — the collective learning starts before the first paying user arrives.
+
+To refresh the seed from your live machine:
+
+```bash
+bash scripts/export_seed.sh
+git add tests/fixtures/kb_seed.sql && git commit -m "chore: refresh KB seed"
 ```
 
 > **Note:** The first `docker-compose up` is slow because it pulls `python:3.11-slim` (~200 MB) and `ollama/ollama` (~2 GB). Subsequent startups use cached images and are near-instant.
