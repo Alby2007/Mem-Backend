@@ -58,7 +58,13 @@ Rules:
 - Only request tickers — no free text after DATA_REQUEST
 - If context is empty but the question is general, just ANSWER with what you know from context
 - Maximum 2 tickers per DATA_REQUEST
-- Do NOT request DATA_REQUEST if you already have last_price atoms in context
+- LIVE PRICE RULE: If the user is asking for the CURRENT price, rate, level, or value of
+  a ticker (keywords: current, now, today, live, latest, trading at, worth, rate, spot),
+  you MUST issue DATA_REQUEST for that ticker even if stale last_price atoms already exist
+  in context — the KB data may be hours or days old.
+- TICKER FORMAT for DATA_REQUEST: use the KB ticker format exactly as it appears in the
+  context (e.g. XAUUSD for gold, XAGUSD for silver, GBPUSD for cable, SPX for S&P 500,
+  EURUSD for EUR/USD). Do NOT use yfinance formats like GC=F or ^GSPC.
 - Prefer SEARCH_REQUEST over refusing to answer when KB signals are absent
 - Only one SEARCH_REQUEST per response — make it specific and focused
 """
@@ -465,12 +471,13 @@ class WorkingMemory:
         if not session or not session.atoms:
             return ''
 
-        lines = ['=== LIVE DATA (fetched this session) ===']
+        now_ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+        lines = [f'=== LIVE DATA (fetched live at {now_ts} — treat as current) ===']
         for a in session.atoms:
-            ts = a.get('fetched_at', '')[:16]  # trim to minute
+            ts = a.get('fetched_at', '')[:16]
             lines.append(
                 f"{a['subject']} | {a['predicate']} | {a['object']}"
-                f"  [conf:{a['confidence']:.2f}, live:{ts}]"
+                f"  [conf:{a['confidence']:.2f}, fetched:{ts}]"
             )
         if session.fetch_log:
             lines.append(f'Fetch log: {"; ".join(session.fetch_log)}')

@@ -1496,6 +1496,23 @@ def kb_refresh_queue():
 
 # ── LLM / Chat endpoints ─────────────────────────────────────────────────────
 
+_LIVE_PRICE_KEYWORDS = (
+    'current', 'currently', 'right now', 'right-now', 'today',
+    'trading at', 'trading now', 'priced at', 'price now', 'price today',
+    'what is', "what's", 'whats', 'how much', 'worth', 'value',
+    'rate', 'rates', 'level', 'levels', 'spot', 'live', 'latest',
+    'at the moment', 'at this moment', 'as of now',
+)
+
+def _query_wants_live(message: str) -> bool:
+    """
+    Returns True if the user's question is explicitly asking for a current /
+    live price, rate, or level — triggering Pass 1 even when the KB has atoms.
+    """
+    m = message.lower()
+    return any(kw in m for kw in _LIVE_PRICE_KEYWORDS)
+
+
 @app.route('/chat', methods=['POST'])
 def chat_endpoint():
     """
@@ -1629,7 +1646,7 @@ def chat_endpoint():
     live_context  = ''
     live_fetched  = []
     wm_session_id = f'wm_{session_id}'
-    if HAS_WORKING_MEMORY and _working_memory is not None and len(atoms) < 5:
+    if HAS_WORKING_MEMORY and _working_memory is not None and len(atoms) < 8:
         try:
             from retrieval import _extract_tickers
             tickers_in_query = _extract_tickers(message)
@@ -1855,7 +1872,8 @@ def chat_endpoint():
     llm_requested_tickers: list = []
     web_searched: str | None = None
     if (HAS_WORKING_MEMORY and _working_memory is not None
-            and not live_fetched and len(atoms) < 8):
+            and not live_fetched
+            and (len(atoms) < 8 or _query_wants_live(message))):
         try:
             from knowledge.working_memory import (
                 DATA_REQUEST_SYSTEM_PROMPT, parse_llm_response
