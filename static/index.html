@@ -437,7 +437,18 @@ select option { background: var(--surface); }
 <div class="screen" id="screen-portfolio">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
     <div style="font-size:16px;font-weight:700;">Portfolio</div>
-    <button class="btn btn-outline btn-sm" id="p-gen-sim-btn" title="Generate a seeded UK test portfolio for your account">⚡ Generate Test Portfolio</button>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn btn-outline btn-sm" id="p-gen-sim-btn" title="Generate a seeded UK test portfolio for your account">⚡ Generate Test Portfolio</button>
+      <select class="btn btn-outline btn-sm" id="p-change-profile-select" title="Load a diverse test profile" style="cursor:pointer;">
+        <option value="">⇄ Change Portfolio…</option>
+        <option value="uk_banks">🇬🇧 UK Banks</option>
+        <option value="us_tech">🇺🇸 US Tech</option>
+        <option value="global_macro">🌍 Global Macro</option>
+        <option value="dividend_income">💰 Dividend Income</option>
+        <option value="crypto_growth">₿ Crypto &amp; Growth</option>
+        <option value="commodities">🏗 Commodities &amp; Energy</option>
+      </select>
+    </div>
   </div>
   <div id="p-sim-banner" style="display:none;"></div>
   <div class="two-col">
@@ -995,6 +1006,117 @@ document.getElementById('p-gen-sim-btn').addEventListener('click', async () => {
   } finally {
     btn.disabled = false;
     btn.textContent = '⚡ Generate Test Portfolio';
+  }
+});
+
+// ── Diverse test portfolio profiles ──────────────────────────────────────────
+const _TEST_PROFILES = {
+  uk_banks: {
+    label: 'UK Banks',
+    holdings: [
+      { ticker: 'BARC.L',  quantity: 900,  avg_cost: 201.82 },
+      { ticker: 'HSBA.L',  quantity: 700,  avg_cost: 747.82 },
+      { ticker: 'LLOY.L',  quantity: 2500, avg_cost: 49.85  },
+      { ticker: 'NWG.L',   quantity: 800,  avg_cost: 263.88 },
+      { ticker: 'STAN.L',  quantity: 400,  avg_cost: 753.92 },
+      { ticker: 'LSEG.L',  quantity: 80,   avg_cost: 991.55 },
+    ],
+  },
+  us_tech: {
+    label: 'US Tech',
+    holdings: [
+      { ticker: 'AAPL',  quantity: 50,  avg_cost: 172.50 },
+      { ticker: 'MSFT',  quantity: 30,  avg_cost: 380.00 },
+      { ticker: 'NVDA',  quantity: 20,  avg_cost: 480.00 },
+      { ticker: 'GOOGL', quantity: 25,  avg_cost: 155.00 },
+      { ticker: 'META',  quantity: 15,  avg_cost: 490.00 },
+      { ticker: 'AMZN',  quantity: 18,  avg_cost: 185.00 },
+      { ticker: 'TSLA',  quantity: 40,  avg_cost: 210.00 },
+    ],
+  },
+  global_macro: {
+    label: 'Global Macro',
+    holdings: [
+      { ticker: 'SPY',      quantity: 40,  avg_cost: 480.00 },
+      { ticker: 'EEM',      quantity: 80,  avg_cost: 40.00  },
+      { ticker: 'GLD',      quantity: 30,  avg_cost: 195.00 },
+      { ticker: 'TLT',      quantity: 50,  avg_cost: 92.00  },
+      { ticker: 'DX-Y.NYB', quantity: 0,   avg_cost: null   },
+      { ticker: 'SHEL.L',   quantity: 200, avg_cost: 2610.00},
+      { ticker: 'BP.L',     quantity: 500, avg_cost: 455.00 },
+      { ticker: 'VOD.L',    quantity: 1200,avg_cost: 68.00  },
+    ],
+  },
+  dividend_income: {
+    label: 'Dividend Income',
+    holdings: [
+      { ticker: 'ULVR.L', quantity: 150, avg_cost: 3980.00 },
+      { ticker: 'BATS.L', quantity: 200, avg_cost: 2680.00 },
+      { ticker: 'NG.L',   quantity: 800, avg_cost: 985.00  },
+      { ticker: 'TSCO.L', quantity: 600, avg_cost: 295.00  },
+      { ticker: 'REL.L',  quantity: 120, avg_cost: 2100.00 },
+      { ticker: 'AZN.L',  quantity: 80,  avg_cost: 11200.00},
+      { ticker: 'GSK.L',  quantity: 200, avg_cost: 1640.00 },
+      { ticker: 'BDEV.L', quantity: 300, avg_cost: 430.00  },
+    ],
+  },
+  crypto_growth: {
+    label: 'Crypto & Growth',
+    holdings: [
+      { ticker: 'MSTR',   quantity: 10,   avg_cost: 340.00  },
+      { ticker: 'COIN',   quantity: 20,   avg_cost: 190.00  },
+      { ticker: 'NVDA',   quantity: 15,   avg_cost: 480.00  },
+      { ticker: 'PLTR',   quantity: 150,  avg_cost: 22.00   },
+      { ticker: 'ARKK',   quantity: 100,  avg_cost: 42.00   },
+      { ticker: 'SQ',     quantity: 40,   avg_cost: 68.00   },
+      { ticker: 'HOOD',   quantity: 200,  avg_cost: 14.00   },
+    ],
+  },
+  commodities: {
+    label: 'Commodities & Energy',
+    holdings: [
+      { ticker: 'RIO.L',  quantity: 150, avg_cost: 5200.00 },
+      { ticker: 'GLEN.L', quantity: 800, avg_cost: 420.00  },
+      { ticker: 'AAL.L',  quantity: 500, avg_cost: 195.00  },
+      { ticker: 'BHP.L',  quantity: 200, avg_cost: 2100.00 },
+      { ticker: 'SHEL.L', quantity: 180, avg_cost: 2610.00 },
+      { ticker: 'BP.L',   quantity: 400, avg_cost: 455.00  },
+      { ticker: 'GLD',    quantity: 25,  avg_cost: 195.00  },
+      { ticker: 'SLV',    quantity: 60,  avg_cost: 22.00   },
+    ],
+  },
+};
+
+document.getElementById('p-change-profile-select').addEventListener('change', async function() {
+  const key = this.value;
+  if (!key) return;
+  this.value = ''; // reset dropdown
+  if (!state.userId) { showToast('Sign in first'); return; }
+  const profile = _TEST_PROFILES[key];
+  if (!profile) return;
+
+  // Load holdings into state
+  state.holdings = profile.holdings.map(h => ({ ...h }));
+  renderHoldings();
+
+  // Auto-submit to backend
+  const msg = document.getElementById('p-msg');
+  msg.innerHTML = '<span class="spinner"></span>';
+  try {
+    const d = await apiFetch(`/users/${state.userId}/portfolio`, {
+      method: 'POST',
+      body: JSON.stringify({ holdings: state.holdings }),
+    });
+    if (!d) return;
+    msg.style.color = 'var(--green)';
+    msg.textContent = `✓ ${profile.label} loaded — ${d.count} holdings`;
+    localStorage.removeItem(`simulated_${state.userId}`);
+    document.getElementById('p-sim-banner').style.display = 'none';
+    loadPortfolioModel();
+    showToast(`${profile.label} portfolio loaded`, 'ok');
+  } catch(e) {
+    msg.style.color = 'var(--red)';
+    msg.textContent = e.message;
   }
 });
 
