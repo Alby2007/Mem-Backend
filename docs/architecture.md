@@ -2,84 +2,100 @@
 
 ## Overview
 
-Trading Galaxy is a **zero-LLM trading knowledge base** — a persistent, queryable, epistemically-aware triple store that:
+Trading Galaxy is a **knowledge-graph-powered trading intelligence platform** — a persistent, queryable, epistemically-aware triple store that:
 
-1. **Ingests** live market data from free data sources on automatic schedules
+1. **Ingests** live market data from multiple sources on automatic schedules
 2. **Stores** knowledge as typed `(subject, predicate, object)` atoms with confidence and provenance
 3. **Retrieves** context for natural-language or structured queries using multi-strategy ranking
 4. **Monitors** epistemic health: knowledge decay, authority conflicts, composite stress
+5. **Serves** a personalised daily briefing to users via the Product Layer
+6. **Provides** a browser-based internal tool (SPA at `GET /`) for portfolio management and KB exploration
 
-The system is designed to feed a copilot or LLM layer with accurate, ranked, non-stale trading context — without needing an LLM to reason about the data itself.
+The system runs fully locally — KB, LLM inference (Ollama), and the frontend are all on-device. No external LLM API calls are required.
 
 ---
 
 ## Component Diagram
 
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│                        External Data Sources                       │
-│  Yahoo Finance (yfinance)  FRED API  SEC EDGAR  RSS Feeds          │
-└────────┬──────────────────────┬──────────┬──────────┬─────────────┘
-         │                      │          │          │
-         ▼                      ▼          ▼          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      ingest/ package                             │
-│                                                                  │
-│  YFinanceAdapter  FREDAdapter  EDGARAdapter  RSSAdapter          │
-│         └──────────────┬──────────────────────┘                  │
-│                  BaseIngestAdapter                               │
-│                  fetch() → transform() → validate() → push()    │
-│                                                                  │
-│                  IngestScheduler                                 │
-│                  (threading.Timer, per-adapter intervals)        │
-│                  health status tracked per adapter               │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ RawAtom list
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   knowledge/ package                             │
-│                                                                  │
-│  TradingKnowledgeGraph (graph.py)                               │
-│  ├── SQLite WAL triple store (facts table)                       │
-│  ├── FTS5 index (facts_fts)                                      │
-│  ├── fact_conflicts audit log                                    │
-│  ├── decay_log                                                   │
-│  └── thread-local connections                                    │
-│                                                                  │
-│  authority.py        — source trust weights + effective_score    │
-│  decay.py            — confidence decay + background worker      │
-│  contradiction.py    — conflict detection                        │
-│  epistemic_stress.py — composite stress signal                   │
-│  working_state.py    — cross-session goal/topic memory           │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ sqlite3.Connection
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    retrieval.py                                  │
-│                                                                  │
-│  Multi-strategy retrieve():                                      │
-│  0. Graph-relational context (PageRank + clustering + BFS paths) │
-│  1. Cross-asset GNN atoms                                         │
-│  2. FTS on key terms (skipped when tickers+intent present)       │
-│  3. Predicate keyword boost (intent-aware predicate fetch)       │
-│  4. Direct ticker/subject match                                  │
-│  5a. High-value signal predicates                                │
-│  5b. Fallback: top-confidence atoms                              │
-│  → Re-rank by authority.effective_score                          │
-│  → Format into labelled sections                                 │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ (snippet, atoms[])
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       api.py (Flask)                             │
-│                                                                  │
-│  POST /ingest          POST /retrieve      GET /query            │
-│  GET  /search          GET  /context/:e    GET  /stats           │
-│  GET  /health          GET  /ingest/status                       │
-│  POST /repair/diagnose POST /repair/proposals                    │
-│  POST /repair/execute  POST /repair/rollback GET /repair/impact  │
-│  POST /kb/graph        POST /kb/traverse                         │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                         External Data Sources                           │
+│  Yahoo Finance · FRED API · SEC EDGAR · RSS Feeds · Options Chains      │
+└──┬─────────────┬──────────────┬───────────┬──────────┬─────────────────┘
+   │             │              │           │          │
+   ▼             ▼              ▼           ▼          ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         ingest/ package                              │
+│                                                                      │
+│  YFinanceAdapter   FREDAdapter     EDGARAdapter    RSSAdapter        │
+│  OptionsAdapter    HistoricalBackfillAdapter       PatternAdapter    │
+│  LLMExtractionAdapter  SignalEnrichmentAdapter  EDGARRealtimeAdapter │
+│  DynamicWatchlistManager  SeedSyncClient                            │
+│         └──────────────────┬─────────────────────────┘              │
+│                      BaseIngestAdapter                              │
+│                      fetch() → transform() → validate() → push()   │
+│                      IngestScheduler (threading.Timer)              │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │ RawAtom list
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                       knowledge/ package                             │
+│                                                                      │
+│  TradingKnowledgeGraph (graph.py)                                   │
+│  ├── SQLite WAL triple store (facts table)                           │
+│  ├── FTS5 index (facts_fts)                                          │
+│  ├── fact_conflicts · decay_log · causal_edges tables               │
+│  └── thread-local connections                                        │
+│                                                                      │
+│  authority.py · decay.py · contradiction.py · epistemic_stress.py  │
+│  working_state.py · graph_retrieval.py · causal_graph.py            │
+│  kb_insufficiency_classifier.py · kb_repair_proposals.py           │
+│  kb_repair_executor.py · kb_validation.py · confidence_intervals.py│
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │ sqlite3.Connection
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         retrieval.py                                 │
+│  0. Graph-relational (PageRank + clustering + BFS)                  │
+│  1. Cross-asset GNN atoms                                            │
+│  2. FTS5                                                             │
+│  3. Predicate keyword boost                                          │
+│  4. Direct ticker match                                              │
+│  5a/5b. High-value predicates / fallback top-confidence             │
+│  → Re-rank by authority.effective_score                              │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │
+                    ┌────────────┼─────────────┐
+                    ▼            ▼             ▼
+┌────────────┐  ┌─────────┐  ┌──────────────────────────────────────┐
+│  llm/      │  │analytics│  │         api.py (Flask)                │
+│            │  │         │  │                                        │
+│ ollama_    │  │portfolio│  │  KB core:  POST /ingest  GET /stats   │
+│ client.py  │  │universe_│  │            POST /retrieve GET /query  │
+│ (chat,     │  │expander │  │            GET /search   GET /health  │
+│ chat_vision│  │pattern_ │  │  Repair:   POST /repair/diagnose      │
+│ list_models│  │detector │  │            POST /repair/proposals     │
+│ is_avail.) │  │snapshot_│  │            POST /repair/execute       │
+│            │  │curator  │  │  Product:  POST /auth/register        │
+│ overlay_   │  │user_    │  │            POST /auth/token           │
+│ builder.py │  │modeller │  │            GET/POST /users/{id}/port. │
+│            │  │network_ │  │  Screenshot: POST /users/{id}/        │
+│ prompt_    │  │effect_  │  │              history/screenshot        │
+│ builder.py │  │engine   │  │  Notifications, tips, alerts,         │
+└────────────┘  │backtest │  │  network, patterns, universe          │
+                │counter- │  │                                        │
+                │factual  │  │  GET / → static/index.html (SPA)      │
+                └─────────┘  └──────────────────────────────────────┘
+                                              │
+                              ┌───────────────┼──────────────────┐
+                              ▼               ▼                  ▼
+                    ┌──────────────┐  ┌────────────┐  ┌─────────────────┐
+                    │ middleware/  │  │  users/    │  │ notifications/  │
+                    │ auth.py      │  │ user_store │  │ tip_scheduler   │
+                    │ rate_limiter │  │ personal_kb│  │ tip_formatter   │
+                    │ validators   │  └────────────┘  │ snapshot_curator│
+                    │ audit        │                   │ telegram_notif. │
+                    └──────────────┘                   └─────────────────┘
 ```
 
 ---
@@ -198,10 +214,18 @@ POST /kb/traverse { topic }
 
 | Adapter | Interval | Rationale |
 |---|---|---|
-| `YFinanceAdapter` | 5 min | Price + signals need to be near-real-time |
+| `YFinanceAdapter` | 5 min | Price + signals near-real-time |
+| `OptionsAdapter` | 15 min | Options chains update intraday |
 | `RSSAdapter` | 15 min | Headlines cycle every 15–30 min |
+| `SignalEnrichmentAdapter` | 30 min | Derived signals from historical + options data |
+| `PatternAdapter` | 60 min | Pattern detection over rolling windows |
+| `LLMExtractionAdapter` | 60 min | LLM-based entity and signal extraction from RSS |
 | `EDGARAdapter` | 6 hours | Filings are rare; daily is sufficient |
+| `EDGARRealtimeAdapter` | 30 min | 8-K real-time filings via EDGAR full-text search |
+| `HistoricalBackfillAdapter` | On-demand | One-shot via `POST /ingest/historical` |
 | `FREDAdapter` | 24 hours | FRED macro series update daily at most |
+
+`SeedSyncClient` runs every hour (independent of the scheduler) to check for a newer KB seed on GitHub Releases and apply it if found.
 
 ---
 
@@ -270,23 +294,84 @@ The JARVIS epistemic governance stack is fully wired:
 | `restore_atoms` | Entropy collapse after prior repair |
 | `manual_review` | Unknown / no automated strategy |
 
+## UK Market Context
+
+The system is configured for UK/LSE-first operation:
+
+| Setting | Value |
+|---|---|
+| Default timezone | `Europe/London` |
+| Default delivery time | `07:30` |
+| Default account currency | `GBP` |
+| Default watchlist | FTSE 100 heavyweights + UK macro proxies (`.L` suffix) |
+| Options watchlist | Top FTSE names with liquid options |
+| LLM universe expansion | UK market context injected for `.L` tickers |
+| Low-liquidity options | `_LOW_OPTIONS_LIQUIDITY` set — confidence capped for `iv_rank` (0.40) and `smart_money_signal` (0.35) |
+
+---
+
+## Frontend (Internal Tool)
+
+`static/index.html` — single-page Bloomberg-terminal-style SPA served at `GET /`. Zero build step.
+
+**Screens:** Auth · Dashboard · Portfolio · Chat · Tips · Patterns · Network
+
+**Portfolio screen — three entry paths:**
+1. **Screenshot upload** — drop/click broker screenshot → `POST /users/{id}/history/screenshot` → `llava` vision model extracts holdings JSON → auto-populates rows
+2. **FTSE sector quick-add** — `[+ FTSE Banks]` `[+ FTSE Energy]` `[+ FTSE Mining]` `[+ FTSE Pharma]` `[+ FTSE Tech]` buttons
+3. **Manual add with autocomplete** — seeds from `GET /universe/coverage`, falls back to hardcoded FTSE top-25 list; `.L` suffix aware
+
+---
+
+## Vision Pipeline
+
+`POST /users/{id}/history/screenshot` — broker screenshot → holdings extraction:
+
+```
+multipart/form-data (file: image/png|jpeg, max 10 MB)
+    → list_models() check — return vision_unavailable gracefully if llava absent
+    → base64 encode image
+    → chat_vision(image_b64, prompt, model='llava')
+    → strip markdown fences from response
+    → json.loads → normalise (uppercase ticker, float coercion)
+    → return { holdings: [{ticker, quantity, avg_cost}], vision_available, count }
+```
+
+Requires `llava` pulled locally: `ollama pull llava` (or `make setup-models`).
+Override model: `OLLAMA_VISION_MODEL` env var.
+
+---
+
+## Seed Management
+
+| Script | Purpose |
+|---|---|
+| `scripts/export_seed.py` | Export shared KB tables to `tests/fixtures/kb_seed.sql` |
+| `scripts/push_seed.py` | Export + upload to GitHub Releases (`seed-YYYYMMDD-HHMM` tag) |
+| `scripts/load_seed.py` | Load seed SQL into local DB |
+| `ingest/seed_sync.py` | Background hourly poll — downloads newer seed from GitHub Releases and applies shared tables only; never touches `user_*` tables |
+
+Seed allowlist (tables synced): `facts`, `fact_conflicts`, `causal_edges`, `pattern_signals`, `signal_calibration`, and governance tables. Personal KB (`user_*`) is structurally protected.
+
+---
+
 ## Module Status
 
-Status taxonomy used below:
+Status taxonomy:
 
 - **Live** — imported and executed in startup/request path
-- **Partial** — schema/API wiring is live, but downstream decision logic is not yet integrated
-- **Dormant** — file exists but is not wired into live runtime path
+- **Partial** — schema/API wiring is live but downstream decision logic not yet integrated
+- **Dormant** — file exists but is not wired into live runtime
 
-### Dormant (not wired)
+### Dormant
 
-| Module | Status | Evidence |
-|---|---|---|
-| `graph_v2.py` | Still dormant — requires `aiosqlite` and is not imported in the live request/startup path | Runtime uses `knowledge.graph` via `KnowledgeGraph`; `graph_v2.py` is never imported in `api.py`/`retrieval.py` |
-| `graph_enhanced.py` | Still dormant — standalone class, not wired into `api.py` or `retrieval.py` | No startup/request-path import and no endpoint/retrieval integration |
+| Module | Notes |
+|---|---|
+| `knowledge/graph_v2.py` | Requires `aiosqlite`; not imported in live path |
+| `knowledge/graph_enhanced.py` | Standalone class; not wired into `api.py` or `retrieval.py` |
 
-### Partially wired
+### Partial
 
 | Module | Live today | Pending |
 |---|---|---|
-| `confidence_intervals.py` | `ensure_confidence_columns()` runs at startup; `GET /kb/confidence` endpoint is exposed | Interval output does not yet feed back into `position_size_pct` (planned v2) |
+| `confidence_intervals.py` | `ensure_confidence_columns()` at startup; `GET /kb/confidence` exposed | Interval not yet fed into `position_size_pct` |

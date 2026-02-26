@@ -7,16 +7,34 @@ Complete file-by-file reference for the Trading Galaxy codebase.
 ## Root
 
 ### `api.py`
-Flask REST API — the main entry point.
+Flask REST API — the main entry point. 3,758 lines.
 
-- Initialises `KnowledgeGraph`, `decay_worker`, and `IngestScheduler`
-- Registers all four adapters with their intervals
+- Initialises `KnowledgeGraph`, `decay_worker`, `IngestScheduler`, and `SeedSyncClient`
+- Registers all adapters with their intervals
 - Exposes all HTTP endpoints
-- Optional dependencies (`epistemic_stress`, `epistemic_adaptation`, `working_state`) are imported with graceful fallback
+- Optional dependencies imported with graceful fallback (`HAS_AUTH`, `HAS_PRODUCT_LAYER`, `HAS_LIMITER`, etc.)
 
-**Key globals:** `app`, `_kg`, `_decay_worker`, `_ingest_scheduler`
+**Key globals:** `app`, `_kg`, `_decay_worker`, `_ingest_scheduler`, `_DB_PATH`
 
-**Endpoints:** `POST /ingest`, `GET /query`, `POST /retrieve`, `GET /search`, `GET /context/<entity>`, `GET /stats`, `GET /health`, `GET /ingest/status`
+**Endpoint groups:**
+
+| Group | Key endpoints |
+|---|---|
+| KB core | `POST /ingest` · `GET /query` · `POST /retrieve` · `GET /search` · `GET /context/<e>` · `GET /stats` · `GET /health` |
+| Ingest | `GET /ingest/status` · `POST /ingest/run-all` · `POST /ingest/historical` |
+| Repair/governance | `POST /repair/diagnose` · `POST /repair/proposals` · `POST /repair/execute` · `POST /repair/rollback` · `GET /repair/impact` |
+| KB graph | `POST /kb/graph` · `POST /kb/traverse` · `GET /kb/causal-chain` · `POST /kb/causal-edge` · `GET /kb/causal-edges` · `GET /kb/confidence` |
+| Auth | `POST /auth/register` · `POST /auth/token` · `POST /auth/refresh` · `POST /auth/logout` |
+| User / product | `GET/POST /users/<id>/portfolio` · `GET /users/<id>/model` · `POST /users/<id>/onboarding` · `GET /users/<id>/snapshot/preview` · `POST /users/<id>/snapshot/send-now` |
+| Screenshot | `POST /users/<id>/history/screenshot` — vision model extraction |
+| Tips | `GET /users/<id>/tip/preview` · `GET/POST /users/<id>/tip/config` · `GET /users/<id>/delivery-history` |
+| Alerts | `GET /users/<id>/alerts` · `GET /users/<id>/alerts/unread-count` |
+| Universe | `POST /users/<id>/expand-universe` · `GET /universe/coverage` · `GET /universe/trending` · `GET /universe/staging/global` |
+| Network | `GET /network/health` · `GET /network/calibration/<ticker>` · `GET /network/cohort/<ticker>` |
+| Patterns | `GET /patterns/live` · `GET /patterns/<id>` |
+| Feedback | `POST /feedback` |
+| Chat | `POST /chat` (overlay-mode aware) |
+| Frontend | `GET /` → `static/index.html` |
 
 ---
 
@@ -51,6 +69,24 @@ Zero-LLM multi-strategy retrieval engine. Called by `POST /retrieve`.
 
 ---
 
+### `Makefile`
+Developer convenience targets.
+
+| Target | Purpose |
+|---|---|
+| `make setup` | `install` + `setup-models` |
+| `make setup-models` | `ollama pull llava && ollama pull llama3.2` |
+| `make install` | `pip install -r requirements.txt` |
+| `make dev` | Start Flask on port 5051 |
+| `make test` | Full pytest suite |
+| `make test-screenshot` | Screenshot upload tests only |
+| `make ingest` | `POST /ingest/run-all` |
+| `make seed` / `push-seed` | Load / export+push KB seed |
+| `make docker-up` | `docker-compose up --build` + pull models into container |
+| `make lint` | `ruff check` |
+
+---
+
 ### `requirements.txt`
 ```
 flask>=3.0.0,<4.0.0
@@ -59,6 +95,11 @@ yfinance>=0.2.0
 fredapi>=0.5.0
 feedparser>=6.0.0
 requests>=2.28.0
+PyJWT>=2.8.0
+bcrypt>=4.1.0
+flask-limiter>=3.5.0
+cryptography>=42.0.0
+limits>=3.6.0
 ```
 
 ---
@@ -114,26 +155,28 @@ A failed adapter never blocks others — errors are caught, logged, recorded in 
 ### `ingest/yfinance_adapter.py`
 Pulls price, fundamentals, analyst consensus, and ETF-specific data from Yahoo Finance via `yfinance`.
 
-**Watchlist:** ~50 tickers across all 11 S&P sectors + broad market ETFs + rates/credit ETFs + macro proxy ETFs (GLD, SLV, UUP, USO).
+**Watchlist (UK/LSE-first):** FTSE 100 heavyweights (`.L` suffix), UK FX pairs (`GBPUSD=X`, `EURGBP=X`), UK gilt proxy, global macro anchors (GLD, ^VIX, ^GSPC).
+
+**Dynamic watchlist:** `DynamicWatchlistManager` extends the base list with per-user expanded tickers.
 
 **Key constants:**
-- `_WATCHLIST` — full 50-ticker list
+- `_DEFAULT_TICKERS` — FTSE-first default list
 - `_BATCH_SIZE = 10` — tickers per yfinance request
 - `_BATCH_DELAY_SEC = 1.5` — seconds between batches
 - `_ETF_QUOTE_TYPES` — quote types routed to ETF path
-- `_ETF_CATEGORY_FALLBACK` — hardcoded category labels for 25 known ETFs
+- `_ETF_CATEGORY_FALLBACK` — hardcoded category labels for known ETFs
 
 **Atoms produced (equity path):**
 
 | Predicate | Example value | Confidence |
 |---|---|---|
-| `last_price` | `191.55` | 0.95 |
-| `sector` | `technology` | 0.90 |
+| `last_price` | `27.50` | 0.95 |
+| `sector` | `energy` | 0.90 |
 | `market_cap_tier` | `mega_cap` | 0.85 |
 | `volatility_regime` | `high_volatility` | 0.80 |
-| `price_target` | `253.99` | 0.75 |
+| `price_target` | `32.00` | 0.75 |
 | `signal_direction` | `long` (price < target) | 0.65 |
-| `earnings_quality` | `next_earnings: 2026-02-25` | 0.85 |
+| `earnings_quality` | `next_earnings: 2026-04-30` | 0.85 |
 
 **Atoms produced (ETF path):**
 
@@ -323,20 +366,300 @@ Defines allowed predicates per domain: `INSTRUMENT_PREDICATES`, `THESIS_PREDICAT
 
 ### Knowledge Extension Module Status
 
-Status taxonomy used below:
-
-- **Live** — imported and executed in startup/request path
-- **Partial** — schema/API wiring is live, but downstream decision logic is not yet integrated
-- **Dormant** — file exists but is not wired into live runtime path
-
 | File | Status | Notes |
 |---|---|---|
-| `graph_v2.py` | Dormant | Requires `aiosqlite`; not imported in live startup/request path |
+| `graph_v2.py` | Dormant | Requires `aiosqlite`; not imported in live path |
 | `graph_enhanced.py` | Dormant | Standalone class; not wired into `api.py` or `retrieval.py` |
-| `confidence_intervals.py` | Partial | `ensure_confidence_columns()` runs at startup and `GET /kb/confidence` is live; interval not yet fed into `position_size_pct` |
-| `causal_graph.py` | Live | `ensure_causal_edges_table()` runs at startup; used by overlay traversal and `/kb/causal-chain`, `/kb/causal-edge`, `/kb/causal-edges` endpoints |
-| `graph_retrieval.py` | Live | PageRank, BFS, community-cluster traversal in retrieval strategy 0 |
+| `confidence_intervals.py` | Partial | `ensure_confidence_columns()` at startup; `GET /kb/confidence` live; not yet fed into `position_size_pct` |
+| `causal_graph.py` | Live | `ensure_causal_edges_table()` at startup; overlay traversal; `/kb/causal-chain`, `/kb/causal-edge`, `/kb/causal-edges` |
+| `graph_retrieval.py` | Live | PageRank, BFS, community-cluster traversal — retrieval strategy 0 |
 | `kb_validation.py` | Live | Governance validation hook in repair proposal flow |
-| `kb_insufficiency_classifier.py` | Live | KB insufficiency detection in retrieve/diagnose paths |
-| `kb_repair_proposals.py` | Live | Generates repair proposals for diagnosed gaps |
-| `kb_repair_executor.py` | Live | Executes approved repair proposals with rollback/impact support |
+| `kb_insufficiency_classifier.py` | Live | 9-rule insufficiency detection in retrieve/diagnose paths |
+| `kb_repair_proposals.py` | Live | Generates repair proposals with preview + simulation |
+| `kb_repair_executor.py` | Live | Atomic execution with auto-rollback and divergence tracking |
+
+---
+
+## `ingest/` — Additional Adapters
+
+### `ingest/options_adapter.py`
+Fetches options chain data for liquid FTSE names via `yfinance` and computes options-regime atoms.
+
+**Ticker scope:** Top FTSE names with liquid options. SPY included for market-level tail risk atoms.
+
+**Low-liquidity handling:** `_LOW_OPTIONS_LIQUIDITY` frozenset — `iv_rank` confidence capped at 0.40, `smart_money_signal` at 0.35 for thin UK options names.
+
+**Atoms produced:**
+
+| Predicate | Notes |
+|---|---|
+| `iv_rank` | 30d IV percentile of 52-week range (0–100) |
+| `put_call_ratio` | Sum put OI / sum call OI, front two expirations |
+| `options_regime` | `compressed` / `normal` / `elevated_vol` |
+| `smart_money_signal` | `call_sweep` / `put_sweep` / `none` |
+| `iv_skew_ratio` | OTM put IV / ATM IV |
+| `iv_skew_25d` | OTM put IV − OTM call IV (5% wings) |
+| `skew_regime` | `normal` / `elevated` / `spike` |
+| `spy_skew_ratio` | Market-level SPY skew |
+| `tail_risk` | `normal` / `moderate` / `elevated` / `extreme` |
+
+---
+
+### `ingest/historical_adapter.py`
+One-shot backfill: fetches 1 year of daily OHLCV via `yf.download()` and stores only derived summary atoms — never raw OHLCV.
+
+**Atoms produced:** `return_1w/1m/3m/6m/1y`, `volatility_30d/90d`, `drawdown_from_high`, `avg_volume_30d`, `price_52w_high/low`, `return_vs_spy_1m/3m`
+
+**Trigger:** `POST /ingest/historical` or called from `run-all`.
+
+---
+
+### `ingest/signal_enrichment_adapter.py`
+Derives higher-level signal atoms by cross-referencing historical, price, and options data already in the KB.
+
+**Atoms produced:** `price_regime`, `volume_trend`, `momentum_signal`, `risk_reward_ratio`, `thesis_risk_level`, `conviction_tier`, `position_size_pct`, `upside_pct`
+
+---
+
+### `ingest/pattern_adapter.py`
+Detects multi-factor chart and signal patterns over rolling windows. Writes to `pattern_signals` table.
+
+---
+
+### `ingest/llm_extraction_adapter.py`
+Runs LLM extraction over queued RSS headlines to produce structured atoms. Uses `EXTRACTION_MODEL` (default `phi3`).
+
+---
+
+### `ingest/edgar_realtime_adapter.py`
+Polls EDGAR full-text search for 8-K filings every 30 min. Deduplicates via `edgar_realtime_seen` table.
+
+---
+
+### `ingest/dynamic_watchlist.py`
+`DynamicWatchlistManager` — merges default tickers with per-user expanded tickers from `user_universes` table.
+
+---
+
+### `ingest/seed_sync.py`
+Background hourly client: polls `Alby2007/Mem-Backend` GitHub Releases. If `seed-YYYYMMDD-HHMM` tag is newer than local `kb_meta.seed_tag`, downloads and applies. Hard-coded `_ALLOWED_TABLES` allowlist prevents any `user_*` table from being overwritten.
+
+---
+
+## `llm/`
+
+### `llm/ollama_client.py`
+Thin wrapper around Ollama REST API (`http://localhost:11434`).
+
+| Function | Purpose |
+|---|---|
+| `chat(messages, model, stream, timeout)` | Text chat — returns str or None |
+| `chat_vision(image_b64, prompt, model, timeout)` | Multimodal image+text — used by screenshot endpoint |
+| `list_models()` | Returns list of locally available model names |
+| `is_available()` | Quick liveness check |
+
+**Env vars:** `OLLAMA_BASE_URL` · `OLLAMA_MODEL` (default `llama3.2`) · `OLLAMA_EXTRACTION_MODEL` (default `phi3`) · `OLLAMA_VISION_MODEL` (default `llava`)
+
+All functions return `None` / `[]` on connection errors — callers degrade gracefully.
+
+---
+
+### `llm/overlay_builder.py`
+Builds structured `overlay_cards` from KB atoms for `POST /chat` when `overlay_mode=True`. No LLM involved — pure KB lookup.
+
+**Card types:** `signal_summary` · `causal_context` · `stress_flag`
+
+**Entity extraction:** regex `[A-Z]{2,5}` on `screen_context` → filtered against `_SCREEN_CONTEXT_STOPWORDS` → validated against known KB subjects.
+
+---
+
+### `llm/prompt_builder.py`
+Builds structured prompts from KB atoms for the chat endpoint. Formats atom lists into sections for LLM consumption.
+
+---
+
+## `analytics/`
+
+### `analytics/portfolio.py`
+`build_portfolio_summary(db_path)` — aggregates KB atoms into long book, avoid book, sector weights, macro alignment, and top conviction list. Called by `GET /portfolio/summary`.
+
+---
+
+### `analytics/universe_expander.py`
+Resolves a user interest description into tickers, ETFs, keywords, and causal relationships via Ollama LLM. Falls back gracefully when Ollama is unavailable.
+
+**UK context:** Injects `_UK_MARKET_CONTEXT` prompt when `market_type='uk'` or interests contain `.L` tickers — ensures LSE ticker resolution with correct `.L` suffix.
+
+**Tier caps:** basic = 20 tickers · pro = 100 tickers. Max 20 tickers per expansion request.
+
+---
+
+### `analytics/pattern_detector.py`
+Detects conviction, momentum, and composite patterns over KB atoms. Writes `PatternSignal` rows. Used by `GET /patterns/live`.
+
+---
+
+### `analytics/snapshot_curator.py`
+Curates personalised daily snapshot from KB atoms for a user. Selects top signals, macro context, and pattern alerts. Called by `GET /users/<id>/snapshot/preview`.
+
+---
+
+### `analytics/user_modeller.py`
+Derives `user_models` row from portfolio history, feedback, and engagement signals. Called on portfolio submit and feedback.
+
+---
+
+### `analytics/network_effect_engine.py`
+Computes cross-user calibration signals and cohort performance. Used by `GET /network/health` and `/network/cohort/<ticker>`.
+
+---
+
+### `analytics/signal_calibration.py`
+Updates `signal_calibration` table from `POST /feedback` submissions. Applies Bayesian confidence updates.
+
+---
+
+### `analytics/position_calculator.py`
+Computes position size, risk/reward, and stop-loss levels from account size + KB atoms. Used by tip formatter.
+
+---
+
+### `analytics/counterfactual.py`
+Builds "what if" counterfactual scenarios from KB atoms. Called by `POST /analytics/counterfactual`.
+
+---
+
+### `analytics/backtest.py`
+Runs simplified signal backtest over historical atoms in KB. Called by `POST /analytics/backtest`.
+
+---
+
+### `analytics/adversarial_stress.py`
+Generates adversarial stress scenarios to test KB robustness. Used in governance/repair flows.
+
+---
+
+### `analytics/alerts.py`
+Generates user alerts from KB signal changes. Writes to `user_alerts` table. Used by `GET /users/<id>/alerts`.
+
+---
+
+## `middleware/`
+
+### `middleware/auth.py`
+JWT authentication. Provides `require_auth` decorator, `assert_self` (horizontal escalation guard), `register_user`, `authenticate_user`.
+
+**Env vars:** `JWT_SECRET_KEY` · `JWT_EXPIRY_HOURS` (default 24) · `JWT_REFRESH_EXPIRY_DAYS` (default 30)
+
+**Tables:** `user_auth` · `refresh_tokens`
+
+**Lockout:** 5 failed attempts → 15-minute lockout.
+
+---
+
+### `middleware/rate_limiter.py`
+Flask rate limiter. Buckets: `auth` (strict) · `ingest` · `portfolio` · `default`. Uses in-memory sliding window.
+
+---
+
+### `middleware/validators.py`
+Request body validators for portfolio submission, onboarding, tip config, ingest atoms, feedback, and register. Returns 400 with structured error on failure.
+
+---
+
+### `middleware/audit.py`
+Writes audit log entries to `audit_log` table on sensitive operations (auth, repair execution).
+
+---
+
+### `middleware/encryption.py`
+Field-level encryption helpers for sensitive user data at rest.
+
+---
+
+## `users/`
+
+### `users/user_store.py`
+All user-facing DB operations: create/get/update user preferences, portfolio CRUD, tip config, delivery history, onboarding, feedback, engagement.
+
+**Defaults (UK):** `delivery_time=07:30` · `timezone=Europe/London` · `account_currency=GBP`
+
+**Key functions:** `create_user` · `get_portfolio` · `save_portfolio` · `get_tip_config` · `set_tip_config` · `log_delivery` · `get_delivery_history` · `log_feedback`
+
+---
+
+### `users/personal_kb.py`
+Per-user KB layer on top of the shared KB. Manages `user_universes`, `user_watchlist`, `user_signals`, `user_alerts` tables. Provides personal context for snapshot and tip generation.
+
+---
+
+## `notifications/`
+
+### `notifications/tip_scheduler.py`
+Schedules and dispatches daily tip delivery per user at their configured `delivery_time`/`timezone`. Calls `snapshot_curator` → `tip_formatter` → notifier.
+
+---
+
+### `notifications/tip_formatter.py`
+Formats curated snapshot into a structured tip message. Applies position sizing via `position_calculator`. Renders Telegram-ready and plain-text variants.
+
+---
+
+### `notifications/snapshot_formatter.py`
+Formats raw snapshot atoms into human-readable daily briefing sections: top signals, macro regime, risk flags, calendar.
+
+---
+
+### `notifications/telegram_notifier.py`
+Sends formatted messages via Telegram Bot API. Requires `TELEGRAM_BOT_TOKEN` env var.
+
+---
+
+### `notifications/delivery_scheduler.py`
+Background thread that fires tip delivery at scheduled times. Integrates with `tip_scheduler`.
+
+---
+
+## `static/`
+
+### `static/index.html`
+Single-page application (SPA) served at `GET /`. Bloomberg-terminal dark aesthetic. Zero build step — pure HTML/CSS/JS.
+
+**Screens:**
+
+| Screen | Purpose |
+|---|---|
+| Auth | Register / login — `POST /auth/register`, `POST /auth/token` |
+| Dashboard | KB stats, conviction tiers, adapter health |
+| Portfolio | Three entry paths (screenshot · sector quick-add · manual + autocomplete) → `POST /users/<id>/portfolio` |
+| Chat | KB-grounded chat with optional overlay mode — `POST /chat` |
+| Tips | Tip configuration, preview, delivery history |
+| Patterns | Live pattern signals |
+| Network | Network health, calibration leaderboard |
+
+**Key JS globals:** `state` (`{token, userId, holdings}`) · `apiFetch()` · `showScreen()` · `FTSE_SECTORS` · `loadTickerList()`
+
+---
+
+## `scripts/`
+
+| Script | Purpose |
+|---|---|
+| `scripts/export_seed.py` | Export shared KB tables → `tests/fixtures/kb_seed.sql` (uses `INSERT OR REPLACE`) |
+| `scripts/push_seed.py` | Export + create GitHub Release with `kb_seed.sql` asset |
+| `scripts/load_seed.py` | Load `kb_seed.sql` into local DB via `executescript()` |
+
+---
+
+## `tests/`
+
+23 test files. Key ones:
+
+| File | Covers |
+|---|---|
+| `test_screenshot_upload.py` | `chat_vision()` unit tests · holdings normalisation · live API endpoint (21 pass) |
+| `test_portfolio.py` | `build_portfolio_summary()` aggregation math, sector weights, edge cases |
+| `test_full_stack.py` | Full HTTP integration tests against live server at `:5050` |
+| `test_options_adapter.py` | Options atom generation, confidence capping for low-liquidity tickers |
+| `test_user_store.py` | UK defaults, portfolio CRUD |
+| `test_pattern_detector.py` | Pattern detection over synthetic KB atoms |
