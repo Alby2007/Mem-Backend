@@ -248,6 +248,14 @@ def retrieve(
     terms = _extract_key_terms(message)
     tickers = _extract_tickers(message)
 
+    # Track which aliases were resolved so the snippet can note them for the LLM
+    _raw_candidates = [t for t in re.findall(r'\b[A-Z0-9^][A-Z0-9^=-]{1,9}\b', message)
+                       if t not in _UPPERCASE_STOPWORDS]
+    _alias_notes = [
+        f"{raw} → {TICKER_ALIASES[raw]} (KB tracks this as {TICKER_ALIASES[raw]})"
+        for raw in _raw_candidates if raw in TICKER_ALIASES
+    ]
+
     # Expand limit dynamically for multi-ticker queries so pinned atoms
     # (4 per ticker) don't crowd out the context atoms.
     if len(tickers) >= 2:
@@ -610,6 +618,8 @@ def retrieve(
 
     # ── Format output ──────────────────────────────────────────────────────────
     lines = ['=== TRADING KNOWLEDGE CONTEXT ===']
+    if _alias_notes:
+        lines.append('[Ticker Aliases Resolved: ' + '; '.join(_alias_notes) + ']')
 
     signals, invalidation, quality, theses, macro, research, other = [], [], [], [], [], [], []
     for r in results:

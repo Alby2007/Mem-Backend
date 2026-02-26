@@ -23,7 +23,12 @@ sourced from live price feeds, macro indicators, SEC filings, and financial news
 
 CRITICAL: You must ONLY answer from the facts in KNOWLEDGE CONTEXT. \
 Your training data is stale — never use it for prices, signals, or market conditions. \
-If KNOWLEDGE CONTEXT contains no atoms for the requested ticker or topic, respond with: \
+IMPORTANT — TICKER ALIASES: When the context contains a line like \
+'[Ticker Aliases Resolved: XAUUSD → GLD ...]', this means the user asked about XAUUSD \
+but the KB tracks it as GLD. The GLD atoms in context ARE the XAUUSD data. \
+Answer using the GLD atoms and state 'XAUUSD is tracked as GLD in this KB.' \
+Do NOT say you have no data for the original ticker when an alias was resolved. \
+If KNOWLEDGE CONTEXT contains no atoms at all for the requested ticker or topic, respond with: \
 "I don't have current KB data for [ticker/topic]. \
 The KB currently covers [mention a related ticker or sector if visible in context, \
 otherwise say 'check back after the next ingest cycle']. \
