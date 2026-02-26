@@ -198,6 +198,13 @@ select option { background: var(--surface); }
 .tip-card-meta .meta-key { color: var(--muted); min-width: 80px; }
 .tip-card-meta .meta-val { color: var(--text); font-family: var(--mono); }
 .skew-warning { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); border-radius: 4px; padding: 6px 10px; font-size: 11px; color: var(--red); margin-top: 8px; }
+.feedback-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.feedback-row .fb-label { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-right: 4px; }
+.fb-btn { background: none; border: 1px solid var(--border); border-radius: 4px; padding: 3px 10px; font-size: 13px; cursor: pointer; transition: border-color .15s, background .15s; color: var(--text); }
+.fb-btn:hover { border-color: var(--accent); background: rgba(245,158,11,.08); }
+.fb-btn.fb-selected { border-color: var(--accent); background: rgba(245,158,11,.18); }
+.fb-btn.fb-stop.fb-selected { border-color: var(--red); background: rgba(239,68,68,.15); }
+.fb-done { font-size: 11px; color: var(--green); font-family: var(--mono); }
 
 /* ── Pattern card ── */
 .pattern-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 14px; cursor: pointer; transition: border-color .15s; }
@@ -1002,7 +1009,30 @@ function appendMsg(role, html) {
   const msgs = document.getElementById('chat-messages');
   const el = document.createElement('div');
   el.className = `msg msg-${role}`;
-  el.innerHTML = `<div class="msg-bubble">${html}</div><div class="msg-time">${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>`;
+  const fbRow = role === 'assistant'
+    ? `<div class="feedback-row">
+        <span class="fb-label">Helpful?</span>
+        <button class="fb-btn" data-v="hit_t1" title="Yes — useful">👍</button>
+        <button class="fb-btn fb-stop" data-v="stopped_out" title="No — not useful">👎</button>
+       </div>`
+    : '';
+  el.innerHTML = `<div class="msg-bubble">${html}</div>${fbRow}<div class="msg-time">${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>`;
+  if (role === 'assistant') {
+    el.querySelectorAll('.fb-btn').forEach(btn => {
+      btn.addEventListener('click', async function() {
+        if (el.dataset.fbDone) return;
+        el.dataset.fbDone = '1';
+        el.querySelectorAll('.fb-btn').forEach(b => b.classList.remove('fb-selected'));
+        this.classList.add('fb-selected');
+        el.querySelector('.feedback-row').insertAdjacentHTML('beforeend', '<span class="fb-done">✓ recorded</span>');
+        if (state.userId) {
+          await apiFetch('/feedback', { method: 'POST', body: JSON.stringify({
+            user_id: state.userId, outcome: this.dataset.v
+          })}).catch(() => {});
+        }
+      });
+    });
+  }
   msgs.appendChild(el);
   msgs.scrollTop = msgs.scrollHeight;
   return el;
@@ -1100,7 +1130,8 @@ document.getElementById('tip-preview-btn').addEventListener('click', async () =>
     const t = d.tip;
     if (!t) { wrap.innerHTML = `<div class="text-sm text-muted">${escHtml(d.reason || 'No eligible patterns')}</div>`; return; }
     const skew = t.skew_warning ? `<div class="skew-warning">⚠ ${escHtml(t.skew_warning)}</div>` : '';
-    wrap.innerHTML = `<div class="tip-card">
+    const patternId = t.pattern_id ?? t.id ?? null;
+    wrap.innerHTML = `<div class="tip-card" id="tip-card-main">
       <div class="tip-card-header">
         <div>
           <div class="tip-card-ticker">${escHtml(t.ticker)}</div>
@@ -1125,7 +1156,32 @@ document.getElementById('tip-preview-btn').addEventListener('click', async () =>
         ${t.calibration_confidence != null ? `<span><span class="meta-key">Cal. Confidence</span><span class="meta-val">${fmt(t.calibration_confidence*100)}%</span></span>` : ''}
       </div>
       ${skew}
+      <div class="feedback-row" id="tip-fb-row">
+        <span class="fb-label">Outcome</span>
+        <button class="fb-btn" data-v="hit_t1" title="Hit Target 1">T1 ✓</button>
+        <button class="fb-btn" data-v="hit_t2" title="Hit Target 2">T2 ✓</button>
+        <button class="fb-btn fb-stop" data-v="stopped_out" title="Stopped out">Stop ✗</button>
+        <button class="fb-btn" data-v="pending" title="Still open">Open</button>
+        <button class="fb-btn" data-v="skipped" title="Skipped">Skip</button>
+      </div>
     </div>`;
+    wrap.querySelectorAll('#tip-fb-row .fb-btn').forEach(btn => {
+      btn.addEventListener('click', async function() {
+        const row = document.getElementById('tip-fb-row');
+        if (row.dataset.done) return;
+        row.dataset.done = '1';
+        row.querySelectorAll('.fb-btn').forEach(b => b.classList.remove('fb-selected'));
+        this.classList.add('fb-selected');
+        row.insertAdjacentHTML('beforeend', '<span class="fb-done">✓ recorded</span>');
+        if (state.userId) {
+          await apiFetch('/feedback', { method: 'POST', body: JSON.stringify({
+            user_id: state.userId,
+            outcome: this.dataset.v,
+            pattern_id: patternId
+          })}).catch(() => {});
+        }
+      });
+    });
   } catch(e) { wrap.innerHTML = `<div class="text-sm" style="color:var(--red)">${escHtml(e.message)}</div>`; }
 });
 
