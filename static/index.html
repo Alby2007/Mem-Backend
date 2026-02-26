@@ -57,6 +57,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 }
 #sidebar:hover { width: 180px; }
 #sidebar:hover .nav-label { opacity: 1; }
+body.auth-mode #sidebar { display: none; }
+body.auth-mode #main { left: 0; }
 .nav-item {
   display: flex; align-items: center; gap: 12px; padding: 12px 20px; cursor: pointer;
   color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
@@ -639,6 +641,7 @@ function showScreen(name) {
   const nv = document.getElementById(`nav-${name}`);
   if (sc) sc.classList.add('active');
   if (nv) nv.classList.add('active');
+  document.body.classList.toggle('auth-mode', name === 'auth');
   if (name === 'dashboard') loadDashboard();
   if (name === 'patterns')  loadPatterns();
   if (name === 'network')   loadNetwork();
