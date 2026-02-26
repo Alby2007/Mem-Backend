@@ -115,6 +115,17 @@ _SYSTEM_LIVE_DATA_RULE = (
     "State 'Live data fetched this session' at the start of your answer when using it."
 )
 
+_SYSTEM_SEARCH_RULE = (
+    "\n13. WEB SEARCH RESULTS block (when present) contains live news snippets fetched "
+    "from the web this session via DuckDuckGo or Google News RSS. "
+    "These snippets are unverified (confidence 0.65) and have NOT been committed to the KB. "
+    "Use them to inform your answer for the current conversation only. "
+    "When citing web search results, state: 'Based on web search results fetched this session:' "
+    "and summarise the key points. Do not treat snippets as authoritative — "
+    "flag any uncertainty. Never use training-data knowledge for prices or signals; "
+    "web snippets may provide recent context where KB has gaps."
+)
+
 _SYSTEM_SIZING_RULE = (
     "\n11. EDUCATIONAL POSITION SIZING: When discussing a holding, use the "
     "'Total invested (cost basis)' figure from USER PORTFOLIO for the maths. "
@@ -140,6 +151,7 @@ def build(
     atom_count: int = 0,
     live_context: Optional[str] = None,
     resolved_aliases: Optional[dict] = None,
+    web_searched: Optional[str] = None,
 ) -> list[dict]:
     """
     Build the [system, user] message list for Ollama.
@@ -180,8 +192,11 @@ def build(
                 f"DO NOT say you have no data for '{raw}'."
             )
 
-    if live_context:
+    if live_context and not web_searched:
         system_text += _SYSTEM_LIVE_DATA_RULE
+
+    if live_context and web_searched:
+        system_text += _SYSTEM_SEARCH_RULE
 
     if portfolio_context:
         system_text += _SYSTEM_PORTFOLIO_RULE

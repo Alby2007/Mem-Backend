@@ -20,10 +20,13 @@ Zero-LLM, pure Python.
 from __future__ import annotations
 
 import logging
+import re as _re
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Optional
+from urllib.parse import quote_plus
 
 _logger = logging.getLogger(__name__)
 
@@ -46,28 +49,36 @@ If you are missing live price, signal, or news data for a specific ticker that w
 materially improve your answer: respond with exactly:
 DATA_REQUEST: <TICKER1>,<TICKER2>
 
+If the context says 'No KB signals available' for one or more holdings, and you need
+current news or context to answer the question, respond with exactly:
+SEARCH_REQUEST: <concise search query, e.g. 'NVDA Nvidia news 2025'>
+
 Rules:
 - Only request DATA_REQUEST if the ticker is directly relevant to the question
 - Only request tickers — no free text after DATA_REQUEST
 - If context is empty but the question is general, just ANSWER with what you know from context
 - Maximum 2 tickers per DATA_REQUEST
 - Do NOT request DATA_REQUEST if you already have last_price atoms in context
+- Prefer SEARCH_REQUEST over refusing to answer when KB signals are absent
+- Only one SEARCH_REQUEST per response — make it specific and focused
 """
-
-import re as _re
 
 def parse_llm_response(text: str) -> tuple[str, list[str]]:
     """
     Parse a pass-1 LLM response.
-    Returns (mode, payload) where mode is 'answer' or 'data_request'.
-    - 'answer': payload[0] is the answer text
-    - 'data_request': payload is list of ticker strings
+    Returns (mode, payload) where mode is 'answer', 'data_request', or 'search_request'.
+    - 'answer':         payload[0] is the answer text
+    - 'data_request':   payload is list of ticker strings
+    - 'search_request': payload[0] is the search query string
     """
     text = (text or '').strip()
     if text.upper().startswith('DATA_REQUEST:'):
         raw = text[len('DATA_REQUEST:'):].strip()
         tickers = [t.strip().upper() for t in _re.split(r'[,\s]+', raw) if t.strip()]
         return 'data_request', tickers[:MAX_ON_DEMAND_TICKERS]
+    if text.upper().startswith('SEARCH_REQUEST:'):
+        query = text[len('SEARCH_REQUEST:'):].strip()
+        return 'search_request', [query]
     if text.upper().startswith('ANSWER:'):
         return 'answer', [text[len('ANSWER:'):].strip()]
     # If model didn't follow format, treat the whole thing as an answer
@@ -76,6 +87,19 @@ def parse_llm_response(text: str) -> tuple[str, list[str]]:
 # A ticker is considered "missing" from the KB if it has fewer than this many
 # last_price atoms (catches both brand-new and recently-cleared tickers)
 _MISSING_THRESHOLD = 1
+
+
+def _extract_ticker_hint(query: str) -> str:
+    """
+    Best-effort extraction of a ticker symbol from a free-text search query.
+    Returns the first ALL-CAPS word that looks like a ticker, else 'web_search'.
+    """
+    tokens = query.split()
+    for tok in tokens:
+        clean = tok.strip('.,;:()').upper()
+        if 2 <= len(clean) <= 6 and clean.isalpha():
+            return clean
+    return 'web_search'
 
 
 # ── Data structures ────────────────────────────────────────────────────────────
@@ -273,6 +297,130 @@ class WorkingMemory:
         session.fetch_log.append(f'{ticker} fetched at {now_iso} ({len(atoms)} atoms)')
         _logger.info('on-demand fetch: %s → %d atoms', ticker, len(atoms))
         return atoms
+
+    # ── Web search on-demand ───────────────────────────────────────────────────
+
+    def web_search_on_demand(self, query: str, session_id: str) -> List[dict]:
+        """
+        Search the web for query when KB has no signals for a ticker.
+        Primary: DuckDuckGo HTML endpoint (no API key).
+        Fallback: Google News RSS.
+        Atoms stored in session at confidence=0.65 (below commit threshold).
+        Returns the list of new atoms added.
+        """
+        session = self._sessions.get(session_id)
+        if session is None:
+            self.open_session(session_id)
+            session = self._sessions[session_id]
+
+        atoms = self._ddg_search(query, session_id) or self._google_news_fallback(query, session_id)
+        if atoms:
+            session.atoms.extend(atoms)
+            session.fetch_log.append(f'web search "{query[:60]}" → {len(atoms)} snippets')
+            _logger.info('web_search_on_demand: "%s" → %d atoms', query, len(atoms))
+        else:
+            _logger.warning('web_search_on_demand: no results for "%s"', query)
+        return atoms
+
+    def _ddg_search(self, query: str, session_id: str) -> List[dict]:
+        """Scrape DuckDuckGo HTML endpoint. Returns empty list on CAPTCHA or error."""
+        try:
+            import requests
+            from bs4 import BeautifulSoup
+        except ImportError:
+            _logger.warning('requests/beautifulsoup4 not installed — DDG search skipped')
+            return []
+
+        _DDG_HEADERS = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'en-GB,en;q=0.9',
+        }
+        try:
+            time.sleep(0.5)
+            resp = requests.post(
+                'https://html.duckduckgo.com/html/',
+                data={'q': query, 'b': '', 'kl': 'uk-en'},
+                headers=_DDG_HEADERS,
+                timeout=8,
+            )
+            if 'challenge-form' in resp.text or resp.status_code != 200:
+                _logger.warning('DuckDuckGo returned CAPTCHA or error (status=%s) — trying RSS fallback', resp.status_code)
+                return []
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            results = soup.select('.result__body')[:5]
+            if not results:
+                results = soup.select('.results_links')[:5]
+            atoms = []
+            now_iso = datetime.now(timezone.utc).isoformat()
+            ticker_hint = _extract_ticker_hint(query)
+            for r in results:
+                title_el   = r.select_one('.result__title') or r.select_one('a.result__a')
+                snippet_el = r.select_one('.result__snippet')
+                title   = title_el.get_text(strip=True)   if title_el   else ''
+                snippet = snippet_el.get_text(strip=True) if snippet_el else ''
+                text = f'{title}: {snippet}' if snippet else title
+                if not text:
+                    continue
+                atoms.append({
+                    'subject':    ticker_hint,
+                    'predicate':  'news_snippet',
+                    'object':     text[:400],
+                    'confidence': 0.65,
+                    'source':     'web_search_ddg',
+                    'fetched_at': now_iso,
+                    'upsert':     False,
+                })
+            _logger.info('DDG search: "%s" → %d results', query, len(atoms))
+            return atoms
+        except Exception as e:
+            _logger.warning('DDG search failed: %s', e)
+            return []
+
+    def _google_news_fallback(self, query: str, session_id: str) -> List[dict]:
+        """Fetch Google News RSS as fallback when DDG is blocked."""
+        try:
+            import requests
+            import xml.etree.ElementTree as ET
+        except ImportError:
+            _logger.warning('requests not installed — Google News RSS fallback skipped')
+            return []
+
+        _GNEWS_RSS = 'https://news.google.com/rss/search?q={q}&hl=en-GB&gl=GB&ceid=GB:en'
+        try:
+            resp = requests.get(
+                _GNEWS_RSS.format(q=quote_plus(query)),
+                timeout=8,
+                headers={'User-Agent': 'Mozilla/5.0 (compatible; TradingGalaxy/1.0)'},
+            )
+            if resp.status_code != 200:
+                _logger.warning('Google News RSS returned status %s', resp.status_code)
+                return []
+            root = ET.fromstring(resp.text)
+            items = root.findall('.//item')[:5]
+            atoms = []
+            now_iso = datetime.now(timezone.utc).isoformat()
+            ticker_hint = _extract_ticker_hint(query)
+            for item in items:
+                title   = (item.findtext('title')       or '').strip()
+                desc    = (item.findtext('description') or '').strip()
+                text = f'{title}: {desc}' if desc else title
+                if not text:
+                    continue
+                atoms.append({
+                    'subject':    ticker_hint,
+                    'predicate':  'news_snippet',
+                    'object':     text[:400],
+                    'confidence': 0.65,
+                    'source':     'web_search_gnews',
+                    'fetched_at': now_iso,
+                    'upsert':     False,
+                })
+            _logger.info('Google News RSS: "%s" → %d results', query, len(atoms))
+            return atoms
+        except Exception as e:
+            _logger.warning('Google News RSS fallback failed: %s', e)
+            return []
 
     # ── Session context for prompt injection ──────────────────────────────────
 

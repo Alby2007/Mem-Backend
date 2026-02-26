@@ -1806,16 +1806,22 @@ def chat_endpoint():
     # If we already fetched live data (live_fetched), skip pass 1 — we have
     # what we need.  If KB had plenty of atoms, skip pass 1 too.
     llm_requested_tickers: list = []
+    web_searched: str | None = None
     if (HAS_WORKING_MEMORY and _working_memory is not None
             and not live_fetched and len(atoms) < 8):
         try:
             from knowledge.working_memory import (
                 DATA_REQUEST_SYSTEM_PROMPT, parse_llm_response
             )
+            # Inject portfolio "no KB signals" context into pass-1 so the LLM
+            # can decide between DATA_REQUEST (prices) and SEARCH_REQUEST (news)
+            _p1_ctx = snippet or '(No KB context)'
+            if portfolio_context:
+                _p1_ctx = portfolio_context + '\n\n' + _p1_ctx
             _p1_messages = [
                 {'role': 'system', 'content': DATA_REQUEST_SYSTEM_PROMPT},
                 {'role': 'user',   'content':
-                    f"{snippet or '(No KB context)'}\n\nQuestion: {message}"},
+                    f"{_p1_ctx}\n\nQuestion: {message}"},
             ]
             _p1_raw = ollama_chat(_p1_messages, model=model)
             if _p1_raw:
@@ -1827,6 +1833,16 @@ def chat_endpoint():
                         _working_memory.fetch_on_demand(_t, wm_session_id, _DB_PATH)
                     live_context  = _working_memory.get_session_snippet(wm_session_id)
                     live_fetched  = _working_memory.get_fetched_tickers(wm_session_id)
+                elif _mode == 'search_request' and _payload:
+                    _search_query = _payload[0]
+                    _working_memory.open_session(wm_session_id)
+                    _search_atoms = _working_memory.web_search_on_demand(
+                        _search_query, wm_session_id
+                    )
+                    if _search_atoms:
+                        web_searched  = _search_query
+                        live_context  = _working_memory.get_session_snippet(wm_session_id)
+                        live_fetched  = _working_memory.get_fetched_tickers(wm_session_id)
         except Exception:
             pass
 
@@ -1851,6 +1867,7 @@ def chat_endpoint():
         atom_count=len(atoms),
         live_context=live_context or None,
         resolved_aliases=_resolved_aliases or None,
+        web_searched=web_searched or None,
     )
 
     answer = ollama_chat(messages, model=model)
@@ -1863,6 +1880,8 @@ def chat_endpoint():
     response['answer'] = answer
     if llm_requested_tickers:
         response['llm_requested_tickers'] = llm_requested_tickers
+    if web_searched:
+        response['web_searched'] = web_searched
 
     # ── Commit working memory atoms back to KB ────────────────────────────
     if HAS_WORKING_MEMORY and _working_memory and live_fetched:
