@@ -150,6 +150,17 @@ select option { background: var(--surface); }
 .btn-sm { padding: 4px 10px; font-size: 11px; }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 
+/* ── Markets screen ── */
+#screen-markets { display: flex; flex-direction: column; height: calc(100vh - var(--topbar-h) - 48px); }
+#screen-markets.active { display: flex; }
+#markets-search-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+#markets-search-bar input { flex: 1; max-width: 260px; }
+.markets-chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 3px; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-family: var(--mono); font-size: 11px; font-weight: 700; cursor: pointer; transition: all .15s; white-space: nowrap; }
+.markets-chip:hover { border-color: var(--accent); color: var(--accent); background: rgba(245,158,11,.07); }
+.markets-chip.active { border-color: var(--accent); color: var(--accent); background: rgba(245,158,11,.14); }
+#markets-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+#markets-chart-container { flex: 1; min-height: 0; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+
 /* ── Auth screen ── */
 #screen-auth { max-width: 720px; margin: 60px auto; }
 .auth-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -344,6 +355,9 @@ select option { background: var(--surface); }
   <div class="nav-item" data-screen="portfolio" id="nav-portfolio">
     <span class="nav-icon">◈</span><span class="nav-label">Portfolio</span>
   </div>
+  <div class="nav-item" data-screen="markets" id="nav-markets">
+    <span class="nav-icon">📈</span><span class="nav-label">Markets</span>
+  </div>
   <div class="nav-item" data-screen="chat" id="nav-chat">
     <span class="nav-icon">◎</span><span class="nav-label">Chat</span>
   </div>
@@ -466,6 +480,28 @@ select option { background: var(--surface); }
       <div id="p-signals"><div class="empty text-sm text-muted">Submit portfolio first</div></div>
     </div>
   </div>
+</div>
+
+<!-- MARKETS ───────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-markets">
+  <div style="font-size:16px;font-weight:700;margin-bottom:12px;">Markets</div>
+  <div id="markets-search-bar">
+    <input id="markets-ticker-input" placeholder="Symbol (e.g. BARC.L, SPY, XAUUSD)…" autocomplete="off" style="max-width:280px;" />
+    <button class="btn btn-primary btn-sm" id="markets-go-btn">Go</button>
+    <span id="markets-current-label" class="mono-amber text-sm" style="margin-left:4px;"></span>
+  </div>
+  <div id="markets-chips">
+    <span class="markets-chip active" data-sym="LSE:BARC">BARC.L</span>
+    <span class="markets-chip" data-sym="LSE:HSBA">HSBA.L</span>
+    <span class="markets-chip" data-sym="LSE:LLOY">LLOY.L</span>
+    <span class="markets-chip" data-sym="LSE:LSEG">LSEG.L</span>
+    <span class="markets-chip" data-sym="LSE:NWG">NWG.L</span>
+    <span class="markets-chip" data-sym="LSE:STAN">STAN.L</span>
+    <span class="markets-chip" data-sym="AMEX:SPY">SPY</span>
+    <span class="markets-chip" data-sym="OANDA:XAUUSD">XAUUSD</span>
+    <span class="markets-chip" data-sym="BITSTAMP:BTCUSD">BTCUSD</span>
+  </div>
+  <div id="markets-chart-container"></div>
 </div>
 
 <!-- CHAT ──────────────────────────────────────────────────────────── -->
@@ -608,6 +644,7 @@ function showScreen(name) {
   if (name === 'network')   loadNetwork();
   if (name === 'tips')      loadTipsHistory();
   if (name === 'portfolio') { loadPortfolioModel(); loadPortfolioHoldings(); loadTickerList(); loadSimBannerIfSet(); }
+  if (name === 'markets')   initMarketsScreen();
 }
 
 document.querySelectorAll('.nav-item').forEach(el => {
@@ -676,6 +713,96 @@ function mdToHtml(s) {
     return `<p>${block.replace(/\n/g, ' ')}</p>`;
   }).join('');
   return t;
+}
+
+// ── MARKETS ──────────────────────────────────────────────────────────────────
+let _tvScriptLoaded = false;
+let _tvCurrentSym   = 'LSE:BARC';
+let _tvWidget       = null;
+
+const _TICKER_MAP = {
+  'BARC.L': 'LSE:BARC', 'HSBA.L': 'LSE:HSBA', 'LLOY.L': 'LSE:LLOY',
+  'LSEG.L': 'LSE:LSEG', 'NWG.L':  'LSE:NWG',  'STAN.L': 'LSE:STAN',
+  'XAUUSD': 'OANDA:XAUUSD', 'GOLD': 'OANDA:XAUUSD', 'GLD': 'AMEX:GLD',
+  'BTCUSD': 'BITSTAMP:BTCUSD', 'BTC': 'BITSTAMP:BTCUSD',
+  'SPY':    'AMEX:SPY',   'QQQ':  'NASDAQ:QQQ', 'AAPL': 'NASDAQ:AAPL',
+  'TSLA':   'NASDAQ:TSLA','MSFT': 'NASDAQ:MSFT',
+};
+
+function _resolveSymbol(raw) {
+  const up = raw.trim().toUpperCase().replace(/\s+/g, '');
+  if (_TICKER_MAP[up]) return _TICKER_MAP[up];
+  // If already has exchange prefix (e.g. "LSE:BARC") pass through
+  if (up.includes(':')) return up;
+  // UK suffix heuristic
+  if (up.endsWith('.L')) return 'LSE:' + up.slice(0, -2);
+  return up;
+}
+
+function _loadTVScript(cb) {
+  if (_tvScriptLoaded) { cb(); return; }
+  const s = document.createElement('script');
+  s.src = 'https://s3.tradingview.com/tv.js';
+  s.onload = () => { _tvScriptLoaded = true; cb(); };
+  document.head.appendChild(s);
+}
+
+function _renderChart(sym) {
+  _tvCurrentSym = sym;
+  const container = document.getElementById('markets-chart-container');
+  container.innerHTML = '';
+  // Update chip active state
+  document.querySelectorAll('.markets-chip').forEach(c => {
+    c.classList.toggle('active', c.dataset.sym === sym);
+  });
+  // Update label
+  const label = document.getElementById('markets-current-label');
+  if (label) label.textContent = sym;
+
+  _loadTVScript(() => {
+    if (!window.TradingView) return;
+    _tvWidget = new TradingView.widget({
+      container_id: 'markets-chart-container',
+      symbol: sym,
+      interval: 'D',
+      timezone: 'Europe/London',
+      theme: 'dark',
+      style: '1',
+      locale: 'en',
+      toolbar_bg: '#111111',
+      enable_publishing: false,
+      hide_side_toolbar: false,
+      allow_symbol_change: true,
+      save_image: false,
+      autosize: true,
+      studies: [],
+    });
+  });
+}
+
+let _marketsInited = false;
+function initMarketsScreen() {
+  if (!_marketsInited) {
+    // Chip click handlers
+    document.querySelectorAll('.markets-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        _renderChart(chip.dataset.sym);
+        document.getElementById('markets-ticker-input').value = '';
+      });
+    });
+    // Go button
+    document.getElementById('markets-go-btn').addEventListener('click', () => {
+      const raw = document.getElementById('markets-ticker-input').value.trim();
+      if (!raw) return;
+      _renderChart(_resolveSymbol(raw));
+    });
+    // Enter key in search
+    document.getElementById('markets-ticker-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('markets-go-btn').click();
+    });
+    _marketsInited = true;
+  }
+  _renderChart(_tvCurrentSym);
 }
 
 // ── Connection ping ───────────────────────────────────────────────────────────
