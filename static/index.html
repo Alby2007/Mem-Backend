@@ -598,7 +598,7 @@ function showScreen(name) {
   if (name === 'patterns')  loadPatterns();
   if (name === 'network')   loadNetwork();
   if (name === 'tips')      loadTipsHistory();
-  if (name === 'portfolio') { loadPortfolioModel(); loadTickerList(); loadSimBannerIfSet(); }
+  if (name === 'portfolio') { loadPortfolioModel(); loadPortfolioHoldings(); loadTickerList(); loadSimBannerIfSet(); }
 }
 
 document.querySelectorAll('.nav-item').forEach(el => {
@@ -1069,6 +1069,18 @@ function renderModelCard(m) {
     </div>`;
 }
 
+async function loadPortfolioHoldings() {
+  if (!state.userId) return;
+  try {
+    const d = await apiFetch(`/users/${state.userId}/portfolio`);
+    const holdings = d?.holdings || [];
+    if (holdings.length) {
+      state.holdings = holdings.map(h => ({ ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost }));
+      renderHoldings();
+    }
+  } catch { /* no holdings yet */ }
+}
+
 async function loadPortfolioModel() {
   if (!state.userId) return;
   try {
@@ -1282,7 +1294,7 @@ async function loadTipsHistory() {
   if (!state.userId) return;
   const el = document.getElementById('tips-history');
   try {
-    const d = await apiFetch(`/users/${state.userId}/delivery-history?limit=20`);
+    const d = await apiFetch(`/users/${state.userId}/delivery-history?limit=90`);
     const rows = d?.history || [];
     if (!rows.length) { el.innerHTML = '<div class="empty text-sm text-muted">No delivery history</div>'; return; }
     el.innerHTML = `<table class="tbl">
