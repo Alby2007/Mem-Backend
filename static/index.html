@@ -216,10 +216,14 @@ select option { background: var(--surface); }
 .msg-bubble h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin: 10px 0 4px; }
 .msg-bubble code { font-family: var(--mono); font-size: 11px; background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 3px; }
 .msg-live-badge { font-size: 10px; font-family: var(--mono); color: var(--green); margin-top: 4px; opacity: 0.8; }
-.pattern-tag { display: inline-flex; align-items: center; gap: 5px; background: rgba(245,158,11,.18); border: 1px solid var(--accent); border-radius: 4px; padding: 2px 8px; font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--accent); white-space: nowrap; vertical-align: middle; }
-.pattern-tag .pt-ticker { color: var(--text); font-weight: 700; }
-.pattern-tag .pt-dir-bull { color: #22c55e; }
-.pattern-tag .pt-dir-bear { color: var(--red); }
+.pattern-tag { display: inline-flex; align-items: center; gap: 0; background: #1a1a1a; border: 1px solid var(--accent); border-radius: 5px; font-family: var(--mono); font-size: 11px; font-weight: 600; white-space: nowrap; vertical-align: middle; overflow: hidden; margin-right: 4px; }
+.pattern-tag .pt-icon { background: var(--accent); color: #000; padding: 3px 7px; font-size: 12px; font-weight: 900; }
+.pattern-tag .pt-ticker { color: var(--accent); padding: 3px 6px; font-weight: 800; border-right: 1px solid rgba(245,158,11,.25); }
+.pattern-tag .pt-dir-bull { color: #22c55e; padding: 3px 5px; border-right: 1px solid rgba(245,158,11,.25); }
+.pattern-tag .pt-dir-bear { color: #ef4444; padding: 3px 5px; border-right: 1px solid rgba(245,158,11,.25); }
+.pattern-tag .pt-dir-neutral { color: var(--muted); padding: 3px 5px; border-right: 1px solid rgba(245,158,11,.25); }
+.pattern-tag .pt-type { color: #e5e5e5; padding: 3px 6px; border-right: 1px solid rgba(245,158,11,.25); }
+.pattern-tag .pt-meta { color: var(--muted); padding: 3px 6px; font-size: 10px; }
 .msg-citation { font-family: var(--mono); font-size: 11px; color: var(--accent); background: rgba(245,158,11,.1); padding: 1px 5px; border-radius: 2px; }
 .msg-time { font-size: 10px; color: var(--muted); margin-top: 3px; font-family: var(--mono); }
 .overlay-card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 12px; }
@@ -750,7 +754,8 @@ function renderUserMsg(msg) {
     const q      = parts[parts.length - 2] || '';
     const zone   = parts[parts.length - 1] || '';
     const dirClass = dir === 'bullish' ? 'pt-dir-bull' : dir === 'bearish' ? 'pt-dir-bear' : '';
-    return `<span class="pattern-tag">⟁ <span class="pt-ticker">${escHtml(ticker)}</span> <span class="${dirClass}">${escHtml(dir.toUpperCase())}</span> ${escHtml(type)} <span style="color:var(--muted)">${escHtml(tf)}</span> <span style="opacity:.7">${escHtml(q)}</span> <span style="opacity:.6">${escHtml(zone)}</span></span>`;
+    const dirSpan = `<span class="${dirClass || 'pt-dir-neutral'}">${escHtml(dir.toUpperCase())}</span>`;
+    return `<span class="pattern-tag"><span class="pt-icon">⟁</span><span class="pt-ticker">${escHtml(ticker)}</span>${dirSpan}<span class="pt-type">${escHtml(type)}</span><span class="pt-meta">${escHtml(tf)} · ${escHtml(q)} · ${escHtml(zone)}</span></span>`;
   });
 }
 

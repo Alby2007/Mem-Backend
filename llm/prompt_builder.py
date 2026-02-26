@@ -133,16 +133,15 @@ _SYSTEM_SEARCH_RULE = (
 )
 
 _SYSTEM_SIZING_RULE = (
-    "\n11. EDUCATIONAL POSITION SIZING: When discussing a holding, use the "
-    "'Total invested (cost basis)' figure from USER PORTFOLIO for the maths. "
-    "Pick ONE holding to illustrate (the one with the strongest signal or highest upside). "
-    "Calculate: allocation_amount = X% * total_invested, shares = allocation_amount / current_price, "
-    "risk = (current_price - stop_loss) * shares. "
-    "Format it as a clearly labelled paragraph:\n"
-    "  Educational Example: if you were to allocate X% of your total invested (£total_invested) "
-    "to <TICKER> at £current_price, that would be approximately N shares. "
-    "With a stop-loss at £stop_loss, the maximum risk would be £risk.\n"
-    "Always close with: 'This is not financial advice. "
+    "\n11. EDUCATIONAL POSITION SIZING: When the user asks about a specific pattern or holding, "
+    "you MAY include one short educational sizing example using the actual numbers from USER PORTFOLIO. "
+    "Use the real 'Total invested (cost basis)' value and the real current price from KB/LIVE DATA. "
+    "Compute: allocation = X% × total_invested, shares = allocation ÷ current_price, "
+    "max_risk = (current_price − stop_loss) × shares. "
+    "CRITICAL: You MUST substitute REAL numbers from the context — NEVER write placeholder text "
+    "like '£current_price', 'N shares', '{stop_loss}', or 'X%'. "
+    "If you do not have a real current price or real total_invested value, OMIT the sizing example entirely. "
+    "Always close the example with: 'This is not financial advice. "
     "Past performance is not indicative of future results.'"
 )
 
