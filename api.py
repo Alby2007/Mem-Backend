@@ -30,6 +30,14 @@ try:
 except ImportError:
     HAS_LLM = False
 
+try:
+    from knowledge.working_memory import WorkingMemory, kb_has_atoms, MAX_ON_DEMAND_TICKERS
+    _working_memory = WorkingMemory()
+    HAS_WORKING_MEMORY = True
+except ImportError:
+    HAS_WORKING_MEMORY = False
+    _working_memory = None  # type: ignore
+
 from knowledge import KnowledgeGraph
 from knowledge.decay import get_decay_worker
 from retrieval import retrieve
@@ -1535,6 +1543,27 @@ def chat_endpoint():
     # ── Retrieve KB context ────────────────────────────────────────────────
     snippet, atoms = retrieve(message, conn, limit=limit, nudges=nudges)
 
+    # ── Working memory: on-demand fetch for tickers absent from KB ────────
+    live_context  = ''
+    live_fetched  = []
+    wm_session_id = f'wm_{session_id}'
+    if HAS_WORKING_MEMORY and _working_memory is not None and len(atoms) < 5:
+        try:
+            from retrieval import _extract_tickers
+            tickers_in_query = _extract_tickers(message)
+            missing = [
+                t for t in tickers_in_query[:MAX_ON_DEMAND_TICKERS]
+                if not kb_has_atoms(t, _DB_PATH)
+            ]
+            if missing:
+                _working_memory.open_session(wm_session_id)
+                for ticker in missing:
+                    _working_memory.fetch_on_demand(ticker, wm_session_id, _DB_PATH)
+                live_context = _working_memory.get_session_snippet(wm_session_id)
+                live_fetched = _working_memory.get_fetched_tickers(wm_session_id)
+        except Exception:
+            pass
+
     # ── Epistemic stress ───────────────────────────────────────────────────
     stress_report = None
     stress_dict   = None
@@ -1690,14 +1719,27 @@ def chat_endpoint():
         prior_context=prior_context,
         portfolio_context=portfolio_context,
         atom_count=len(atoms),
+        live_context=live_context or None,
     )
 
     answer = ollama_chat(messages, model=model)
     if answer is None:
+        _working_memory.close_without_commit(wm_session_id) if HAS_WORKING_MEMORY and _working_memory else None
         response['error'] = 'Ollama returned no response'
         return jsonify(response), 503
 
     response['answer'] = answer
+
+    # ── Commit working memory atoms back to KB ────────────────────────────
+    if HAS_WORKING_MEMORY and _working_memory and live_fetched:
+        try:
+            commit_result = _working_memory.commit_session(wm_session_id, _kg)
+            response['kb_enriched']    = commit_result.committed > 0
+            response['live_fetched']   = live_fetched
+            response['atoms_committed'] = commit_result.committed
+        except Exception:
+            _working_memory.close_without_commit(wm_session_id)
+
     return jsonify(response)
 
 

@@ -66,6 +66,13 @@ _SYSTEM_PORTFOLIO_RULE = (
     "Do not reveal exact position sizes or average costs unless the user explicitly asks."
 )
 
+_SYSTEM_LIVE_DATA_RULE = (
+    "\n12. LIVE DATA block (when present) contains atoms fetched on-demand this session "
+    "from live market feeds. These are MORE CURRENT than the KB atoms above. "
+    "Prefer live data for price, regime, and direction. "
+    "State 'Live data fetched this session' at the start of your answer when using it."
+)
+
 _SYSTEM_SIZING_RULE = (
     "\n11. EDUCATIONAL POSITION SIZING: When any instrument is discussed, use the "
     "user's total invested figure from USER PORTFOLIO to illustrate position-sizing "
@@ -86,6 +93,7 @@ def build(
     prior_context: Optional[str] = None,
     portfolio_context: Optional[str] = None,
     atom_count: int = 0,
+    live_context: Optional[str] = None,
 ) -> list[dict]:
     """
     Build the [system, user] message list for Ollama.
@@ -117,6 +125,9 @@ def build(
         if primary not in ("unknown", "") and conf > 0.3:
             system_text += _SYSTEM_DIAGNOSIS_SUFFIX.format(primary_type=primary)
 
+    if live_context:
+        system_text += _SYSTEM_LIVE_DATA_RULE
+
     if portfolio_context:
         system_text += _SYSTEM_PORTFOLIO_RULE
         system_text += _SYSTEM_SIZING_RULE
@@ -137,7 +148,11 @@ def build(
     # KB context block
     user_parts.append(snippet if snippet.strip() else "(No KB context available for this query.)")
 
-    # Portfolio context — injected after KB, before the question
+    # Live on-demand data — injected after KB, before portfolio
+    if live_context:
+        user_parts.append(live_context)
+
+    # Portfolio context — injected after live data, before the question
     if portfolio_context:
         user_parts.append(portfolio_context)
 
