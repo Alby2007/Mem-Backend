@@ -579,8 +579,8 @@ def get_open_patterns(
         clauses = ["status NOT IN ('filled','broken')", "quality_score >= ?"]
         params: list = [min_quality]
         if ticker:
-            clauses.append("ticker = ?")
-            params.append(ticker)
+            clauses.append("ticker LIKE ?")
+            params.append(f'%{ticker}%')
         if pattern_type:
             clauses.append("pattern_type = ?")
             params.append(pattern_type)
@@ -599,7 +599,7 @@ def get_open_patterns(
                        alerted_users, detected_at
                 FROM pattern_signals
                 WHERE {where}
-                ORDER BY detected_at DESC LIMIT ?""",
+                ORDER BY quality_score DESC, detected_at DESC LIMIT ?""",
             params,
         ).fetchall()
         cols = ['id', 'ticker', 'pattern_type', 'direction', 'zone_high', 'zone_low',

@@ -1954,10 +1954,19 @@ async function loadPatterns() {
   if (tf)     params.set('timeframe', tf);
   if (dir)    params.set('direction', dir);
   if (ticker) params.set('ticker', ticker);
-  params.set('limit', '50');
+  params.set('min_quality', '0.5');
+  params.set('limit', ticker ? '100' : '200');
   try {
     const d = await apiFetch(`/patterns/live?${params}`);
-    const pats = d?.patterns || [];
+    let pats = d?.patterns || [];
+    // If no ticker filter, cap to 3 results per ticker to avoid flooding
+    if (!ticker) {
+      const seenCounts = {};
+      pats = pats.filter(p => {
+        seenCounts[p.ticker] = (seenCounts[p.ticker] || 0) + 1;
+        return seenCounts[p.ticker] <= 3;
+      }).slice(0, 60);
+    }
     document.getElementById('pf-count').textContent = `${pats.length} result${pats.length===1?'':'s'}`;
     if (!pats.length) { grid.innerHTML = '<div class="empty text-sm text-muted">No open patterns match filters</div>'; return; }
     grid.innerHTML = pats.map(p => `
