@@ -119,11 +119,7 @@ Set `OLLAMA_MODEL=llama3.2` (or whichever model you pulled) in `.env` — this i
 
 The repo ships with a pre-seeded KB snapshot (`tests/fixtures/kb_seed.sql`) containing real shared market intelligence — conviction tiers, patterns, macro regime, causal edges, signal calibration. **This contains NO user data.** Your personal KB is built from your own interactions.
 
-Load the seed after `docker-compose up`:
-
-```bash
-bash scripts/load_seed.sh
-```
+**The seed loads automatically on first boot.** When the API starts against an empty DB it detects `total_facts < 100` and loads the seed before accepting requests. No manual step required — `docker-compose up` is enough.
 
 Verify it loaded:
 
@@ -136,6 +132,13 @@ curl.exe http://localhost:5050/stats
 ```
 
 You should see `total_facts > 2000` immediately.
+
+If you need to load the seed manually (e.g. into an existing DB):
+
+```bash
+# Works on any OS — no sqlite3 CLI needed
+python scripts/load_seed.py
+```
 
 Then register your test user and build your personal KB:
 
@@ -156,7 +159,7 @@ curl -s -X POST http://localhost:5050/users/alice/portfolio \
 To refresh the seed from your live machine:
 
 ```bash
-bash scripts/export_seed.sh
+python scripts/export_seed.py
 git add tests/fixtures/kb_seed.sql && git commit -m "chore: refresh KB seed"
 ```
 

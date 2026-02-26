@@ -302,6 +302,39 @@ if HAS_HYBRID:
     except Exception:
         pass
 
+# Auto-seed on first boot: if the DB is empty and the seed file exists, load it.
+# This means `docker-compose up` gives collaborators a populated KB immediately —
+# no manual load step required.
+try:
+    import sqlite3 as _sqlite3
+    import pathlib as _pathlib
+    _SEED_PATH = _pathlib.Path(__file__).parent / 'tests' / 'fixtures' / 'kb_seed.sql'
+    if _SEED_PATH.exists():
+        _seed_check = _sqlite3.connect(_DB_PATH, timeout=5)
+        try:
+            _fact_count = _seed_check.execute(
+                "SELECT COUNT(*) FROM facts"
+            ).fetchone()[0]
+        except Exception:
+            _fact_count = 0
+        finally:
+            _seed_check.close()
+        if _fact_count < 100:
+            import logging as _logging
+            _seed_log = _logging.getLogger('api.autoseed')
+            _seed_log.info('Auto-seeding KB from %s (%d facts found) …', _SEED_PATH, _fact_count)
+            _seed_conn = _sqlite3.connect(_DB_PATH, timeout=15)
+            try:
+                _seed_conn.executescript(_SEED_PATH.read_text(encoding='utf-8'))
+                _after = _seed_conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
+                _seed_log.info('Auto-seed complete — %d facts loaded.', _after)
+            except Exception as _seed_err:
+                _seed_log.warning('Auto-seed failed: %s', _seed_err)
+            finally:
+                _seed_conn.close()
+except Exception:
+    pass
+
 # Start delivery scheduler (checks every 60s for due briefings)
 _delivery_scheduler = None
 if HAS_PRODUCT_LAYER:
