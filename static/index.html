@@ -151,7 +151,8 @@ select option { background: var(--surface); }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ── Markets screen ── */
-#screen-markets { display: block; }
+#screen-markets { display: none; }
+#screen-markets.active { display: block; }
 #markets-search-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
 #markets-search-bar input { max-width: 280px; }
 .markets-chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 3px; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-family: var(--mono); font-size: 11px; font-weight: 700; cursor: pointer; transition: all .15s; white-space: nowrap; }
