@@ -130,6 +130,12 @@ TICKER_ALIASES: dict = {
     'GOLD':     'GLD',
     'GOLDUSD':  'GLD',
     'USDXAU':   'GLD',
+    'AXUUSD':   'GLD',   # transposition typo
+    'XAUUDS':   'GLD',   # transposition typo
+    'XUAUSD':   'GLD',   # transposition typo
+    'AUUSD':    'GLD',   # partial
+    'GOLDX':    'GLD',
+    'XGOLD':    'GLD',
     # ── Silver ────────────────────────────────────────────────────────────
     'XAGUSD':   'SLV',
     'XAGUSD=X': 'SLV',
@@ -797,28 +803,28 @@ def retrieve(
         return f"  {r['subject']} | {r['predicate']} | {r['object']}"
 
     if invalidation:
-        lines.append('[Conviction, Sizing & Invalidation]')
+        lines.append('# conviction-sizing-invalidation')
         lines.extend(_fmt(r) for r in invalidation[:20])
     if quality:
-        lines.append('[Signal Quality & Regime]')
+        lines.append('# signal-quality-regime')
         lines.extend(_fmt(r) for r in quality[:15])
     if signals:
-        lines.append('[Signals & Positioning]')
+        lines.append('# signals-positioning')
         lines.extend(_fmt(r) for r in signals[:10])
     if theses:
-        lines.append('[Theses & Evidence]')
+        lines.append('# theses-evidence')
         lines.extend(_fmt(r) for r in theses[:8])
     if macro:
-        lines.append('[Macro / Regime]')
+        lines.append('# macro-regime')
         lines.extend(_fmt(r) for r in macro[:6])
     if research:
-        lines.append('[Research]')
+        lines.append('# research')
         lines.extend(_fmt(r) for r in research[:6])
     if historical:
-        lines.append('[Historical Performance]')
+        lines.append('# historical-performance')
         lines.extend(_fmt(r) for r in historical[:12])
     if other:
-        lines.append('[Other]')
+        lines.append('# context')
         lines.extend(_fmt(r) for r in other[:6])
 
     flat_snippet = '\n'.join(lines)
