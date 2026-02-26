@@ -2936,15 +2936,16 @@ def security_headers(response):
     response.headers['X-XSS-Protection']             = '1; mode=block'
     response.headers['Referrer-Policy']              = 'strict-origin-when-cross-origin'
     response.headers['Strict-Transport-Security']    = 'max-age=31536000'
-    # SPA frontend needs inline styles/scripts and Google Fonts CDN
+    # SPA frontend needs inline styles/scripts, Google Fonts CDN, and TradingView embed
     if response.content_type and 'text/html' in response.content_type:
         response.headers['Content-Security-Policy'] = (
             "default-src 'self'; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com; "
-            "script-src 'self' 'unsafe-inline'; "
-            "connect-src 'self'; "
-            "img-src 'self' data: blob:; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://*.tradingview.com; "
+            "font-src 'self' https://fonts.gstatic.com https://*.tradingview.com; "
+            "script-src 'self' 'unsafe-inline' https://s3.tradingview.com https://*.tradingview.com; "
+            "connect-src 'self' https://*.tradingview.com wss://*.tradingview.com; "
+            "img-src 'self' data: blob: https://*.tradingview.com; "
+            "frame-src 'self' https://*.tradingview.com; "
             "frame-ancestors 'none'"
         )
     else:
