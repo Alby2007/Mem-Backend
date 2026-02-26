@@ -121,34 +121,136 @@ _KEYWORD_PREDICATE_BOOST: dict = {
 }
 
 # Common name / forex pair → canonical KB ticker alias map
+# Covers formal symbols, common names, broker platform names, and typo variants
 TICKER_ALIASES: dict = {
+    # ── Gold ──────────────────────────────────────────────────────────────
     'XAUUSD':   'GLD',
+    'XAUUSD=X': 'GLD',
+    'XAU':      'GLD',
     'GOLD':     'GLD',
+    'GOLDUSD':  'GLD',
+    'USDXAU':   'GLD',
+    # ── Silver ────────────────────────────────────────────────────────────
     'XAGUSD':   'SLV',
+    'XAGUSD=X': 'SLV',
+    'XAG':      'SLV',
     'SILVER':   'SLV',
+    'SILVERUSD':'SLV',
+    'AGUUSD':   'SLV',   # common typo / broker variant
+    'AGSUSD':   'SLV',
+    'SILV':     'SLV',
+    # ── Oil / Energy ──────────────────────────────────────────────────────
     'OIL':      'USO',
     'CRUDE':    'USO',
+    'CRUDEOIL': 'USO',
     'WTI':      'USO',
+    'WTIOIL':   'USO',
+    'USOIL':    'USO',
     'BRENT':    'USO',
+    'BRENTOIL': 'USO',
+    'UKOIL':    'USO',
+    'CL':       'USO',
+    'CLF':      'USO',
+    'CL=F':     'USO',
+    'BZ=F':     'USO',
+    # ── Natural Gas ───────────────────────────────────────────────────────
+    'NATGAS':   'UNG',
+    'GAS':      'UNG',
+    'NATURALGAS':'UNG',
+    'NG':       'UNG',
+    'NG=F':     'UNG',
+    # ── UK Indices ────────────────────────────────────────────────────────
     'UK100':    '^FTSE',
     'FTSE100':  '^FTSE',
     'FTSE':     '^FTSE',
+    'UK250':    '^FTMC',
+    'FTSE250':  '^FTMC',
+    'FTMC':     '^FTMC',
+    # ── US Indices ────────────────────────────────────────────────────────
     'US500':    '^GSPC',
     'SP500':    '^GSPC',
     'SPX':      '^GSPC',
+    'S&P':      '^GSPC',
+    'S&P500':   '^GSPC',
+    'SPY500':   '^GSPC',
     'DOW':      '^DJI',
     'DJIA':     '^DJI',
+    'DOW30':    '^DJI',
+    'US30':     '^DJI',
     'NDX':      '^IXIC',
     'NAS100':   '^IXIC',
     'NASDAQ':   '^IXIC',
-    'BTC':      'BTC-USD',
-    'BITCOIN':  'BTC-USD',
-    'ETH':      'ETH-USD',
-    'ETHEREUM': 'ETH-USD',
-    'GBP':      'GBP=X',
-    'EUR':      'EURUSD=X',
-    'CABLE':    'GBP=X',
+    'NASDAQ100':'^IXIC',
+    'US100':    '^IXIC',
+    'TECH100':  '^IXIC',
+    'VIX':      '^VIX',
+    'VOLINDEX': '^VIX',
+    'FEARINDEX': '^VIX',
+    # ── Crypto ────────────────────────────────────────────────────────────
+    'BTC':       'BTC-USD',
+    'BITCOIN':   'BTC-USD',
+    'BTCUSD':    'BTC-USD',
+    'XBT':       'BTC-USD',
+    'ETH':       'ETH-USD',
+    'ETHEREUM':  'ETH-USD',
+    'ETHUSD':    'ETH-USD',
+    'ETHER':     'ETH-USD',
+    # ── FX ────────────────────────────────────────────────────────────────
+    'GBP':       'GBP=X',
+    'GBPUSD':    'GBP=X',
+    'GBPUSD=X':  'GBP=X',
+    'CABLE':     'GBP=X',
+    'STERLING':  'GBP=X',
+    'POUND':     'GBP=X',
+    'EUR':       'EURUSD=X',
+    'EURUSD':    'EURUSD=X',
+    'EURO':      'EURUSD=X',
+    'USDJPY':    'JPY=X',
+    'JPY':       'JPY=X',
+    'YEN':       'JPY=X',
+    'DXY':       'UUP',
+    'DOLLAR':    'UUP',
+    'USINDEX':   'UUP',
+    # ── Bonds / Rates ─────────────────────────────────────────────────────
+    'US10Y':     'TLT',
+    'TNX':       'TLT',
+    'BONDS':     'TLT',
+    'TREASURIES':'TLT',
+    '10YEAR':    'TLT',
+    'GILT':      'TLT',
+    'UK10Y':     'TLT',
+    # ── Commodities ───────────────────────────────────────────────────────
+    'COPPER':    'CPER',
+    'HG=F':      'CPER',
+    'WHEAT':     'WEAT',
+    'CORN':      'CORN',
+    'SOY':       'SOYB',
+    'SOYBEANS':  'SOYB',
 }
+
+# Word-level fuzzy aliases — matched against lowercase message text
+# Catches informal names and typos not caught by uppercase token extraction
+_FUZZY_TEXT_ALIASES: list = [
+    # (search_string_lower, canonical_ticker)
+    ('silver',      'SLV'),
+    ('gold',        'GLD'),
+    ('crude oil',   'USO'),
+    ('natural gas', 'UNG'),
+    ('bitcoin',     'BTC-USD'),
+    ('ethereum',    'ETH-USD'),
+    ('sterling',    'GBP=X'),
+    ('cable',       'GBP=X'),
+    ('ftse 100',    '^FTSE'),
+    ('ftse100',     '^FTSE'),
+    ('ftse 250',    '^FTMC'),
+    ('s&p 500',     '^GSPC'),
+    ('s&p500',      '^GSPC'),
+    ('nasdaq',      '^IXIC'),
+    ('dow jones',   '^DJI'),
+    ('vix',         '^VIX'),
+    ('copper',      'CPER'),
+    ('wheat',       'WEAT'),
+]
 
 _STOPWORDS = {
     'the', 'is', 'at', 'which', 'on', 'a', 'an', 'and', 'or', 'for',
@@ -178,17 +280,39 @@ def _extract_key_terms(message: str) -> List[str]:
 
 
 def _extract_tickers(message: str) -> List[str]:
-    """Extract uppercase ticker symbols from a message, expanding known aliases."""
-    candidates = re.findall(r'\b[A-Z0-9^][A-Z0-9^=-]{1,9}\b', message)
-    raw = [t for t in candidates if t not in _UPPERCASE_STOPWORDS]
+    """
+    Extract ticker symbols from a message, expanding known aliases.
+    Two passes:
+      1. Uppercase token pass — finds explicit tickers and expands via TICKER_ALIASES
+      2. Fuzzy text pass — scans lowercase message for commodity/instrument names
+         via _FUZZY_TEXT_ALIASES (catches typos, informal names, multi-word phrases)
+    """
     expanded: list = []
     seen_t: set = set()
-    for t in raw:
+
+    def _add(tick: str) -> None:
+        if tick and tick not in seen_t:
+            seen_t.add(tick)
+            expanded.append(tick)
+
+    # Pass 1: uppercase token extraction + alias expansion
+    candidates = re.findall(r'\b[A-Z0-9^][A-Z0-9^=/-]{1,9}\b', message)
+    for t in candidates:
+        if t in _UPPERCASE_STOPWORDS:
+            continue
         canonical = TICKER_ALIASES.get(t, t)
-        for tick in (t, canonical) if canonical != t else (t,):
-            if tick not in seen_t:
-                seen_t.add(tick)
-                expanded.append(tick)
+        if canonical != t:
+            _add(t)           # keep original so alias note fires in snippet
+            _add(canonical)
+        else:
+            _add(t)
+
+    # Pass 2: word-level fuzzy matching against lowercase message
+    msg_lower = message.lower()
+    for phrase, canonical in _FUZZY_TEXT_ALIASES:
+        if phrase in msg_lower and canonical not in seen_t:
+            _add(canonical)
+
     return expanded
 
 
