@@ -3647,6 +3647,15 @@ def network_cohort(ticker: str):
         return jsonify({'error': str(e)}), 500
 
 
+# ── Frontend ──────────────────────────────────────────────────────────────────
+
+@app.route('/')
+def serve_frontend():
+    from flask import send_from_directory
+    import os as _os
+    return send_from_directory(_os.path.join(_os.path.dirname(__file__), 'static'), 'index.html')
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':

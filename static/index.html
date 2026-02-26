@@ -1,0 +1,1069 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trading Galaxy — Internal Tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:      #0a0a0a;
+  --surface: #111111;
+  --card:    #1a1a1a;
+  --border:  #2a2a2a;
+  --accent:  #f59e0b;
+  --accent2: #d97706;
+  --green:   #10b981;
+  --red:     #ef4444;
+  --blue:    #3b82f6;
+  --muted:   #6b7280;
+  --text:    #f5f5f5;
+  --mono:    'JetBrains Mono', monospace;
+  --sans:    'DM Sans', sans-serif;
+  --sidebar-w: 64px;
+  --topbar-h:  48px;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; overflow: hidden; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--surface); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Top bar ── */
+#topbar {
+  position: fixed; top: 0; left: 0; right: 0; height: var(--topbar-h);
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 16px; gap: 16px; z-index: 100;
+}
+#topbar .wordmark { font-family: var(--mono); font-weight: 700; font-size: 13px; color: var(--accent); letter-spacing: 0.12em; flex-shrink: 0; }
+#topbar .spacer { flex: 1; }
+#conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+#conn-dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+#conn-dot.err { background: var(--red); }
+#conn-label { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+#user-badge { font-size: 11px; color: var(--muted); font-family: var(--mono); background: var(--card); padding: 2px 8px; border-radius: 3px; border: 1px solid var(--border); }
+#kb-count { font-family: var(--mono); font-size: 11px; color: var(--accent); }
+
+/* ── Sidebar ── */
+#sidebar {
+  position: fixed; left: 0; top: var(--topbar-h); bottom: 0;
+  width: var(--sidebar-w); background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; z-index: 90; transition: width .2s ease; overflow: hidden;
+}
+#sidebar:hover { width: 180px; }
+#sidebar:hover .nav-label { opacity: 1; }
+.nav-item {
+  display: flex; align-items: center; gap: 12px; padding: 12px 20px; cursor: pointer;
+  color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  transition: color .15s, background .15s; white-space: nowrap; border-left: 2px solid transparent;
+}
+.nav-item:hover { color: var(--text); background: var(--card); }
+.nav-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(245,158,11,.06); }
+.nav-icon { font-size: 16px; flex-shrink: 0; width: 24px; text-align: center; }
+.nav-label { opacity: 0; transition: opacity .15s; font-family: var(--sans); }
+.nav-spacer { flex: 1; }
+
+/* ── Main ── */
+#main {
+  position: fixed; left: var(--sidebar-w); top: var(--topbar-h); right: 0; bottom: 0;
+  overflow-y: auto; padding: 24px;
+}
+.screen { display: none; }
+.screen.active { display: block; }
+
+/* ── Cards / surfaces ── */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 16px; }
+.card-sm { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+.section-title { font-size: 10px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+
+/* ── Stat cards ── */
+.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+.stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 16px; }
+.stat-card .stat-label { font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.stat-card .stat-value { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--accent); }
+.stat-card .stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.stat-card.stress-green .stat-value { color: var(--green); }
+.stat-card.stress-amber .stat-value { color: var(--accent); }
+.stat-card.stress-red .stat-value { color: var(--red); }
+
+/* ── Two-col layout ── */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+
+/* ── Badges ── */
+.badge { display: inline-block; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; padding: 2px 7px; border-radius: 3px; text-transform: uppercase; }
+.badge-high   { background: rgba(245,158,11,.18); color: var(--accent); border: 1px solid rgba(245,158,11,.3); }
+.badge-medium { background: rgba(59,130,246,.18); color: var(--blue); border: 1px solid rgba(59,130,246,.3); }
+.badge-low    { background: rgba(107,114,128,.18); color: var(--muted); border: 1px solid rgba(107,114,128,.3); }
+.badge-avoid  { background: rgba(239,68,68,.18); color: var(--red); border: 1px solid rgba(239,68,68,.3); }
+.badge-open   { background: rgba(16,185,129,.18); color: var(--green); border: 1px solid rgba(16,185,129,.3); }
+.badge-bullish { background: rgba(16,185,129,.18); color: var(--green); border: 1px solid rgba(16,185,129,.3); }
+.badge-bearish { background: rgba(239,68,68,.18); color: var(--red); border: 1px solid rgba(239,68,68,.3); }
+
+/* ── Status dot ── */
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
+.dot-green { background: var(--green); box-shadow: 0 0 5px var(--green); }
+.dot-red   { background: var(--red); }
+.dot-amber { background: var(--accent); }
+.dot-muted { background: var(--muted); }
+
+/* ── Mono value ── */
+.mono { font-family: var(--mono); }
+.mono-amber { font-family: var(--mono); color: var(--accent); }
+.mono-green { font-family: var(--mono); color: var(--green); }
+.mono-red   { font-family: var(--mono); color: var(--red); }
+.mono-muted { font-family: var(--mono); color: var(--muted); }
+
+/* ── Tables ── */
+.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tbl th { text-align: left; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.tbl td { padding: 8px 10px; border-bottom: 1px solid rgba(42,42,42,.5); vertical-align: middle; }
+.tbl tr:hover td { background: rgba(255,255,255,.02); }
+
+/* ── Forms ── */
+.form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.form-row label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
+input, select, textarea {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); font-family: var(--sans); font-size: 13px; padding: 7px 10px; outline: none;
+  transition: border-color .15s;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+input::placeholder { color: var(--muted); }
+select option { background: var(--surface); }
+
+/* ── Buttons ── */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 4px; border: none; font-family: var(--sans); font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s; }
+.btn-primary { background: var(--accent); color: #000; }
+.btn-primary:hover { background: var(--accent2); }
+.btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+.btn-ghost { background: transparent; color: var(--muted); }
+.btn-ghost:hover { color: var(--text); }
+.btn-danger { background: transparent; border: 1px solid rgba(239,68,68,.3); color: var(--red); }
+.btn-danger:hover { background: rgba(239,68,68,.1); }
+.btn-sm { padding: 4px 10px; font-size: 11px; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── Auth screen ── */
+#screen-auth { max-width: 720px; margin: 60px auto; }
+.auth-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.auth-title { font-size: 18px; font-weight: 700; margin-bottom: 20px; color: var(--text); }
+.auth-divider { text-align: center; color: var(--muted); font-size: 11px; margin: 8px 0; }
+
+/* ── Chat screen ── */
+#screen-chat { display: none; flex-direction: column; height: calc(100vh - var(--topbar-h) - 48px); }
+#screen-chat.active { display: flex; }
+#chat-messages { flex: 1; overflow-y: auto; padding: 16px 0; display: flex; flex-direction: column; gap: 12px; }
+.msg { display: flex; flex-direction: column; max-width: 75%; }
+.msg-user { align-self: flex-end; align-items: flex-end; }
+.msg-assistant { align-self: flex-start; align-items: flex-start; }
+.msg-bubble { padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.5; }
+.msg-user .msg-bubble { background: var(--accent); color: #000; font-weight: 500; }
+.msg-assistant .msg-bubble { background: var(--card); border: 1px solid var(--border); color: var(--text); }
+.msg-citation { font-family: var(--mono); font-size: 11px; color: var(--accent); background: rgba(245,158,11,.1); padding: 1px 5px; border-radius: 2px; }
+.msg-time { font-size: 10px; color: var(--muted); margin-top: 3px; font-family: var(--mono); }
+.overlay-card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 12px; }
+.overlay-card-title { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+#chat-input-bar { display: flex; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); align-items: flex-end; }
+#chat-input { flex: 1; resize: none; min-height: 40px; max-height: 120px; }
+.toggle-wrap { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.toggle { position: relative; width: 32px; height: 18px; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; inset: 0; background: var(--border); border-radius: 18px; cursor: pointer; transition: .2s; }
+.toggle-slider::before { content: ''; position: absolute; width: 12px; height: 12px; left: 3px; top: 3px; background: var(--muted); border-radius: 50%; transition: .2s; }
+.toggle input:checked + .toggle-slider { background: var(--accent); }
+.toggle input:checked + .toggle-slider::before { transform: translateX(14px); background: #000; }
+
+/* ── Tip preview card ── */
+.tip-card { background: var(--card); border: 1px solid var(--accent); border-radius: 8px; padding: 20px; max-width: 480px; }
+.tip-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+.tip-card-ticker { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--accent); }
+.tip-card-type { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.tip-card-zone { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 12px; }
+.tip-card-zone-label { font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+.tip-card-levels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.tip-level { text-align: center; }
+.tip-level-label { font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.tip-level-value { font-family: var(--mono); font-size: 14px; font-weight: 700; margin-top: 2px; }
+.tip-level-value.entry { color: var(--accent); }
+.tip-level-value.stop { color: var(--red); }
+.tip-level-value.target { color: var(--green); }
+.tip-card-meta { font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.tip-card-meta span { display: flex; gap: 6px; }
+.tip-card-meta .meta-key { color: var(--muted); min-width: 80px; }
+.tip-card-meta .meta-val { color: var(--text); font-family: var(--mono); }
+.skew-warning { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); border-radius: 4px; padding: 6px 10px; font-size: 11px; color: var(--red); margin-top: 8px; }
+
+/* ── Pattern card ── */
+.pattern-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 14px; cursor: pointer; transition: border-color .15s; }
+.pattern-card:hover { border-color: var(--accent); }
+.pattern-card.expanded { border-color: var(--accent); }
+.pattern-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.pattern-detail { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: none; }
+.pattern-card.expanded .pattern-detail { display: block; }
+
+/* ── Conviction ticker card ── */
+.conviction-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 14px; display: flex; align-items: center; gap: 12px; }
+.conviction-ticker { font-family: var(--mono); font-size: 16px; font-weight: 700; color: var(--text); min-width: 80px; }
+.conviction-meta { flex: 1; }
+.conviction-upside { font-family: var(--mono); font-size: 18px; font-weight: 700; }
+
+/* ── Adapter row ── */
+.adapter-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(42,42,42,.5); }
+.adapter-name { font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 130px; }
+.adapter-time { font-family: var(--mono); font-size: 10px; color: var(--muted); flex: 1; }
+
+/* ── Holdings ── */
+.holding-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid rgba(42,42,42,.4); font-size: 12px; }
+.holding-ticker { font-family: var(--mono); font-weight: 700; min-width: 80px; color: var(--accent); }
+.holding-meta { flex: 1; color: var(--muted); font-family: var(--mono); font-size: 11px; }
+
+/* ── Network leaderboard ── */
+.lb-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid rgba(42,42,42,.4); }
+.lb-rank { font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 24px; }
+.lb-ticker { font-family: var(--mono); font-size: 13px; font-weight: 700; min-width: 80px; }
+.lb-bar-wrap { flex: 1; height: 4px; background: var(--border); border-radius: 2px; }
+.lb-bar { height: 4px; background: var(--accent); border-radius: 2px; }
+.lb-count { font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 40px; text-align: right; }
+
+/* ── Error toast ── */
+#toast { position: fixed; bottom: 20px; right: 20px; background: var(--red); color: #fff; padding: 10px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; z-index: 9999; display: none; max-width: 320px; }
+
+/* ── Loading spinner ── */
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Empty state ── */
+.empty { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 12px; }
+.empty-icon { font-size: 28px; margin-bottom: 8px; }
+
+/* ── Misc ── */
+.flex { display: flex; }
+.flex-center { display: flex; align-items: center; }
+.gap-8 { gap: 8px; }
+.gap-12 { gap: 12px; }
+.gap-16 { gap: 16px; }
+.mb-8 { margin-bottom: 8px; }
+.mb-12 { margin-bottom: 12px; }
+.mb-16 { margin-bottom: 16px; }
+.mb-20 { margin-bottom: 20px; }
+.mt-8 { margin-top: 8px; }
+.mt-12 { margin-top: 12px; }
+.mt-16 { margin-top: 16px; }
+.text-muted { color: var(--muted); }
+.text-accent { color: var(--accent); }
+.text-green { color: var(--green); }
+.text-red { color: var(--red); }
+.text-sm { font-size: 11px; }
+.text-xs { font-size: 10px; }
+.fw-700 { font-weight: 700; }
+.w-full { width: 100%; }
+.inline-flex { display: inline-flex; align-items: center; gap: 6px; }
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+.filter-bar select, .filter-bar input { padding: 5px 8px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<!-- ── Top bar ──────────────────────────────────────────────────────── -->
+<div id="topbar">
+  <span class="wordmark">TRADING GALAXY</span>
+  <div class="spacer"></div>
+  <div id="conn-dot"></div>
+  <span id="conn-label">CONNECTING</span>
+  <span id="user-badge">not signed in</span>
+  <span id="kb-count">KB: —</span>
+</div>
+
+<!-- ── Sidebar ─────────────────────────────────────────────────────── -->
+<nav id="sidebar">
+  <div class="nav-item active" data-screen="dashboard" id="nav-dashboard">
+    <span class="nav-icon">▦</span><span class="nav-label">Dashboard</span>
+  </div>
+  <div class="nav-item" data-screen="portfolio" id="nav-portfolio">
+    <span class="nav-icon">◈</span><span class="nav-label">Portfolio</span>
+  </div>
+  <div class="nav-item" data-screen="chat" id="nav-chat">
+    <span class="nav-icon">◎</span><span class="nav-label">Chat</span>
+  </div>
+  <div class="nav-item" data-screen="tips" id="nav-tips">
+    <span class="nav-icon">◆</span><span class="nav-label">Tips</span>
+  </div>
+  <div class="nav-item" data-screen="patterns" id="nav-patterns">
+    <span class="nav-icon">⟁</span><span class="nav-label">Patterns</span>
+  </div>
+  <div class="nav-item" data-screen="network" id="nav-network">
+    <span class="nav-icon">⬡</span><span class="nav-label">Network</span>
+  </div>
+  <div class="nav-spacer"></div>
+  <div class="nav-item" data-screen="auth" id="nav-auth">
+    <span class="nav-icon">⊕</span><span class="nav-label">Auth</span>
+  </div>
+</nav>
+
+<!-- ── Main ────────────────────────────────────────────────────────── -->
+<main id="main">
+
+<!-- AUTH ──────────────────────────────────────────────────────────── -->
+<div class="screen active" id="screen-auth">
+  <div style="margin-bottom:32px;">
+    <div style="font-size:24px;font-weight:700;margin-bottom:6px;">Sign in to Trading Galaxy</div>
+    <div class="text-muted text-sm">Internal tool — token lives in memory only, cleared on refresh.</div>
+  </div>
+  <div class="auth-panels">
+    <div class="card">
+      <div class="auth-title">Register</div>
+      <div class="form-row"><label>User ID</label><input id="reg-uid" placeholder="alice" /></div>
+      <div class="form-row"><label>Email</label><input id="reg-email" type="email" placeholder="alice@example.com" /></div>
+      <div class="form-row"><label>Password</label><input id="reg-pw" type="password" placeholder="••••••••" /></div>
+      <div class="form-row"><label>Confirm</label><input id="reg-pw2" type="password" placeholder="••••••••" /></div>
+      <button class="btn btn-outline w-full" id="reg-btn">Create Account</button>
+      <div id="reg-msg" class="text-sm mt-8 text-muted"></div>
+    </div>
+    <div class="card">
+      <div class="auth-title">Login</div>
+      <div class="form-row"><label>Email</label><input id="login-email" type="email" placeholder="alice@example.com" /></div>
+      <div class="form-row"><label>Password</label><input id="login-pw" type="password" placeholder="••••••••" /></div>
+      <button class="btn btn-primary w-full" id="login-btn">Sign In</button>
+      <div id="login-msg" class="text-sm mt-8 text-muted"></div>
+    </div>
+  </div>
+</div>
+
+<!-- DASHBOARD ─────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-dashboard">
+  <div class="flex-center gap-12 mb-20" style="justify-content:space-between;">
+    <div style="font-size:16px;font-weight:700;">Dashboard</div>
+    <button class="btn btn-ghost btn-sm" id="dash-refresh-btn">↻ Refresh</button>
+  </div>
+  <div class="stat-grid" id="dash-stats">
+    <div class="stat-card"><div class="stat-label">Total Facts</div><div class="stat-value" id="s-facts">—</div><div class="stat-sub">KB atoms</div></div>
+    <div class="stat-card"><div class="stat-label">Market Regime</div><div class="stat-value" id="s-regime" style="font-size:13px;padding-top:4px;">—</div><div class="stat-sub" id="s-regime-sub">from KB</div></div>
+    <div class="stat-card" id="s-stress-card"><div class="stat-label">KB Conflicts</div><div class="stat-value" id="s-stress">—</div><div class="stat-sub" id="s-stress-sub">ratio</div></div>
+    <div class="stat-card"><div class="stat-label">Open Patterns</div><div class="stat-value" id="s-patterns">—</div><div class="stat-sub">active signals</div></div>
+  </div>
+  <div class="two-col">
+    <div>
+      <div class="section-title">Top Conviction</div>
+      <div id="dash-conviction" style="display:flex;flex-direction:column;gap:10px;">
+        <div class="empty"><div class="spinner"></div></div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">Ingest Adapters</div>
+      <div id="dash-adapters"><div class="empty"><div class="spinner"></div></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- PORTFOLIO ─────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-portfolio">
+  <div style="font-size:16px;font-weight:700;margin-bottom:20px;">Portfolio</div>
+  <div class="two-col">
+    <div>
+      <div class="section-title">Holdings</div>
+      <div class="card mb-12">
+        <div style="display:grid;grid-template-columns:1fr 80px 90px;gap:8px;margin-bottom:8px;">
+          <input id="p-ticker" placeholder="TICKER" style="text-transform:uppercase;" />
+          <input id="p-qty" placeholder="Qty" type="number" min="0" />
+          <input id="p-cost" placeholder="Avg cost" type="number" min="0" step="0.01" />
+        </div>
+        <button class="btn btn-outline btn-sm" id="p-add-btn">+ Add Holding</button>
+      </div>
+      <div id="p-holdings-list" style="margin-bottom:12px;"></div>
+      <button class="btn btn-primary" id="p-submit-btn">Submit Portfolio</button>
+      <div id="p-msg" class="text-sm mt-8 text-muted"></div>
+    </div>
+    <div>
+      <div class="section-title">User Model</div>
+      <div id="p-model-card" class="card mb-16">
+        <div class="empty text-muted text-sm">Submit portfolio to build model</div>
+      </div>
+      <div class="section-title">Watchlist Signals</div>
+      <div id="p-signals"><div class="empty text-sm text-muted">Submit portfolio first</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- CHAT ──────────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-chat">
+  <div id="chat-messages"></div>
+  <div id="chat-input-bar">
+    <div class="toggle-wrap">
+      <label class="toggle"><input type="checkbox" id="overlay-toggle"><span class="toggle-slider"></span></label>
+      <span>Overlay</span>
+    </div>
+    <textarea id="chat-input" placeholder="Ask the KB anything…" rows="1"></textarea>
+    <button class="btn btn-primary" id="chat-send-btn">Send</button>
+  </div>
+</div>
+
+<!-- TIPS ──────────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-tips">
+  <div style="font-size:16px;font-weight:700;margin-bottom:20px;">Tips</div>
+  <div class="two-col mb-20">
+    <div>
+      <div class="section-title">Tip Configuration</div>
+      <div class="card">
+        <div class="form-row"><label>Account Size (USD)</label><input id="tip-account" type="number" placeholder="10000" /></div>
+        <div class="form-row"><label>Max Risk per Trade (%)</label><input id="tip-risk" type="number" placeholder="1.0" step="0.1" /></div>
+        <div class="form-row"><label>Delivery Time</label><input id="tip-time" type="time" value="08:00" /></div>
+        <div class="form-row"><label>Timezone</label>
+          <select id="tip-tz">
+            <option value="UTC">UTC</option>
+            <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
+            <option value="America/New_York">America/New_York (ET)</option>
+            <option value="Europe/London">Europe/London (GMT)</option>
+            <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
+          </select>
+        </div>
+        <div class="form-row"><label>Tier</label>
+          <select id="tip-tier">
+            <option value="basic">Basic</option>
+            <option value="premium">Premium</option>
+          </select>
+        </div>
+        <button class="btn btn-primary btn-sm mt-8" id="tip-config-btn">Save Config</button>
+        <div id="tip-config-msg" class="text-sm mt-8 text-muted"></div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">Today's Tip Preview</div>
+      <div id="tip-preview-wrap">
+        <button class="btn btn-outline btn-sm mb-12" id="tip-preview-btn">▶ Load Preview</button>
+        <div id="tip-preview-card"></div>
+      </div>
+    </div>
+  </div>
+  <div class="section-title">Delivery History</div>
+  <div id="tips-history"><div class="empty text-sm text-muted">No history yet</div></div>
+</div>
+
+<!-- PATTERNS ──────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-patterns">
+  <div style="font-size:16px;font-weight:700;margin-bottom:16px;">Patterns</div>
+  <div class="filter-bar">
+    <select id="pf-type"><option value="">All Types</option><option value="fvg">FVG</option><option value="order_block">Order Block</option><option value="bos">BOS</option><option value="choch">CHoCH</option></select>
+    <select id="pf-tf"><option value="">All Timeframes</option><option value="1m">1m</option><option value="5m">5m</option><option value="15m">15m</option><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option></select>
+    <select id="pf-dir"><option value="">All Directions</option><option value="bullish">Bullish</option><option value="bearish">Bearish</option></select>
+    <input id="pf-ticker" placeholder="Ticker…" style="width:100px;" />
+    <button class="btn btn-outline btn-sm" id="pf-search-btn">Search</button>
+    <span id="pf-count" class="text-muted text-xs"></span>
+  </div>
+  <div id="patterns-grid" class="pattern-grid">
+    <div class="empty"><div class="spinner"></div></div>
+  </div>
+</div>
+
+<!-- NETWORK ───────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-network">
+  <div style="font-size:16px;font-weight:700;margin-bottom:20px;">Network</div>
+  <div class="three-col">
+    <div>
+      <div class="section-title">Coverage Leaderboard</div>
+      <div id="net-leaderboard"><div class="empty"><div class="spinner"></div></div></div>
+    </div>
+    <div>
+      <div class="section-title">Trending Markets (7d)</div>
+      <div id="net-trending"><div class="empty"><div class="spinner"></div></div></div>
+    </div>
+    <div>
+      <div class="section-title">Network Health</div>
+      <div id="net-health"><div class="empty"><div class="spinner"></div></div></div>
+    </div>
+  </div>
+</div>
+
+</main><!-- /main -->
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+const state = {
+  token: null,
+  userId: null,
+  holdings: [],     // pending holdings before submit
+};
+
+// ── API base ─────────────────────────────────────────────────────────────────
+const API = '';   // same origin
+
+// ── apiFetch ─────────────────────────────────────────────────────────────────
+async function apiFetch(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+  const res = await fetch(API + path, { ...opts, headers });
+  if (res.status === 401) { signOut(); showToast('Session expired — please sign in again'); return null; }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function showToast(msg, type = 'error') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.background = type === 'ok' ? 'var(--green)' : 'var(--red)';
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const sc = document.getElementById(`screen-${name}`);
+  const nv = document.getElementById(`nav-${name}`);
+  if (sc) sc.classList.add('active');
+  if (nv) nv.classList.add('active');
+  if (name === 'dashboard') loadDashboard();
+  if (name === 'patterns')  loadPatterns();
+  if (name === 'network')   loadNetwork();
+  if (name === 'tips')      loadTipsHistory();
+  if (name === 'portfolio') loadPortfolioModel();
+}
+
+document.querySelectorAll('.nav-item').forEach(el => {
+  el.addEventListener('click', () => {
+    const s = el.dataset.screen;
+    if ((s !== 'auth') && !state.token) { showScreen('auth'); return; }
+    showScreen(s);
+  });
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function tierBadge(tier) {
+  const t = (tier || '').toLowerCase();
+  const cls = { high: 'badge-high', medium: 'badge-medium', low: 'badge-low', avoid: 'badge-avoid' }[t] || 'badge-low';
+  return `<span class="badge ${cls}">${tier || '—'}</span>`;
+}
+function dirBadge(dir) {
+  const d = (dir || '').toLowerCase();
+  const cls = d === 'bullish' ? 'badge-bullish' : d === 'bearish' ? 'badge-bearish' : 'badge-low';
+  return `<span class="badge ${cls}">${dir || '—'}</span>`;
+}
+function dot(ok) {
+  return ok ? `<span class="dot dot-green"></span>` : `<span class="dot dot-red"></span>`;
+}
+function fmt(v, digits = 2) {
+  if (v == null) return '—';
+  const n = parseFloat(v);
+  return isNaN(n) ? v : n.toFixed(digits);
+}
+function fmtTime(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+  catch { return iso; }
+}
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleDateString(); }
+  catch { return iso; }
+}
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Connection ping ───────────────────────────────────────────────────────────
+async function pingConnection() {
+  try {
+    const d = await apiFetch('/stats');
+    if (!d) return;
+    document.getElementById('conn-dot').className = 'ok';
+    document.getElementById('conn-label').textContent = 'CONNECTED';
+    document.getElementById('kb-count').textContent = `KB: ${(d.total_facts || 0).toLocaleString()}`;
+    return d;
+  } catch {
+    document.getElementById('conn-dot').className = 'err';
+    document.getElementById('conn-label').textContent = 'DISCONNECTED';
+  }
+}
+
+// ── AUTH ──────────────────────────────────────────────────────────────────────
+document.getElementById('reg-btn').addEventListener('click', async () => {
+  const uid   = document.getElementById('reg-uid').value.trim();
+  const email = document.getElementById('reg-email').value.trim();
+  const pw    = document.getElementById('reg-pw').value;
+  const pw2   = document.getElementById('reg-pw2').value;
+  const msg   = document.getElementById('reg-msg');
+  if (!uid || !email || !pw) { msg.textContent = 'User ID, email and password required.'; return; }
+  if (pw !== pw2)  { msg.textContent = 'Passwords do not match.'; return; }
+  msg.innerHTML = '<span class="spinner"></span>';
+  try {
+    const d = await apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ user_id: uid, email, password: pw }) });
+    if (!d) { msg.textContent = 'Failed.'; return; }
+    msg.style.color = 'var(--green)';
+    msg.textContent = `Account created — sign in as ${email}`;
+    document.getElementById('login-email').value = email;
+  } catch (e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
+});
+
+document.getElementById('login-btn').addEventListener('click', async () => {
+  const email = document.getElementById('login-email').value.trim();
+  const pw    = document.getElementById('login-pw').value;
+  const msg   = document.getElementById('login-msg');
+  if (!email || !pw) { msg.textContent = 'Email and password required.'; return; }
+  msg.innerHTML = '<span class="spinner"></span>';
+  try {
+    const d = await apiFetch('/auth/token', { method: 'POST', body: JSON.stringify({ email, password: pw }) });
+    if (!d) { msg.textContent = 'Failed.'; return; }
+    state.token  = d.access_token || d.token;
+    state.userId = d.user_id;
+    document.getElementById('user-badge').textContent = `[${state.userId}]`;
+    showScreen('dashboard');
+  } catch (e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
+});
+
+function signOut() {
+  state.token = null; state.userId = null; state.holdings = [];
+  document.getElementById('user-badge').textContent = 'not signed in';
+  showScreen('auth');
+}
+
+// ── DASHBOARD ─────────────────────────────────────────────────────────────────
+let dashInterval = null;
+
+async function loadDashboard() {
+  clearInterval(dashInterval);
+  await refreshDashboard();
+  dashInterval = setInterval(refreshDashboard, 60000);
+}
+
+async function refreshDashboard() {
+  try {
+    const stats = await apiFetch('/stats');
+    if (!stats) return;
+    document.getElementById('s-facts').textContent    = (stats.total_facts || 0).toLocaleString();
+    document.getElementById('s-patterns').textContent = stats.open_patterns || 0;
+
+    // regime
+    const atoms = stats.top_retrieved_atoms || [];
+    const regime = atoms.length ? (atoms[0].regime || atoms[0].market_regime || '—') : (stats.market_regime || '—');
+    document.getElementById('s-regime').textContent = regime.replace(/_/g,' ');
+
+    // stress ratio
+    const ratio = stats.total_facts ? (stats.total_conflicts_detected / stats.total_facts) : 0;
+    const pct = (ratio * 100).toFixed(1) + '%';
+    document.getElementById('s-stress').textContent = pct;
+    document.getElementById('s-stress-sub').textContent = `${stats.total_conflicts_detected || 0} conflicts`;
+    const sc = document.getElementById('s-stress-card');
+    sc.className = 'stat-card ' + (ratio < 0.3 ? 'stress-green' : ratio < 0.6 ? 'stress-amber' : 'stress-red');
+    document.getElementById('kb-count').textContent = `KB: ${(stats.total_facts||0).toLocaleString()}`;
+  } catch(e) { showToast('Stats load failed: ' + e.message); }
+
+  // conviction tickers
+  try {
+    const ps = await apiFetch('/portfolio/summary');
+    const top3 = (ps?.top_conviction || []).slice(0, 3);
+    const conv = document.getElementById('dash-conviction');
+    if (!top3.length) { conv.innerHTML = '<div class="empty text-sm text-muted">No conviction data yet</div>'; }
+    else conv.innerHTML = top3.map(t => {
+      const up = t.upside_pct != null ? `<span class="mono-${t.upside_pct >= 0 ? 'green' : 'red'}">${t.upside_pct >= 0 ? '▲' : '▼'} ${fmt(Math.abs(t.upside_pct))}%</span>` : '';
+      return `<div class="conviction-card">
+        <span class="conviction-ticker">${escHtml(t.ticker)}</span>
+        <div class="conviction-meta">${tierBadge(t.conviction_tier)}</div>
+        <div class="conviction-upside">${up}</div>
+      </div>`;
+    }).join('');
+  } catch { document.getElementById('dash-conviction').innerHTML = '<div class="empty text-sm text-muted">No portfolio summary available</div>'; }
+
+  // adapters
+  try {
+    const ingest = await apiFetch('/ingest/status');
+    const adapters = Object.values(ingest?.adapters || {});
+    const el = document.getElementById('dash-adapters');
+    if (!adapters.length) { el.innerHTML = '<div class="empty text-sm text-muted">No adapters</div>'; return; }
+    el.innerHTML = adapters.map(a => {
+      const ok = !a.is_running && a.last_success_at;
+      return `<div class="adapter-row">
+        ${dot(ok)}
+        <span class="adapter-name">${escHtml(a.name)}</span>
+        <span class="adapter-time">${a.last_run_at ? fmtTime(a.last_run_at) : 'never'}</span>
+        <span class="text-xs mono-muted">${a.total_atoms ?? 0} atoms</span>
+      </div>`;
+    }).join('');
+  } catch { document.getElementById('dash-adapters').innerHTML = '<div class="empty text-sm text-muted">Ingest status unavailable</div>'; }
+}
+
+document.getElementById('dash-refresh-btn').addEventListener('click', refreshDashboard);
+
+// ── PORTFOLIO ─────────────────────────────────────────────────────────────────
+function renderHoldings() {
+  const el = document.getElementById('p-holdings-list');
+  if (!state.holdings.length) { el.innerHTML = '<div class="text-sm text-muted mb-8">No holdings added yet</div>'; return; }
+  el.innerHTML = state.holdings.map((h, i) => `
+    <div class="holding-row">
+      <span class="holding-ticker">${escHtml(h.ticker)}</span>
+      <span class="holding-meta">${h.quantity} × ${h.avg_cost ? '@' + h.avg_cost : ''}</span>
+      <button class="btn btn-ghost btn-sm" onclick="removeHolding(${i})">✕</button>
+    </div>`).join('');
+}
+
+window.removeHolding = function(i) { state.holdings.splice(i, 1); renderHoldings(); };
+
+document.getElementById('p-add-btn').addEventListener('click', () => {
+  const ticker = document.getElementById('p-ticker').value.trim().toUpperCase();
+  const qty    = parseFloat(document.getElementById('p-qty').value) || 0;
+  const cost   = parseFloat(document.getElementById('p-cost').value) || null;
+  if (!ticker) { showToast('Enter a ticker'); return; }
+  state.holdings.push({ ticker, quantity: qty, avg_cost: cost });
+  document.getElementById('p-ticker').value = '';
+  document.getElementById('p-qty').value = '';
+  document.getElementById('p-cost').value = '';
+  renderHoldings();
+});
+
+document.getElementById('p-submit-btn').addEventListener('click', async () => {
+  if (!state.userId) { showToast('Sign in first'); return; }
+  const msg = document.getElementById('p-msg');
+  msg.innerHTML = '<span class="spinner"></span>';
+  try {
+    const d = await apiFetch(`/users/${state.userId}/portfolio`, {
+      method: 'POST',
+      body: JSON.stringify({ holdings: state.holdings })
+    });
+    if (!d) return;
+    msg.style.color = 'var(--green)';
+    msg.textContent = `✓ ${d.count} holdings submitted`;
+    loadPortfolioModel();
+  } catch(e) { msg.style.color='var(--red)'; msg.textContent = e.message; }
+});
+
+async function loadPortfolioModel() {
+  if (!state.userId) return;
+  try {
+    const m = await apiFetch(`/users/${state.userId}/preferences/inferred`);
+    if (!m) return;
+    document.getElementById('p-model-card').innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
+        ${[
+          ['Risk Tolerance', m.risk_tolerance],
+          ['Holding Style', m.holding_style],
+          ['Portfolio Beta', fmt(m.portfolio_beta)],
+          ['Preferred Pattern', m.preferred_pattern],
+          ['Avg Win Rate', m.avg_win_rate != null ? fmt(m.avg_win_rate*100)+'%' : '—'],
+          ['Sector Affinity', (m.sector_affinity||[]).join(', ') || '—'],
+        ].map(([k,v]) => `
+          <div><div class="text-xs text-muted mb-8">${k}</div><div class="mono-amber">${escHtml(String(v||'—'))}</div></div>
+        `).join('')}
+      </div>`;
+  } catch { /* model not ready yet */ }
+
+  // watchlist signals
+  try {
+    const ws = await apiFetch(`/users/${state.userId}/watchlist-signals`);
+    const sigs = ws?.signals || [];
+    if (!sigs.length) { document.getElementById('p-signals').innerHTML = '<div class="empty text-sm text-muted">No signals yet</div>'; return; }
+    document.getElementById('p-signals').innerHTML = `
+      <table class="tbl">
+        <thead><tr><th>Ticker</th><th>Tier</th><th>Upside</th><th>Direction</th></tr></thead>
+        <tbody>${sigs.slice(0,20).map(s => `<tr>
+          <td class="mono-amber">${escHtml(s.ticker)}</td>
+          <td>${tierBadge(s.conviction_tier)}</td>
+          <td class="mono-${(s.upside_pct||0)>=0?'green':'red'}">${fmt(s.upside_pct)}%</td>
+          <td>${dirBadge(s.signal_direction)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  } catch { document.getElementById('p-signals').innerHTML = '<div class="empty text-sm text-muted">Signals unavailable</div>'; }
+}
+
+// ── CHAT ──────────────────────────────────────────────────────────────────────
+let sessionId = `s_${Date.now()}`;
+
+function appendMsg(role, html) {
+  const msgs = document.getElementById('chat-messages');
+  const el = document.createElement('div');
+  el.className = `msg msg-${role}`;
+  el.innerHTML = `<div class="msg-bubble">${html}</div><div class="msg-time">${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>`;
+  msgs.appendChild(el);
+  msgs.scrollTop = msgs.scrollHeight;
+  return el;
+}
+
+function renderOverlay(overlay) {
+  if (!overlay || typeof overlay !== 'object') return '';
+  const parts = [];
+  if (overlay.signals?.length) {
+    parts.push(`<div class="overlay-card">
+      <div class="overlay-card-title">Signal Summary</div>
+      ${overlay.signals.slice(0,4).map(s => `<div class="flex-center gap-8 text-sm mb-8">
+        <span class="mono-amber">${escHtml(s.ticker||'')}</span>
+        ${tierBadge(s.conviction_tier)}
+        <span class="mono-${(s.upside_pct||0)>=0?'green':'red'}">${fmt(s.upside_pct)}%</span>
+      </div>`).join('')}
+    </div>`);
+  }
+  if (overlay.causal_chain?.length) {
+    parts.push(`<div class="overlay-card">
+      <div class="overlay-card-title">Causal Context</div>
+      <div class="text-sm text-muted">${overlay.causal_chain.slice(0,3).map(c => escHtml(String(c))).join(' → ')}</div>
+    </div>`);
+  }
+  if (overlay.stress_flag) {
+    parts.push(`<div class="overlay-card" style="border-color:var(--red)">
+      <div class="overlay-card-title" style="color:var(--red)">⚠ Stress Flag</div>
+      <div class="text-sm text-muted">${escHtml(String(overlay.stress_flag))}</div>
+    </div>`);
+  }
+  return parts.join('');
+}
+
+async function sendChat() {
+  const inp = document.getElementById('chat-input');
+  const msg = inp.value.trim();
+  if (!msg) return;
+  inp.value = '';
+  inp.style.height = 'auto';
+  const overlayMode = document.getElementById('overlay-toggle').checked;
+
+  appendMsg('user', escHtml(msg));
+  const thinking = appendMsg('assistant', '<span class="spinner"></span>');
+
+  try {
+    const d = await apiFetch('/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message: msg, session_id: sessionId, overlay_mode: overlayMode })
+    });
+    if (!d) { thinking.remove(); return; }
+    const answer = escHtml(d.response || d.answer || JSON.stringify(d));
+    const overlayHtml = overlayMode ? renderOverlay(d.overlay) : '';
+    thinking.querySelector('.msg-bubble').innerHTML = answer + overlayHtml;
+  } catch(e) {
+    thinking.querySelector('.msg-bubble').innerHTML = `<span style="color:var(--red)">${escHtml(e.message)}</span>`;
+  }
+}
+
+document.getElementById('chat-send-btn').addEventListener('click', sendChat);
+document.getElementById('chat-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+document.getElementById('chat-input').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+// ── TIPS ──────────────────────────────────────────────────────────────────────
+document.getElementById('tip-config-btn').addEventListener('click', async () => {
+  if (!state.userId) { showToast('Sign in first'); return; }
+  const msg = document.getElementById('tip-config-msg');
+  msg.innerHTML = '<span class="spinner"></span>';
+  try {
+    const d = await apiFetch(`/users/${state.userId}/onboarding`, {
+      method: 'POST',
+      body: JSON.stringify({
+        account_size:       parseFloat(document.getElementById('tip-account').value) || null,
+        risk_tolerance:     null,
+        delivery_time:      document.getElementById('tip-time').value,
+        timezone:           document.getElementById('tip-tz').value,
+      })
+    });
+    if (!d) return;
+    msg.style.color = 'var(--green)'; msg.textContent = '✓ Config saved';
+  } catch(e) { msg.style.color='var(--red)'; msg.textContent = e.message; }
+});
+
+document.getElementById('tip-preview-btn').addEventListener('click', async () => {
+  if (!state.userId) { showToast('Sign in first'); return; }
+  const wrap = document.getElementById('tip-preview-card');
+  wrap.innerHTML = '<span class="spinner"></span>';
+  try {
+    const d = await apiFetch(`/users/${state.userId}/tip/preview`);
+    if (!d) { wrap.innerHTML = '<div class="text-sm text-muted">No tip available</div>'; return; }
+    const t = d.tip;
+    if (!t) { wrap.innerHTML = `<div class="text-sm text-muted">${escHtml(d.reason || 'No eligible patterns')}</div>`; return; }
+    const skew = t.skew_warning ? `<div class="skew-warning">⚠ ${escHtml(t.skew_warning)}</div>` : '';
+    wrap.innerHTML = `<div class="tip-card">
+      <div class="tip-card-header">
+        <div>
+          <div class="tip-card-ticker">${escHtml(t.ticker)}</div>
+          <div class="tip-card-type">${escHtml(t.pattern_type||'')} · ${escHtml(t.timeframe||'')} · ${dirBadge(t.direction)}</div>
+        </div>
+        ${t.quality_score != null ? `<span class="badge badge-open">Q: ${fmt(t.quality_score)}</span>` : ''}
+      </div>
+      <div class="tip-card-zone">
+        <div class="tip-card-zone-label">Entry Zone</div>
+        <div class="mono-amber">${fmt(t.zone_low)} – ${fmt(t.zone_high)}</div>
+      </div>
+      <div class="tip-card-levels">
+        <div class="tip-level"><div class="tip-level-label">Entry</div><div class="tip-level-value entry">${fmt(t.entry_price || t.zone_high)}</div></div>
+        <div class="tip-level"><div class="tip-level-label">Stop</div><div class="tip-level-value stop">${fmt(t.stop_loss)}</div></div>
+        <div class="tip-level"><div class="tip-level-label">Target 1</div><div class="tip-level-value target">${fmt(t.target_1)}</div></div>
+      </div>
+      <div class="tip-card-meta">
+        ${t.position_units != null ? `<span><span class="meta-key">Units</span><span class="meta-val">${t.position_units}</span></span>` : ''}
+        ${t.rr_ratio != null ? `<span><span class="meta-key">R/R</span><span class="meta-val">${fmt(t.rr_ratio)}</span></span>` : ''}
+        ${t.kb_conviction ? `<span><span class="meta-key">KB Conviction</span><span class="meta-val">${escHtml(t.kb_conviction)}</span></span>` : ''}
+        ${t.kb_regime ? `<span><span class="meta-key">Regime</span><span class="meta-val">${escHtml(t.kb_regime).replace(/_/g,' ')}</span></span>` : ''}
+        ${t.calibration_confidence != null ? `<span><span class="meta-key">Cal. Confidence</span><span class="meta-val">${fmt(t.calibration_confidence*100)}%</span></span>` : ''}
+      </div>
+      ${skew}
+    </div>`;
+  } catch(e) { wrap.innerHTML = `<div class="text-sm" style="color:var(--red)">${escHtml(e.message)}</div>`; }
+});
+
+async function loadTipsHistory() {
+  if (!state.userId) return;
+  const el = document.getElementById('tips-history');
+  try {
+    const d = await apiFetch(`/users/${state.userId}/delivery-history?limit=20`);
+    const rows = d?.history || [];
+    if (!rows.length) { el.innerHTML = '<div class="empty text-sm text-muted">No delivery history</div>'; return; }
+    el.innerHTML = `<table class="tbl">
+      <thead><tr><th>Date</th><th>Regime</th><th>Opportunities</th><th>Success</th><th>Length</th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td class="mono-muted">${fmtDate(r.delivered_at || r.created_at)}</td>
+        <td><span class="text-sm">${escHtml((r.regime_at_delivery||'').replace(/_/g,' '))||'—'}</span></td>
+        <td class="mono-amber">${r.opportunities_count ?? '—'}</td>
+        <td>${dot(r.success)}</td>
+        <td class="mono-muted text-xs">${r.message_length ? r.message_length+'c' : '—'}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  } catch { el.innerHTML = '<div class="empty text-sm text-muted">History unavailable</div>'; }
+}
+
+// ── PATTERNS ──────────────────────────────────────────────────────────────────
+async function loadPatterns() {
+  const grid = document.getElementById('patterns-grid');
+  grid.innerHTML = '<div class="empty"><div class="spinner"></div></div>';
+  const params = new URLSearchParams();
+  const type   = document.getElementById('pf-type').value;
+  const tf     = document.getElementById('pf-tf').value;
+  const dir    = document.getElementById('pf-dir').value;
+  const ticker = document.getElementById('pf-ticker').value.trim().toUpperCase();
+  if (type)   params.set('pattern_type', type);
+  if (tf)     params.set('timeframe', tf);
+  if (dir)    params.set('direction', dir);
+  if (ticker) params.set('ticker', ticker);
+  params.set('limit', '50');
+  try {
+    const d = await apiFetch(`/patterns/live?${params}`);
+    const pats = d?.patterns || [];
+    document.getElementById('pf-count').textContent = `${pats.length} result${pats.length===1?'':'s'}`;
+    if (!pats.length) { grid.innerHTML = '<div class="empty text-sm text-muted">No open patterns match filters</div>'; return; }
+    grid.innerHTML = pats.map(p => `
+      <div class="pattern-card" onclick="togglePattern(this, ${p.id})">
+        <div class="flex-center gap-8 mb-8">
+          <span class="mono-amber fw-700">${escHtml(p.ticker)}</span>
+          ${dirBadge(p.direction)}
+          <span class="badge badge-open" style="margin-left:auto;">${escHtml(p.pattern_type||'').replace(/_/g,' ')}</span>
+        </div>
+        <div class="flex-center gap-12 text-sm mb-8">
+          <span class="text-muted">TF</span><span class="mono">${escHtml(p.timeframe||'—')}</span>
+          <span class="text-muted">Q</span><span class="mono-amber">${fmt(p.quality_score)}</span>
+        </div>
+        <div class="text-xs text-muted">Zone: <span class="mono">${fmt(p.zone_low)} – ${fmt(p.zone_high)}</span></div>
+        <div class="text-xs text-muted mt-8">Formed: ${fmtDate(p.formed_at)}</div>
+        <div class="pattern-detail" id="pd-${p.id}"><div class="spinner"></div></div>
+      </div>`).join('');
+  } catch(e) { grid.innerHTML = `<div class="empty text-sm" style="color:var(--red)">${escHtml(e.message)}</div>`; }
+}
+
+window.togglePattern = async function(el, id) {
+  el.classList.toggle('expanded');
+  const detail = document.getElementById(`pd-${id}`);
+  if (!el.classList.contains('expanded')) return;
+  if (detail.dataset.loaded) return;
+  detail.dataset.loaded = '1';
+  try {
+    const qs = state.userId ? `?user_id=${state.userId}` : '';
+    const d = await apiFetch(`/patterns/${id}${qs}`);
+    const p = d?.pattern || d || {};
+    const pos = d?.position_recommendation;
+    detail.innerHTML = `
+      <div style="font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+        <div><span class="text-muted">KB Conviction</span><br><span class="mono-amber">${escHtml(p.kb_conviction||'—')}</span></div>
+        <div><span class="text-muted">Regime</span><br><span class="mono">${escHtml((p.kb_regime||'—').replace(/_/g,' '))}</span></div>
+        <div><span class="text-muted">Signal Dir</span><br>${dirBadge(p.kb_signal_dir)}</div>
+        <div><span class="text-muted">Status</span><br><span class="badge badge-open">${escHtml(p.status||'open')}</span></div>
+      </div>
+      ${pos ? `<div class="card-sm text-sm">
+        <div class="text-xs text-muted mb-8">Position Sizing</div>
+        <div class="flex-center gap-12">
+          <span><span class="text-muted">Entry</span> <span class="mono-amber">${fmt(pos.entry_price)}</span></span>
+          <span><span class="text-muted">Stop</span> <span class="mono-red">${fmt(pos.stop_loss)}</span></span>
+          <span><span class="text-muted">Units</span> <span class="mono-green">${pos.position_units || '—'}</span></span>
+          <span><span class="text-muted">R/R</span> <span class="mono">${fmt(pos.rr_ratio)}</span></span>
+        </div>
+      </div>` : ''}`;
+  } catch(e) { detail.innerHTML = `<span class="text-sm" style="color:var(--red)">${escHtml(e.message)}</span>`; }
+};
+
+document.getElementById('pf-search-btn').addEventListener('click', loadPatterns);
+['pf-type','pf-tf','pf-dir'].forEach(id => {
+  document.getElementById(id).addEventListener('change', loadPatterns);
+});
+
+// ── NETWORK ───────────────────────────────────────────────────────────────────
+async function loadNetwork() {
+  // Coverage leaderboard
+  try {
+    const d = await apiFetch('/universe/coverage');
+    const rows = (d?.tickers || []).slice(0, 20);
+    const maxCov = Math.max(...rows.map(r => r.coverage_count || 0), 1);
+    const el = document.getElementById('net-leaderboard');
+    if (!rows.length) { el.innerHTML = '<div class="empty text-sm text-muted">No coverage data</div>'; return; }
+    el.innerHTML = rows.map((r, i) => `
+      <div class="lb-row">
+        <span class="lb-rank">${i+1}</span>
+        <span class="lb-ticker mono-amber">${escHtml(r.ticker)}</span>
+        <div class="lb-bar-wrap"><div class="lb-bar" style="width:${((r.coverage_count||0)/maxCov*100).toFixed(1)}%"></div></div>
+        <span class="lb-count">${r.coverage_count||0}</span>
+      </div>`).join('');
+  } catch { document.getElementById('net-leaderboard').innerHTML = '<div class="empty text-sm text-muted">Unavailable</div>'; }
+
+  // Trending
+  try {
+    const d = await apiFetch('/universe/trending');
+    const rows = (d?.trending || []).slice(0, 15);
+    const el = document.getElementById('net-trending');
+    if (!rows.length) { el.innerHTML = '<div class="empty text-sm text-muted">No trending data</div>'; return; }
+    el.innerHTML = rows.map(r => `
+      <div class="lb-row">
+        <span class="lb-ticker mono-amber">${escHtml(r.ticker)}</span>
+        <span class="text-xs text-muted" style="flex:1">${escHtml(r.sector_label||'')}</span>
+        <span class="mono-green text-xs">+${fmt(r.growth_rate*100,0)}%</span>
+      </div>`).join('');
+  } catch { document.getElementById('net-trending').innerHTML = '<div class="empty text-sm text-muted">Unavailable</div>'; }
+
+  // Health
+  try {
+    const d = await apiFetch('/network/health');
+    const el = document.getElementById('net-health');
+    el.innerHTML = `<div class="card" style="font-size:12px;display:flex;flex-direction:column;gap:12px;">
+      ${[
+        ['Total Tickers', d.total_tickers],
+        ['Total Users', d.total_users],
+        ['Flywheel Velocity', fmt(d.flywheel_velocity)],
+        ['Cohort Signals Active', d.cohort_signals_active],
+      ].map(([k,v]) => `<div class="flex-center" style="justify-content:space-between;">
+        <span class="text-muted">${k}</span>
+        <span class="mono-amber fw-700">${v ?? '—'}</span>
+      </div>`).join('')}
+      ${d.tickers_by_tier ? `<div style="margin-top:4px;">
+        <div class="text-xs text-muted mb-8">Tickers by Tier</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          ${Object.entries(d.tickers_by_tier).map(([k,v]) => `${tierBadge(k)} <span class="mono text-xs">${v}</span>`).join('')}
+        </div>
+      </div>` : ''}
+    </div>`;
+  } catch { document.getElementById('net-health').innerHTML = '<div class="empty text-sm text-muted">Unavailable</div>'; }
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+(async () => {
+  await pingConnection();
+  setInterval(pingConnection, 30000);
+  showScreen('auth');
+})();
+</script>
+</body>
+</html>
