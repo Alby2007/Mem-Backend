@@ -576,12 +576,9 @@ function escHtml(s) {
 // ── Connection ping ───────────────────────────────────────────────────────────
 async function pingConnection() {
   try {
-    const d = await apiFetch('/stats');
-    if (!d) return;
+    await apiFetch('/health');
     document.getElementById('conn-dot').className = 'ok';
     document.getElementById('conn-label').textContent = 'CONNECTED';
-    document.getElementById('kb-count').textContent = `KB: ${(d.total_facts || 0).toLocaleString()}`;
-    return d;
   } catch {
     document.getElementById('conn-dot').className = 'err';
     document.getElementById('conn-label').textContent = 'DISCONNECTED';
@@ -1061,7 +1058,7 @@ async function loadNetwork() {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 (async () => {
   await pingConnection();
-  setInterval(pingConnection, 30000);
+  setInterval(pingConnection, 60000);
   showScreen('auth');
 })();
 </script>
