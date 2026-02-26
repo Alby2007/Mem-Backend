@@ -1971,8 +1971,10 @@ async function loadPatterns() {
     }
     document.getElementById('pf-count').textContent = `${pats.length} result${pats.length===1?'':'s'}`;
     if (!pats.length) { grid.innerHTML = '<div class="empty text-sm text-muted">No open patterns match filters</div>'; return; }
+    window._patternCache = {};
+    pats.forEach(p => { window._patternCache[p.id] = p; });
     grid.innerHTML = pats.map(p => `
-      <div class="pattern-card" title="Ctrl+click to discuss in Chat" onclick="handlePatternClick(event,this,${p.id},${JSON.stringify(JSON.stringify(p))})">
+      <div class="pattern-card" title="Ctrl+click to discuss in Chat" onclick="handlePatternClick(event,this,${p.id})">
         <div class="flex-center gap-8 mb-8">
           <span class="mono-amber fw-700">${escHtml(p.ticker)}</span>
           ${dirBadge(p.direction)}
@@ -1989,10 +1991,10 @@ async function loadPatterns() {
   } catch(e) { grid.innerHTML = `<div class="empty text-sm" style="color:var(--red)">${escHtml(e.message)}</div>`; }
 }
 
-window.handlePatternClick = function(event, el, id, patJson) {
+window.handlePatternClick = function(event, el, id) {
   if (event.ctrlKey) {
-    const p = JSON.parse(patJson);
-    sendPatternToChat(p);
+    const p = (window._patternCache || {})[id];
+    if (p) sendPatternToChat(p);
     return;
   }
   togglePattern(el, id);
