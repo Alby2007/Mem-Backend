@@ -44,7 +44,7 @@ try:
 
     limiter = Limiter(
         key_func=get_remote_address,
-        default_limits=[RATE_LIMITS['default'], '50 per hour'],
+        default_limits=[RATE_LIMITS['default'], '200 per hour'],
         storage_uri='memory://',
     )
 

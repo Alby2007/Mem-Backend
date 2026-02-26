@@ -226,6 +226,10 @@ except ImportError:
         def decorator(f):
             return f
         return decorator
+    class _NoOpLimiter:
+        def exempt(self, f): return f
+        def init_app(self, app): pass
+    limiter = _NoOpLimiter()  # type: ignore
 
 try:
     from middleware.audit import log_audit_event, get_audit_log, ensure_audit_table
@@ -389,6 +393,7 @@ if HAS_INGEST:
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route('/health', methods=['GET'])
+@limiter.exempt
 def health():
     return jsonify({'status': 'ok', 'db': _DB_PATH})
 

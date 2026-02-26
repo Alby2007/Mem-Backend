@@ -1429,7 +1429,7 @@ async function loadNetwork() {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 (async () => {
   await pingConnection();
-  setInterval(pingConnection, 60000);
+  setInterval(pingConnection, 300000);
   showScreen('auth');
 })();
 </script>
