@@ -760,11 +760,20 @@ function renderUserMsg(msg) {
 }
 
 function expandPatternTag(msg) {
-  // Replace [PATTERN:...] with a rich natural-language context block for the LLM
-  return msg.replace(/\[PATTERN:([A-Z0-9.^/-]+)\s+(BULLISH|BEARISH|NEUTRAL)\s+([A-Z ]+?)\s+(\w+)\s+Q([\d.]+)\s+Zone([\d.]+)-([\d.]+)\]/gi,
-    (_, ticker, dir, type, tf, q, zlo, zhi) =>
-      `[Pattern context: ${ticker} — ${dir} ${type.trim()} detected on the ${tf} timeframe. Quality score: ${q}/1.0. Key zone: ${zlo}–${zhi}. Please discuss this pattern, its implications, and how it may intersect with my portfolio.]`
-  );
+  // Replace [PATTERN:inner] using the same split approach as renderUserMsg (immune to regex misalignment)
+  return msg.replace(/\[PATTERN:([^\]]+)\]/g, (_, inner) => {
+    const parts = inner.trim().split(/\s+/);
+    // parts: [ticker, direction, ...type_words..., timeframe, Qscore, ZoneLO-HI]
+    const ticker = parts[0] || '';
+    const dir    = parts[1] || '';
+    const zone   = parts[parts.length - 1] || '';   // e.g. Zone499.25-509.93
+    const q      = parts[parts.length - 2] || '';   // e.g. Q0.75
+    const tf     = parts[parts.length - 3] || '';   // e.g. 1d
+    const type   = parts.slice(2, parts.length - 3).join(' ').trim(); // everything in between
+    const zoneClean = zone.replace(/^Zone/i, '').replace('-', '–');
+    const qClean    = q.replace(/^Q/i, '');
+    return `[Pattern context: ${ticker} — ${dir} ${type} detected on the ${tf} timeframe. Quality score: ${qClean}/1.0. Key zone: ${zoneClean}. Please discuss this pattern, its implications, and how it may intersect with my portfolio.]`;
+  });
 }
 
 function mdToHtml(s) {
