@@ -2058,6 +2058,157 @@ def user_portfolio_get(user_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/users/<user_id>/portfolio/generate-sim', methods=['POST'])
+@require_auth
+def user_portfolio_generate_sim(user_id):
+    """
+    POST /users/<user_id>/portfolio/generate-sim
+
+    Generate a seeded, realistic UK test portfolio for an intern/tester account.
+    Selects one of 5 archetypes deterministically from user_id (reproducible).
+
+    Returns:
+      { archetype, description, tips_alignment, holdings, model, simulated: true }
+    """
+    err = assert_self(user_id)
+    if err:
+        return err
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+
+    import hashlib as _hashlib
+    import random  as _random
+
+    _ARCHETYPES = [
+        {
+            'key':           'conservative_income',
+            'title':         'Conservative Income Trader',
+            'description':   'Focuses on FTSE defensive names and dividend payers. Low turnover, avoids high-beta cyclicals.',
+            'tips_alignment': 'Tips favour low-risk setups: mitigation blocks and IFVG patterns. Expect smaller position sizes (1–2%) and tight stop levels.',
+            'risk_tolerance': 'conservative',
+            'holding_style':  'value',
+            'sectors':       ['utilities', 'consumer_staples', 'healthcare', 'financials'],
+            'holdings': [
+                {'ticker': 'ULVR.L', 'quantity': 120, 'avg_cost': 3820.0,  'sector': 'consumer_staples'},
+                {'ticker': 'NG.L',   'quantity': 400, 'avg_cost': 1042.0,  'sector': 'utilities'},
+                {'ticker': 'TSCO.L', 'quantity': 350, 'avg_cost': 295.0,   'sector': 'consumer_staples'},
+                {'ticker': 'GSK.L',  'quantity': 180, 'avg_cost': 1685.0,  'sector': 'healthcare'},
+                {'ticker': 'BATS.L', 'quantity': 160, 'avg_cost': 2460.0,  'sector': 'consumer_staples'},
+                {'ticker': 'NWG.L',  'quantity': 900, 'avg_cost': 285.0,   'sector': 'financials'},
+            ],
+        },
+        {
+            'key':           'ftse_momentum',
+            'title':         'FTSE Momentum Trader',
+            'description':   'Chases high-conviction breakouts in FTSE growth names. Sector-diverse with a bias toward industrials and tech.',
+            'tips_alignment': 'Tips favour momentum breakouts: FVG and order block patterns on growth names. Expect moderate position sizes (2–3%) with wider targets.',
+            'risk_tolerance': 'moderate',
+            'holding_style':  'momentum',
+            'sectors':       ['technology', 'industrials', 'healthcare', 'financials'],
+            'holdings': [
+                {'ticker': 'AZN.L',  'quantity':  80, 'avg_cost': 11200.0, 'sector': 'healthcare'},
+                {'ticker': 'LSEG.L', 'quantity': 100, 'avg_cost': 9850.0,  'sector': 'financials'},
+                {'ticker': 'RR.L',   'quantity': 600, 'avg_cost': 415.0,   'sector': 'industrials'},
+                {'ticker': 'BA.L',   'quantity': 250, 'avg_cost': 1295.0,  'sector': 'industrials'},
+                {'ticker': 'AUTO.L', 'quantity': 200, 'avg_cost': 630.0,   'sector': 'technology'},
+                {'ticker': 'SAGE.L', 'quantity': 220, 'avg_cost': 1105.0,  'sector': 'technology'},
+            ],
+        },
+        {
+            'key':           'energy_commodities',
+            'title':         'Commodities & Energy Trader',
+            'description':   'Concentrated in FTSE energy and mining. Cyclical, regime-sensitive, comfortable with higher volatility.',
+            'tips_alignment': 'Tips favour commodity cycle plays. Patterns will be regime-sensitive — expect elevated vol signals and wider stops. Stress flags fire more often for this profile.',
+            'risk_tolerance': 'aggressive',
+            'holding_style':  'mixed',
+            'sectors':       ['energy', 'materials', 'mining'],
+            'holdings': [
+                {'ticker': 'SHEL.L', 'quantity': 200, 'avg_cost': 2680.0,  'sector': 'energy'},
+                {'ticker': 'BP.L',   'quantity': 500, 'avg_cost': 445.0,   'sector': 'energy'},
+                {'ticker': 'RIO.L',  'quantity': 120, 'avg_cost': 4950.0,  'sector': 'materials'},
+                {'ticker': 'GLEN.L', 'quantity': 800, 'avg_cost': 420.0,   'sector': 'materials'},
+                {'ticker': 'AAL.L',  'quantity': 450, 'avg_cost': 225.0,   'sector': 'materials'},
+                {'ticker': 'BHP.L',  'quantity': 150, 'avg_cost': 2150.0,  'sector': 'materials'},
+            ],
+        },
+        {
+            'key':           'financials_heavy',
+            'title':         'Financials-Concentrated Trader',
+            'description':   'Heavily weighted to UK banks and financial infrastructure. High concentration risk — sensitive to rate and credit cycle.',
+            'tips_alignment': 'Tips lean financials-sector. Concentration risk is flagged — watch sector stress alerts. Position sizes moderate (2–3%) with value-oriented setups.',
+            'risk_tolerance': 'moderate',
+            'holding_style':  'value',
+            'sectors':       ['financials'],
+            'holdings': [
+                {'ticker': 'HSBA.L', 'quantity': 700, 'avg_cost': 680.0,   'sector': 'financials'},
+                {'ticker': 'BARC.L', 'quantity': 900, 'avg_cost': 205.0,   'sector': 'financials'},
+                {'ticker': 'LLOY.L', 'quantity': 2500,'avg_cost': 52.0,    'sector': 'financials'},
+                {'ticker': 'STAN.L', 'quantity': 400, 'avg_cost': 690.0,   'sector': 'financials'},
+                {'ticker': 'NWG.L',  'quantity': 800, 'avg_cost': 285.0,   'sector': 'financials'},
+                {'ticker': 'LSEG.L', 'quantity':  90, 'avg_cost': 9850.0,  'sector': 'financials'},
+            ],
+        },
+        {
+            'key':           'high_conviction_growth',
+            'title':         'High-Conviction Growth Trader',
+            'description':   'Concentrated in FTSE tech and pharma growth names. Aggressive, targets T2/T3 on breakouts, tolerates wide drawdowns.',
+            'tips_alignment': 'Tips favour aggressive growth plays: high quality-score patterns, T2/T3 targets. Expect larger position sizes (3–5%) and higher-conviction FVG/OB setups.',
+            'risk_tolerance': 'aggressive',
+            'holding_style':  'momentum',
+            'sectors':       ['technology', 'healthcare'],
+            'holdings': [
+                {'ticker': 'AZN.L',  'quantity': 100, 'avg_cost': 11200.0, 'sector': 'healthcare'},
+                {'ticker': 'SAGE.L', 'quantity': 300, 'avg_cost': 1105.0,  'sector': 'technology'},
+                {'ticker': 'LSEG.L', 'quantity': 120, 'avg_cost': 9850.0,  'sector': 'technology'},
+                {'ticker': 'RR.L',   'quantity': 500, 'avg_cost': 415.0,   'sector': 'industrials'},
+                {'ticker': 'AUTO.L', 'quantity': 280, 'avg_cost': 630.0,   'sector': 'technology'},
+                {'ticker': 'HIK.L',  'quantity': 200, 'avg_cost': 1820.0,  'sector': 'healthcare'},
+            ],
+        },
+    ]
+
+    # Seed selection deterministically from user_id (same archetype every call)
+    seed_int = int(_hashlib.md5(user_id.encode()).hexdigest(), 16)
+    archetype = _ARCHETYPES[seed_int % len(_ARCHETYPES)]
+
+    # Apply ±10% random variation to avg_cost (seeded so repeatable)
+    rng = _random.Random(seed_int)
+    holdings = []
+    for h in archetype['holdings']:
+        jitter = 1.0 + rng.uniform(-0.10, 0.10)
+        holdings.append({
+            'ticker':   h['ticker'],
+            'quantity': h['quantity'],
+            'avg_cost': round(h['avg_cost'] * jitter, 2),
+            'sector':   h['sector'],
+        })
+
+    try:
+        result = upsert_portfolio(_DB_PATH, user_id, holdings)
+        model  = build_user_model(user_id, _DB_PATH)
+        result['model'] = model
+        if HAS_HYBRID:
+            try:
+                infer_and_write_from_portfolio(user_id, _DB_PATH)
+            except Exception:
+                pass
+        return jsonify({
+            'simulated':      True,
+            'archetype':      archetype['key'],
+            'title':          archetype['title'],
+            'description':    archetype['description'],
+            'tips_alignment': archetype['tips_alignment'],
+            'risk_tolerance': archetype['risk_tolerance'],
+            'holding_style':  archetype['holding_style'],
+            'sectors':        archetype['sectors'],
+            'holdings':       holdings,
+            'count':          len(holdings),
+            'model':          model,
+        }), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/users/<user_id>/history/screenshot', methods=['POST'])
 @require_auth
 def user_portfolio_screenshot(user_id: str):

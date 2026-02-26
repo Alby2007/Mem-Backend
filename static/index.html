@@ -198,6 +198,16 @@ select option { background: var(--surface); }
 .tip-card-meta .meta-key { color: var(--muted); min-width: 80px; }
 .tip-card-meta .meta-val { color: var(--text); font-family: var(--mono); }
 .skew-warning { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); border-radius: 4px; padding: 6px 10px; font-size: 11px; color: var(--red); margin-top: 8px; }
+.sim-banner { display: flex; align-items: center; gap: 10px; background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.4); border-radius: 6px; padding: 8px 14px; margin-bottom: 16px; font-size: 12px; color: var(--accent); font-weight: 600; }
+.sim-banner .sim-badge { background: var(--accent); color: #000; border-radius: 3px; padding: 1px 7px; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; }
+.sim-banner .sim-clear { margin-left: auto; font-size: 10px; color: var(--muted); cursor: pointer; text-decoration: underline; }
+.sim-banner .sim-clear:hover { color: var(--text); }
+.sim-profile-card { background: rgba(245,158,11,.06); border: 1px solid rgba(245,158,11,.3); border-radius: 6px; padding: 14px; margin-bottom: 16px; }
+.sim-profile-title { font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+.sim-profile-row { display: flex; gap: 8px; font-size: 11px; margin-bottom: 6px; }
+.sim-profile-key { color: var(--muted); min-width: 82px; }
+.sim-profile-val { color: var(--text); }
+.sim-profile-note { font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; line-height: 1.5; }
 .feedback-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .feedback-row .fb-label { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-right: 4px; }
 .fb-btn { background: none; border: 1px solid var(--border); border-radius: 4px; padding: 3px 10px; font-size: 13px; cursor: pointer; transition: border-color .15s, background .15s; color: var(--text); }
@@ -399,7 +409,11 @@ select option { background: var(--surface); }
 
 <!-- PORTFOLIO ─────────────────────────────────────────────────────── -->
 <div class="screen" id="screen-portfolio">
-  <div style="font-size:16px;font-weight:700;margin-bottom:20px;">Portfolio</div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div style="font-size:16px;font-weight:700;">Portfolio</div>
+    <button class="btn btn-outline btn-sm" id="p-gen-sim-btn" title="Generate a seeded UK test portfolio for your account">⚡ Generate Test Portfolio</button>
+  </div>
+  <div id="p-sim-banner" style="display:none;"></div>
   <div class="two-col">
     <div>
       <!-- 1. Screenshot upload -->
@@ -583,7 +597,7 @@ function showScreen(name) {
   if (name === 'patterns')  loadPatterns();
   if (name === 'network')   loadNetwork();
   if (name === 'tips')      loadTipsHistory();
-  if (name === 'portfolio') { loadPortfolioModel(); loadTickerList(); }
+  if (name === 'portfolio') { loadPortfolioModel(); loadTickerList(); loadSimBannerIfSet(); }
 }
 
 document.querySelectorAll('.nav-item').forEach(el => {
@@ -675,6 +689,7 @@ document.getElementById('login-btn').addEventListener('click', async () => {
 });
 
 function signOut() {
+  if (state.userId) localStorage.removeItem(`simulated_${state.userId}`);
   state.token = null; state.userId = null; state.holdings = [];
   document.getElementById('user-badge').textContent = 'not signed in';
   showScreen('auth');
@@ -748,6 +763,75 @@ async function refreshDashboard() {
 document.getElementById('dash-refresh-btn').addEventListener('click', refreshDashboard);
 
 // ── PORTFOLIO ─────────────────────────────────────────────────────────────────
+
+// ── SIMULATED PORTFOLIO ──────────────────────────────────────────────────────
+
+function _simKey() { return `simulated_${state.userId}`; }
+
+function renderSimBanner(title, description, tipsAlignment, riskTolerance, holdingStyle, sectors) {
+  const banner = document.getElementById('p-sim-banner');
+  banner.style.display = 'block';
+  banner.innerHTML = `
+    <div class="sim-banner">
+      <span class="sim-badge">⚠ Simulated</span>
+      <span>This is a test portfolio — not real positions.</span>
+      <span class="sim-clear" id="sim-clear-btn">Clear simulated flag</span>
+    </div>
+    <div class="sim-profile-card">
+      <div class="sim-profile-title">🧪 Test Profile: ${escHtml(title)}</div>
+      <div class="sim-profile-row"><span class="sim-profile-key">Description</span><span class="sim-profile-val">${escHtml(description)}</span></div>
+      <div class="sim-profile-row"><span class="sim-profile-key">Risk tolerance</span><span class="sim-profile-val" style="text-transform:capitalize">${escHtml(riskTolerance)}</span></div>
+      <div class="sim-profile-row"><span class="sim-profile-key">Holding style</span><span class="sim-profile-val" style="text-transform:capitalize">${escHtml(holdingStyle)}</span></div>
+      <div class="sim-profile-row"><span class="sim-profile-key">Sectors</span><span class="sim-profile-val">${(sectors||[]).map(s => s.replace(/_/g,' ')).join(' · ')}</span></div>
+      <div class="sim-profile-note"><strong>Tips alignment:</strong> ${escHtml(tipsAlignment)}</div>
+    </div>`;
+  document.getElementById('sim-clear-btn').addEventListener('click', () => {
+    localStorage.removeItem(_simKey());
+    banner.style.display = 'none';
+  });
+}
+
+function loadSimBannerIfSet() {
+  if (!state.userId) return;
+  const stored = localStorage.getItem(_simKey());
+  if (!stored) return;
+  try {
+    const d = JSON.parse(stored);
+    renderSimBanner(d.title, d.description, d.tips_alignment, d.risk_tolerance, d.holding_style, d.sectors);
+  } catch { localStorage.removeItem(_simKey()); }
+}
+
+document.getElementById('p-gen-sim-btn').addEventListener('click', async () => {
+  if (!state.userId) { showToast('Sign in first'); return; }
+  const btn = document.getElementById('p-gen-sim-btn');
+  btn.disabled = true;
+  btn.textContent = '⚡ Generating…';
+  try {
+    const d = await apiFetch(`/users/${state.userId}/portfolio/generate-sim`, { method: 'POST' });
+    if (!d) return;
+    // Populate holdings in state
+    state.holdings = (d.holdings || []).map(h => ({ ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost }));
+    renderHoldings();
+    // Render model card
+    if (d.model) renderModelCard(d.model);
+    // Store simulated state per-user in localStorage
+    localStorage.setItem(_simKey(), JSON.stringify({
+      title:          d.title,
+      description:    d.description,
+      tips_alignment: d.tips_alignment,
+      risk_tolerance: d.risk_tolerance,
+      holding_style:  d.holding_style,
+      sectors:        d.sectors,
+    }));
+    renderSimBanner(d.title, d.description, d.tips_alignment, d.risk_tolerance, d.holding_style, d.sectors);
+    showToast(`Test portfolio generated: ${d.title}`, 'ok');
+  } catch(e) {
+    showToast(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⚡ Generate Test Portfolio';
+  }
+});
 
 // FTSE sector quick-add
 const FTSE_SECTORS = {
@@ -960,28 +1044,36 @@ document.getElementById('p-submit-btn').addEventListener('click', async () => {
     if (!d) return;
     msg.style.color = 'var(--green)';
     msg.textContent = `✓ ${d.count} holdings submitted`;
+    // Manual submit clears simulated flag
+    if (state.userId) localStorage.removeItem(`simulated_${state.userId}`);
+    document.getElementById('p-sim-banner').style.display = 'none';
     loadPortfolioModel();
   } catch(e) { msg.style.color='var(--red)'; msg.textContent = e.message; }
 });
+
+function renderModelCard(m) {
+  if (!m) return;
+  document.getElementById('p-model-card').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
+      ${[
+        ['Risk Tolerance', m.risk_tolerance],
+        ['Holding Style', m.holding_style],
+        ['Portfolio Beta', fmt(m.portfolio_beta)],
+        ['Preferred Pattern', m.preferred_pattern],
+        ['Avg Win Rate', m.avg_win_rate != null ? fmt(m.avg_win_rate*100)+'%' : '—'],
+        ['Sector Affinity', (m.sector_affinity||[]).join(', ') || '—'],
+      ].map(([k,v]) => `
+        <div><div class="text-xs text-muted mb-8">${k}</div><div class="mono-amber">${escHtml(String(v||'—'))}</div></div>
+      `).join('')}
+    </div>`;
+}
 
 async function loadPortfolioModel() {
   if (!state.userId) return;
   try {
     const m = await apiFetch(`/users/${state.userId}/preferences/inferred`);
     if (!m) return;
-    document.getElementById('p-model-card').innerHTML = `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
-        ${[
-          ['Risk Tolerance', m.risk_tolerance],
-          ['Holding Style', m.holding_style],
-          ['Portfolio Beta', fmt(m.portfolio_beta)],
-          ['Preferred Pattern', m.preferred_pattern],
-          ['Avg Win Rate', m.avg_win_rate != null ? fmt(m.avg_win_rate*100)+'%' : '—'],
-          ['Sector Affinity', (m.sector_affinity||[]).join(', ') || '—'],
-        ].map(([k,v]) => `
-          <div><div class="text-xs text-muted mb-8">${k}</div><div class="mono-amber">${escHtml(String(v||'—'))}</div></div>
-        `).join('')}
-      </div>`;
+    renderModelCard(m);
   } catch { /* model not ready yet */ }
 
   // watchlist signals
