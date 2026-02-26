@@ -1651,8 +1651,26 @@ def chat_endpoint():
                 _h_parts = [f"{h['ticker']} ×{int(h['quantity'])} @ £{h['avg_cost']:.0f}"
                             if h.get('avg_cost') else h['ticker']
                             for h in _holdings[:20]]
-                _lines = [f"=== USER PORTFOLIO ===",
+                # Compute portfolio value metrics for sizing education
+                _pos_values = [
+                    h['quantity'] * h['avg_cost']
+                    for h in _holdings if h.get('quantity') and h.get('avg_cost')
+                ]
+                _total_cost = sum(_pos_values)
+                _largest_pct = (
+                    round(max(_pos_values) / _total_cost * 100)
+                    if _total_cost > 0 and _pos_values else None
+                )
+                _lines = ["=== USER PORTFOLIO ===",
                           f"Holdings: {', '.join(_h_parts)}"]
+                if _total_cost > 0:
+                    _lines.append(f"Total invested (cost basis): £{_total_cost:,.0f}")
+                if _largest_pct is not None:
+                    _largest_ticker = max(
+                        (h for h in _holdings if h.get('quantity') and h.get('avg_cost')),
+                        key=lambda h: h['quantity'] * h['avg_cost']
+                    )['ticker']
+                    _lines.append(f"Largest single position: {_largest_pct}% ({_largest_ticker})")
                 if _model:
                     _risk    = _model.get('risk_tolerance', '')
                     _style   = _model.get('holding_style', '')

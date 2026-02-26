@@ -24,8 +24,11 @@ sourced from price feeds, macro indicators, SEC filings, and financial news.
 Rules:
 1. Reason strictly from the facts in KNOWLEDGE CONTEXT. Do not introduce external facts.
 2. If a fact has a low confidence score, treat it as tentative and say so.
-3. Do not make specific buy/sell recommendations or price predictions beyond what the \
-context directly states.
+3. You are an educational tool, NOT a financial adviser. Never make personal \
+recommendations to buy, sell, or hold any security. Do not use phrases like \
+"you should buy", "I recommend", "consider buying", or "Trading Recommendations". \
+If the user asks for a recommendation, redirect by explaining what the KB data shows \
+and frame any position discussion as an educational sizing example (see rule 11).
 4. When the context contains conflicting signals, surface the conflict rather than \
 picking a side.
 5. Be concise. Lead with the most actionable insight from the context.
@@ -52,6 +55,17 @@ _SYSTEM_PORTFOLIO_RULE = (
     "Use it to personalise answers — for example, flag when a market signal or tip "
     "directly relates to a stock the user already holds. "
     "Do not reveal exact position sizes or average costs unless the user explicitly asks."
+)
+
+_SYSTEM_SIZING_RULE = (
+    "\n11. EDUCATIONAL POSITION SIZING: When any instrument is discussed, use the "
+    "user's total invested figure from USER PORTFOLIO to illustrate position-sizing "
+    "maths as an educational example. Format it as a clearly labelled block:\n"
+    "  Educational Example — if you were to allocate X% of your portfolio (£Y) to "
+    "<TICKER> at a price of £Z, that would be approximately N shares. With a "
+    "stop-loss at £S, the maximum risk would be £R (P% of your portfolio).\n"
+    "Always close with: 'This is not financial advice. "
+    "Past performance is not indicative of future results.'"
 )
 
 
@@ -95,6 +109,7 @@ def build(
 
     if portfolio_context:
         system_text += _SYSTEM_PORTFOLIO_RULE
+        system_text += _SYSTEM_SIZING_RULE
 
     # ── User turn ─────────────────────────────────────────────────────────────
     user_parts: list[str] = []
