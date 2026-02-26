@@ -33,6 +33,46 @@ _COMMIT_THRESHOLD = 0.70
 # Max on-demand fetches per chat request (latency guard)
 MAX_ON_DEMAND_TICKERS = 2
 
+# ── LLM-initiated fetch support ───────────────────────────────────────────────
+
+DATA_REQUEST_SYSTEM_PROMPT = """\
+You are a trading intelligence system. Given a user question and knowledge context,
+decide if you have enough data to answer well.
+
+If you have enough context: respond with exactly:
+ANSWER: <your full answer here>
+
+If you are missing live price, signal, or news data for a specific ticker that would
+materially improve your answer: respond with exactly:
+DATA_REQUEST: <TICKER1>,<TICKER2>
+
+Rules:
+- Only request DATA_REQUEST if the ticker is directly relevant to the question
+- Only request tickers — no free text after DATA_REQUEST
+- If context is empty but the question is general, just ANSWER with what you know from context
+- Maximum 2 tickers per DATA_REQUEST
+- Do NOT request DATA_REQUEST if you already have last_price atoms in context
+"""
+
+import re as _re
+
+def parse_llm_response(text: str) -> tuple[str, list[str]]:
+    """
+    Parse a pass-1 LLM response.
+    Returns (mode, payload) where mode is 'answer' or 'data_request'.
+    - 'answer': payload[0] is the answer text
+    - 'data_request': payload is list of ticker strings
+    """
+    text = (text or '').strip()
+    if text.upper().startswith('DATA_REQUEST:'):
+        raw = text[len('DATA_REQUEST:'):].strip()
+        tickers = [t.strip().upper() for t in _re.split(r'[,\s]+', raw) if t.strip()]
+        return 'data_request', tickers[:MAX_ON_DEMAND_TICKERS]
+    if text.upper().startswith('ANSWER:'):
+        return 'answer', [text[len('ANSWER:'):].strip()]
+    # If model didn't follow format, treat the whole thing as an answer
+    return 'answer', [text]
+
 # A ticker is considered "missing" from the KB if it has fewer than this many
 # last_price atoms (catches both brand-new and recently-cleared tickers)
 _MISSING_THRESHOLD = 1

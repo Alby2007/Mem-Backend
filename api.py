@@ -1711,6 +1711,35 @@ def chat_endpoint():
         except Exception:
             portfolio_context = None
 
+    # ── Pass 1: LLM-initiated data request (only when KB is thin) ────────
+    # If we already fetched live data (live_fetched), skip pass 1 — we have
+    # what we need.  If KB had plenty of atoms, skip pass 1 too.
+    llm_requested_tickers: list = []
+    if (HAS_WORKING_MEMORY and _working_memory is not None
+            and not live_fetched and len(atoms) < 8):
+        try:
+            from knowledge.working_memory import (
+                DATA_REQUEST_SYSTEM_PROMPT, parse_llm_response
+            )
+            _p1_messages = [
+                {'role': 'system', 'content': DATA_REQUEST_SYSTEM_PROMPT},
+                {'role': 'user',   'content':
+                    f"{snippet or '(No KB context)'}\n\nQuestion: {message}"},
+            ]
+            _p1_raw = ollama_chat(_p1_messages, model=model)
+            if _p1_raw:
+                _mode, _payload = parse_llm_response(_p1_raw)
+                if _mode == 'data_request' and _payload:
+                    llm_requested_tickers = _payload
+                    _working_memory.open_session(wm_session_id)
+                    for _t in llm_requested_tickers:
+                        _working_memory.fetch_on_demand(_t, wm_session_id, _DB_PATH)
+                    live_context  = _working_memory.get_session_snippet(wm_session_id)
+                    live_fetched  = _working_memory.get_fetched_tickers(wm_session_id)
+        except Exception:
+            pass
+
+    # ── Build full prompt (pass 2 or single-pass if no data request) ──────
     messages = build_prompt(
         user_message=message,
         snippet=snippet,
@@ -1724,18 +1753,21 @@ def chat_endpoint():
 
     answer = ollama_chat(messages, model=model)
     if answer is None:
-        _working_memory.close_without_commit(wm_session_id) if HAS_WORKING_MEMORY and _working_memory else None
+        if HAS_WORKING_MEMORY and _working_memory:
+            _working_memory.close_without_commit(wm_session_id)
         response['error'] = 'Ollama returned no response'
         return jsonify(response), 503
 
     response['answer'] = answer
+    if llm_requested_tickers:
+        response['llm_requested_tickers'] = llm_requested_tickers
 
     # ── Commit working memory atoms back to KB ────────────────────────────
     if HAS_WORKING_MEMORY and _working_memory and live_fetched:
         try:
             commit_result = _working_memory.commit_session(wm_session_id, _kg)
-            response['kb_enriched']    = commit_result.committed > 0
-            response['live_fetched']   = live_fetched
+            response['kb_enriched']     = commit_result.committed > 0
+            response['live_fetched']    = live_fetched
             response['atoms_committed'] = commit_result.committed
         except Exception:
             _working_memory.close_without_commit(wm_session_id)
