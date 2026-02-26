@@ -1503,6 +1503,12 @@ def chat_endpoint():
     overlay_mode    = bool(data.get('overlay_mode', False))
     chat_user_id    = data.get('user_id') or None
 
+    # Auto-boost limit for portfolio-wide queries so all holdings get KB atoms
+    _PORTFOLIO_KEYWORDS = ('portfolio', 'holdings', 'positions', 'my stocks',
+                           'discuss my', 'analyse my', 'analyze my', 'review my')
+    if chat_user_id and any(kw in message.lower() for kw in _PORTFOLIO_KEYWORDS):
+        limit = max(limit, 80)
+
     conn = _kg.thread_local_conn()
 
     # ── Prior session context (working_state) ──────────────────────────────
@@ -1736,6 +1742,30 @@ def chat_endpoint():
                     _profile = ' · '.join(p for p in [_risk, _style, _sectors] if p)
                     if _profile:
                         _lines.append(f"Risk profile: {_profile}")
+                # ── Per-ticker KB signals injected into portfolio block ──────
+                _holding_tickers = [h['ticker'] for h in _holdings]
+                _ticker_atoms: dict = {}
+                for _ht in _holding_tickers:
+                    try:
+                        _ht_rows = conn.execute(
+                            """SELECT predicate, object FROM facts
+                               WHERE subject=? AND predicate IN
+                               ('last_price','currency','price_regime','signal_direction',
+                                'signal_quality','return_1m','return_3m','return_1y',
+                                'upside_pct','conviction_tier','macro_confirmation')
+                               ORDER BY predicate""",
+                            (_ht.lower(),)
+                        ).fetchall()
+                        if _ht_rows:
+                            _ticker_atoms[_ht] = _ht_rows
+                    except Exception:
+                        pass
+                if _ticker_atoms:
+                    _lines.append("\nPer-holding KB signals:")
+                    for _ht, _rows in _ticker_atoms.items():
+                        _atom_str = '  '.join(f"{p}={v}" for p, v in _rows)
+                        _lines.append(f"  {_ht}: {_atom_str}")
+
                 portfolio_context = '\n'.join(_lines)
         except Exception:
             portfolio_context = None
