@@ -98,7 +98,9 @@ _SYSTEM_PORTFOLIO_RULE = (
     "After all holdings, add a paragraph on concentration risk "
     "(all financials = sector concentration risk, flag it explicitly). "
     "Do not use bullet points or sub-lists inside each holding section — write in prose. "
-    "Do not reveal exact average costs unless the user explicitly asks."
+    "Do not reveal exact average costs unless the user explicitly asks. "
+    "IMPORTANT: Do NOT introduce sector names, company descriptions, executive names, or "
+    "industry classifications from your training data — only use the 'sector' atom from the KB if present." 
 )
 
 _SYSTEM_LIVE_DATA_RULE = (
@@ -109,12 +111,15 @@ _SYSTEM_LIVE_DATA_RULE = (
 )
 
 _SYSTEM_SIZING_RULE = (
-    "\n11. EDUCATIONAL POSITION SIZING: When any instrument is discussed, use the "
-    "user's total invested figure from USER PORTFOLIO to illustrate position-sizing "
-    "maths as an educational example. Format it as a clearly labelled block:\n"
-    "  Educational Example — if you were to allocate X% of your portfolio (£Y) to "
-    "<TICKER> at a price of £Z, that would be approximately N shares. With a "
-    "stop-loss at £S, the maximum risk would be £R (P% of your portfolio).\n"
+    "\n11. EDUCATIONAL POSITION SIZING: When discussing a holding, use the "
+    "'Total invested (cost basis)' figure from USER PORTFOLIO for the maths. "
+    "Pick ONE holding to illustrate (the one with the strongest signal or highest upside). "
+    "Calculate: allocation_amount = X% * total_invested, shares = allocation_amount / current_price, "
+    "risk = (current_price - stop_loss) * shares. "
+    "Format it as a clearly labelled paragraph:\n"
+    "  Educational Example: if you were to allocate X% of your total invested (£total_invested) "
+    "to <TICKER> at £current_price, that would be approximately N shares. "
+    "With a stop-loss at £stop_loss, the maximum risk would be £risk.\n"
     "Always close with: 'This is not financial advice. "
     "Past performance is not indicative of future results.'"
 )
