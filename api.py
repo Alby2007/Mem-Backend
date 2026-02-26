@@ -1763,8 +1763,30 @@ def chat_endpoint():
                 if _ticker_atoms:
                     _lines.append("\nPer-holding KB signals:")
                     for _ht, _rows in _ticker_atoms.items():
-                        _atom_str = '  '.join(f"{p}={v}" for p, v in _rows)
-                        _lines.append(f"  {_ht}: {_atom_str}")
+                        _d = {p: v for p, v in _rows}
+                        _price    = _d.get('last_price', '?')
+                        _regime   = _d.get('price_regime', '?').replace('_', ' ')
+                        _dir      = _d.get('signal_direction', '?')
+                        _qual     = _d.get('signal_quality', '?')
+                        _macro    = _d.get('macro_confirmation', '?')
+                        _conv     = _d.get('conviction_tier', '?')
+                        _upside   = _d.get('upside_pct', '?')
+                        _ret1m    = _d.get('return_1m', '')
+                        _ret1y    = _d.get('return_1y', '')
+                        _target   = _d.get('price_target', '')
+                        _sent = (
+                            f"  {_ht}: Current price {_price}, price regime is {_regime} "
+                            f"(signal direction: {_dir}, upside to target: {_upside}%). "
+                            f"Signal quality is {_qual}, macro confirmation is {_macro}, "
+                            f"conviction tier is {_conv}."
+                        )
+                        if _ret1m:
+                            _sent += f" 1-month return: {_ret1m}%."
+                        if _ret1y:
+                            _sent += f" 1-year return: {_ret1y}%."
+                        if _target:
+                            _sent += f" KB price target: {_target}."
+                        _lines.append(_sent)
 
                 portfolio_context = '\n'.join(_lines)
         except Exception:
