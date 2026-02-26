@@ -614,6 +614,7 @@ select option { background: var(--surface); }
     <button class="btn btn-outline btn-sm" id="pf-search-btn">Search</button>
     <span id="pf-count" class="text-muted text-xs"></span>
   </div>
+  <div id="pf-shift-hint" class="text-xs text-muted" style="margin-bottom:10px;display:none;">Shift+click any card to discuss it in Chat</div>
   <div id="patterns-grid" class="pattern-grid">
     <div class="empty"><div class="spinner"></div></div>
   </div>
@@ -1956,6 +1957,7 @@ async function loadPatterns() {
   if (ticker) params.set('ticker', ticker);
   params.set('min_quality', '0.5');
   params.set('limit', ticker ? '100' : '200');
+  document.getElementById('pf-shift-hint').style.display = '';
   try {
     const d = await apiFetch(`/patterns/live?${params}`);
     let pats = d?.patterns || [];
@@ -1970,7 +1972,7 @@ async function loadPatterns() {
     document.getElementById('pf-count').textContent = `${pats.length} result${pats.length===1?'':'s'}`;
     if (!pats.length) { grid.innerHTML = '<div class="empty text-sm text-muted">No open patterns match filters</div>'; return; }
     grid.innerHTML = pats.map(p => `
-      <div class="pattern-card" onclick="togglePattern(this, ${p.id})">
+      <div class="pattern-card" title="Shift+click to discuss in Chat" onclick="handlePatternClick(event,this,${p.id},${JSON.stringify(JSON.stringify(p))})">
         <div class="flex-center gap-8 mb-8">
           <span class="mono-amber fw-700">${escHtml(p.ticker)}</span>
           ${dirBadge(p.direction)}
@@ -1985,6 +1987,26 @@ async function loadPatterns() {
         <div class="pattern-detail" id="pd-${p.id}"><div class="spinner"></div></div>
       </div>`).join('');
   } catch(e) { grid.innerHTML = `<div class="empty text-sm" style="color:var(--red)">${escHtml(e.message)}</div>`; }
+}
+
+window.handlePatternClick = function(event, el, id, patJson) {
+  if (event.shiftKey) {
+    const p = JSON.parse(patJson);
+    sendPatternToChat(p);
+    return;
+  }
+  togglePattern(el, id);
+};
+
+function sendPatternToChat(p) {
+  showScreen('chat');
+  const inp = document.getElementById('chat-input');
+  const tag = `[PATTERN:${p.ticker} ${(p.direction||'').toUpperCase()} ${(p.pattern_type||'').replace(/_/g,' ').toUpperCase()} ${p.timeframe||'1d'} Q${fmt(p.quality_score)} Zone${fmt(p.zone_low)}-${fmt(p.zone_high)}] `;
+  inp.value = tag + inp.value;
+  inp.focus();
+  inp.setSelectionRange(inp.value.length, inp.value.length);
+  inp.style.height = 'auto';
+  inp.style.height = inp.scrollHeight + 'px';
 }
 
 window.togglePattern = async function(el, id) {
