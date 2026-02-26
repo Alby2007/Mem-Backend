@@ -850,6 +850,14 @@ CREATE TABLE IF NOT EXISTS signal_calibration (
 )
 """
 
+_DDL_KB_META = """
+CREATE TABLE IF NOT EXISTS kb_meta (
+    key        TEXT PRIMARY KEY,
+    value      TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+)
+"""
+
 
 def ensure_hybrid_tables(conn: sqlite3.Connection) -> None:
     """Create all hybrid build tables if they do not exist. Idempotent."""
@@ -859,7 +867,40 @@ def ensure_hybrid_tables(conn: sqlite3.Connection) -> None:
     conn.execute(_DDL_USER_KB_CONTEXT)
     conn.execute(_DDL_USER_ENGAGEMENT_EVENTS)
     conn.execute(_DDL_SIGNAL_CALIBRATION)
+    conn.execute(_DDL_KB_META)
     conn.commit()
+
+
+def ensure_kb_meta_table(conn: sqlite3.Connection) -> None:
+    """Create kb_meta if it does not exist. Idempotent."""
+    conn.execute(_DDL_KB_META)
+    conn.commit()
+
+
+def get_kb_meta(db_path: str, key: str) -> str | None:
+    """Read a value from kb_meta. Returns None if key absent."""
+    conn = sqlite3.connect(db_path, timeout=5)
+    try:
+        row = conn.execute(
+            "SELECT value FROM kb_meta WHERE key=?", (key,)
+        ).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def set_kb_meta(db_path: str, key: str, value: str) -> None:
+    """Upsert a key-value pair in kb_meta."""
+    conn = sqlite3.connect(db_path, timeout=5)
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO kb_meta (key, value, updated_at) "
+            "VALUES (?, ?, datetime('now'))",
+            (key, value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ── Universe tickers store helpers ─────────────────────────────────────────────

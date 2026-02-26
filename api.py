@@ -335,6 +335,15 @@ try:
 except Exception:
     pass
 
+# Start seed sync client — polls GitHub Releases hourly, applies newer seeds automatically
+_seed_sync = None
+try:
+    from ingest.seed_sync import SeedSyncClient
+    _seed_sync = SeedSyncClient(db_path=_DB_PATH)
+    _seed_sync.start()
+except Exception:
+    pass
+
 # Start delivery scheduler (checks every 60s for due briefings)
 _delivery_scheduler = None
 if HAS_PRODUCT_LAYER:
