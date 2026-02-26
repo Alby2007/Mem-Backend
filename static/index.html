@@ -715,9 +715,7 @@ function mdToHtml(s) {
 }
 
 // ── MARKETS ──────────────────────────────────────────────────────────────────
-let _tvScriptLoaded = false;
-let _tvCurrentSym   = 'LSE:BARC';
-let _tvWidget       = null;
+let _tvCurrentSym = 'LSE:BARC';
 
 const _TICKER_MAP = {
   'BARC.L': 'LSE:BARC', 'HSBA.L': 'LSE:HSBA', 'LLOY.L': 'LSE:LLOY',
@@ -725,31 +723,19 @@ const _TICKER_MAP = {
   'XAUUSD': 'OANDA:XAUUSD', 'GOLD': 'OANDA:XAUUSD', 'GLD': 'AMEX:GLD',
   'BTCUSD': 'BITSTAMP:BTCUSD', 'BTC': 'BITSTAMP:BTCUSD',
   'SPY':    'AMEX:SPY',   'QQQ':  'NASDAQ:QQQ', 'AAPL': 'NASDAQ:AAPL',
-  'TSLA':   'NASDAQ:TSLA','MSFT': 'NASDAQ:MSFT',
+  'TSLA':   'NASDAQ:TSLA', 'MSFT': 'NASDAQ:MSFT',
 };
 
 function _resolveSymbol(raw) {
   const up = raw.trim().toUpperCase().replace(/\s+/g, '');
   if (_TICKER_MAP[up]) return _TICKER_MAP[up];
-  // If already has exchange prefix (e.g. "LSE:BARC") pass through
   if (up.includes(':')) return up;
-  // UK suffix heuristic
   if (up.endsWith('.L')) return 'LSE:' + up.slice(0, -2);
   return up;
 }
 
-function _loadTVScript(cb) {
-  if (_tvScriptLoaded) { cb(); return; }
-  const s = document.createElement('script');
-  s.src = 'https://s3.tradingview.com/tv.js';
-  s.onload = () => { _tvScriptLoaded = true; cb(); };
-  document.head.appendChild(s);
-}
-
 function _renderChart(sym) {
   _tvCurrentSym = sym;
-  const container = document.getElementById('markets-chart-container');
-  container.innerHTML = '';
   // Update chip active state
   document.querySelectorAll('.markets-chip').forEach(c => {
     c.classList.toggle('active', c.dataset.sym === sym);
@@ -757,47 +743,44 @@ function _renderChart(sym) {
   // Update label
   const label = document.getElementById('markets-current-label');
   if (label) label.textContent = sym;
-
-  _loadTVScript(() => {
-    if (!window.TradingView) return;
-    const c = document.getElementById('markets-chart-container');
-    _tvWidget = new TradingView.widget({
-      container_id: 'markets-chart-container',
-      symbol: sym,
-      interval: 'D',
-      timezone: 'Europe/London',
-      theme: 'dark',
-      style: '1',
-      locale: 'en',
-      toolbar_bg: '#111111',
-      enable_publishing: false,
-      hide_side_toolbar: false,
-      allow_symbol_change: true,
-      save_image: false,
-      width: c.offsetWidth  || '100%',
-      height: c.offsetHeight || 600,
-      studies: [],
-    });
+  // Build TradingView embed URL
+  const params = new URLSearchParams({
+    symbol:   sym,
+    interval: 'D',
+    timezone: 'Europe/London',
+    theme:    'dark',
+    style:    '1',
+    locale:   'en',
+    toolbar_bg: '%23111111',
+    hide_side_toolbar: '0',
+    allow_symbol_change: '1',
+    save_image: '0',
   });
+  const src = `https://s.tradingview.com/widgetembed/?${params.toString()}`;
+  const container = document.getElementById('markets-chart-container');
+  container.innerHTML = `<iframe
+    src="${src}"
+    style="width:100%;height:100%;border:none;"
+    allowtransparency="true"
+    scrolling="no"
+    allowfullscreen
+  ></iframe>`;
 }
 
 let _marketsInited = false;
 function initMarketsScreen() {
   if (!_marketsInited) {
-    // Chip click handlers
     document.querySelectorAll('.markets-chip').forEach(chip => {
       chip.addEventListener('click', () => {
         _renderChart(chip.dataset.sym);
         document.getElementById('markets-ticker-input').value = '';
       });
     });
-    // Go button
     document.getElementById('markets-go-btn').addEventListener('click', () => {
       const raw = document.getElementById('markets-ticker-input').value.trim();
       if (!raw) return;
       _renderChart(_resolveSymbol(raw));
     });
-    // Enter key in search
     document.getElementById('markets-ticker-input').addEventListener('keydown', e => {
       if (e.key === 'Enter') document.getElementById('markets-go-btn').click();
     });
