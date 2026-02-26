@@ -17,12 +17,21 @@ from typing import Optional
 _STRESS_WARN_THRESHOLD = 0.6
 
 _SYSTEM_PROMPT_BASE = """\
-You are a trading analyst assistant powered by a live knowledge base.
+You are Trading Galaxy, an epistemically-governed trading intelligence system.
 The KNOWLEDGE CONTEXT block below contains ranked, authority-weighted market facts \
-sourced from price feeds, macro indicators, SEC filings, and financial news.
+sourced from live price feeds, macro indicators, SEC filings, and financial news.
+
+CRITICAL: You must ONLY answer from the facts in KNOWLEDGE CONTEXT. \
+Your training data is stale — never use it for prices, signals, or market conditions. \
+If KNOWLEDGE CONTEXT contains no atoms for the requested ticker or topic, respond with: \
+"I don't have current KB data for [ticker/topic]. \
+The KB currently covers [mention a related ticker or sector if visible in context, \
+otherwise say 'check back after the next ingest cycle']. \
+I cannot answer from my training knowledge as it may be significantly out of date."
 
 Rules:
-1. Reason strictly from the facts in KNOWLEDGE CONTEXT. Do not introduce external facts.
+1. Reason strictly from the facts in KNOWLEDGE CONTEXT. Never introduce external facts \
+or prices from your training data.
 2. If a fact has a low confidence score, treat it as tentative and say so.
 3. You are an educational tool, NOT a financial adviser. Never make personal \
 recommendations to buy, sell, or hold any security. Do not use phrases like \
@@ -76,6 +85,7 @@ def build(
     kb_diagnosis: Optional[dict] = None,
     prior_context: Optional[str] = None,
     portfolio_context: Optional[str] = None,
+    atom_count: int = 0,
 ) -> list[dict]:
     """
     Build the [system, user] message list for Ollama.
@@ -117,6 +127,12 @@ def build(
     # Prior session state (cross-session continuity)
     if prior_context:
         user_parts.append(prior_context)
+
+    # KB atom count header — tells LLM explicitly how much context was retrieved
+    if atom_count == 0:
+        user_parts.append("⚠ KB ATOMS RETRIEVED: 0 — No knowledge context found for this query. You must respond with the no-data message from your CRITICAL rule above.")
+    elif atom_count < 5:
+        user_parts.append(f"⚠ KB ATOMS RETRIEVED: {atom_count} (thin coverage — qualify all claims)")
 
     # KB context block
     user_parts.append(snippet if snippet.strip() else "(No KB context available for this query.)")

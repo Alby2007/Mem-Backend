@@ -120,6 +120,36 @@ _KEYWORD_PREDICATE_BOOST: dict = {
     'trend':       ('return_1m', 'return_3m', 'price_regime', 'signal_direction'),
 }
 
+# Common name / forex pair → canonical KB ticker alias map
+TICKER_ALIASES: dict = {
+    'XAUUSD':   'GLD',
+    'GOLD':     'GLD',
+    'XAGUSD':   'SLV',
+    'SILVER':   'SLV',
+    'OIL':      'USO',
+    'CRUDE':    'USO',
+    'WTI':      'USO',
+    'BRENT':    'USO',
+    'UK100':    '^FTSE',
+    'FTSE100':  '^FTSE',
+    'FTSE':     '^FTSE',
+    'US500':    '^GSPC',
+    'SP500':    '^GSPC',
+    'SPX':      '^GSPC',
+    'DOW':      '^DJI',
+    'DJIA':     '^DJI',
+    'NDX':      '^IXIC',
+    'NAS100':   '^IXIC',
+    'NASDAQ':   '^IXIC',
+    'BTC':      'BTC-USD',
+    'BITCOIN':  'BTC-USD',
+    'ETH':      'ETH-USD',
+    'ETHEREUM': 'ETH-USD',
+    'GBP':      'GBP=X',
+    'EUR':      'EURUSD=X',
+    'CABLE':    'GBP=X',
+}
+
 _STOPWORDS = {
     'the', 'is', 'at', 'which', 'on', 'a', 'an', 'and', 'or', 'for',
     'in', 'of', 'to', 'that', 'this', 'with', 'from', 'by', 'are',
@@ -148,9 +178,18 @@ def _extract_key_terms(message: str) -> List[str]:
 
 
 def _extract_tickers(message: str) -> List[str]:
-    """Extract uppercase ticker symbols from a message."""
-    candidates = re.findall(r'\b[A-Z]{2,5}\b', message)
-    return [t for t in candidates if t not in _UPPERCASE_STOPWORDS]
+    """Extract uppercase ticker symbols from a message, expanding known aliases."""
+    candidates = re.findall(r'\b[A-Z0-9^][A-Z0-9^=-]{1,9}\b', message)
+    raw = [t for t in candidates if t not in _UPPERCASE_STOPWORDS]
+    expanded: list = []
+    seen_t: set = set()
+    for t in raw:
+        canonical = TICKER_ALIASES.get(t, t)
+        for tick in (t, canonical) if canonical != t else (t,):
+            if tick not in seen_t:
+                seen_t.add(tick)
+                expanded.append(tick)
+    return expanded
 
 
 def retrieve(

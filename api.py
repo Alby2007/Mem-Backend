@@ -1689,6 +1689,7 @@ def chat_endpoint():
         kb_diagnosis=kb_diagnosis,
         prior_context=prior_context,
         portfolio_context=portfolio_context,
+        atom_count=len(atoms),
     )
 
     answer = ollama_chat(messages, model=model)
