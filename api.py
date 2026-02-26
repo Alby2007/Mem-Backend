@@ -2692,7 +2692,19 @@ def security_headers(response):
     response.headers['X-XSS-Protection']             = '1; mode=block'
     response.headers['Referrer-Policy']              = 'strict-origin-when-cross-origin'
     response.headers['Strict-Transport-Security']    = 'max-age=31536000'
-    response.headers['Content-Security-Policy']      = "default-src 'none'"
+    # SPA frontend needs inline styles/scripts and Google Fonts CDN
+    if response.content_type and 'text/html' in response.content_type:
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "script-src 'self' 'unsafe-inline'; "
+            "connect-src 'self'; "
+            "img-src 'self' data: blob:; "
+            "frame-ancestors 'none'"
+        )
+    else:
+        response.headers['Content-Security-Policy'] = "default-src 'none'"
     return response
 
 
@@ -3897,9 +3909,15 @@ def network_cohort(ticker: str):
 
 @app.route('/')
 def serve_frontend():
-    from flask import send_from_directory
+    from flask import send_from_directory, make_response
     import os as _os
-    return send_from_directory(_os.path.join(_os.path.dirname(__file__), 'static'), 'index.html')
+    resp = make_response(send_from_directory(
+        _os.path.join(_os.path.dirname(__file__), 'static'), 'index.html'
+    ))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
