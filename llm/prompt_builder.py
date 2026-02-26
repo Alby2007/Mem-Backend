@@ -47,6 +47,13 @@ _SYSTEM_DIAGNOSIS_SUFFIX = (
     "Acknowledge the gap and indicate what additional data would improve the answer."
 )
 
+_SYSTEM_PORTFOLIO_RULE = (
+    "\n10. You have access to the user's portfolio in the USER PORTFOLIO block below. "
+    "Use it to personalise answers — for example, flag when a market signal or tip "
+    "directly relates to a stock the user already holds. "
+    "Do not reveal exact position sizes or average costs unless the user explicitly asks."
+)
+
 
 def build(
     user_message: str,
@@ -54,16 +61,19 @@ def build(
     stress: Optional[dict] = None,
     kb_diagnosis: Optional[dict] = None,
     prior_context: Optional[str] = None,
+    portfolio_context: Optional[str] = None,
 ) -> list[dict]:
     """
     Build the [system, user] message list for Ollama.
 
     Args:
-        user_message:  The user's natural-language question.
-        snippet:       The formatted KB context string from retrieve().
-        stress:        Dict with composite_stress, decay_pressure, etc.
-        kb_diagnosis:  Optional kb_diagnosis block from /retrieve (fires when stressed).
-        prior_context: Optional prior-session state string from working_state.
+        user_message:      The user's natural-language question.
+        snippet:           The formatted KB context string from retrieve().
+        stress:            Dict with composite_stress, decay_pressure, etc.
+        kb_diagnosis:      Optional kb_diagnosis block from /retrieve (fires when stressed).
+        prior_context:     Optional prior-session state string from working_state.
+        portfolio_context: Optional formatted string of user holdings + model.
+                           When None the prompt is identical to the no-portfolio case.
 
     Returns:
         [{"role": "system", "content": ...}, {"role": "user", "content": ...}]
@@ -83,6 +93,9 @@ def build(
         if primary not in ("unknown", "") and conf > 0.3:
             system_text += _SYSTEM_DIAGNOSIS_SUFFIX.format(primary_type=primary)
 
+    if portfolio_context:
+        system_text += _SYSTEM_PORTFOLIO_RULE
+
     # ── User turn ─────────────────────────────────────────────────────────────
     user_parts: list[str] = []
 
@@ -92,6 +105,10 @@ def build(
 
     # KB context block
     user_parts.append(snippet if snippet.strip() else "(No KB context available for this query.)")
+
+    # Portfolio context — injected after KB, before the question
+    if portfolio_context:
+        user_parts.append(portfolio_context)
 
     # User question — always last so the LLM sees context then question
     user_parts.append(f"Question: {user_message}")

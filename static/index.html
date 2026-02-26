@@ -1185,7 +1185,7 @@ async function sendChat() {
   try {
     const d = await apiFetch('/chat', {
       method: 'POST',
-      body: JSON.stringify({ message: msg, session_id: sessionId, overlay_mode: overlayMode })
+      body: JSON.stringify({ message: msg, session_id: sessionId, overlay_mode: overlayMode, user_id: state.userId || null })
     });
     if (!d) { thinking.remove(); return; }
     const answer = escHtml(d.response || d.answer || JSON.stringify(d));

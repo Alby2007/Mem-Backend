@@ -1489,6 +1489,7 @@ def chat_endpoint():
     screen_context  = data.get('screen_context', '')
     screen_entities = data.get('screen_entities') or []
     overlay_mode    = bool(data.get('overlay_mode', False))
+    chat_user_id    = data.get('user_id') or None
 
     conn = _kg.thread_local_conn()
 
@@ -1640,12 +1641,36 @@ def chat_endpoint():
         response['error'] = 'Ollama not reachable — KB context returned without LLM answer'
         return jsonify(response), 503
 
+    # ── Portfolio context (personalisation) ──────────────────────────────
+    portfolio_context = None
+    if chat_user_id and HAS_PRODUCT_LAYER:
+        try:
+            _holdings = get_portfolio(_DB_PATH, chat_user_id)
+            _model    = get_user_model(_DB_PATH, chat_user_id)
+            if _holdings:
+                _h_parts = [f"{h['ticker']} ×{int(h['quantity'])} @ £{h['avg_cost']:.0f}"
+                            if h.get('avg_cost') else h['ticker']
+                            for h in _holdings[:20]]
+                _lines = [f"=== USER PORTFOLIO ===",
+                          f"Holdings: {', '.join(_h_parts)}"]
+                if _model:
+                    _risk    = _model.get('risk_tolerance', '')
+                    _style   = _model.get('holding_style', '')
+                    _sectors = ', '.join(_model.get('sector_affinity') or [])
+                    _profile = ' · '.join(p for p in [_risk, _style, _sectors] if p)
+                    if _profile:
+                        _lines.append(f"Risk profile: {_profile}")
+                portfolio_context = '\n'.join(_lines)
+        except Exception:
+            portfolio_context = None
+
     messages = build_prompt(
         user_message=message,
         snippet=snippet,
         stress=stress_dict,
         kb_diagnosis=kb_diagnosis,
         prior_context=prior_context,
+        portfolio_context=portfolio_context,
     )
 
     answer = ollama_chat(messages, model=model)
