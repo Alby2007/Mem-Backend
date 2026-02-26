@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 _log = logging.getLogger(__name__)
 
 REPO            = 'Alby2007/Mem-Backend'
-CHECK_INTERVAL  = 3600   # seconds between polls
+CHECK_INTERVAL  = 3600   # seconds between polls (hourly)
 
 # Hard-coded allowlist — INSERT statements for any other table are silently dropped.
 # This is the structural guarantee that personal KB is never overwritten by a sync.
@@ -165,8 +165,9 @@ class SeedSyncClient:
             if table_name not in _ALLOWED_TABLES:
                 continue
 
-            # Rewrite INSERT → INSERT OR IGNORE for idempotency
-            rewritten = stripped.replace('INSERT INTO', 'INSERT OR IGNORE INTO', 1)
+            # Rewrite INSERT → INSERT OR REPLACE so fresher atoms from the live machine
+            # overwrite stale local data. Idempotent: re-applying same seed is safe.
+            rewritten = stripped.replace('INSERT INTO', 'INSERT OR REPLACE INTO', 1)
             allowed_statements.append(rewritten)
 
         if not allowed_statements:

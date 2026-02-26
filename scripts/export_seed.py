@@ -99,7 +99,7 @@ def dump_table(conn: sqlite3.Connection, table: str, schema_only: bool = False) 
         col_names = [d[0] for d in conn.execute(f"SELECT * FROM [{table}] LIMIT 0").description]  # noqa: S608
         for row in rows:
             values = ", ".join(_escape(v) for v in row)
-            lines.append(f"INSERT OR IGNORE INTO [{table}] ({', '.join(col_names)}) VALUES ({values});")
+            lines.append(f"INSERT OR REPLACE INTO [{table}] ({', '.join(col_names)}) VALUES ({values});")
 
     return "\n".join(lines) + "\n"
 
