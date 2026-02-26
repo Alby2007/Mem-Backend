@@ -216,6 +216,10 @@ select option { background: var(--surface); }
 .msg-bubble h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin: 10px 0 4px; }
 .msg-bubble code { font-family: var(--mono); font-size: 11px; background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 3px; }
 .msg-live-badge { font-size: 10px; font-family: var(--mono); color: var(--green); margin-top: 4px; opacity: 0.8; }
+.pattern-tag { display: inline-flex; align-items: center; gap: 5px; background: rgba(245,158,11,.18); border: 1px solid var(--accent); border-radius: 4px; padding: 2px 8px; font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--accent); white-space: nowrap; vertical-align: middle; }
+.pattern-tag .pt-ticker { color: var(--text); font-weight: 700; }
+.pattern-tag .pt-dir-bull { color: #22c55e; }
+.pattern-tag .pt-dir-bear { color: var(--red); }
 .msg-citation { font-family: var(--mono); font-size: 11px; color: var(--accent); background: rgba(245,158,11,.1); padding: 1px 5px; border-radius: 2px; }
 .msg-time { font-size: 10px; color: var(--muted); margin-top: 3px; font-family: var(--mono); }
 .overlay-card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 12px; }
@@ -733,6 +737,29 @@ function fmtDate(iso) {
 }
 function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderUserMsg(msg) {
+  // Render [PATTERN:TICKER DIR TYPE TF QSCORE ZoneLO-HI] as a styled pill + rest as escaped text
+  return escHtml(msg).replace(/\[PATTERN:([^\]]+)\]/g, (_, inner) => {
+    const parts = inner.trim().split(/\s+/);
+    const ticker = parts[0] || '';
+    const dir    = (parts[1] || '').toLowerCase();
+    const type   = parts.slice(2, parts.length - 3).join(' ');
+    const tf     = parts[parts.length - 3] || '';
+    const q      = parts[parts.length - 2] || '';
+    const zone   = parts[parts.length - 1] || '';
+    const dirClass = dir === 'bullish' ? 'pt-dir-bull' : dir === 'bearish' ? 'pt-dir-bear' : '';
+    return `<span class="pattern-tag">⟁ <span class="pt-ticker">${escHtml(ticker)}</span> <span class="${dirClass}">${escHtml(dir.toUpperCase())}</span> ${escHtml(type)} <span style="color:var(--muted)">${escHtml(tf)}</span> <span style="opacity:.7">${escHtml(q)}</span> <span style="opacity:.6">${escHtml(zone)}</span></span>`;
+  });
+}
+
+function expandPatternTag(msg) {
+  // Replace [PATTERN:...] with a rich natural-language context block for the LLM
+  return msg.replace(/\[PATTERN:([A-Z0-9.^/-]+)\s+(BULLISH|BEARISH|NEUTRAL)\s+([A-Z ]+?)\s+(\w+)\s+Q([\d.]+)\s+Zone([\d.]+)-([\d.]+)\]/gi,
+    (_, ticker, dir, type, tf, q, zlo, zhi) =>
+      `[Pattern context: ${ticker} — ${dir} ${type.trim()} detected on the ${tf} timeframe. Quality score: ${q}/1.0. Key zone: ${zlo}–${zhi}. Please discuss this pattern, its implications, and how it may intersect with my portfolio.]`
+  );
 }
 
 function mdToHtml(s) {
@@ -1805,13 +1832,14 @@ async function sendChat() {
   inp.style.height = 'auto';
   const overlayMode = document.getElementById('overlay-toggle').checked;
 
-  appendMsg('user', escHtml(msg));
+  appendMsg('user', renderUserMsg(msg));
   const thinking = appendMsg('assistant', '<span class="spinner"></span>');
+  const msgForBackend = expandPatternTag(msg);
 
   try {
     const d = await apiFetch('/chat', {
       method: 'POST',
-      body: JSON.stringify({ message: msg, session_id: sessionId, overlay_mode: overlayMode, user_id: state.userId || null })
+      body: JSON.stringify({ message: msgForBackend, session_id: sessionId, overlay_mode: overlayMode, user_id: state.userId || null })
     });
     if (!d) { thinking.remove(); return; }
     const answer = mdToHtml(d.response || d.answer || JSON.stringify(d));
