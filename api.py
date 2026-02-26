@@ -1646,17 +1646,26 @@ def chat_endpoint():
     live_context  = ''
     live_fetched  = []
     wm_session_id = f'wm_{session_id}'
-    if HAS_WORKING_MEMORY and _working_memory is not None and len(atoms) < 8:
+    if HAS_WORKING_MEMORY and _working_memory is not None:
         try:
             from retrieval import _extract_tickers
+            from knowledge.working_memory import _YF_TICKER_MAP
             tickers_in_query = _extract_tickers(message)
-            missing = [
+            # Tickers completely absent from KB — always fetch
+            missing_from_kb = [
                 t for t in tickers_in_query[:MAX_ON_DEMAND_TICKERS]
                 if not kb_has_atoms(t, _DB_PATH)
             ]
-            if missing:
+            # Commodity/forex/index tickers — always fetch live regardless of
+            # KB atoms because seeded prices go stale within hours
+            live_always = [
+                t for t in tickers_in_query[:MAX_ON_DEMAND_TICKERS]
+                if t.upper() in _YF_TICKER_MAP and t not in missing_from_kb
+            ]
+            to_fetch = missing_from_kb + live_always
+            if (missing_from_kb and len(atoms) < 8) or live_always:
                 _working_memory.open_session(wm_session_id)
-                for ticker in missing:
+                for ticker in to_fetch[:MAX_ON_DEMAND_TICKERS]:
                     _working_memory.fetch_on_demand(ticker, wm_session_id, _DB_PATH)
                 live_context = _working_memory.get_session_snippet(wm_session_id)
                 live_fetched = _working_memory.get_fetched_tickers(wm_session_id)

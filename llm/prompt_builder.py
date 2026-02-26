@@ -109,10 +109,16 @@ _SYSTEM_PORTFOLIO_RULE = (
 )
 
 _SYSTEM_LIVE_DATA_RULE = (
-    "\n12. LIVE DATA block (when present) contains atoms fetched on-demand this session "
-    "from live market feeds. These are MORE CURRENT than the KB atoms above. "
-    "Prefer live data for price, regime, and direction. "
-    "State 'Live data fetched this session' at the start of your answer when using it."
+    "\n12. LIVE DATA block is present. These atoms were fetched from live market feeds "
+    "moments ago — they are the definitive current prices and regimes. "
+    "CRITICAL RULES for LIVE DATA: "
+    "(a) Use the last_price from LIVE DATA as the current price — do NOT use any last_price "
+    "from the KB atoms above; KB prices are stale. "
+    "(b) Lead your answer with the live price immediately — e.g. 'Gold is currently trading "
+    "at $X (live, fetched this session).' Do not bury the price. "
+    "(c) Do NOT say you don't have current data or that prices may be outdated — you have live data. "
+    "(d) The 52-week high/low and price_regime from LIVE DATA take precedence over KB values. "
+    "(e) If the LIVE DATA block says 'fetched live at [timestamp]', cite that timestamp."
 )
 
 _SYSTEM_SEARCH_RULE = (
