@@ -59,31 +59,82 @@ trading-galaxy/
 
 ---
 
-## Quick Start
+## Quick Start (Intern Onboarding)
+
+### 1. Clone and install
 
 ```bash
-pip install -r requirements.txt
-python api.py
-# API running at http://localhost:5050
+git clone https://github.com/Alby2007/Mem-Backend.git
+cd trading-galaxy
+make setup          # pip install -r requirements.txt + ollama pull llava + ollama pull llama3.2
 ```
+
+> **Prerequisites:** Python 3.11+, [Ollama](https://ollama.com/download) running locally. Ollama is only needed for the screenshot upload feature — everything else works without it.
+
+### 2. Start the server
+
+```bash
+make dev
+# Flask starts at http://localhost:5051
+```
+
+### 3. Open the UI
+
+Navigate to **http://localhost:5051** in your browser. You'll see the Bloomberg-terminal-style SPA.
+
+### 4. Register a test account
+
+Click **Register** on the auth screen, or from the terminal:
+
+```bash
+# PowerShell (Windows)
+curl.exe -s -X POST http://localhost:5051/auth/register `
+  -H "Content-Type: application/json" `
+  -d '{"user_id": "intern1", "password": "test"}'
+
+# macOS / Linux / Git Bash
+curl -s -X POST http://localhost:5051/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id": "intern1", "password": "test"}'
+```
+
+### 5. Try the Portfolio screen — three entry paths
+
+After logging in, click **Portfolio** in the nav bar.
+
+#### Path A — FTSE sector quick-add
+Click any of the `[+ FTSE Banks]`, `[+ FTSE Energy]`, `[+ FTSE Mining]`, `[+ FTSE Pharma]`, `[+ FTSE Tech]` buttons to bulk-add a sector basket. Then click **Save Portfolio**.
+
+#### Path B — Ticker autocomplete
+Type a company name or partial ticker (e.g. `barc` or `BP`) in the **Add holding** box. The dropdown auto-suggests `.L`-suffix LSE tickers. Select one, set quantity and cost, click **Add**.
+
+#### Path C — Screenshot upload (requires Ollama + llava)
+Drag a broker screenshot (PNG or JPEG, max 10 MB) onto the **drop zone** at the top of the Portfolio screen, or click to select a file. The vision model extracts your holdings automatically and populates the table. Confirm and click **Save Portfolio**.
+
+> If Ollama is not running or `llava` is not pulled, the drop zone shows a "vision unavailable" message and the other two paths still work normally.
+
+### 6. Explore other screens
+
+| Screen | What to test |
+|---|---|
+| **Dashboard** | KB stats, adapter health, conviction tiers |
+| **Chat** | Ask anything about a FTSE ticker — try `"What is the signal on BP.L?"` |
+| **Tips** | Set your tip delivery time and preview today's tip |
+| **Patterns** | Live SMC pattern signals |
+| **Network** | Cross-user calibration health |
 
 ### Environment Variables
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `TRADING_KB_DB` | No | `trading_knowledge.db` | SQLite database path |
-| `PORT` | No | `5050` | Flask server port |
+| `PORT` | No | `5051` | Flask server port |
 | `FRED_API_KEY` | No | *(skip FRED adapter)* | Free key from [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html) |
 | `EDGAR_USER_AGENT` | No | `TradingGalaxyKB admin@tradinggalaxy.dev` | SEC requires contact info in User-Agent |
 | `TELEGRAM_BOT_TOKEN` | No | *(no Telegram delivery)* | Bot token from [@BotFather](https://t.me/BotFather) — required for daily briefings and tips |
-
-```bash
-# Full startup with all features:
-FRED_API_KEY=your_key_here python api.py
-
-# Without FRED (adapter skips gracefully):
-python api.py
-```
+| `OLLAMA_BASE_URL` | No | `http://localhost:11434` | Ollama endpoint |
+| `OLLAMA_VISION_MODEL` | No | `llava` | Vision model for screenshot upload |
+| `JWT_SECRET_KEY` | No | auto-generated | Set explicitly in production |
 
 ---
 
