@@ -763,7 +763,14 @@ def retrieve(
     # ── Format output ──────────────────────────────────────────────────────────
     lines = ['=== TRADING KNOWLEDGE CONTEXT ===']
     if _alias_notes:
-        lines.append('[Ticker Aliases Resolved: ' + '; '.join(_alias_notes) + ']')
+        for note in _alias_notes:
+            raw_sym = note.split('→')[0].strip()
+            kb_sym  = note.split('(KB tracks this as ')[1].rstrip(')')
+            lines.append(
+                f"INSTRUCTION: '{raw_sym}' is an alias. "
+                f"The KB data below (subject='{kb_sym.lower()}') IS the data for {raw_sym}. "
+                f"Use it directly. Do NOT say you have no data for {raw_sym}."
+            )
 
     _HIST_PREDICATES = frozenset({
         'return_1w', 'return_1m', 'return_3m', 'return_6m', 'return_1y',

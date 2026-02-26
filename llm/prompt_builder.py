@@ -163,6 +163,13 @@ def build(
     if portfolio_context:
         user_parts.append(portfolio_context)
 
+    # If snippet contains alias instructions, echo them right before the question
+    # so they are the last thing the LLM reads before answering
+    if snippet and 'is an alias' in snippet:
+        import re as _re
+        for m in _re.finditer(r"INSTRUCTION: '(\S+)' is an alias.*?Do NOT say you have no data for \S+\.", snippet):
+            user_parts.append(m.group(0))
+
     # User question — always last so the LLM sees context then question
     user_parts.append(f"Question: {user_message}")
 
