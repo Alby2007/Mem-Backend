@@ -1972,6 +1972,7 @@ async function loadPatterns() {
     document.getElementById('pf-count').textContent = `${pats.length} result${pats.length===1?'':'s'}`;
     if (!pats.length) { grid.innerHTML = '<div class="empty text-sm text-muted">No open patterns match filters</div>'; return; }
     grid.innerHTML = pats.map(p => `
+      <div class="pattern-card" title="Ctrl+click to discuss in Chat" onclick="handlePatternClick(event,this,${p.id},${JSON.stringify(JSON.stringify(p))})">
         <div class="flex-center gap-8 mb-8">
           <span class="mono-amber fw-700">${escHtml(p.ticker)}</span>
           ${dirBadge(p.direction)}
