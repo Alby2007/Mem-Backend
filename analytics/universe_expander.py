@@ -54,12 +54,28 @@ _MAX_TICKERS_PER_REQUEST = 20
 
 # ── LLM resolution ────────────────────────────────────────────────────────────
 
+_UK_MARKET_CONTEXT = """
+UK market context:
+- London Stock Exchange tickers use .L suffix (SHEL.L, AZN.L, BP.L)
+- Key sectors: energy (oil majors), mining, financials (banks/insurance),
+  pharma, consumer staples, telecoms, property REITs
+- FTSE 100 is large cap, FTSE 250 is mid cap (more domestically focused)
+- UK retailers heavily exposed to consumer confidence and inflation
+- Mining stocks (RIO.L, AAL.L) driven by China demand
+- Popular retail trading themes: UK banks, housebuilders, miners,
+  defence (BA.L, QQ.L), energy transition
+- AIM market for small caps — lower liquidity, higher risk
+- Options market less developed than US — pattern detection more
+  valuable than options flow for most FTSE names outside top 20
+- Use .L suffix for all LSE-listed equities; indices use ^ prefix (^FTSE, ^FTMC)
+"""
+
 _RESOLVE_PROMPT = """You are a financial market expert. Given a user's investment interest description,
 identify relevant tickers, ETFs, keywords, and causal relationships.
 
 User description: {description}
 Market type: {market_type}
-
+{market_context}
 Respond with valid JSON only, no markdown fences, matching this exact schema:
 {{
   "sector_label": "string — one concise sector/theme label",
@@ -85,9 +101,11 @@ def resolve_interest(
     try:
         from llm.ollama_client import OllamaClient
         client = OllamaClient()
+        market_context = _UK_MARKET_CONTEXT if 'uk' in market_type.lower() or 'london' in market_type.lower() else ''
         prompt = _RESOLVE_PROMPT.format(
             description=description,
             market_type=market_type,
+            market_context=market_context,
         )
         raw = client.generate(prompt)
         # Strip markdown fences if present

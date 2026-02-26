@@ -2974,8 +2974,8 @@ def user_onboarding_status(user_id: str):
     portfolio_submitted = portfolio_count > 0
 
     tip_config_set = bool(
-        (tip_time and tip_time != '08:00') or
-        (tip_tz and tip_tz != 'UTC')
+        (tip_time and tip_time != '07:30') or
+        (tip_tz and tip_tz != 'Europe/London')
     )
     account_size_set = account_size is not None and float(account_size or 0) > 0
 

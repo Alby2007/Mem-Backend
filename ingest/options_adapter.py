@@ -112,29 +112,23 @@ except ImportError:
 _logger = logging.getLogger(__name__)
 
 # ── Equity-only options universe ──────────────────────────────────────────────
-# ~44 liquid single names; excludes all ETFs, macro proxies, sector ETFs.
+# Top FTSE names with meaningful listed options liquidity.
+# UK retail options market is significantly less developed than US —
+# confidence on options-derived atoms is capped for names outside this list.
 _OPTIONS_TICKERS = [
-    # Mega-cap tech
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'AVGO',
-    # Semiconductors
-    'AMD', 'INTC', 'QCOM', 'MU',
-    # Software / cloud
-    'CRM', 'ADBE', 'NOW', 'SNOW',
-    # Fintech / payments
-    'PYPL', 'COIN',
-    # Financials
-    'JPM', 'V', 'MA', 'BAC', 'GS', 'MS', 'AXP', 'BLK', 'SCHW',
-    # Healthcare
-    'UNH', 'LLY', 'ABBV', 'PFE', 'MRK',
-    # Energy
-    'XOM', 'CVX', 'COP',
-    # Consumer
-    'WMT', 'COST', 'MCD',
-    # Industrials
-    'CAT', 'HON',
-    # REIT / infra
-    'AMT',
+    # Top 20 FTSE — most liquid options
+    'SHEL.L', 'AZN.L', 'HSBA.L', 'ULVR.L', 'BP.L',
+    'GSK.L', 'RIO.L', 'LLOY.L', 'BARC.L', 'NWG.L',
+    'LSEG.L', 'BA.L', 'RR.L', 'VOD.L', 'BATS.L',
+    'NG.L', 'REL.L', 'TSCO.L', 'BDEV.L', 'AAL.L',
 ]
+
+# FTSE names with thin options liquidity — smart_money_signal and iv_rank
+# atoms are emitted at reduced authority (0.45 vs 0.75) for these tickers.
+_LOW_OPTIONS_LIQUIDITY: frozenset = frozenset({
+    'VOD.L', 'BATS.L', 'NG.L', 'REL.L', 'TSCO.L', 'BDEV.L', 'AAL.L',
+    'QQ.L', 'MKS.L', 'PSON.L', 'PSN.L',
+})
 
 # Volume-to-OI ratio threshold for a "sweep" (new large position being opened)
 _SWEEP_VOLUME_RATIO = 3.0
@@ -491,6 +485,12 @@ class OptionsAdapter(BaseIngestAdapter):
         now_iso = datetime.now(timezone.utc).isoformat()
         src     = f'options_feed_{sym.lower()}'
         meta    = {'as_of': now_iso, 'ticker': sym}
+        # UK options market is thin for smaller names — cap signal confidence
+        _low_liq = sym.upper() in _LOW_OPTIONS_LIQUIDITY
+        _iv_conf     = 0.40 if _low_liq else 0.65
+        _sweep_conf  = 0.35 if _low_liq else 0.60
+        if _low_liq:
+            meta = {**meta, 'low_options_liquidity': True}
 
         (calls_iv, puts_iv,
          calls_oi, puts_oi,
@@ -531,7 +531,7 @@ class OptionsAdapter(BaseIngestAdapter):
                 subject    = sym.lower(),
                 predicate  = 'iv_rank',
                 object     = str(iv_rank),
-                confidence = 0.65,
+                confidence = _iv_conf,
                 source     = src,
                 metadata   = meta,
                 upsert     = True,
@@ -554,7 +554,7 @@ class OptionsAdapter(BaseIngestAdapter):
             subject    = sym.lower(),
             predicate  = 'smart_money_signal',
             object     = sweep,
-            confidence = 0.60,
+            confidence = _sweep_conf,
             source     = src,
             metadata   = meta,
             upsert     = True,

@@ -52,33 +52,28 @@ _logger = logging.getLogger(__name__)
 
 # Default watchlist — override via constructor
 _DEFAULT_TICKERS = [
-    # Mega-cap tech
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'AVGO',
-    # Financials
-    'JPM', 'V', 'MA', 'BAC', 'GS', 'MS', 'BRK-B',
-    # Healthcare
-    'UNH', 'JNJ', 'LLY', 'ABBV', 'PFE',
-    # Energy
-    'XOM', 'CVX', 'COP',
-    # Consumer
-    'WMT', 'PG', 'KO', 'MCD', 'COST',
-    # Industrials
-    'CAT', 'HON', 'RTX',
-    # Comms
-    'DIS', 'NFLX', 'CMCSA',
-    # Broad market ETFs
-    'SPY', 'QQQ', 'IWM', 'DIA', 'VTI',
-    # Sector ETFs
-    'XLF', 'XLE', 'XLK', 'XLV', 'XLI', 'XLC', 'XLY', 'XLP',
-    # Macro proxies
-    'GLD', 'SLV', 'TLT', 'HYG', 'LQD', 'UUP',
-    # Additional high-coverage equities
-    'AMD', 'INTC', 'QCOM', 'MU', 'CRM', 'ADBE', 'NOW', 'SNOW',
-    'PYPL', 'COIN',
-    'BRK-B', 'AXP', 'BLK', 'SCHW',
-    'CVS', 'MRK', 'BMY', 'GILD',
-    'NEE', 'DUK', 'SO',
-    'AMT', 'PLD', 'EQIX',
+    # FTSE 100 heavyweights
+    'SHEL.L', 'AZN.L', 'HSBA.L', 'ULVR.L', 'BP.L',
+    'GSK.L', 'RIO.L', 'BATS.L', 'VOD.L', 'LLOY.L',
+    'BARC.L', 'NWG.L', 'LSEG.L', 'REL.L', 'NG.L',
+    # Defence / industrials
+    'BA.L', 'QQ.L', 'RR.L',
+    # Consumer / retail
+    'TSCO.L', 'MKS.L', 'PSON.L',
+    # Housebuilders
+    'BDEV.L', 'PSN.L',
+    # FTSE indices as macro proxies
+    '^FTSE',    # FTSE 100
+    '^FTMC',    # FTSE 250
+    # UK FX — critical macro signal
+    'GBPUSD=X',
+    'EURGBP=X',
+    # UK gilt proxy
+    'GBGB10YR=X',
+    # Global macro proxies — London is globally connected
+    'GLD',
+    '^GSPC',    # S&P 500 correlation
+    '^VIX',
 ]
 
 # Parallel workers for per-ticker info() calls

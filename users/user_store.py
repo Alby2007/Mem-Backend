@@ -59,11 +59,11 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     selected_sectors       TEXT DEFAULT '[]',
     selected_risk          TEXT DEFAULT 'moderate',
     telegram_chat_id       TEXT,
-    delivery_time          TEXT DEFAULT '08:00',
-    timezone               TEXT DEFAULT 'UTC',
+    delivery_time          TEXT DEFAULT '07:30',
+    timezone               TEXT DEFAULT 'Europe/London',
     tier                   TEXT DEFAULT 'basic',
-    tip_delivery_time      TEXT DEFAULT '08:00',
-    tip_delivery_timezone  TEXT DEFAULT 'UTC',
+    tip_delivery_time      TEXT DEFAULT '07:30',
+    tip_delivery_timezone  TEXT DEFAULT 'Europe/London',
     tip_markets            TEXT DEFAULT '["equities"]',
     tip_timeframes         TEXT DEFAULT '["1h"]',
     tip_pattern_types      TEXT,
@@ -110,8 +110,8 @@ CREATE TABLE IF NOT EXISTS tip_delivery_log (
 # New columns added to user_preferences after initial schema creation
 _PREFERENCES_MIGRATIONS = [
     "ALTER TABLE user_preferences ADD COLUMN tier TEXT DEFAULT 'basic'",
-    "ALTER TABLE user_preferences ADD COLUMN tip_delivery_time TEXT DEFAULT '08:00'",
-    "ALTER TABLE user_preferences ADD COLUMN tip_delivery_timezone TEXT DEFAULT 'UTC'",
+    "ALTER TABLE user_preferences ADD COLUMN tip_delivery_time TEXT DEFAULT '07:30'",
+    "ALTER TABLE user_preferences ADD COLUMN tip_delivery_timezone TEXT DEFAULT 'Europe/London'",
     "ALTER TABLE user_preferences ADD COLUMN tip_markets TEXT DEFAULT '[\"equities\"]'",
     "ALTER TABLE user_preferences ADD COLUMN tip_timeframes TEXT DEFAULT '[\"1h\"]'",
     "ALTER TABLE user_preferences ADD COLUMN tip_pattern_types TEXT",
@@ -157,8 +157,8 @@ def create_user(
     db_path: str,
     user_id: str,
     telegram_chat_id: Optional[str] = None,
-    delivery_time: str = '08:00',
-    timezone_str: str = 'UTC',
+    delivery_time: str = '07:30',
+    timezone_str: str = 'Europe/London',
 ) -> dict:
     """
     Create a user preferences row. Returns the created row.
