@@ -101,6 +101,7 @@ def build(
     portfolio_context: Optional[str] = None,
     atom_count: int = 0,
     live_context: Optional[str] = None,
+    resolved_aliases: Optional[dict] = None,
 ) -> list[dict]:
     """
     Build the [system, user] message list for Ollama.
@@ -126,11 +127,20 @@ def build(
         if composite >= _STRESS_WARN_THRESHOLD:
             system_text += _SYSTEM_THIN_COVERAGE
 
-    if kb_diagnosis:
+    if kb_diagnosis and not resolved_aliases:
         primary = kb_diagnosis.get("primary_type", "unknown")
         conf    = kb_diagnosis.get("confidence", 0.0)
         if primary not in ("unknown", "") and conf > 0.3:
             system_text += _SYSTEM_DIAGNOSIS_SUFFIX.format(primary_type=primary)
+
+    if resolved_aliases:
+        for raw, canonical in resolved_aliases.items():
+            system_text += (
+                f"\nALIAS RESOLVED: The user said '{raw}'. This KB tracks it as '{canonical}'. "
+                f"All atoms with subject='{canonical.lower()}' below ARE the '{raw}' data. "
+                f"You MUST answer from those atoms. "
+                f"DO NOT say you have no data for '{raw}'."
+            )
 
     if live_context:
         system_text += _SYSTEM_LIVE_DATA_RULE

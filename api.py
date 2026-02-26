@@ -1739,6 +1739,16 @@ def chat_endpoint():
         except Exception:
             pass
 
+    # ── Extract resolved aliases from snippet for system prompt injection ─────
+    _resolved_aliases: dict = {}
+    if snippet and 'is an alias' in snippet:
+        import re as _re2
+        for _m in _re2.finditer(
+            r"INSTRUCTION: '(\S+)' is an alias\. The KB data below \(subject='(\S+)'\)",
+            snippet
+        ):
+            _resolved_aliases[_m.group(1)] = _m.group(2).upper()
+
     # ── Build full prompt (pass 2 or single-pass if no data request) ──────
     messages = build_prompt(
         user_message=message,
@@ -1749,6 +1759,7 @@ def chat_endpoint():
         portfolio_context=portfolio_context,
         atom_count=len(atoms),
         live_context=live_context or None,
+        resolved_aliases=_resolved_aliases or None,
     )
 
     answer = ollama_chat(messages, model=model)
