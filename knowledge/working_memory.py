@@ -89,6 +89,35 @@ def parse_llm_response(text: str) -> tuple[str, list[str]]:
 _MISSING_THRESHOLD = 1
 
 
+# Maps KB/display tickers → yfinance ticker symbols for on-demand fetch
+_YF_TICKER_MAP: dict[str, str] = {
+    # Precious metals
+    'XAUUSD': 'GC=F',   'GOLD':   'GC=F',
+    'XAGUSD': 'SI=F',   'SILVER': 'SI=F',
+    'XPTUSD': 'PL=F',
+    'XPDUSD': 'PA=F',
+    'XCUUSD': 'HG=F',
+    # Energy
+    'CL':     'CL=F',   'CRUDE':  'CL=F',   'OIL':    'CL=F',
+    'BZ':     'BZ=F',   'BRENT':  'BZ=F',
+    'NG':     'NG=F',   'NATGAS': 'NG=F',
+    # Agriculture
+    'ZW':     'ZW=F',   'ZC':     'ZC=F',   'ZS':     'ZS=F',
+    'KC':     'KC=F',   'SB':     'SB=F',   'CC':     'CC=F',
+    # Forex pairs
+    'GBPUSD': 'GBPUSD=X', 'EURUSD': 'EURUSD=X', 'USDJPY': 'JPY=X',
+    'GBPEUR': 'GBPEUR=X', 'AUDUSD': 'AUDUSD=X', 'USDCAD': 'CAD=X',
+    'USDCHF': 'CHF=X',   'NZDUSD': 'NZDUSD=X', 'EURGBP': 'EURGBP=X',
+    'EURJPY': 'EURJPY=X','GBPJPY': 'GBPJPY=X', 'USDCNH': 'CNH=X',
+    'DXY':    'DX-Y.NYB',
+    # Indices (KB name → yfinance)
+    'SPX':    '^GSPC',   'NDX':    '^NDX',    'DJI':    '^DJI',
+    'FTSE':   '^FTSE',   'DAX':    '^GDAXI',  'CAC':    '^FCHI',
+    'NI225':  '^N225',   'HSI':    '^HSI',    'ASX':    '^AXJO',
+    'SX5E':   '^STOXX50E', 'VIX':  '^VIX',   'MCX':    '^MCX',
+}
+
+
 def _extract_ticker_hint(query: str) -> str:
     """
     Best-effort extraction of a ticker symbol from a free-text search query.
@@ -205,8 +234,11 @@ class WorkingMemory:
         now_iso = datetime.now(timezone.utc).isoformat()
         atoms: List[dict] = []
 
+        # Resolve KB ticker to yfinance symbol (commodities, forex, indices use different formats)
+        yf_symbol = _YF_TICKER_MAP.get(ticker.upper(), ticker)
+
         try:
-            t = yf.Ticker(ticker)
+            t = yf.Ticker(yf_symbol)
             fi = t.fast_info
 
             # last_price
@@ -242,7 +274,7 @@ class WorkingMemory:
 
         # Analyst target → signal_direction (slower path, best-effort)
         try:
-            t = yf.Ticker(ticker)
+            t = yf.Ticker(yf_symbol)
             info = t.info
             target = info.get('targetMeanPrice') or info.get('targetMedianPrice')
             price_now = info.get('regularMarketPrice') or info.get('currentPrice')
