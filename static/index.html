@@ -419,16 +419,15 @@ select option { background: var(--surface); }
 
 <!-- AUTH ──────────────────────────────────────────────────────────── -->
 <div class="screen active" id="screen-auth">
-  <div style="margin-bottom:32px;">
+    <div style="margin-bottom:32px;">
     <div style="font-size:24px;font-weight:700;margin-bottom:6px;">Sign in to Trading Galaxy</div>
-    <div class="text-muted text-sm">Internal tool — token lives in memory only, cleared on refresh.</div>
+    <div class="text-muted text-sm">Session persists across refreshes. Sign out to clear.</div>
   </div>
   <div class="auth-panels">
     <div class="card">
       <div class="auth-title">Register</div>
-      <div class="form-row"><label>User ID</label><input id="reg-uid" placeholder="alice" /></div>
       <div class="form-row"><label>Email</label><input id="reg-email" type="email" placeholder="alice@example.com" /></div>
-      <div class="form-row"><label>Password</label><input id="reg-pw" type="password" placeholder="••••••••" /></div>
+      <div class="form-row"><label>Password</label><input id="reg-pw" type="password" placeholder="min 8 characters" /></div>
       <div class="form-row"><label>Confirm</label><input id="reg-pw2" type="password" placeholder="••••••••" /></div>
       <button class="btn btn-outline w-full" id="reg-btn">Create Account</button>
       <div id="reg-msg" class="text-sm mt-8 text-muted"></div>
@@ -1212,13 +1211,16 @@ async function pingConnection() {
 
 // ── AUTH ──────────────────────────────────────────────────────────────────────
 document.getElementById('reg-btn').addEventListener('click', async () => {
-  const uid   = document.getElementById('reg-uid').value.trim();
   const email = document.getElementById('reg-email').value.trim();
   const pw    = document.getElementById('reg-pw').value;
   const pw2   = document.getElementById('reg-pw2').value;
   const msg   = document.getElementById('reg-msg');
-  if (!uid || !email || !pw) { msg.textContent = 'User ID, email and password required.'; return; }
-  if (pw !== pw2)  { msg.textContent = 'Passwords do not match.'; return; }
+  if (!email || !pw) { msg.textContent = 'Email and password required.'; return; }
+  if (pw !== pw2)    { msg.textContent = 'Passwords do not match.'; return; }
+  if (pw.length < 8) { msg.textContent = 'Password must be at least 8 characters.'; return; }
+  // Derive a stable user_id from the email local part + random suffix
+  const uid = email.split('@')[0].toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 32)
+              + '_' + Math.random().toString(36).slice(2, 7);
   msg.innerHTML = '<span class="spinner"></span>';
   try {
     const d = await apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ user_id: uid, email, password: pw }) });
@@ -1238,16 +1240,24 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   try {
     const d = await apiFetch('/auth/token', { method: 'POST', body: JSON.stringify({ email, password: pw }) });
     if (!d) { msg.textContent = 'Failed.'; return; }
-    state.token  = d.access_token || d.token;
-    state.userId = d.user_id;
-    document.getElementById('user-badge').textContent = `[${state.userId}]`;
+    _saveSession(d.access_token || d.token, d.user_id);
     showScreen('dashboard');
   } catch (e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
 });
 
+function _saveSession(token, userId) {
+  state.token  = token;
+  state.userId = userId;
+  localStorage.setItem('tg_token',   token);
+  localStorage.setItem('tg_user_id', userId);
+  document.getElementById('user-badge').textContent = `[${userId}]`;
+}
+
 function signOut() {
   if (state.userId) localStorage.removeItem(`simulated_${state.userId}`);
   state.token = null; state.userId = null; state.holdings = [];
+  localStorage.removeItem('tg_token');
+  localStorage.removeItem('tg_user_id');
   document.getElementById('user-badge').textContent = 'not signed in';
   showScreen('auth');
 }
@@ -2148,6 +2158,27 @@ async function loadNetwork() {
 (async () => {
   await pingConnection();
   setInterval(pingConnection, 300000);
+  // Restore persisted session
+  const storedToken  = localStorage.getItem('tg_token');
+  const storedUserId = localStorage.getItem('tg_user_id');
+  if (storedToken && storedUserId) {
+    try {
+      // Verify token is still valid
+      state.token  = storedToken;
+      state.userId = storedUserId;
+      const me = await apiFetch('/auth/me');
+      if (me) {
+        document.getElementById('user-badge').textContent = `[${storedUserId}]`;
+        showScreen('dashboard');
+        return;
+      }
+    } catch {
+      // Token expired or invalid — clear and show auth
+      localStorage.removeItem('tg_token');
+      localStorage.removeItem('tg_user_id');
+      state.token = null; state.userId = null;
+    }
+  }
   showScreen('auth');
 })();
 </script>

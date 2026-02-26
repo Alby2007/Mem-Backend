@@ -1565,7 +1565,8 @@ def chat_endpoint():
     screen_context  = data.get('screen_context', '')
     screen_entities = data.get('screen_entities') or []
     overlay_mode    = bool(data.get('overlay_mode', False))
-    chat_user_id    = data.get('user_id') or None
+    # Trust the authenticated token identity over the request body to prevent spoofing
+    chat_user_id    = getattr(g, 'user_id', None) or data.get('user_id') or None
 
     # Auto-boost limit for portfolio-wide queries so all holdings get KB atoms
     _PORTFOLIO_KEYWORDS = ('portfolio', 'holdings', 'positions', 'my stocks',
@@ -3753,7 +3754,8 @@ def submit_feedback():
         return jsonify({'error': 'pattern layer not available'}), 503
 
     data = request.get_json(force=True, silent=True) or {}
-    user_id = str(data.get('user_id', '')).strip()
+    # Trust authenticated token identity over request body
+    user_id = getattr(g, 'user_id', None) or str(data.get('user_id', '')).strip()
     outcome = str(data.get('outcome', '')).strip()
 
     if not user_id:
