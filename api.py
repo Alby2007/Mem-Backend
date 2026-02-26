@@ -1712,8 +1712,7 @@ def chat_endpoint():
             _holdings = get_portfolio(_DB_PATH, chat_user_id)
             _model    = get_user_model(_DB_PATH, chat_user_id)
             if _holdings:
-                _h_parts = [f"{h['ticker']} ×{int(h['quantity'])} @ £{h['avg_cost']:.0f}"
-                            if h.get('avg_cost') else h['ticker']
+                _h_parts = [f"{h['ticker']} ×{int(h['quantity'])}"
                             for h in _holdings[:20]]
                 # Compute portfolio value metrics for sizing education
                 _pos_values = [
@@ -1774,18 +1773,26 @@ def chat_endpoint():
                         _ret1m    = _d.get('return_1m', '')
                         _ret1y    = _d.get('return_1y', '')
                         _target   = _d.get('price_target', '')
+                        # Compute implied move narrative from price_target vs last_price
+                        _implied = ''
+                        try:
+                            if _target and _price and _price != '?' and _target != '?':
+                                _move = float(_target) - float(_price)
+                                _move_dir = 'up to' if _move >= 0 else 'down to'
+                                _implied = (f" The KB price target is {_target}, implying a move "
+                                            f"{_move_dir} {_target} ({_upside}% from current price).")
+                        except Exception:
+                            pass
                         _sent = (
-                            f"  {_ht}: Current price {_price}, price regime is {_regime} "
-                            f"(signal direction: {_dir}, upside to target: {_upside}%). "
-                            f"Signal quality is {_qual}, macro confirmation is {_macro}, "
-                            f"conviction tier is {_conv}."
+                            f"  {_ht}: Current price {_price} ({_regime} regime). "
+                            f"KB signal direction is {_dir}.{_implied} "
+                            f"Signal quality: {_qual}. Macro confirmation: {_macro}. "
+                            f"Conviction tier: {_conv}."
                         )
                         if _ret1m:
                             _sent += f" 1-month return: {_ret1m}%."
                         if _ret1y:
                             _sent += f" 1-year return: {_ret1y}%."
-                        if _target:
-                            _sent += f" KB price target: {_target}."
                         _lines.append(_sent)
 
                 portfolio_context = '\n'.join(_lines)
