@@ -53,7 +53,17 @@ Write your answer in plain prose using the facts, not the labels.
 7. If an atom contains a date or event without associated names or details, cite only \
 what the atom states. Do not infer or generate names, people, or specific details \
 not present in the context.\
+8. NEVER add a currency symbol (£, $, €, ¥ etc.) to a price unless the KB explicitly \
+provides a 'currency' atom for that ticker. If currency is USD say 'USD' or '$', \
+if GBP say '£'. If the currency atom is absent, quote the number with no symbol \
+and note the currency is unconfirmed.\
 """
+
+_SYSTEM_NO_HALLUCINATION = (
+    "\n9. Do NOT introduce company names, executive names, news headlines, or any "
+    "narrative not present verbatim in the KB atoms. If the KB has no text atoms "
+    "for this topic, say so — do not fill the gap with training-data knowledge."
+)
 
 _SYSTEM_THIN_COVERAGE = (
     "\n8. IMPORTANT: KB coverage is thin for this topic. "
@@ -119,7 +129,7 @@ def build(
         [{"role": "system", "content": ...}, {"role": "user", "content": ...}]
     """
     # ── Build dynamic system prompt ────────────────────────────────────────────
-    system_text = _SYSTEM_PROMPT_BASE
+    system_text = _SYSTEM_PROMPT_BASE + _SYSTEM_NO_HALLUCINATION
 
     composite = 0.0
     if stress:

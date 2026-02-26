@@ -444,7 +444,7 @@ def retrieve(
     # NVDA META by upside") exhaust the 30-atom limit before all tickers
     # get their price/target atoms, leaving the LLM with gaps.
     _PINNED_PREDICATES = (
-        'last_price', 'price_target', 'signal_direction', 'earnings_quality',
+        'last_price', 'currency', 'price_target', 'signal_direction', 'earnings_quality',
         'signal_quality', 'macro_confirmation', 'price_regime', 'upside_pct',
         'return_1m', 'return_3m', 'return_6m', 'return_1y',
         'volatility_30d', 'volatility_90d', 'drawdown_from_52w_high',
@@ -790,7 +790,7 @@ def retrieve(
                       'upside_pct', 'signal_direction', 'signal_confidence'):
             quality.append(r)
         elif pred in ('price_target', 'entry_condition', 'exit_condition',
-                      'invalidation_condition', 'last_price'):
+                      'invalidation_condition', 'last_price', 'currency'):
             signals.append(r)
         elif pred in ('premise', 'supporting_evidence', 'contradicting_evidence',
                       'risk_reward_ratio', 'position_sizing_note'):

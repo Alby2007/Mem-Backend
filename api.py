@@ -378,6 +378,10 @@ if HAS_PATTERN_LAYER:
 # { session_id: { 'streak': int, 'last_stress': float } }
 _session_streaks: dict = {}
 
+# Per-session last-seen tickers for follow-up carry-forward
+# { session_id: [list of canonical ticker strings] }
+_session_tickers: dict = {}
+
 # Start ingest scheduler (adapters run on their own intervals)
 _ingest_scheduler = None
 if HAS_INGEST:
@@ -1540,8 +1544,33 @@ def chat_endpoint():
         except Exception:
             nudges = None
 
-    # ── Retrieve KB context ────────────────────────────────────────────────
-    snippet, atoms = retrieve(message, conn, limit=limit, nudges=nudges)
+    # ── Ticker carry-forward for follow-up queries ──────────────────────────
+    # If the current message has no explicit tickers, inject the previous
+    # session's tickers into the retrieval query so follow-ups like
+    # "give me more info on it" or "what's the signal?" resolve correctly.
+    try:
+        from retrieval import _extract_tickers as _et
+        _cur_tickers = _et(message)
+    except Exception:
+        _cur_tickers = []
+
+    _retrieve_message = message
+    if not _cur_tickers and session_id in _session_tickers:
+        _prev = _session_tickers[session_id]
+        if _prev:
+            _retrieve_message = message + ' ' + ' '.join(_prev)
+
+    # ── Retrieve KB context ────────────────────────────────────────────
+    snippet, atoms = retrieve(_retrieve_message, conn, limit=limit, nudges=nudges)
+
+    # Save tickers seen this turn so next follow-up can carry them forward
+    if _cur_tickers:
+        _session_tickers[session_id] = _cur_tickers
+    elif session_id not in _session_tickers and atoms:
+        # Derive from atom subjects as fallback
+        _seen = list({a['subject'].upper() for a in atoms if 'subject' in a})[:4]
+        if _seen:
+            _session_tickers[session_id] = _seen
 
     # ── Working memory: on-demand fetch for tickers absent from KB ────────
     live_context  = ''

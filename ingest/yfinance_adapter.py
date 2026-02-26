@@ -346,6 +346,16 @@ class YFinanceAdapter(BaseIngestAdapter):
                 upsert=True,
             ))
 
+        # Store currency so LLM never invents a wrong symbol
+        _currency = info.get('currency') or info.get('financialCurrency')
+        if _currency:
+            atoms.append(RawAtom(
+                subject=symbol, predicate='currency', object=_currency.upper(),
+                confidence=0.99, source=src,
+                metadata={'as_of': now_iso},
+                upsert=True,
+            ))
+
         if is_etf:
             return self._etf_atoms(symbol, info, src, now_iso, atoms, current_price)
 
