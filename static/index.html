@@ -218,6 +218,35 @@ select option { background: var(--surface); }
 .adapter-name { font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 130px; }
 .adapter-time { font-family: var(--mono); font-size: 10px; color: var(--muted); flex: 1; }
 
+/* ── Screenshot drop zone ── */
+.drop-zone {
+  border: 2px dashed var(--border); border-radius: 6px; padding: 24px 16px;
+  text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  background: var(--surface); position: relative;
+}
+.drop-zone:hover, .drop-zone.drag-over { border-color: var(--accent); background: rgba(245,158,11,.04); }
+.drop-zone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+.drop-zone-icon { font-size: 22px; margin-bottom: 6px; color: var(--muted); }
+.drop-zone-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.drop-zone-sub { font-size: 10px; color: var(--muted); margin-top: 4px; }
+
+/* ── Sector quick-add ── */
+.sector-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+
+/* ── Autocomplete ── */
+.autocomplete-wrap { position: relative; flex: 1; }
+.autocomplete-dropdown {
+  position: absolute; top: 100%; left: 0; right: 0; background: var(--card);
+  border: 1px solid var(--accent); border-radius: 4px; z-index: 200;
+  max-height: 180px; overflow-y: auto; display: none;
+}
+.autocomplete-dropdown.open { display: block; }
+.ac-item {
+  padding: 6px 10px; font-family: var(--mono); font-size: 12px; cursor: pointer;
+  border-bottom: 1px solid rgba(42,42,42,.5);
+}
+.ac-item:hover, .ac-item.selected { background: rgba(245,158,11,.12); color: var(--accent); }
+
 /* ── Holdings ── */
 .holding-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid rgba(42,42,42,.4); font-size: 12px; }
 .holding-ticker { font-family: var(--mono); font-weight: 700; min-width: 80px; color: var(--accent); }
@@ -366,10 +395,28 @@ select option { background: var(--surface); }
   <div style="font-size:16px;font-weight:700;margin-bottom:20px;">Portfolio</div>
   <div class="two-col">
     <div>
-      <div class="section-title">Holdings</div>
+      <!-- 1. Screenshot upload -->
+      <div class="section-title">Drop Broker Screenshot</div>
+      <div class="drop-zone mb-12" id="p-drop-zone">
+        <input type="file" id="p-screenshot-input" accept="image/png,image/jpeg,image/webp" />
+        <div class="drop-zone-icon">📷</div>
+        <div class="drop-zone-label">Drop screenshot or click to upload</div>
+        <div class="drop-zone-sub">Hargreaves Lansdown · Freetrade · Trading 212 · IG · AJ Bell</div>
+      </div>
+      <div id="p-screenshot-msg" class="text-sm mb-12 text-muted"></div>
+
+      <!-- 2. Sector quick-add -->
+      <div class="section-title">Add by Sector</div>
+      <div class="sector-btns mb-12" id="p-sector-btns"></div>
+
+      <!-- 3. Manual add with autocomplete -->
+      <div class="section-title">Add Manually</div>
       <div class="card mb-12">
-        <div style="display:grid;grid-template-columns:1fr 80px 90px;gap:8px;margin-bottom:8px;">
-          <input id="p-ticker" placeholder="TICKER" style="text-transform:uppercase;" />
+        <div style="display:grid;grid-template-columns:1fr 80px 90px;gap:8px;margin-bottom:8px;align-items:start;">
+          <div class="autocomplete-wrap">
+            <input id="p-ticker" placeholder="Ticker (e.g. BARC.L)" autocomplete="off" />
+            <div class="autocomplete-dropdown" id="p-ac-dropdown"></div>
+          </div>
           <input id="p-qty" placeholder="Qty" type="number" min="0" />
           <input id="p-cost" placeholder="Avg cost" type="number" min="0" step="0.01" />
         </div>
@@ -412,13 +459,13 @@ select option { background: var(--surface); }
       <div class="card">
         <div class="form-row"><label>Account Size (USD)</label><input id="tip-account" type="number" placeholder="10000" /></div>
         <div class="form-row"><label>Max Risk per Trade (%)</label><input id="tip-risk" type="number" placeholder="1.0" step="0.1" /></div>
-        <div class="form-row"><label>Delivery Time</label><input id="tip-time" type="time" value="08:00" /></div>
+        <div class="form-row"><label>Delivery Time</label><input id="tip-time" type="time" value="07:30" /></div>
         <div class="form-row"><label>Timezone</label>
           <select id="tip-tz">
+            <option value="Europe/London" selected>Europe/London (GMT/BST)</option>
             <option value="UTC">UTC</option>
             <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
             <option value="America/New_York">America/New_York (ET)</option>
-            <option value="Europe/London">Europe/London (GMT)</option>
             <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
           </select>
         </div>
@@ -529,7 +576,7 @@ function showScreen(name) {
   if (name === 'patterns')  loadPatterns();
   if (name === 'network')   loadNetwork();
   if (name === 'tips')      loadTipsHistory();
-  if (name === 'portfolio') loadPortfolioModel();
+  if (name === 'portfolio') { loadPortfolioModel(); loadTickerList(); }
 }
 
 document.querySelectorAll('.nav-item').forEach(el => {
@@ -694,13 +741,121 @@ async function refreshDashboard() {
 document.getElementById('dash-refresh-btn').addEventListener('click', refreshDashboard);
 
 // ── PORTFOLIO ─────────────────────────────────────────────────────────────────
+
+// FTSE sector quick-add
+const FTSE_SECTORS = {
+  'FTSE Banks':  ['HSBA.L','LLOY.L','BARC.L','NWG.L','STAN.L'],
+  'FTSE Energy': ['SHEL.L','BP.L'],
+  'FTSE Mining': ['RIO.L','AAL.L','GLEN.L','BHP.L'],
+  'FTSE Pharma': ['AZN.L','GSK.L','HIK.L'],
+  'FTSE Tech':   ['SAGE.L','AUTO.L','LSEG.L'],
+};
+
+// Autocomplete ticker list — seeded from /universe/coverage, topped up with FTSE defaults
+let _acTickers = [];
+const _FTSE_FALLBACK = [
+  'SHEL.L','AZN.L','HSBA.L','ULVR.L','BP.L','GSK.L','RIO.L','BATS.L','VOD.L',
+  'LLOY.L','BARC.L','NWG.L','LSEG.L','REL.L','NG.L','BA.L','RR.L','TSCO.L',
+  'MKS.L','BDEV.L','PSN.L','AAL.L','GLEN.L','STAN.L','HIK.L','AUTO.L','SAGE.L',
+  'GBPUSD=X','EURGBP=X','GLD','^FTSE','^FTMC','^GSPC','^VIX',
+];
+
+async function loadTickerList() {
+  try {
+    const d = await apiFetch('/universe/coverage');
+    const remote = (d?.tickers || []).map(t => t.ticker || t).filter(Boolean);
+    _acTickers = [...new Set([...remote, ..._FTSE_FALLBACK])];
+  } catch {
+    _acTickers = [..._FTSE_FALLBACK];
+  }
+}
+
+// Build sector buttons
+(function buildSectorBtns() {
+  const wrap = document.getElementById('p-sector-btns');
+  Object.keys(FTSE_SECTORS).forEach(label => {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-outline btn-sm';
+    btn.textContent = '+ ' + label;
+    btn.addEventListener('click', () => {
+      const tickers = FTSE_SECTORS[label];
+      const existing = new Set(state.holdings.map(h => h.ticker));
+      let added = 0;
+      tickers.forEach(t => {
+        if (!existing.has(t)) {
+          state.holdings.push({ ticker: t, quantity: 0, avg_cost: null });
+          added++;
+        }
+      });
+      renderHoldings();
+      if (added === 0) showToast(`All ${label} tickers already added`, 'ok');
+    });
+    wrap.appendChild(btn);
+  });
+})();
+
+// Autocomplete
+const _acInput = document.getElementById('p-ticker');
+const _acDrop  = document.getElementById('p-ac-dropdown');
+let _acIdx = -1;
+
+function _acShow(matches) {
+  if (!matches.length) { _acDrop.classList.remove('open'); return; }
+  _acDrop.innerHTML = matches.map((t, i) =>
+    `<div class="ac-item" data-ticker="${escHtml(t)}">${escHtml(t)}</div>`
+  ).join('');
+  _acDrop.classList.add('open');
+  _acIdx = -1;
+  _acDrop.querySelectorAll('.ac-item').forEach(el => {
+    el.addEventListener('mousedown', e => {
+      e.preventDefault();
+      _acInput.value = el.dataset.ticker;
+      _acDrop.classList.remove('open');
+    });
+  });
+}
+
+_acInput.addEventListener('input', () => {
+  const q = _acInput.value.trim().toUpperCase();
+  if (q.length < 2) { _acDrop.classList.remove('open'); return; }
+  const matches = _acTickers.filter(t =>
+    t.toUpperCase().startsWith(q) || t.toUpperCase().includes(q)
+  ).slice(0, 6);
+  _acShow(matches);
+});
+
+_acInput.addEventListener('keydown', e => {
+  const items = _acDrop.querySelectorAll('.ac-item');
+  if (!items.length) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _acIdx = Math.min(_acIdx + 1, items.length - 1);
+    items.forEach((el, i) => el.classList.toggle('selected', i === _acIdx));
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _acIdx = Math.max(_acIdx - 1, 0);
+    items.forEach((el, i) => el.classList.toggle('selected', i === _acIdx));
+  } else if (e.key === 'Enter' && _acIdx >= 0) {
+    e.preventDefault();
+    _acInput.value = items[_acIdx].dataset.ticker;
+    _acDrop.classList.remove('open');
+  } else if (e.key === 'Escape') {
+    _acDrop.classList.remove('open');
+  }
+});
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.autocomplete-wrap')) _acDrop.classList.remove('open');
+});
+
+// Holdings render
 function renderHoldings() {
   const el = document.getElementById('p-holdings-list');
   if (!state.holdings.length) { el.innerHTML = '<div class="text-sm text-muted mb-8">No holdings added yet</div>'; return; }
   el.innerHTML = state.holdings.map((h, i) => `
     <div class="holding-row">
       <span class="holding-ticker">${escHtml(h.ticker)}</span>
-      <span class="holding-meta">${h.quantity} × ${h.avg_cost ? '@' + h.avg_cost : ''}</span>
+      <span class="holding-meta">${h.quantity || '—'} ${h.avg_cost != null ? '@ £' + h.avg_cost : ''}</span>
       <button class="btn btn-ghost btn-sm" onclick="removeHolding(${i})">✕</button>
     </div>`).join('');
 }
@@ -708,16 +863,83 @@ function renderHoldings() {
 window.removeHolding = function(i) { state.holdings.splice(i, 1); renderHoldings(); };
 
 document.getElementById('p-add-btn').addEventListener('click', () => {
-  const ticker = document.getElementById('p-ticker').value.trim().toUpperCase();
+  const ticker = (_acInput.value || '').trim().toUpperCase();
   const qty    = parseFloat(document.getElementById('p-qty').value) || 0;
   const cost   = parseFloat(document.getElementById('p-cost').value) || null;
   if (!ticker) { showToast('Enter a ticker'); return; }
+  _acDrop.classList.remove('open');
   state.holdings.push({ ticker, quantity: qty, avg_cost: cost });
-  document.getElementById('p-ticker').value = '';
+  _acInput.value = '';
   document.getElementById('p-qty').value = '';
   document.getElementById('p-cost').value = '';
   renderHoldings();
 });
+
+// Screenshot upload
+const _dropZone = document.getElementById('p-drop-zone');
+const _fileInput = document.getElementById('p-screenshot-input');
+
+['dragenter','dragover'].forEach(ev => _dropZone.addEventListener(ev, e => {
+  e.preventDefault(); _dropZone.classList.add('drag-over');
+}));
+['dragleave','drop'].forEach(ev => _dropZone.addEventListener(ev, e => {
+  e.preventDefault(); _dropZone.classList.remove('drag-over');
+}));
+_dropZone.addEventListener('drop', e => {
+  const file = e.dataTransfer?.files?.[0];
+  if (file) handleScreenshot(file);
+});
+_fileInput.addEventListener('change', () => {
+  if (_fileInput.files?.[0]) handleScreenshot(_fileInput.files[0]);
+});
+
+async function handleScreenshot(file) {
+  if (!state.userId) { showToast('Sign in first'); return; }
+  const sMsg = document.getElementById('p-screenshot-msg');
+  sMsg.innerHTML = '<span class="spinner"></span> Analysing screenshot…';
+  sMsg.style.color = 'var(--muted)';
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const headers = {};
+    if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+    const res = await fetch(`${API}/users/${state.userId}/history/screenshot`, {
+      method: 'POST', headers, body: formData,
+    });
+    const d = await res.json();
+
+    if (!d.vision_available) {
+      sMsg.style.color = 'var(--muted)';
+      sMsg.textContent = '⚠ Vision model not available — add holdings manually below';
+      return;
+    }
+    if (!d.holdings?.length) {
+      sMsg.style.color = 'var(--muted)';
+      sMsg.textContent = 'No holdings detected — try a clearer screenshot or add manually';
+      return;
+    }
+
+    // Merge into state.holdings (skip duplicates)
+    const existing = new Set(state.holdings.map(h => h.ticker));
+    let added = 0;
+    d.holdings.forEach(h => {
+      if (!existing.has(h.ticker)) {
+        state.holdings.push(h);
+        added++;
+      }
+    });
+    renderHoldings();
+    sMsg.style.color = 'var(--green)';
+    sMsg.textContent = `✓ ${added} holding${added !== 1 ? 's' : ''} extracted — review and submit`;
+  } catch(e) {
+    sMsg.style.color = 'var(--red)';
+    sMsg.textContent = 'Upload failed: ' + e.message;
+  }
+  // Reset file input so same file can be re-uploaded
+  _fileInput.value = '';
+}
 
 document.getElementById('p-submit-btn').addEventListener('click', async () => {
   if (!state.userId) { showToast('Sign in first'); return; }

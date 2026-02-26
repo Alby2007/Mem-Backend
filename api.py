@@ -2058,6 +2058,101 @@ def user_portfolio_get(user_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/users/<user_id>/history/screenshot', methods=['POST'])
+@require_auth
+def user_portfolio_screenshot(user_id: str):
+    """
+    POST /users/<user_id>/history/screenshot — extract holdings from broker screenshot.
+
+    Accepts multipart/form-data with a 'file' field (image/png or image/jpeg).
+    Sends the image to the local Ollama vision model (llava) and returns extracted
+    holdings as a JSON list.
+
+    Returns:
+      { "holdings": [{"ticker": "SHEL.L", "quantity": 10, "avg_cost": 27.50}, ...],
+        "vision_available": true }
+    or on model unavailable:
+      { "holdings": [], "vision_available": false, "reason": "vision_model_unavailable" }
+    """
+    err = assert_self(user_id)
+    if err: return err
+
+    import base64 as _b64
+    from llm.ollama_client import chat_vision, list_models, VISION_MODEL
+
+    # Check vision model is available
+    available_models = list_models()
+    vision_available = any(VISION_MODEL.split(':')[0] in m for m in available_models)
+    if not vision_available:
+        return jsonify({
+            'holdings': [],
+            'vision_available': False,
+            'reason': 'vision_model_unavailable',
+            'available_models': available_models,
+        }), 200
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'file field required'}), 400
+
+    f = request.files['file']
+    if not f.content_type or not f.content_type.startswith('image/'):
+        return jsonify({'error': 'file must be an image (image/png or image/jpeg)'}), 400
+
+    image_bytes = f.read()
+    if len(image_bytes) > 10 * 1024 * 1024:
+        return jsonify({'error': 'image too large (max 10 MB)'}), 400
+
+    image_b64 = _b64.b64encode(image_bytes).decode('utf-8')
+
+    prompt = (
+        "This is a screenshot of a stock brokerage portfolio page. "
+        "Extract all stock holdings visible in the image. "
+        "For each holding, identify: the ticker symbol, the quantity held, and the average cost/price per share if visible. "
+        "LSE-listed UK stocks use a .L suffix (e.g. SHEL.L, BARC.L). "
+        "Respond with ONLY valid JSON — no markdown, no explanation. "
+        "Format: [{\"ticker\": \"SHEL.L\", \"quantity\": 10, \"avg_cost\": 27.50}, ...] "
+        "If avg_cost is not visible, set it to null. "
+        "If no holdings are visible, return []."
+    )
+
+    try:
+        raw = chat_vision(image_b64, prompt, timeout=90)
+        if not raw:
+            return jsonify({'holdings': [], 'vision_available': True, 'reason': 'model_returned_empty'}), 200
+
+        # Strip markdown fences if present
+        raw = raw.strip()
+        if raw.startswith('```'):
+            raw = '\n'.join(l for l in raw.split('\n') if not l.startswith('```'))
+
+        import json as _json
+        holdings = _json.loads(raw)
+        if not isinstance(holdings, list):
+            holdings = []
+
+        # Normalise: ensure required keys, coerce types
+        clean = []
+        for h in holdings:
+            ticker = str(h.get('ticker') or '').strip().upper()
+            if not ticker:
+                continue
+            try:
+                qty = float(h.get('quantity') or 0)
+            except (TypeError, ValueError):
+                qty = 0.0
+            avg_cost = h.get('avg_cost')
+            try:
+                avg_cost = float(avg_cost) if avg_cost is not None else None
+            except (TypeError, ValueError):
+                avg_cost = None
+            clean.append({'ticker': ticker, 'quantity': qty, 'avg_cost': avg_cost})
+
+        return jsonify({'holdings': clean, 'vision_available': True, 'count': len(clean)})
+
+    except Exception as e:
+        return jsonify({'error': str(e), 'holdings': [], 'vision_available': True}), 500
+
+
 @app.route('/users/<user_id>/model', methods=['GET'])
 @require_auth
 def user_model_get(user_id):

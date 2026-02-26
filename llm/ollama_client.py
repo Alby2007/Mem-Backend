@@ -23,6 +23,7 @@ _logger = logging.getLogger(__name__)
 _BASE_URL          = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 DEFAULT_MODEL      = os.environ.get("OLLAMA_MODEL", "llama3.2")
 EXTRACTION_MODEL   = os.environ.get("OLLAMA_EXTRACTION_MODEL", "phi3")
+VISION_MODEL       = os.environ.get("OLLAMA_VISION_MODEL", "llava")
 
 _CHAT_URL  = f"{_BASE_URL}/api/chat"
 _TAGS_URL  = f"{_BASE_URL}/api/tags"
@@ -93,6 +94,47 @@ def list_models() -> List[str]:
     except Exception as e:
         _logger.warning("Ollama list_models error: %s", e)
         return []
+
+
+def chat_vision(
+    image_b64: str,
+    prompt: str,
+    model: str = VISION_MODEL,
+    timeout: int = 120,
+) -> Optional[str]:
+    """
+    Send an image (base64-encoded) + text prompt to an Ollama vision model.
+
+    Uses the Ollama multimodal message format:
+        {"role": "user", "content": prompt, "images": [base64_string]}
+
+    Returns the assistant reply string, or None on any error.
+    Callers should check None and degrade gracefully.
+    """
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+                "images": [image_b64],
+            }
+        ],
+        "stream": False,
+    }
+    try:
+        r = _requests.post(_CHAT_URL, json=payload, timeout=timeout)
+        r.raise_for_status()
+        return r.json().get("message", {}).get("content", "")
+    except _requests.exceptions.ConnectionError:
+        _logger.warning("Ollama not reachable at %s (vision request)", _BASE_URL)
+        return None
+    except _requests.exceptions.Timeout:
+        _logger.warning("Ollama vision request timed out after %ds", timeout)
+        return None
+    except Exception as e:
+        _logger.error("Ollama chat_vision error: %s", e)
+        return None
 
 
 def is_available() -> bool:
