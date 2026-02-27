@@ -550,7 +550,8 @@ def ingest_status():
     adapter_status = _ingest_scheduler.get_status()
     # Enrich each adapter entry with live KB atom count by source prefix
     try:
-        _sc = sqlite3.connect(_DB_PATH, timeout=5)
+        import sqlite3 as _sqlite3
+        _sc = _sqlite3.connect(_DB_PATH, timeout=5)
         try:
             # Map adapter name → source prefix pattern
             _src_patterns = {
