@@ -275,6 +275,30 @@ select option { background: var(--surface); }
 .fb-btn.fb-stop.fb-selected { border-color: var(--red); background: rgba(239,68,68,.15); }
 .fb-done { font-size: 11px; color: var(--green); font-family: var(--mono); }
 
+/* ── Tip card ── */
+.tip-card { background: var(--surface); border: 1px solid var(--accent); border-radius: 8px; padding: 14px; margin-top: 12px; font-size: 13px; }
+.tip-card-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.tip-ticker { font-family: var(--mono); font-size: 16px; font-weight: 700; color: var(--accent); letter-spacing: 0.05em; }
+.tip-dir { font-size: 13px; color: var(--text); }
+.tip-tf { font-size: 11px; font-family: var(--mono); }
+.tip-zone { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.tip-pos-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 10px; margin-bottom: 12px; padding: 10px; background: rgba(245,158,11,.05); border-radius: 6px; }
+.tip-pos-grid > div { display: flex; flex-direction: column; gap: 2px; }
+.tip-label { font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.tip-feedback-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.tip-fb-btn { border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; background: none; color: var(--text); transition: border-color .15s, background .15s; white-space: nowrap; }
+.tip-fb-btn:hover { border-color: var(--accent); background: rgba(245,158,11,.08); }
+.tip-fb-btn:disabled { opacity: .4; cursor: default; }
+.tip-fb-take { border-color: var(--green) !important; }
+.tip-fb-take:hover { background: rgba(34,197,94,.1) !important; }
+.tip-fb-skip { border-color: var(--red) !important; }
+.tip-fb-skip:hover { background: rgba(239,68,68,.08) !important; }
+.tip-confirm { font-size: 12px; color: var(--green); margin-top: 8px; padding: 8px 10px; background: rgba(34,197,94,.08); border-radius: 6px; border: 1px solid rgba(34,197,94,.2); }
+.tip-rejection-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; align-items: center; }
+.tip-rej-btn { border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; font-size: 11px; cursor: pointer; background: none; color: var(--muted); transition: border-color .15s; }
+.tip-rej-btn:hover { border-color: var(--accent); color: var(--text); }
+.tip-rej-btn:disabled { opacity: .4; cursor: default; }
+
 /* ── Pattern card ── */
 .pattern-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 14px; cursor: pointer; transition: border-color .15s; }
 .pattern-card:hover { border-color: var(--accent); }
@@ -1863,6 +1887,103 @@ function appendMsg(role, html) {
   return el;
 }
 
+function renderTipCard(tip, tipIdFromLog) {
+  if (!tip) return '';
+  const p = tip.position || {};
+  const patternId = tip.pattern_id;
+  const tipId = tipIdFromLog || 'ondemand';
+  const dirEmoji = tip.direction === 'bullish' ? '📈' : '📉';
+  const patLabel = (tip.pattern_type || '').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+  const tfLabel  = {fvg:'FVG',ifvg:'IFVG',bpr:'BPR'}[tip.pattern_type] || tip.timeframe || '';
+  const convBadge = tip.kb_conviction
+    ? `<span class="tier-badge" style="background:${{high:'#f59e0b',medium:'#6b7280',low:'#374151'}[tip.kb_conviction]||'#374151'}">${escHtml(tip.kb_conviction.toUpperCase())}</span>`
+    : '';
+  let posHtml = '';
+  if (p.suggested_entry) {
+    posHtml = `
+      <div class="tip-pos-grid">
+        <div><span class="tip-label">Entry</span><span class="mono-amber">${fmt(p.suggested_entry)}</span></div>
+        <div><span class="tip-label">Stop</span><span class="mono-red">${fmt(p.stop_loss)}</span></div>
+        <div><span class="tip-label">T1</span><span class="mono-green">${fmt(p.target_1)}</span></div>
+        <div><span class="tip-label">T2</span><span class="mono-green">${fmt(p.target_2)}</span></div>
+        <div><span class="tip-label">Size</span><span class="mono-amber">${p.position_size_units ? Math.round(p.position_size_units)+' shares' : '—'}</span></div>
+        <div><span class="tip-label">Value</span><span class="mono-amber">${p.account_currency==='GBP'?'£':'$'}${p.position_value ? p.position_value.toLocaleString('en-GB',{maximumFractionDigits:0}) : '—'}</span></div>
+      </div>`;
+  }
+  const feedbackId = `tip-fb-${Date.now()}`;
+  return `<div class="tip-card" id="${feedbackId}">
+    <div class="tip-card-header">
+      <span class="tip-ticker">${escHtml(tip.ticker)}</span>
+      ${convBadge}
+      <span class="tip-dir">${dirEmoji} ${escHtml(patLabel)}</span>
+      <span class="tip-tf text-muted">${escHtml(tfLabel)}</span>
+    </div>
+    <div class="tip-zone">Zone: <span class="mono-amber">${fmt(tip.zone_low)} – ${fmt(tip.zone_high)}</span></div>
+    ${posHtml}
+    <div class="tip-feedback-btns" data-tip-id="${tipId}" data-pattern-id="${patternId||''}">
+      <button class="tip-fb-btn tip-fb-take" data-action="taking_it">✅ Taking this trade</button>
+      <button class="tip-fb-btn tip-fb-more" data-action="tell_me_more">🤔 Tell me more</button>
+      <button class="tip-fb-btn tip-fb-skip" data-action="not_for_me">❌ Not for me</button>
+    </div>
+  </div>`;
+}
+
+function bindTipFeedback(msgEl) {
+  const btns = msgEl.querySelectorAll('.tip-feedback-btns');
+  btns.forEach(row => {
+    row.querySelectorAll('.tip-fb-btn').forEach(btn => {
+      btn.addEventListener('click', async function() {
+        const tipId  = row.dataset.tipId;
+        const patId  = row.dataset.patternId;
+        const action = this.dataset.action;
+        if (row.dataset.done) return;
+        row.dataset.done = '1';
+        row.querySelectorAll('.tip-fb-btn').forEach(b => b.disabled = true);
+        this.style.opacity = '1';
+        try {
+          const url = tipId && tipId !== 'ondemand' ? `/tips/${tipId}/feedback` : '/tips/0/feedback';
+          const d = await apiFetch(url, { method: 'POST', body: JSON.stringify({
+            user_id: state.userId, action, pattern_id: patId ? parseInt(patId) : null
+          })});
+          if (action === 'taking_it' && d) {
+            row.insertAdjacentHTML('afterend',
+              `<div class="tip-confirm">✅ ${escHtml(d.message || 'Position added — monitor active')}</div>`);
+          } else if (action === 'tell_me_more' && d) {
+            row.insertAdjacentHTML('afterend',
+              `<div class="tip-confirm">🤔 ${escHtml(d.message || 'Ask me anything about this setup')}</div>`);
+            const inp = document.getElementById('chat-input');
+            inp.value = 'Tell me more about this setup — what is the risk and what regime is it in?';
+            inp.focus();
+          } else if (action === 'not_for_me') {
+            row.insertAdjacentHTML('afterend',
+              `<div class="tip-rejection-btns">
+                <span class="tip-label">What put you off?</span>
+                <button class="tip-rej-btn" data-r="too_risky">Too risky</button>
+                <button class="tip-rej-btn" data-r="wrong_setup">Wrong setup</button>
+                <button class="tip-rej-btn" data-r="wrong_timing">Wrong timing</button>
+                <button class="tip-rej-btn" data-r="dont_know_stock">Don't know it</button>
+                <button class="tip-rej-btn" data-r="prefer_uk">Prefer UK</button>
+                <button class="tip-rej-btn" data-r="no_reason">No reason</button>
+              </div>`);
+            row.nextElementSibling.querySelectorAll('.tip-rej-btn').forEach(rb => {
+              rb.addEventListener('click', async function() {
+                row.nextElementSibling.querySelectorAll('.tip-rej-btn').forEach(b => b.disabled = true);
+                await apiFetch(url || '/tips/0/feedback', { method: 'POST', body: JSON.stringify({
+                  user_id: state.userId, action: 'not_for_me',
+                  rejection_reason: this.dataset.r, pattern_id: patId ? parseInt(patId) : null
+                })}).catch(()=>{});
+                this.insertAdjacentHTML('afterend','<span class="fb-done"> ✓</span>');
+              });
+            });
+          }
+        } catch(e) {
+          showToast('Feedback error: ' + e.message);
+        }
+      });
+    });
+  });
+}
+
 function renderOverlay(overlay) {
   if (!overlay || typeof overlay !== 'object') return '';
   const parts = [];
@@ -1911,7 +2032,9 @@ async function sendChat() {
     if (!d) { thinking.remove(); return; }
     const answer = mdToHtml(d.response || d.answer || JSON.stringify(d));
     const overlayHtml = overlayMode ? renderOverlay(d.overlay) : '';
-    thinking.querySelector('.msg-bubble').innerHTML = answer + overlayHtml;
+    const tipCardHtml = d.tip_card ? renderTipCard(d.tip_card, d.tip_card.tip_id) : '';
+    thinking.querySelector('.msg-bubble').innerHTML = answer + overlayHtml + tipCardHtml;
+    if (tipCardHtml) bindTipFeedback(thinking);
     if (d.kb_enriched && d.live_fetched?.length) {
       const badge = document.createElement('div');
       badge.className = 'msg-live-badge';

@@ -435,6 +435,15 @@ if HAS_PATTERN_LAYER:
     except Exception:
         pass
 
+# Start position monitor (checks every 300s for tip-originated position triggers)
+_position_monitor = None
+try:
+    from analytics.position_monitor import PositionMonitor
+    _position_monitor = PositionMonitor(_DB_PATH, interval_sec=300)
+    _position_monitor.start()
+except Exception:
+    _position_monitor = None
+
 # Per-session streak store for epistemic adaptation
 # { session_id: { 'streak': int, 'last_stress': float } }
 _session_streaks: dict = {}
@@ -2573,6 +2582,90 @@ def chat_endpoint():
             _has_prior_turns = len(_check_hist) > 1
         except Exception:
             pass
+
+    # ── On-demand tip intent detection ────────────────────────────────────
+    # "give me a tip" / "what should I trade today" / "any setups worth looking at"
+    # Routes to tip pipeline and injects a structured tip card into response.
+    _TIP_INTENT_PHRASES = (
+        'give me a tip', 'give me tip', 'daily tip', 'today\'s tip',
+        'what should i trade', 'what should i buy', 'what should i sell',
+        'any setups worth', 'best opportunity right now', 'what\'s looking good',
+        "what's looking good", 'best setup today', 'top trade today',
+        'trade of the day', 'tip of the day', 'recommend a trade',
+        'show me a trade', 'suggest a trade',
+    )
+    _msg_lower_tip = message.lower()
+    _is_tip_request = any(ph in _msg_lower_tip for ph in _TIP_INTENT_PHRASES)
+
+    if _is_tip_request and HAS_PATTERN_LAYER and chat_user_id:
+        try:
+            from notifications.tip_scheduler import _pick_best_pattern, _get_local_now
+            from notifications.tip_formatter import format_tip, tip_to_dict, TIER_LIMITS
+            from analytics.pattern_detector import PatternSignal
+            from analytics.position_calculator import calculate_position
+            import sqlite3 as _sq2
+
+            _prefs_row = None
+            _c_tip = _sq2.connect(_DB_PATH, timeout=5)
+            try:
+                _prefs_row = _c_tip.execute(
+                    """SELECT tier, tip_timeframes, tip_pattern_types,
+                              account_size, max_risk_per_trade_pct, account_currency
+                       FROM user_preferences WHERE user_id=?""", (chat_user_id,)
+                ).fetchone()
+            finally:
+                _c_tip.close()
+
+            _tier = 'basic'
+            _tip_prefs: dict = {}
+            if _prefs_row:
+                import json as _json
+                _tier = _prefs_row[0] or 'basic'
+                def _j(v): 
+                    try: return _json.loads(v) if v else None
+                    except Exception: return None
+                _limits = TIER_LIMITS.get(_tier, TIER_LIMITS['basic'])
+                _tip_prefs = {
+                    'account_size': _prefs_row[3] or 10000,
+                    'max_risk_per_trade_pct': _prefs_row[4] or 1.0,
+                    'account_currency': _prefs_row[5] or 'GBP',
+                    'tier': _tier,
+                    'tip_timeframes': _j(_prefs_row[1]) or _limits['timeframes'],
+                    'tip_pattern_types': _j(_prefs_row[2]),
+                }
+
+            _pat_row = _pick_best_pattern(
+                _DB_PATH, chat_user_id, _tier,
+                _tip_prefs.get('tip_timeframes', ['1h']),
+                _tip_prefs.get('tip_pattern_types'),
+            )
+            if _pat_row:
+                _sig = PatternSignal(
+                    pattern_type  = _pat_row['pattern_type'],
+                    ticker        = _pat_row['ticker'],
+                    direction     = _pat_row['direction'],
+                    zone_high     = _pat_row['zone_high'],
+                    zone_low      = _pat_row['zone_low'],
+                    zone_size_pct = _pat_row.get('zone_size_pct', 0.0),
+                    timeframe     = _pat_row['timeframe'],
+                    formed_at     = _pat_row.get('formed_at', ''),
+                    quality_score = _pat_row.get('quality_score') or 0.0,
+                    status        = _pat_row['status'],
+                    kb_conviction = _pat_row.get('kb_conviction', ''),
+                    kb_regime     = _pat_row.get('kb_regime', ''),
+                    kb_signal_dir = _pat_row.get('kb_signal_dir', ''),
+                )
+                _tip_pos = calculate_position(_sig, _tip_prefs) if _tip_prefs else None
+                _tip_dict = tip_to_dict(_sig, _tip_pos, tier=_tier)
+                response['tip_card'] = {
+                    **_tip_dict,
+                    'tip_id': None,
+                    'pattern_id': _pat_row.get('id'),
+                    'feedback_actions': ['taking_it', 'tell_me_more', 'not_for_me'],
+                }
+        except Exception as _tip_err:
+            import logging as _logging
+            _logging.getLogger(__name__).warning('on-demand tip failed: %s', _tip_err)
 
     # ── Opportunity generation scan ────────────────────────────────────────
     # Detects open-ended generation queries ("make me a daytime strategy",
@@ -4791,6 +4884,483 @@ def submit_feedback():
         return jsonify({'id': row['id'], 'recorded': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ── Tip feedback (3-path: taking_it / tell_me_more / not_for_me) ──────────────
+
+@app.route('/tips/<int:tip_id>/feedback', methods=['POST'])
+@limiter.exempt
+def tip_feedback_action(tip_id: int):
+    """
+    POST /tips/<tip_id>/feedback
+
+    Handle user response to a tip card. Three paths:
+      taking_it   — add position to portfolio + create tip_followup for monitoring
+      tell_me_more — pre-load tip context; returns extended tip detail for Q&A
+      not_for_me  — store rejection reason, soft-update user model
+
+    Body:
+      { "user_id": "alice", "action": "taking_it"|"tell_me_more"|"not_for_me",
+        "rejection_reason": "too_risky" (only for not_for_me),
+        "pattern_id": 42 }
+    """
+    if not HAS_PATTERN_LAYER:
+        return jsonify({'error': 'pattern layer not available'}), 503
+
+    data    = request.get_json(force=True, silent=True) or {}
+    user_id = getattr(g, 'user_id', None) or str(data.get('user_id', '')).strip()
+    action  = str(data.get('action', '')).strip()
+    pattern_id = data.get('pattern_id')
+
+    if not user_id:
+        return jsonify({'error': 'user_id required'}), 400
+    if action not in ('taking_it', 'tell_me_more', 'not_for_me'):
+        return jsonify({'error': 'action must be taking_it|tell_me_more|not_for_me'}), 400
+
+    try:
+        import sqlite3 as _sq
+        pattern_row = None
+        if pattern_id:
+            _c = _sq.connect(_DB_PATH, timeout=5)
+            try:
+                r = _c.execute(
+                    """SELECT id, ticker, pattern_type, direction, timeframe,
+                              zone_low, zone_high, quality_score, status,
+                              kb_conviction, kb_regime, kb_signal_dir
+                       FROM pattern_signals WHERE id=?""",
+                    (int(pattern_id),),
+                ).fetchone()
+                if r:
+                    cols = ['id','ticker','pattern_type','direction','timeframe',
+                            'zone_low','zone_high','quality_score','status',
+                            'kb_conviction','kb_regime','kb_signal_dir']
+                    pattern_row = dict(zip(cols, r))
+            finally:
+                _c.close()
+
+        # ── Path A: Taking it ────────────────────────────────────────────────
+        if action == 'taking_it':
+            from users.user_store import create_tip_followup, ensure_tip_feedback_table
+            from analytics.pattern_detector import PatternSignal
+            from analytics.position_calculator import calculate_position
+
+            if not pattern_row:
+                return jsonify({'error': 'pattern_id required for taking_it'}), 400
+
+            # Load user prefs for position sizing
+            _c2 = _sq.connect(_DB_PATH, timeout=5)
+            try:
+                prefs_row = _c2.execute(
+                    """SELECT account_size, max_risk_per_trade_pct, account_currency, tier
+                       FROM user_preferences WHERE user_id=?""", (user_id,)
+                ).fetchone()
+            finally:
+                _c2.close()
+            prefs = {}
+            if prefs_row:
+                prefs = {
+                    'account_size': prefs_row[0] or 10000,
+                    'max_risk_per_trade_pct': prefs_row[1] or 1.0,
+                    'account_currency': prefs_row[2] or 'GBP',
+                    'tier': prefs_row[3] or 'basic',
+                }
+
+            sig = PatternSignal(
+                pattern_type  = pattern_row['pattern_type'],
+                ticker        = pattern_row['ticker'],
+                direction     = pattern_row['direction'],
+                zone_high     = pattern_row['zone_high'],
+                zone_low      = pattern_row['zone_low'],
+                zone_size_pct = 0.0,
+                timeframe     = pattern_row['timeframe'],
+                formed_at     = '',
+                quality_score = pattern_row['quality_score'] or 0.0,
+                status        = pattern_row['status'],
+                kb_conviction = pattern_row.get('kb_conviction',''),
+                kb_regime     = pattern_row.get('kb_regime',''),
+                kb_signal_dir = pattern_row.get('kb_signal_dir',''),
+            )
+            pos = calculate_position(sig, prefs) if prefs else None
+
+            followup = create_tip_followup(
+                _DB_PATH,
+                user_id     = user_id,
+                ticker      = pattern_row['ticker'],
+                tip_id      = tip_id,
+                pattern_id  = pattern_row['id'],
+                direction   = pattern_row['direction'],
+                entry_price = pos.suggested_entry if pos else pattern_row['zone_low'],
+                stop_loss   = pos.stop_loss if pos else None,
+                target_1    = pos.target_1 if pos else None,
+                target_2    = pos.target_2 if pos else None,
+                target_3    = pos.target_3 if pos else None,
+                position_size = pos.position_size_units if pos else None,
+                regime_at_entry    = pattern_row.get('kb_regime'),
+                conviction_at_entry = pattern_row.get('kb_conviction'),
+            )
+
+            # Commit opening atom to personal KB
+            if HAS_HYBRID:
+                try:
+                    from users.personal_kb import write_atom
+                    write_atom(user_id, pattern_row['ticker'],
+                               'user_action', 'opened_position', _DB_PATH)
+                except Exception:
+                    pass
+
+            confirmation = {
+                'action': 'taking_it',
+                'followup_id': followup['id'],
+                'ticker': pattern_row['ticker'],
+                'entry_price': pos.suggested_entry if pos else None,
+                'stop_loss':   pos.stop_loss if pos else None,
+                'target_1':    pos.target_1 if pos else None,
+                'target_2':    pos.target_2 if pos else None,
+                'position_size': int(pos.position_size_units) if pos else None,
+                'message': (
+                    f"{pattern_row['ticker']} added to monitoring — "
+                    f"position monitor activated. "
+                    f"You'll be alerted when action is needed."
+                ),
+            }
+            return jsonify(confirmation)
+
+        # ── Path B: Tell me more ─────────────────────────────────────────────
+        if action == 'tell_me_more':
+            detail = {
+                'action': 'tell_me_more',
+                'tip_id': tip_id,
+                'pattern': pattern_row,
+                'message': 'Tip context loaded. Ask me anything about this setup.',
+                'suggested_questions': [
+                    'What is the risk if it breaks below the zone?',
+                    'How has this pattern performed in the current regime?',
+                    'Does this conflict with my existing positions?',
+                ],
+            }
+            return jsonify(detail)
+
+        # ── Path C: Not for me ───────────────────────────────────────────────
+        if action == 'not_for_me':
+            reason = str(data.get('rejection_reason', 'no_reason')).strip()
+            _VALID_REASONS = {'too_risky','wrong_setup','wrong_timing',
+                              'dont_know_stock','prefer_uk','no_reason'}
+            if reason not in _VALID_REASONS:
+                reason = 'no_reason'
+
+            log_tip_feedback(_DB_PATH, user_id, 'skipped',
+                             tip_id=tip_id, pattern_id=pattern_id)
+
+            # Soft update personal KB with rejection reason
+            if HAS_HYBRID and pattern_row:
+                try:
+                    from users.personal_kb import write_atom
+                    write_atom(user_id, pattern_row['ticker'],
+                               'user_rejection_reason', reason, _DB_PATH)
+                    update_from_feedback(user_id,
+                        {'pattern_type': pattern_row['pattern_type'],
+                         'outcome': 'skipped', 'rejection_reason': reason}, _DB_PATH)
+                except Exception:
+                    pass
+
+            return jsonify({
+                'action': 'not_for_me',
+                'rejection_reason': reason,
+                'recorded': True,
+                'message': 'Thanks — this helps improve future tips for you.',
+            })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Position update response (closed / hold_t2 / partial / override) ──────────
+
+@app.route('/tips/<int:followup_id>/position-update', methods=['POST'])
+@limiter.exempt
+def tip_position_update(followup_id: int):
+    """
+    POST /tips/<followup_id>/position-update
+
+    Handle user response to a position monitor alert.
+    Actions: closed | hold_t2 | partial | override
+
+    Body:
+      { "user_id": "alice", "action": "closed"|"hold_t2"|"partial"|"override",
+        "exit_price": 923.40,    (closed/partial)
+        "shares_closed": 6,      (partial)
+        "close_method": "hit_t1" (closed: hit_t1|hit_t2|hit_t3|stopped_out|manual) }
+    """
+    from users.user_store import (
+        get_user_followups, update_followup_status, ensure_tip_followups_table,
+    )
+    import sqlite3 as _sq
+
+    data    = request.get_json(force=True, silent=True) or {}
+    user_id = getattr(g, 'user_id', None) or str(data.get('user_id', '')).strip()
+    action  = str(data.get('action', '')).strip()
+
+    if not user_id:
+        return jsonify({'error': 'user_id required'}), 400
+    if action not in ('closed', 'hold_t2', 'partial', 'override'):
+        return jsonify({'error': 'action must be closed|hold_t2|partial|override'}), 400
+
+    # Load the followup row
+    _c = _sq.connect(_DB_PATH, timeout=5)
+    try:
+        ensure_tip_followups_table(_c)
+        row = _c.execute(
+            """SELECT id, user_id, tip_id, pattern_id, ticker, direction,
+                      entry_price, stop_loss, target_1, target_2, target_3,
+                      position_size, tracking_target, status,
+                      regime_at_entry, conviction_at_entry
+               FROM tip_followups WHERE id=? AND user_id=?""",
+            (followup_id, user_id),
+        ).fetchone()
+    finally:
+        _c.close()
+
+    if not row:
+        return jsonify({'error': 'followup not found'}), 404
+    cols = ['id','user_id','tip_id','pattern_id','ticker','direction',
+            'entry_price','stop_loss','target_1','target_2','target_3',
+            'position_size','tracking_target','status',
+            'regime_at_entry','conviction_at_entry']
+    pos = dict(zip(cols, row))
+
+    try:
+        if action == 'closed':
+            exit_price   = float(data.get('exit_price', pos['entry_price'] or 0))
+            close_method = str(data.get('close_method', 'manual'))
+            entry        = pos['entry_price'] or exit_price
+            position_size = pos['position_size'] or 1
+            bullish       = pos['direction'] != 'bearish'
+            pnl_raw       = (exit_price - entry) * position_size
+            if not bullish:
+                pnl_raw = -pnl_raw
+            pnl_pct = ((exit_price - entry) / entry * 100) if entry else 0.0
+
+            update_followup_status(_DB_PATH, followup_id, status='closed')
+
+            # Resolve prediction ledger
+            if HAS_PATTERN_LAYER and pos.get('pattern_id'):
+                try:
+                    from analytics.prediction_ledger import PredictionLedger
+                    pl = PredictionLedger(_DB_PATH)
+                    pl.on_price_written(pos['ticker'], exit_price)
+                except Exception:
+                    pass
+
+            # Update signal calibration
+            outcome_map = {
+                'hit_t1': 'hit_t1', 'hit_t2': 'hit_t2', 'hit_t3': 'hit_t3',
+                'stopped_out': 'stopped_out', 'manual': 'manual',
+            }
+            cal_outcome = outcome_map.get(close_method, 'manual')
+            if HAS_HYBRID and pos.get('pattern_id'):
+                try:
+                    _c2 = _sq.connect(_DB_PATH, timeout=5)
+                    prow = _c2.execute(
+                        "SELECT ticker, pattern_type, timeframe, kb_regime FROM pattern_signals WHERE id=?",
+                        (pos['pattern_id'],),
+                    ).fetchone()
+                    _c2.close()
+                    if prow:
+                        update_calibration(
+                            ticker=prow[0], pattern_type=prow[1],
+                            timeframe=prow[2], market_regime=prow[3] or None,
+                            outcome=cal_outcome, db_path=_DB_PATH,
+                        )
+                        update_from_feedback(user_id,
+                            {'pattern_type': prow[1], 'outcome': cal_outcome}, _DB_PATH)
+                except Exception:
+                    pass
+
+            # Commit outcome atom to personal KB
+            if HAS_HYBRID:
+                try:
+                    from users.personal_kb import write_atom
+                    write_atom(user_id, pos['ticker'], 'trade_outcome', cal_outcome, _DB_PATH)
+                    write_atom(user_id, pos['ticker'], 'realised_pnl_pct',
+                               f'{pnl_pct:+.1f}%', _DB_PATH)
+                except Exception:
+                    pass
+
+            log_tip_feedback(_DB_PATH, user_id, cal_outcome,
+                             tip_id=pos.get('tip_id'), pattern_id=pos.get('pattern_id'))
+
+            return jsonify({
+                'action': 'closed',
+                'ticker': pos['ticker'],
+                'exit_price': exit_price,
+                'entry_price': entry,
+                'pnl_gbp': round(pnl_raw, 2),
+                'pnl_pct': round(pnl_pct, 2),
+                'outcome': cal_outcome,
+                'message': (
+                    f"Trade closed — {pos['ticker']}: "
+                    f"{'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%. "
+                    f"Calibration updated."
+                ),
+            })
+
+        elif action == 'hold_t2':
+            new_stop = pos['entry_price']
+            update_followup_status(_DB_PATH, followup_id,
+                                   status='watching', tracking_target='T2',
+                                   stop_loss=new_stop)
+            if HAS_HYBRID:
+                try:
+                    from users.personal_kb import write_atom
+                    write_atom(user_id, pos['ticker'],
+                               'user_position_intent', 'holding_for_t2', _DB_PATH)
+                except Exception:
+                    pass
+            return jsonify({
+                'action': 'hold_t2',
+                'ticker': pos['ticker'],
+                'tracking_target': 'T2',
+                'new_stop': new_stop,
+                'message': f"Stop moved to breakeven ({new_stop}) — risk-free position. Watching for T2.",
+            })
+
+        elif action == 'partial':
+            shares_closed = float(data.get('shares_closed', 0))
+            exit_price    = float(data.get('exit_price', pos['entry_price'] or 0))
+            orig_size     = pos['position_size'] or 0
+            remainder     = max(0, orig_size - shares_closed)
+            entry         = pos['entry_price'] or exit_price
+            partial_pnl   = (exit_price - entry) * shares_closed
+
+            _c3 = _sq.connect(_DB_PATH, timeout=5)
+            try:
+                ensure_tip_followups_table(_c3)
+                _c3.execute(
+                    "UPDATE tip_followups SET position_size=?, status='partial', updated_at=? WHERE id=?",
+                    (remainder, datetime.now(timezone.utc).isoformat(), followup_id),
+                )
+                _c3.commit()
+            finally:
+                _c3.close()
+
+            return jsonify({
+                'action': 'partial',
+                'ticker': pos['ticker'],
+                'shares_closed': shares_closed,
+                'remainder': remainder,
+                'partial_pnl': round(partial_pnl, 2),
+                'exit_price': exit_price,
+                'message': (
+                    f"Partial exit recorded — {int(shares_closed)} shares closed at {exit_price}. "
+                    f"{int(remainder)} shares remaining. Monitor continues."
+                ),
+            })
+
+        elif action == 'override':
+            # User is overriding the stop-zone recommendation
+            update_followup_status(_DB_PATH, followup_id,
+                                   status='watching', alert_level='OVERRIDE')
+            if HAS_HYBRID:
+                try:
+                    from users.personal_kb import write_atom
+                    write_atom(user_id, pos['ticker'],
+                               'user_override', 'held_past_stop_zone', _DB_PATH)
+                except Exception:
+                    pass
+            return jsonify({
+                'action': 'override',
+                'ticker': pos['ticker'],
+                'message': 'Override noted — monitoring every 15 minutes. If stop is breached a CRITICAL alert will fire.',
+            })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Telegram callback webhook (inline keyboard button presses) ─────────────────
+
+@app.route('/telegram/callback', methods=['POST'])
+@limiter.exempt
+def telegram_callback():
+    """
+    POST /telegram/callback
+
+    Receives Telegram inline keyboard callback_query updates.
+    Dispatches to tip_feedback_action or tip_position_update based on callback_data.
+
+    callback_data formats:
+      tip:<tip_id>:<action>          → tip feedback (taking_it|tell_me_more|not_for_me)
+      pos:<followup_id>:<action>     → position update (closed|hold_t2|partial|override)
+    """
+    import os as _os
+    data = request.get_json(force=True, silent=True) or {}
+
+    callback_query = data.get('callback_query', {})
+    if not callback_query:
+        return jsonify({'ok': True})
+
+    callback_data = callback_query.get('data', '')
+    from_user     = callback_query.get('from', {})
+    tg_user_id    = str(from_user.get('id', ''))
+    query_id      = callback_query.get('id', '')
+
+    # Acknowledge the callback immediately (Telegram requires <3s)
+    try:
+        import sqlite3 as _sq
+        _c = _sq.connect(_DB_PATH, timeout=5)
+        row = _c.execute(
+            "SELECT user_id FROM user_preferences WHERE telegram_chat_id=?",
+            (tg_user_id,),
+        ).fetchone()
+        _c.close()
+        user_id = row[0] if row else None
+    except Exception:
+        user_id = None
+
+    if not user_id:
+        return jsonify({'ok': True})
+
+    try:
+        parts = callback_data.split(':')
+        if len(parts) >= 3 and parts[0] == 'tip':
+            tip_id = int(parts[1])
+            action_map = {
+                'taking': 'taking_it', 'more': 'tell_me_more', 'skip': 'not_for_me',
+                'taking_it': 'taking_it', 'tell_me_more': 'tell_me_more', 'not_for_me': 'not_for_me',
+            }
+            action = action_map.get(parts[2], parts[2])
+            with app.test_request_context(
+                f'/tips/{tip_id}/feedback',
+                method='POST',
+                json={'user_id': user_id, 'action': action},
+                content_type='application/json',
+            ):
+                from flask import g as _g
+                _g.user_id = user_id
+                resp = tip_feedback_action(tip_id)
+
+        elif len(parts) >= 3 and parts[0] == 'pos':
+            followup_id = int(parts[1])
+            pos_action_map = {
+                'closed': 'closed', 'hold_t2': 'hold_t2',
+                'partial': 'partial', 'override': 'override', 'more': 'override',
+            }
+            action = pos_action_map.get(parts[2], parts[2])
+            with app.test_request_context(
+                f'/tips/{followup_id}/position-update',
+                method='POST',
+                json={'user_id': user_id, 'action': action},
+                content_type='application/json',
+            ):
+                from flask import g as _g
+                _g.user_id = user_id
+                resp = tip_position_update(followup_id)
+
+    except Exception as e:
+        import logging as _log
+        _log.getLogger(__name__).warning('telegram_callback error: %s', e)
+
+    return jsonify({'ok': True})
 
 
 @app.route('/users/<user_id>/alerts', methods=['GET'])

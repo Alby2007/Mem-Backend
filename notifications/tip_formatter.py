@@ -368,6 +368,108 @@ def format_tip(
     return '\n'.join(lines)
 
 
+def format_position_update(alert_type: str, pos: dict, current_price: float) -> str:
+    """
+    Render a Telegram MarkdownV2 position update alert.
+
+    Parameters
+    ----------
+    alert_type    One of: t1_zone_reached, t2_zone_reached, stop_loss_zone_reached,
+                  pattern_invalidated, conviction_tier_dropped, regime_shift_detected,
+                  earnings_within_2_days, sector_tailwind_reversed, short_squeeze_developing
+    pos           tip_followups row dict
+    current_price Current market price
+    """
+    ticker     = pos.get('ticker', '?')
+    entry      = pos.get('entry_price') or 0.0
+    stop       = pos.get('stop_loss')
+    t1         = pos.get('target_1')
+    t2         = pos.get('target_2')
+    direction  = pos.get('direction', 'bullish')
+    bullish    = direction != 'bearish'
+
+    pnl_raw    = ((current_price - entry) / entry * 100) if entry else 0.0
+    if not bullish:
+        pnl_raw = -pnl_raw
+    pnl_sign   = '\\+' if pnl_raw >= 0 else ''
+    pnl_str    = f'{pnl_sign}{pnl_raw:.1f}%'
+
+    _e  = _escape_mdv2
+    _ep = lambda p: _e(_fmt_price(p)) if p else 'N/A'
+
+    _ALERT_HEADERS = {
+        't1_zone_reached':          ('⚡', 'POSITION UPDATE', 'T1 zone reached ✅'),
+        't2_zone_reached':          ('🎯', 'POSITION UPDATE', 'T2 zone reached ✅'),
+        'stop_loss_zone_reached':   ('🛑', 'POSITION ALERT',  'Approaching stop zone ⚠️'),
+        'pattern_invalidated':      ('❌', 'POSITION ALERT',  'Pattern invalidated'),
+        'conviction_tier_dropped':  ('⚠️', 'POSITION UPDATE', 'Conviction tier dropped'),
+        'regime_shift_detected':    ('🔄', 'POSITION UPDATE', 'Regime shift detected'),
+        'earnings_within_2_days':   ('📋', 'POSITION ALERT',  'Earnings within 2 days'),
+        'sector_tailwind_reversed': ('↩️', 'POSITION UPDATE', 'Sector tailwind reversed'),
+        'short_squeeze_developing': ('🔥', 'POSITION UPDATE', 'Short squeeze developing'),
+    }
+
+    icon, header, subtitle = _ALERT_HEADERS.get(
+        alert_type, ('📍', 'POSITION UPDATE', alert_type.replace('_', ' ').title())
+    )
+
+    lines = [
+        f'{icon} *{_e(header)} — {_e(ticker)}*',
+        f'_{_e(subtitle)}_',
+        '',
+        f'📍 Price: {_ep(current_price)}',
+        f'Entry was: {_ep(entry)} \\| P&L: {_e(pnl_str)}',
+    ]
+
+    if alert_type == 't1_zone_reached' and t2:
+        lines += [
+            '',
+            '💡 *Recommended action:*',
+            f'Take 50% at current price \\({_ep(current_price)}\\)',
+            f'Move stop on remainder to breakeven \\({_ep(entry)}\\)',
+            f'Next target: T2 at {_ep(t2)}',
+        ]
+    elif alert_type == 't2_zone_reached':
+        lines += [
+            '',
+            '💡 *Recommended action:*',
+            'Consider closing position or trailing stop',
+            f'T2 target at {_ep(t2)} has been reached',
+        ]
+    elif alert_type == 'stop_loss_zone_reached' and stop:
+        dist = abs((current_price - stop) / entry * 100) if entry else 0
+        lines += [
+            f'Stop loss: {_ep(stop)} \\({_e(f"{dist:.1f}%")} away\\)',
+            '',
+            '💡 *Recommended action:*',
+            'Close position — approaching your defined risk level',
+        ]
+    elif alert_type == 'pattern_invalidated':
+        lines += [
+            '',
+            '💡 *Recommended action:*',
+            'Setup invalidated — KB signal has reversed',
+            'Consider closing to preserve capital',
+        ]
+    elif alert_type == 'conviction_tier_dropped':
+        entry_conv   = pos.get('conviction_at_entry', 'unknown')
+        lines += [
+            f'Conviction at entry: {_e(entry_conv.title())}',
+            'Current conviction has decreased',
+            '',
+            '💡 *Recommended action:*',
+            'Consider reducing position size or tightening stop',
+        ]
+    elif alert_type == 'regime_shift_detected':
+        entry_regime = pos.get('regime_at_entry', 'unknown')
+        lines += [
+            f'Regime at entry: {_e(entry_regime.replace("_", " ").title())}',
+            'Market regime has changed — reassess setup validity',
+        ]
+
+    return '\n'.join(lines)
+
+
 def tip_to_dict(
     pattern:  PatternSignal,
     position: Optional[PositionRecommendation],
