@@ -34,7 +34,7 @@ _logger = logging.getLogger(__name__)
 _COMMIT_THRESHOLD = 0.70
 
 # Max on-demand fetches per chat request (latency guard)
-MAX_ON_DEMAND_TICKERS = 2
+MAX_ON_DEMAND_TICKERS = 6
 
 # ── LLM-initiated fetch support ───────────────────────────────────────────────
 

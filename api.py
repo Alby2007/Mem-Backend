@@ -2066,7 +2066,7 @@ def chat_endpoint():
                 if _is_live_asset(t) and t not in missing_from_kb
             ]
             to_fetch = missing_from_kb + live_always
-            if (missing_from_kb and len(atoms) < 8) or live_always:
+            if missing_from_kb or live_always:
                 _working_memory.open_session(wm_session_id)
                 for ticker in to_fetch[:MAX_ON_DEMAND_TICKERS]:
                     _working_memory.fetch_on_demand(ticker, wm_session_id, _DB_PATH)
