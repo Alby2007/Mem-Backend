@@ -6363,9 +6363,63 @@ def serve_frontend():
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def _tg_poll_loop():
+    """Background thread: long-poll Telegram getUpdates to handle /start <code> logins."""
+    import time as _time, json as _json
+    import urllib.request as _ur
+    bot_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    if not bot_token:
+        return
+    offset = 0
+    url_base = f'https://api.telegram.org/bot{bot_token}'
+
+    def _send(chat_id, text):
+        try:
+            payload = _json.dumps({'chat_id': chat_id, 'text': text}).encode()
+            req = _ur.Request(f'{url_base}/sendMessage', data=payload,
+                              headers={'Content-Type': 'application/json'})
+            _ur.urlopen(req, timeout=5)
+        except Exception:
+            pass
+
+    while True:
+        try:
+            req = _ur.Request(f'{url_base}/getUpdates?timeout=30&offset={offset}')
+            resp = _ur.urlopen(req, timeout=35)
+            data = _json.loads(resp.read())
+            for upd in data.get('result', []):
+                offset = upd['update_id'] + 1
+                msg = upd.get('message', {})
+                text = (msg.get('text') or '').strip()
+                chat_id = (msg.get('chat') or {}).get('id')
+                from_user = msg.get('from', {})
+                if not chat_id or not text.startswith('/start'):
+                    continue
+                parts = text.split(maxsplit=1)
+                code = parts[1].strip().upper() if len(parts) > 1 else ''
+                if code and code in _TG_LOGIN_CODES:
+                    entry = _TG_LOGIN_CODES[code]
+                    if _time.time() < entry['expires']:
+                        entry['chat_id'] = chat_id
+                        entry['user_data'] = {
+                            'id':         chat_id,
+                            'first_name': from_user.get('first_name', ''),
+                            'last_name':  from_user.get('last_name', ''),
+                            'username':   from_user.get('username', ''),
+                        }
+                        _send(chat_id, '✅ Logged in! Return to the Trading Galaxy dashboard and click Verify.')
+                    else:
+                        _send(chat_id, '⚠️ That login code has expired. Please request a new one.')
+                else:
+                    _send(chat_id, '👋 Welcome to Trading Galaxy! Use the Sign in button on the dashboard to get a login code.')
+        except Exception:
+            _time.sleep(5)
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5050))
+    import threading
     if HAS_LLM:
-        import threading
         threading.Thread(target=warmup, daemon=True).start()
+    threading.Thread(target=_tg_poll_loop, daemon=True, name='tg-poll').start()
     app.run(host='0.0.0.0', port=port, debug=False)
