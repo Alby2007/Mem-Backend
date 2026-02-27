@@ -1,6 +1,6 @@
 # REST API Reference
 
-Base URL: `http://localhost:5050`
+Base URL: `https://api.tradinggalaxy.dev` (production) · `http://localhost:5050` (local dev)
 
 All request/response bodies are JSON. All endpoints return `Content-Type: application/json`.
 
@@ -12,7 +12,7 @@ Liveness check.
 
 **Response**
 ```json
-{ "status": "ok", "db": "trading_knowledge.db" }
+{ "status": "ok", "db": "trading_knowledge.db", "facts": 8890 }
 ```
 
 ---
@@ -283,17 +283,6 @@ GET /context/NVDA
 
 ---
 
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `TRADING_KB_DB` | `trading_knowledge.db` | Path to the SQLite database file |
-| `PORT` | `5050` | Flask listening port |
-| `FRED_API_KEY` | *(none)* | Required for `FREDAdapter` — get free key at fred.stlouisfed.org |
-| `EDGAR_USER_AGENT` | `trading-galaxy-kb research@example.com` | Required by SEC EDGAR fair-use policy |
-
----
-
 ## Error Responses
 
 All errors return a JSON body with an `error` key:
@@ -301,8 +290,3 @@ All errors return a JSON body with an `error` key:
 ```json
 { "error": "invalid JSON" }
 ```
-
-| HTTP status | When |
-|---|---|
-| `400` | Missing required field, invalid JSON |
-| `500` | Unhandled server error (check server logs) |

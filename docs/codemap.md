@@ -406,9 +406,11 @@ Fetches options chain data for liquid FTSE names via `yfinance` and computes opt
 ---
 
 ### `ingest/historical_adapter.py`
-One-shot backfill: fetches 1 year of daily OHLCV via `yf.download()` and stores only derived summary atoms — never raw OHLCV.
+One-shot backfill: fetches **5 years** of daily OHLCV via `yf.download()` and stores only derived summary atoms — never raw OHLCV.
 
-**Atoms produced:** `return_1w/1m/3m/6m/1y`, `volatility_30d/90d`, `drawdown_from_high`, `avg_volume_30d`, `price_52w_high/low`, `return_vs_spy_1m/3m`
+**Atoms produced:** `return_1w/1m/3m/6m/1y/3y/5y`, `volatility_30d/90d/5y`, `max_drawdown_5y`, `drawdown_from_high`, `avg_volume_30d`, `price_52w_high/low`, `price_3y_ago`, `return_vs_spy_1m/3m`
+
+**Key constants:** `_W_1Y=252`, `_W_3Y=756`, `_W_5Y=1260` trading day windows.
 
 **Trigger:** `POST /ingest/historical` or called from `run-all`.
 
@@ -438,6 +440,24 @@ Polls EDGAR full-text search for 8-K filings every 30 min. Deduplicates via `edg
 
 ### `ingest/dynamic_watchlist.py`
 `DynamicWatchlistManager` — merges default tickers with per-user expanded tickers from `user_universes` table.
+
+**Promotion logic:** `coverage_count ≥ 3` → `added_to_ingest=1` → ticker enters the yfinance scheduled ingest.
+
+---
+
+### `ingest/fca_short_interest_adapter.py`
+Downloads the daily FCA short position XLSX and extracts significant short positions (≥ 0.5% of issued share capital) for UK-listed equities.
+
+**Maps:** `_ISIN_TO_TICKER` (ISIN → yfinance `.L` symbol) · `_NAME_TO_TICKER` (company name fallback).
+
+**Atoms produced:** `{ticker} | fca_short_interest | "3.45% (Bridgewater Associates)"`
+
+---
+
+### `ingest/discovery_pipeline.py`
+Universal Discovery Pipeline. Scans FCA short interest, RSS ticker mentions, and user portfolio additions. Scores tickers by `coverage_count`; promotes to scheduled ingest at threshold.
+
+**Endpoint:** `POST /discover/run`
 
 ---
 
@@ -516,6 +536,43 @@ Computes cross-user calibration signals and cohort performance. Used by `GET /ne
 
 ### `analytics/signal_calibration.py`
 Updates `signal_calibration` table from `POST /feedback` submissions. Applies Bayesian confidence updates.
+
+**Key functions:** `update_calibration(ticker, pattern_type, timeframe, market_regime, outcome, db_path)` · `get_calibration(...)` · `_confidence_score(n)` · `_confidence_label(score)`
+
+---
+
+### `analytics/historical_calibration.py`
+Sliding-window backtester that back-populates `signal_calibration` with historical pattern outcome statistics **before any live user feedback exists**.
+
+**Approach:** 100-candle detection window slid through N years of daily OHLCV in steps of 5 candles. Each detected pattern is checked against the following 20 candles for T1/T2/T3 hits or stop-out.
+
+**Regime classification:** Cross-asset proxies (SPY, HYG, TLT, GLD, VIX) used to label each window `risk_on_expansion` / `risk_off_contraction` / `stagflation` / `recovery`.
+
+**Class:** `HistoricalCalibrator(db_path, window_size, forward_horizon, step_size)`
+- `calibrate_ticker(ticker, ohlcv_df, proxy_data, lookback_years)` → `{patterns_detected, calibration_rows_written}`
+- `calibrate_watchlist(tickers, lookback_years)` → per-ticker summary dict
+
+**CLI:** `python -m analytics.historical_calibration --years 3`
+**Endpoint:** `POST /calibrate/historical`
+
+---
+
+### `analytics/regime_history.py`
+Classifies each calendar month over the historical record into a macro regime using cross-asset proxy data, then writes regime-conditional performance atoms to the KB.
+
+**Regime matrix:** `risk_off_contraction` (SPY↓ + VIX↑) · `stagflation` (SPY flat + GLD↑) · `recovery` (SPY↑ + TLT↑) · `risk_on_expansion` (SPY↑ baseline)
+
+**Atoms written per equity ticker:**
+```
+global_macro_regime | regime_history_YYYY_MM | <regime>
+{TICKER}            | return_in_{regime}     | avg monthly return %
+{TICKER}            | regime_hit_rate_{regime}| % months ticker was up
+{TICKER}            | best_regime / worst_regime
+```
+
+**Class:** `RegimeHistoryClassifier(db_path)` · `run(tickers, lookback_years)`
+**CLI:** `python -m analytics.regime_history --years 5`
+**Endpoint:** `POST /calibrate/regime-history`
 
 ---
 
@@ -645,9 +702,20 @@ Single-page application (SPA) served at `GET /`. Bloomberg-terminal dark aesthet
 
 | Script | Purpose |
 |---|---|
-| `scripts/export_seed.py` | Export shared KB tables → `tests/fixtures/kb_seed.sql` (uses `INSERT OR REPLACE`) |
-| `scripts/push_seed.py` | Export + create GitHub Release with `kb_seed.sql` asset |
+| `scripts/export_seed.py` | Export shared KB tables → `tests/fixtures/kb_seed.sql`. Runs quality gate (fact count, open patterns). |
+| `scripts/push_seed.py` | Export + create GitHub Release tagged `seed-YYYYMMDD-HHMM` with `kb_seed.sql` asset. Prunes releases > 10. |
 | `scripts/load_seed.py` | Load `kb_seed.sql` into local DB via `executescript()` |
+| `scripts/check_module_status_docs.py` | Verifies module status table in `architecture.md` matches live import state |
+
+---
+
+## `deploy/`
+
+| File | Purpose |
+|---|---|
+| `deploy/hetzner.md` | Full step-by-step guide: CPX22 provisioning, Docker setup, Caddy TLS, systemd, backups, zero-downtime deploys |
+| `deploy/Caddyfile` | Caddy reverse proxy config for `api.tradinggalaxy.dev` — automatic Let's Encrypt TLS, security headers, rate limiting |
+| `deploy/seed-bootstrap.sh` | First-boot script: downloads latest `kb_seed.sql` from GitHub Releases and loads it into the `kb-data` Docker volume |
 
 ---
 

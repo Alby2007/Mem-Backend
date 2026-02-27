@@ -68,6 +68,43 @@ CREATE TABLE decay_log (
 
 ---
 
+## `signal_calibration` Table
+
+Stores historical pattern outcome statistics used to show intern-facing hit rates. Populated by `analytics/historical_calibration.py` (backtest) and `POST /feedback` (live user outcomes).
+
+```sql
+CREATE TABLE signal_calibration (
+    ticker               TEXT NOT NULL,
+    pattern_type         TEXT NOT NULL,
+    timeframe            TEXT NOT NULL DEFAULT '1d',
+    market_regime        TEXT,              -- NULL = all regimes blended
+    sample_size          INTEGER DEFAULT 0,
+    hit_rate_t1          REAL,              -- fraction reaching T1
+    hit_rate_t2          REAL,              -- fraction reaching T2
+    hit_rate_t3          REAL,              -- fraction reaching T3
+    stopped_out_rate     REAL,              -- fraction stopped out
+    avg_time_to_target_hours REAL,
+    calibration_confidence   REAL,          -- 0–1, based on sample size
+    last_updated         TEXT,
+    PRIMARY KEY (ticker, pattern_type, timeframe, market_regime)
+);
+```
+
+**`calibration_confidence` thresholds:**
+
+| Sample size | Label | Score |
+|---|---|---|
+| ≥ 100 | `established` | ≥ 0.60 |
+| 30–99 | `moderate` | 0.35–0.59 |
+| 10–29 | `low` | 0.15–0.34 |
+| < 10 | `insufficient` | < 0.15 |
+
+**Market regimes:** `risk_on_expansion` · `risk_off_contraction` · `stagflation` · `recovery` · `NULL` (all regimes blended)
+
+**Launch state (seed `seed-20260227-0741`):** 2,346 rows · 378,910 samples · 1,366 `established` rows across 77 tickers.
+
+---
+
 ## Predicate Vocabulary
 
 Predicates are defined in `knowledge/kb_domain_schemas.py`. The active predicates used by the ingest pipeline are:
@@ -116,6 +153,22 @@ Predicates are defined in `knowledge/kb_domain_schemas.py`. The active predicate
 | `risk_on_off` | `risk_off` | `model_signal_*` |
 | `asset_class_bias` | `equities_underweight` | `model_signal_*` |
 | `sector_rotation` | `defensive_rotation` | `model_signal_*` |
+| `regime_history_YYYY_MM` | `risk_off_contraction` | `macro_data_regime_history` |
+
+### Regime-Conditional Performance (per equity ticker)
+
+Written by `analytics/regime_history.py` via `POST /calibrate/regime-history`.
+
+| Predicate | Example value | Notes |
+|---|---|---|
+| `return_in_risk_on_expansion` | `3.62` | Avg monthly return (%) in that regime |
+| `return_in_risk_off_contraction` | `5.54` | |
+| `return_in_stagflation` | `2.08` | |
+| `return_in_recovery` | `0.3` | |
+| `regime_hit_rate_risk_on_expansion` | `83.3` | % months ticker was up in regime |
+| `regime_hit_rate_risk_off_contraction` | `66.7` | |
+| `best_regime` | `risk_off_contraction (+5.5%/mo)` | Best performing regime |
+| `worst_regime` | `recovery (+0.3%/mo)` | Worst performing regime |
 
 ### Research / News
 
@@ -233,3 +286,5 @@ All stored lowercase: `aapl`, `msft`, `googl`, `amzn`, `nvda`, `meta`, `tsla`, `
 
 ### Macro subjects
 `us_macro`, `us_labor`, `us_yields`, `us_credit`, `global_macro_regime`, `financial_news`
+
+`global_macro_regime` holds all `regime_history_YYYY_MM` atoms (52 months of classified macro history at launch).

@@ -74,6 +74,30 @@ scheduler.start()   # non-blocking, all adapters fire immediately then re-arm
 
 ---
 
+### `ingest/historical_adapter.py` (one-shot)
+
+Downloads **5 years** of daily OHLCV for all watchlist tickers in a single bulk call and emits interpretable summary atoms. Not on a schedule — triggered via `POST /ingest/historical` or `POST /ingest/run-all`.
+
+**Atoms produced:**
+
+| Predicate | Description | Confidence |
+|---|---|---|
+| `return_1w/1m/3m/6m/1y` | % return over rolling windows | 0.90 |
+| `return_3y` | % return over 3 years (756 trading days) | 0.85 |
+| `return_5y` | % return over 5 years (1260 trading days) | 0.85 |
+| `volatility_30d/90d` | Annualised realised volatility | 0.85 |
+| `volatility_5y` | Annualised realised vol over full 5yr window | 0.80 |
+| `max_drawdown_5y` | Peak-to-trough max drawdown over 5 years | 0.85 |
+| `drawdown_from_high` | % below 52-week high | 0.90 |
+| `avg_volume_30d` | Average daily volume, 30 days | 0.90 |
+| `price_52w_high/low` | 52-week range reference prices | 0.95 |
+| `price_3y_ago` | Reference anchor price 3 years ago | 0.85 |
+| `return_vs_spy_1m/3m` | Alpha vs SPY over 1/3 months | 0.80 |
+
+All atoms are `upsert=True` — safe to re-run.
+
+---
+
 ## Adapter: YFinanceAdapter
 
 **Source:** Yahoo Finance via `yfinance` library  
@@ -258,6 +282,53 @@ metadata:   { 'url': '...', 'published': '...', 'ticker_mentions': ['AAPL', 'NVD
 ```
 
 Ticker mentions are extracted from headline text using the same uppercase-sequence pattern as the retrieval engine, filtered against a stopword list.
+
+---
+
+## Adapter: FCAShortInterestAdapter
+
+**Source:** FCA short position disclosure XLSX (public)
+**URL:** `https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx`
+**Interval:** 24 hours  
+**Requires:** None
+
+Parses the daily FCA short-selling disclosure file to extract significant short positions (≥ 0.5% of issued share capital) for UK-listed companies.
+
+**Atoms produced:**
+```
+{TICKER} | fca_short_interest | "3.45% (Bridgewater Associates)"
+```
+
+Uses ISIN-to-ticker and name-to-ticker fallback maps to resolve disclosures to yfinance ticker symbols.
+
+---
+
+## Discovery Pipeline
+
+`ingest/discovery_pipeline.py` — Universal Discovery Pipeline
+
+Runs on schedule or via `POST /discover/run`. Discovers new tickers from multiple signals and promotes them into the active watchlist when coverage exceeds threshold.
+
+**Discovery stages:**
+1. FCA short interest XLSX — surfaces heavily shorted UK names
+2. RSS headline ticker extraction — tickers mentioned ≥ 3× in recent news
+3. Coverage scoring — counts how many discovery sources surface the same ticker
+
+**Promotion logic:**
+- `coverage_count ≥ 3` → promoted to `added_to_ingest=1` (enters yfinance watchlist)
+- Network effect: each new user who adds a ticker increments `coverage_count`
+
+**DB tables:** `discovery_log` · `dynamic_watchlist`
+
+---
+
+## Seed Sync Client
+
+`ingest/seed_sync.py` — runs hourly as a background thread independent of the ingest scheduler.
+
+Polls `Alby2007/Mem-Backend` GitHub Releases. If the latest `seed-YYYYMMDD-HHMM` tag is newer than the locally stored `kb_meta.seed_tag`, downloads `kb_seed.sql` and applies shared tables only.
+
+**Hard-coded allowlist** (`_ALLOWED_TABLES`): `facts`, `fact_conflicts`, `causal_edges`, `pattern_signals`, `signal_calibration`, and governance tables. **Never touches any `user_*` table.**
 
 ---
 

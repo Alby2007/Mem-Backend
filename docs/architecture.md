@@ -342,13 +342,77 @@ Override model: `OLLAMA_VISION_MODEL` env var.
 
 ---
 
+## Historical Calibration Layer
+
+Two modules back-populate the system with real outcome data before any live user feedback exists:
+
+### `analytics/historical_calibration.py`
+
+Slides a 100-candle detection window through 3+ years of daily OHLCV. For each pattern detected, checks T1/T2/T3 hits and stop-outs in the following 20 candles. Aggregates hit rates by `(ticker, pattern_type, timeframe, regime)` and writes to `signal_calibration`.
+
+```
+POST /calibrate/historical
+    → bulk yf.download() for watchlist + proxy tickers
+    → for each ticker:
+        → slide window [100 candles] step 5
+        → detect_all_patterns(window)
+        → classify_regime(SPY, VIX, TLT, GLD at window_end)
+        → _check_outcome(pattern, future[20 candles])
+        → aggregate into _AggBucket keyed by (ticker, pattern, regime)
+    → _upsert_calibration() → signal_calibration table
+```
+
+**Result (3yr, 77 tickers):** 377,801 patterns detected → 2,310 calibration rows → 378,910 total samples, 1,366 `established` rows (≥100 samples each).
+
+### `analytics/regime_history.py`
+
+Classifies each calendar month over 5 years into a macro regime using cross-asset proxies (SPY, HYG, TLT, GLD, VIX). Writes month-level regime atoms and per-ticker regime-conditional performance atoms.
+
+**Regime matrix (priority order):**
+
+| Regime | Condition |
+|---|---|
+| `risk_off_contraction` | SPY < -3% AND (HYG < -1% OR VIX > +10%) |
+| `stagflation` | SPY < 1% AND GLD > +2% |
+| `recovery` | SPY > +2% AND TLT > +1% |
+| `risk_on_expansion` | SPY > +1% (baseline) |
+
+**Result (5yr, 73 tickers):** 52 months classified, 740 atoms written.
+
+---
+
+## Deployment
+
+The stack runs as three Docker services managed by `docker compose`:
+
+| Service | Image | Role |
+|---|---|---|
+| `trading-galaxy` | Built from `Dockerfile` | Gunicorn (2 workers × 4 threads) serving `api.py` |
+| `caddy` | `caddy:2-alpine` | TLS termination, reverse proxy, security headers |
+| `ollama` | `ollama/ollama` | LLM inference — optional via `--profile llm` |
+
+**Domain:** `api.tradinggalaxy.dev` — Caddy provisions Let's Encrypt TLS automatically.
+
+**Data persistence:** `kb-data` Docker volume — SQLite WAL DB survives container restarts and rebuilds.
+
+**First-boot seed:** `bash deploy/seed-bootstrap.sh` downloads latest `kb_seed.sql` from GitHub Releases and populates the volume with 378k calibration samples.
+
+**Zero-downtime deploys:** `git pull && docker compose up -d --build` — Caddy health-checks the upstream and queues requests during the brief restart.
+
+**Auto-restart:** systemd `trading-galaxy.service` with `Requires=docker.service` ensures the stack restarts on server reboot.
+
+See `deploy/hetzner.md` for the full runbook.
+
+---
+
 ## Seed Management
 
 | Script | Purpose |
 |---|---|
-| `scripts/export_seed.py` | Export shared KB tables to `tests/fixtures/kb_seed.sql` |
-| `scripts/push_seed.py` | Export + upload to GitHub Releases (`seed-YYYYMMDD-HHMM` tag) |
+| `scripts/export_seed.py` | Export shared KB tables to `tests/fixtures/kb_seed.sql`. Runs quality gate. |
+| `scripts/push_seed.py` | Export + upload to GitHub Releases (`seed-YYYYMMDD-HHMM` tag). Prunes releases > 10. |
 | `scripts/load_seed.py` | Load seed SQL into local DB |
+| `deploy/seed-bootstrap.sh` | First-boot: download latest seed from GitHub Releases, load into `kb-data` volume |
 | `ingest/seed_sync.py` | Background hourly poll — downloads newer seed from GitHub Releases and applies shared tables only; never touches `user_*` tables |
 
 Seed allowlist (tables synced): `facts`, `fact_conflicts`, `causal_edges`, `pattern_signals`, `signal_calibration`, and governance tables. Personal KB (`user_*`) is structurally protected.
