@@ -158,9 +158,8 @@ def main() -> None:
         print(f"  SKIP optional table (not yet created): {t}")
     print(f"All required tables present. ({len(missing_optional)} optional table(s) skipped)")
     # Update export lists to only tables that actually exist
-    global SHARED_TABLES
+    global SHARED_TABLES, USER_TABLES
     SHARED_TABLES = [t for t in SHARED_TABLES if t in existing]
-    global USER_TABLES
     USER_TABLES = USER_TABLES + [t for t in USER_TABLES_OPTIONAL if t in existing]
 
     # ── 2. Quality gate ───────────────────────────────────────────────────────
