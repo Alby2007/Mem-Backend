@@ -1,7 +1,7 @@
 """
 ingest/historical_adapter.py — Historical Summary Backfill Adapter
 
-Fetches one year of daily OHLCV for the watchlist via a single yf.download()
+Fetches five years of daily OHLCV for the watchlist via a single yf.download()
 call and computes interpretable summary atoms. Raw OHLCV is never stored in
 the KB — only the meaningful derived facts that the LLM can reason about.
 
@@ -54,11 +54,16 @@ All atoms use source prefix 'derived_signal_historical_{ticker}' (authority 0.65
   return_3m              "-4.12"               % return over 63 trading days
   return_6m              "22.80"               % return over 126 trading days
   return_1y              "67.40"               % return over 252 trading days
+  return_3y              "+42.3"               % return over 756 trading days (~3yr)
+  return_5y              "+67.8"               % return over 1260 trading days (~5yr)
   volatility_30d         "42.5"                annualised realised vol, 30-day window
   volatility_90d         "38.2"                annualised realised vol, 90-day window
+  volatility_5y          "28.4"                annualised realised vol, full 5-year window
+  max_drawdown_5y        "-42.1"               max peak-to-trough drawdown over 5yr history
   drawdown_from_52w_high "-12.4"               % drawdown from 52-week high close
   price_6m_ago           "143.00"              reference close price 126 trading days ago
   price_1y_ago           "98.50"               reference close price 252 trading days ago
+  price_3y_ago           "82.40"               reference close price 756 trading days ago
   avg_volume_30d         "42500000"            mean daily volume over 30 trading days
   high_52w               "974.00"              52-week highest close
   low_52w                "392.30"              52-week lowest close
@@ -111,13 +116,15 @@ except ImportError:
 _logger = logging.getLogger(__name__)
 
 # Trading day windows
-_W_1W  =   5
-_W_1M  =  21
-_W_3M  =  63
-_W_6M  = 126
-_W_1Y  = 252
-_W_30D =  30
-_W_90D =  90
+_W_1W  =    5
+_W_1M  =   21
+_W_3M  =   63
+_W_6M  =  126
+_W_1Y  =  252
+_W_3Y  =  756
+_W_5Y  = 1260
+_W_30D =   30
+_W_90D =   90
 
 # Annualisation factor for daily vol → annual
 _ANNUAL_FACTOR = math.sqrt(252)
@@ -175,9 +182,26 @@ def _drawdown_from_high(series) -> Optional[float]:
     return round((last - high) / high * 100, 2)
 
 
+def _max_drawdown(series) -> Optional[float]:
+    """
+    Maximum peak-to-trough drawdown over the full series.
+    Uses the rolling cumulative maximum as the peak reference.
+    Returns the worst percentage drawdown (negative number, e.g. -42.1).
+    """
+    if series is None or len(series) < 2:
+        return None
+    try:
+        rolling_max = series.cummax()
+        drawdowns   = (series - rolling_max) / rolling_max * 100
+        mdd = float(drawdowns.min())
+        return round(mdd, 2)
+    except Exception:
+        return None
+
+
 class HistoricalBackfillAdapter(BaseIngestAdapter):
     """
-    One-shot historical summary backfill. Downloads 1 year of daily OHLCV
+    One-shot historical summary backfill. Downloads 5 years of daily OHLCV
     for all tickers in a single bulk call and emits interpretable summary atoms.
 
     Idempotent — all atoms are upsert=True.
@@ -207,13 +231,13 @@ class HistoricalBackfillAdapter(BaseIngestAdapter):
             return []
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        _logger.info('historical_backfill: downloading 1y daily OHLCV for %d tickers', len(self.tickers))
+        _logger.info('historical_backfill: downloading 5y daily OHLCV for %d tickers', len(self.tickers))
 
-        # ── Single bulk download: 1 year of daily closes + volume ─────────────
+        # ── Single bulk download: 5 years of daily closes + volume ───────────
         try:
             raw = yf.download(
                 tickers   = self.tickers,
-                period    = '1y',
+                period    = '5y',
                 interval  = '1d',
                 group_by  = 'ticker',
                 auto_adjust = True,
@@ -315,10 +339,13 @@ class HistoricalBackfillAdapter(BaseIngestAdapter):
         _atom('return_3m',  _pct_return(close, _W_3M))
         _atom('return_6m',  _pct_return(close, _W_6M))
         _atom('return_1y',  _pct_return(close, _W_1Y))
+        _atom('return_3y',  _pct_return(close, _W_3Y))
+        _atom('return_5y',  _pct_return(close, _W_5Y))
 
         # ── Realised volatility ───────────────────────────────────────────────
         _atom('volatility_30d', _realised_vol(close, _W_30D))
         _atom('volatility_90d', _realised_vol(close, _W_90D))
+        _atom('volatility_5y',  _realised_vol(close, min(_W_5Y, len(close) - _MIN_ROWS_BUFFER)))
 
         # ── Drawdown from 52-week high ────────────────────────────────────────
         _atom('drawdown_from_52w_high', _drawdown_from_high(close))
@@ -327,6 +354,9 @@ class HistoricalBackfillAdapter(BaseIngestAdapter):
         _atom('high_52w', round(float(close.max()), 2), confidence=0.85)
         _atom('low_52w',  round(float(close.min()), 2), confidence=0.85)
 
+        # ── Max drawdown over 5y ──────────────────────────────────────────────
+        _atom('max_drawdown_5y', _max_drawdown(close), confidence=0.85)
+
         # ── Reference prices (anchoring) ──────────────────────────────────────
         # 6 months ago
         if len(close) >= _W_6M + _MIN_ROWS_BUFFER:
@@ -334,6 +364,9 @@ class HistoricalBackfillAdapter(BaseIngestAdapter):
         # 1 year ago
         if len(close) >= _W_1Y + _MIN_ROWS_BUFFER:
             _atom('price_1y_ago', round(float(close.iloc[-(_W_1Y + 1)]), 2), confidence=0.85)
+        # 3 years ago
+        if len(close) >= _W_3Y + _MIN_ROWS_BUFFER:
+            _atom('price_3y_ago', round(float(close.iloc[-(_W_3Y + 1)]), 2), confidence=0.85)
 
         # ── Average volume (30d) ──────────────────────────────────────────────
         if volume is not None and len(volume) >= _W_30D:

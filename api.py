@@ -582,6 +582,114 @@ def ingest_historical():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/calibrate/historical', methods=['POST'])
+def calibrate_historical():
+    """
+    POST /calibrate/historical
+
+    Back-populate signal_calibration with historical pattern outcome statistics.
+    Slides a 100-candle detection window through N years of daily OHLCV,
+    checks outcomes against the following 20 candles, and writes aggregated
+    hit rates to signal_calibration by (ticker, pattern_type, regime).
+
+    Body (optional):
+      { "tickers": ["HSBA.L", "NVDA"],   -- subset (default: full watchlist)
+        "lookback_years": 3 }             -- history depth (default: 3)
+
+    Returns:
+      { "tickers_calibrated": 12,
+        "total_patterns_detected": 4821,
+        "total_rows_written": 87,
+        "per_ticker": { "HSBA.L": {"patterns_detected": 412, "rows_written": 8}, ... } }
+
+    This runs synchronously. Expect ~3-5 minutes for a full watchlist.
+    Run once at launch, then re-run monthly to incorporate new history.
+    """
+    if not HAS_INGEST:
+        return jsonify({'error': 'ingest not available'}), 503
+
+    try:
+        from analytics.historical_calibration import HistoricalCalibrator
+    except ImportError as e:
+        return jsonify({'error': f'historical_calibration not available: {e}'}), 503
+
+    data           = request.get_json(force=True, silent=True) or {}
+    tickers        = data.get('tickers') or None
+    lookback_years = int(data.get('lookback_years', 3))
+    lookback_years = max(1, min(lookback_years, 10))
+
+    try:
+        cal     = HistoricalCalibrator(db_path=_DB_PATH)
+        results = cal.calibrate_watchlist(tickers=tickers, lookback_years=lookback_years)
+
+        total_patterns = sum(r.get('patterns_detected', 0) for r in results.values())
+        total_rows     = sum(r.get('calibration_rows_written', 0) for r in results.values())
+
+        return jsonify({
+            'tickers_calibrated':      len(results),
+            'total_patterns_detected': total_patterns,
+            'total_rows_written':      total_rows,
+            'lookback_years':          lookback_years,
+            'per_ticker': {
+                t: {
+                    'patterns_detected':       r.get('patterns_detected', 0),
+                    'calibration_rows_written': r.get('calibration_rows_written', 0),
+                    'error':                   r.get('error'),
+                }
+                for t, r in results.items()
+            },
+        })
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('historical calibration failed: %s', e)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/calibrate/regime-history', methods=['POST'])
+def calibrate_regime_history():
+    """
+    POST /calibrate/regime-history
+
+    Classify each historical month into a macro regime (risk_on_expansion,
+    risk_off_contraction, stagflation, recovery) using cross-asset proxy data,
+    then write regime-conditional performance atoms to the KB for each ticker:
+
+      global_macro_regime | regime_history_2022_06 | risk_off_contraction
+      HSBA.L              | return_in_risk_on_expansion  | "+3.2"
+      HSBA.L              | regime_hit_rate_risk_off_contraction | "38.5"
+      HSBA.L              | best_regime  | risk_on_expansion (+3.2%/mo)
+      HSBA.L              | worst_regime | risk_off_contraction (-2.1%/mo)
+
+    Body (optional):
+      { "lookback_years": 5,
+        "tickers": ["HSBA.L", "BP.L"] }  -- default: full watchlist
+
+    Runs synchronously (~1–2 minutes for full watchlist).
+    Run once at launch; re-run quarterly to incorporate new history.
+    """
+    if not HAS_INGEST:
+        return jsonify({'error': 'ingest not available'}), 503
+
+    try:
+        from analytics.regime_history import RegimeHistoryClassifier
+    except ImportError as e:
+        return jsonify({'error': f'regime_history not available: {e}'}), 503
+
+    data           = request.get_json(force=True, silent=True) or {}
+    lookback_years = int(data.get('lookback_years', 5))
+    lookback_years = max(1, min(lookback_years, 10))
+    tickers        = data.get('tickers') or None
+
+    try:
+        clf    = RegimeHistoryClassifier(db_path=_DB_PATH)
+        result = clf.run(tickers=tickers, lookback_years=lookback_years)
+        return jsonify({**result, 'lookback_years': lookback_years})
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('regime history failed: %s', e)
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/ingest/patterns', methods=['POST'])
 def ingest_patterns():
     """
