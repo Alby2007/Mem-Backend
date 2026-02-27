@@ -554,28 +554,28 @@ def ingest_status():
         try:
             # Map adapter name → source prefix pattern
             _src_patterns = {
-                'yfinance':          'exchange_feed_yahoo%',
-                'signal_enrichment': 'signal_enrichment%',
-                'rss_news':          'rss_%',
-                'llm_extraction':    'llm_extraction%',
-                'fred':              'fred%',
-                'edgar':             'edgar%',
-                'bne':               'bne%',
-                'options':           'options%',
-                'earnings_calendar': 'earnings%',
-                'lse_flow':          'lse%',
-                'fca_short_interest':'fca%',
-                'edgar_realtime':    'edgar_realtime%',
+                'yfinance':          ['exchange_feed_yahoo%', 'yfinance%'],
+                'signal_enrichment': ['derived_signal%', 'signal_enrichment%'],
+                'rss_news':          ['news_wire%', 'rss_%'],
+                'llm_extraction':    ['llm_extract%'],
+                'fred':              ['macro_data%', 'fred%'],
+                'edgar':             ['regulatory_filing%', 'edgar%'],
+                'bne':               ['bne%'],
+                'options':           ['options%'],
+                'earnings_calendar': ['earnings%'],
+                'lse_flow':          ['lse%', 'uk_%'],
+                'fca_short_interest':['fca%'],
+                'edgar_realtime':    ['edgar_realtime%'],
             }
             for name, entry in adapter_status.items():
-                pat = _src_patterns.get(name)
-                if pat:
+                patterns = _src_patterns.get(name, [])
+                total = 0
+                for pat in patterns:
                     row = _sc.execute(
                         "SELECT COUNT(*) FROM facts WHERE source LIKE ?", (pat,)
                     ).fetchone()
-                    entry['kb_atoms'] = row[0] if row else 0
-                else:
-                    entry['kb_atoms'] = 0
+                    total += row[0] if row else 0
+                entry['kb_atoms'] = total
         finally:
             _sc.close()
     except Exception:
