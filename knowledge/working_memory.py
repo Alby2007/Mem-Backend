@@ -98,7 +98,9 @@ _MISSING_THRESHOLD = 1
 # Maps KB/display tickers → yfinance ticker symbols for on-demand fetch
 _YF_TICKER_MAP: dict[str, str] = {
     # Precious metals
-    'XAUUSD': 'GC=F',   'GOLD':   'GC=F',
+    # Note: GC=F (COMEX gold futures) returns ~double the per-oz spot price in
+    # yfinance. Use GLD ETF instead — it tracks gold accurately (~$479/share).
+    'XAUUSD': 'GLD',    'GOLD':   'GLD',
     'XAGUSD': 'SI=F',   'SILVER': 'SI=F',
     'XPTUSD': 'PL=F',
     'XPDUSD': 'PA=F',

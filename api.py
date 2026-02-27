@@ -2590,6 +2590,19 @@ def chat_endpoint():
                         _at.get('atom_type') == 'intent'
                     )
                     _threshold = 0.25 if _is_user_intent else 0.40
+                    # Never commit price/financial data from conversation —
+                    # LLM-generated figures must not become KB ground truth.
+                    _PRICE_PREDICATES = {
+                        'last_price', 'price', 'price_target', 'price_range',
+                        'invalidation_price', 'nav_price', 'close_price',
+                        'open_price', 'high_price', 'low_price',
+                        'high_52w', 'low_52w', 'pe_ratio', 'eps', 'revenue',
+                        'market_cap', 'market_cap_tier', 'return_1m', 'return_1y',
+                        'return_1w', 'return_3m', 'return_6m', 'drawdown_from_52w_high',
+                        'upside_pct', 'volatility_30d', 'volatility_90d',
+                    }
+                    if _at.get('predicate') in _PRICE_PREDICATES:
+                        continue
                     if _at['effective_salience'] >= _threshold:
                         try:
                             _kg.add_fact(
