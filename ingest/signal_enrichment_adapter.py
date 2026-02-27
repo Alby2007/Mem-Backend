@@ -154,7 +154,9 @@ def _read_kb_atoms(
                 'signal_quality', 'thesis_risk_level', 'macro_confirmation',
                 'next_earnings',
                 'skew_regime', 'iv_skew_ratio',
-                'tail_risk', 'spy_skew_regime', 'spy_skew_ratio'
+                'tail_risk', 'spy_skew_regime', 'spy_skew_ratio',
+                'insider_conviction', 'short_squeeze_potential',
+                'macro_event_risk', 'sector_tailwind', 'risk_appetite'
             )
             ORDER BY subject, predicate, confidence DESC
         """)
@@ -314,6 +316,10 @@ def _compute_position_sizing_atoms(
     vol_30d: Optional[float],
     src_base: str,
     meta: dict,
+    insider_conviction: str = '',
+    short_squeeze: str = '',
+    macro_event_risk: str = '',
+    sector_tailwind: str = '',
 ) -> List[RawAtom]:
     """
     Compute conviction_tier, volatility_scalar, position_size_pct.
@@ -355,6 +361,12 @@ def _compute_position_sizing_atoms(
     if not sq or not rl:
         return atoms
 
+    # Normalise new inputs
+    ic  = (insider_conviction or '').lower()   # high|moderate|low|none
+    ss  = (short_squeeze      or '').lower()   # high|moderate|low|minimal
+    mer = (macro_event_risk   or '').lower()   # high|medium|low
+    st  = (sector_tailwind    or '').lower()   # positive|negative|neutral
+
     # ── Classify conviction_tier ───────────────────────────────────────────────
     # CT-AVOID (highest priority)
     if sq == 'conflicted':
@@ -390,10 +402,29 @@ def _compute_position_sizing_atoms(
         tier = 'medium'
         ct_rule = 'CT-M_residual'
 
+    # ── Conviction upgrade from new signals (applied after base tier) ──────────
+    # Upgrade rule U1: insider_conviction=high + short_squeeze=high
+    # (insider buy INTO a squeeze setup = very strong combo) → upgrade by one
+    _TIER_ORDER = ['avoid', 'low', 'medium', 'high']
+    if ic == 'high' and ss in ('high', 'moderate') and tier in ('low', 'medium'):
+        idx = _TIER_ORDER.index(tier)
+        tier = _TIER_ORDER[min(idx + 1, len(_TIER_ORDER) - 1)]
+        ct_rule += '+U1_insider_squeeze'
+    # Upgrade rule U2: sector_tailwind=positive + insider_conviction >= moderate
+    elif st == 'positive' and ic in ('high', 'moderate') and tier == 'low':
+        tier = 'medium'
+        ct_rule += '+U2_sector_tailwind_insider'
+
+    # ── Macro event risk position reduction ───────────────────────────────────
+    # If FOMC/CPI/NFP within 3 days, reduce position size by 30% (size adjusted below)
+    _macro_event_reduction = 0.70 if mer == 'high' else (0.85 if mer == 'medium' else 1.0)
+
     # ── Compute volatility_scalar ──────────────────────────────────────────────
     if vol_30d is None or vol_30d <= 0:
         # Can't compute scalar — emit conviction_tier only
-        ct_meta = {**meta, 'ct_rule': ct_rule, 'vol_30d': 'missing'}
+        ct_meta = {**meta, 'ct_rule': ct_rule, 'vol_30d': 'missing',
+                   'insider_conviction': ic, 'short_squeeze': ss,
+                   'macro_event_risk': mer, 'sector_tailwind': st}
         atoms.append(RawAtom(
             subject    = ticker,
             predicate  = 'conviction_tier',
@@ -411,11 +442,14 @@ def _compute_position_sizing_atoms(
     if tier == 'avoid':
         size = 0.0
     else:
-        size = round(_CT_BASE_ALLOC[tier] * scalar, 2)
+        size = round(_CT_BASE_ALLOC[tier] * scalar * _macro_event_reduction, 2)
 
     ps_meta = {**meta, 'ct_rule': ct_rule, 'vol_scalar': str(scalar),
                'base_alloc': str(_CT_BASE_ALLOC.get(tier, 0.0)),
-               'vol_30d_input': str(vol_30d)}
+               'vol_30d_input': str(vol_30d),
+               'insider_conviction': ic, 'short_squeeze': ss,
+               'macro_event_risk': mer, 'sector_tailwind': st,
+               'macro_event_reduction': str(_macro_event_reduction)}
 
     atoms.append(RawAtom(
         subject    = ticker,
@@ -1108,7 +1142,11 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                 else preds.get('thesis_risk_level', '')
             )
             pos_atoms = _compute_position_sizing_atoms(
-                ticker, sig_quality, thesis_rl, macro_conf, vol_30d, src_base, meta
+                ticker, sig_quality, thesis_rl, macro_conf, vol_30d, src_base, meta,
+                insider_conviction=preds.get('insider_conviction', ''),
+                short_squeeze=preds.get('short_squeeze_potential', ''),
+                macro_event_risk=market_atoms.get('macro_event_risk', ''),
+                sector_tailwind=preds.get('sector_tailwind', ''),
             )
             atoms.extend(pos_atoms)
 

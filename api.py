@@ -63,6 +63,10 @@ try:
     from ingest.earnings_calendar_adapter import EarningsCalendarAdapter
     from ingest.fca_short_interest_adapter import FCAShortInterestAdapter
     from ingest.lse_flow_adapter import LSEFlowAdapter
+    from ingest.insider_adapter import InsiderAdapter
+    from ingest.short_interest_adapter import ShortInterestAdapter
+    from ingest.sector_rotation_adapter import SectorRotationAdapter
+    from ingest.economic_calendar_adapter import EconomicCalendarAdapter
     from ingest.discovery_pipeline import DiscoveryPipeline
     HAS_INGEST = True
 except ImportError:
@@ -460,6 +464,10 @@ if HAS_INGEST:
         _ingest_scheduler.register(EarningsCalendarAdapter(db_path=_DB_PATH), interval_sec=3600)   # 1 hour earnings calendar
         _ingest_scheduler.register(FCAShortInterestAdapter(db_path=_DB_PATH), interval_sec=86400)  # 24 hours FCA short interest
         _ingest_scheduler.register(LSEFlowAdapter(db_path=_DB_PATH),          interval_sec=3600)   # 1 hour LSE order flow
+        _ingest_scheduler.register(InsiderAdapter(db_path=_DB_PATH),          interval_sec=3600)   # 1 hour Form 4 insider transactions
+        _ingest_scheduler.register(ShortInterestAdapter(db_path=_DB_PATH),    interval_sec=86400)  # 24 hours FINRA short interest
+        _ingest_scheduler.register(SectorRotationAdapter(db_path=_DB_PATH),   interval_sec=3600)   # 1 hour sector rotation
+        _ingest_scheduler.register(EconomicCalendarAdapter(db_path=_DB_PATH), interval_sec=86400)  # 24 hours economic calendar
         _ingest_scheduler.start()
     except Exception as _e:
         import logging as _logging
