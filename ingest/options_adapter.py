@@ -120,13 +120,13 @@ _OPTIONS_TICKERS = [
     'SHEL.L', 'AZN.L', 'HSBA.L', 'ULVR.L', 'BP.L',
     'GSK.L', 'RIO.L', 'LLOY.L', 'BARC.L', 'NWG.L',
     'LSEG.L', 'BA.L', 'RR.L', 'VOD.L', 'BATS.L',
-    'NG.L', 'REL.L', 'TSCO.L', 'BDEV.L', 'AAL.L',
+    'NG.L', 'REL.L', 'TSCO.L', 'AAL.L',
 ]
 
 # FTSE names with thin options liquidity — smart_money_signal and iv_rank
 # atoms are emitted at reduced authority (0.45 vs 0.75) for these tickers.
 _LOW_OPTIONS_LIQUIDITY: frozenset = frozenset({
-    'VOD.L', 'BATS.L', 'NG.L', 'REL.L', 'TSCO.L', 'BDEV.L', 'AAL.L',
+    'VOD.L', 'BATS.L', 'NG.L', 'REL.L', 'TSCO.L', 'AAL.L',
     'QQ.L', 'MKS.L', 'PSON.L', 'PSN.L',
 })
 

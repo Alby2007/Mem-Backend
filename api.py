@@ -18,6 +18,12 @@ from __future__ import annotations
 
 import os
 import re
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -53,6 +59,10 @@ try:
     from ingest.llm_extraction_adapter import LLMExtractionAdapter
     from ingest.edgar_realtime_adapter import EDGARRealtimeAdapter
     from ingest.options_adapter import OptionsAdapter
+    from ingest.boe_adapter import BoEAdapter
+    from ingest.earnings_calendar_adapter import EarningsCalendarAdapter
+    from ingest.fca_short_interest_adapter import FCAShortInterestAdapter
+    from ingest.lse_flow_adapter import LSEFlowAdapter
     HAS_INGEST = True
 except ImportError:
     HAS_INGEST = False
@@ -395,6 +405,10 @@ if HAS_INGEST:
         _ingest_scheduler.register(EDGARRealtimeAdapter(db_path=_DB_PATH),   interval_sec=180)    # 3 min real-time 8-K
         _ingest_scheduler.register(OptionsAdapter(),                          interval_sec=1800)   # 30 min options chain
         _ingest_scheduler.register(FREDAdapter(),                             interval_sec=86400)  # 24 hours
+        _ingest_scheduler.register(BoEAdapter(),                              interval_sec=86400)  # 24 hours UK macro
+        _ingest_scheduler.register(EarningsCalendarAdapter(db_path=_DB_PATH), interval_sec=3600)   # 1 hour earnings calendar
+        _ingest_scheduler.register(FCAShortInterestAdapter(db_path=_DB_PATH), interval_sec=86400)  # 24 hours FCA short interest
+        _ingest_scheduler.register(LSEFlowAdapter(db_path=_DB_PATH),          interval_sec=3600)   # 1 hour LSE order flow
         _ingest_scheduler.start()
     except Exception as _e:
         import logging as _logging
@@ -556,6 +570,136 @@ def ingest_historical():
         import logging as _logging
         _logging.getLogger(__name__).error('historical backfill failed: %s', e)
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/ingest/patterns', methods=['POST'])
+def ingest_patterns():
+    """
+    Trigger pattern detection across all KB tickers that have last_price atoms.
+
+    Fetches 6 months of daily OHLCV via yfinance, runs detect_all_patterns(),
+    and inserts new signals into pattern_signals. Skips duplicates.
+
+    Body (optional):
+      { "tickers": ["NVDA", "META"] }  — run on a subset only
+      {}                               — run on all KB tickers with last_price
+    """
+    if not HAS_INGEST:
+        return jsonify({'error': 'ingest not available'}), 503
+
+    import sqlite3 as _sq
+    try:
+        from analytics.pattern_detector import detect_all_patterns, OHLCV as _OHLCV
+        import yfinance as _yf
+    except ImportError as e:
+        return jsonify({'error': f'pattern detection not available: {e}'}), 503
+
+    _YF_MAP = {
+        'xauusd': 'GC=F',  'xagusd': 'SI=F',  'xptusd': 'PL=F',
+        'cl': 'CL=F',      'bz': 'BZ=F',       'ng': 'NG=F',
+        'gbpusd': 'GBPUSD=X', 'eurusd': 'EURUSD=X', 'usdjpy': 'JPY=X',
+        'dxy': 'DX-Y.NYB',
+        'spx': '^GSPC',    'ndx': '^NDX',       'dji': '^DJI',
+        'ftse': '^FTSE',   'dax': '^GDAXI',     'vix': '^VIX',
+    }
+
+    data    = request.get_json(force=True, silent=True) or {}
+    filter_tickers = [t.lower() for t in data.get('tickers', [])]
+
+    conn = _sq.connect(_DB_PATH, timeout=15)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pattern_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL, pattern_type TEXT NOT NULL,
+            direction TEXT NOT NULL, zone_high REAL NOT NULL,
+            zone_low REAL NOT NULL, zone_size_pct REAL,
+            timeframe TEXT NOT NULL, formed_at TEXT,
+            status TEXT NOT NULL DEFAULT 'open', filled_at TEXT,
+            quality_score REAL, kb_conviction TEXT DEFAULT '',
+            kb_regime TEXT DEFAULT '', kb_signal_dir TEXT DEFAULT '',
+            alerted_users TEXT DEFAULT '[]', detected_at TEXT
+        )
+    """)
+    conn.commit()
+
+    # Load KB tickers
+    rows = conn.execute(
+        "SELECT DISTINCT subject FROM facts WHERE predicate = 'last_price'"
+    ).fetchall()
+    tickers = [r[0] for r in rows]
+    if filter_tickers:
+        tickers = [t for t in tickers if t.lower() in filter_tickers]
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    total_inserted = 0
+    total_tickers  = 0
+
+    for ticker in tickers:
+        yf_sym = _YF_MAP.get(ticker.lower(), ticker.upper())
+        atoms_rows = conn.execute(
+            "SELECT predicate, object FROM facts WHERE subject = ?", (ticker,)
+        ).fetchall()
+        atoms_map = {r[0]: r[1] for r in atoms_rows}
+
+        try:
+            hist = _yf.Ticker(yf_sym).history(period='6mo', interval='1d', auto_adjust=True)
+            if hist.empty or len(hist) < 10:
+                continue
+            candles = [
+                _OHLCV(
+                    timestamp=ts.isoformat(),
+                    open=float(row['Open']), high=float(row['High']),
+                    low=float(row['Low']),   close=float(row['Close']),
+                    volume=float(row.get('Volume', 0) or 0),
+                )
+                for ts, row in hist.iterrows()
+            ]
+            signals = detect_all_patterns(
+                candles, ticker=ticker.upper(), timeframe='1d',
+                kb_conviction=atoms_map.get('conviction_tier', ''),
+                kb_regime=atoms_map.get('price_regime', ''),
+                kb_signal_dir=atoms_map.get('signal_direction', ''),
+            )
+            inserted = 0
+            for sig in signals:
+                exists = conn.execute(
+                    """SELECT 1 FROM pattern_signals
+                       WHERE ticker=? AND pattern_type=? AND formed_at=? AND timeframe=?
+                       LIMIT 1""",
+                    (sig.ticker, sig.pattern_type, sig.formed_at, sig.timeframe),
+                ).fetchone()
+                if exists:
+                    continue
+                conn.execute(
+                    """INSERT INTO pattern_signals
+                       (ticker, pattern_type, direction, zone_high, zone_low,
+                        zone_size_pct, timeframe, formed_at, status,
+                        quality_score, kb_conviction, kb_regime, kb_signal_dir,
+                        alerted_users, detected_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?)""",
+                    (sig.ticker, sig.pattern_type, sig.direction,
+                     sig.zone_high, sig.zone_low, sig.zone_size_pct,
+                     sig.timeframe, sig.formed_at, sig.status,
+                     sig.quality_score, sig.kb_conviction,
+                     sig.kb_regime, sig.kb_signal_dir, now_iso),
+                )
+                inserted += 1
+            conn.commit()
+            total_inserted += inserted
+            total_tickers  += 1
+        except Exception as _e:
+            import logging as _logging
+            _logging.getLogger(__name__).warning('pattern detection failed for %s: %s', ticker, _e)
+
+    conn.close()
+    total_now = _sq.connect(_DB_PATH).execute(
+        "SELECT COUNT(*) FROM pattern_signals"
+    ).fetchone()[0]
+    return jsonify({
+        'tickers_processed': total_tickers,
+        'patterns_inserted': total_inserted,
+        'pattern_signals_total': total_now,
+    })
 
 
 @app.route('/stats', methods=['GET'])

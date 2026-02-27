@@ -61,15 +61,15 @@ _DEFAULT_TICKERS = [
     # Consumer / retail
     'TSCO.L', 'MKS.L', 'PSON.L',
     # Housebuilders
-    'BDEV.L', 'PSN.L',
+    'PSN.L',
     # FTSE indices as macro proxies
     '^FTSE',    # FTSE 100
     '^FTMC',    # FTSE 250
     # UK FX — critical macro signal
     'GBPUSD=X',
     'EURGBP=X',
-    # UK gilt proxy
-    'GBGB10YR=X',
+    # US rate proxy (liquid, used as gilt/rate regime anchor)
+    'TLT',
     # Global macro proxies — London is globally connected
     'GLD',
     '^GSPC',    # S&P 500 correlation

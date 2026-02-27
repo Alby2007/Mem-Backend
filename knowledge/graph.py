@@ -172,6 +172,31 @@ class TradingKnowledgeGraph:
             except sqlite3.Error as e:
                 _logger.warning('taxonomy init error for %r: %s', cat, e)
     
+    _SIGNAL_DIRECTION_NORMALISE: Dict[str, str] = {
+        'buy':            'bullish',
+        'strong_buy':     'bullish',
+        'outperform':     'bullish',
+        'overweight':     'bullish',
+        'accumulate':     'bullish',
+        'add':            'bullish',
+        'positive':       'bullish',
+        'long':           'bullish',
+        'near_high':      'bullish',
+        'sell':           'bearish',
+        'strong_sell':    'bearish',
+        'underperform':   'bearish',
+        'underweight':    'bearish',
+        'reduce':         'bearish',
+        'negative':       'bearish',
+        'short':          'bearish',
+        'near_low':       'bearish',
+        'hold':           'neutral',
+        'market_perform': 'neutral',
+        'in_line':        'neutral',
+        'equal_weight':   'neutral',
+        'sector_perform': 'neutral',
+    }
+
     def add_fact(self, subject: str, predicate: str, object: str,
                  confidence: float = 0.5, source: str = 'unknown',
                  metadata: Optional[Dict] = None,
@@ -194,6 +219,11 @@ class TradingKnowledgeGraph:
         subj = subject.lower().strip()
         pred = predicate.lower().strip()
         obj  = object.lower().strip()
+
+        # Semantic normalisation — collapse synonymous signal_direction values
+        # before write so 'buy' and 'bullish' don't create spurious conflicts.
+        if pred == 'signal_direction':
+            obj = self._SIGNAL_DIRECTION_NORMALISE.get(obj, obj)
         now  = datetime.now().isoformat()
         meta_str = json.dumps(metadata) if metadata else None
 
