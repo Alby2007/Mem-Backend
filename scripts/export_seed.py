@@ -40,6 +40,7 @@ SHARED_TABLES = [
     "kb_insufficient_log",
     "repair_execution_log",
     "repair_rollback_log",
+    "discovery_log",
 ]
 
 USER_TABLES = [

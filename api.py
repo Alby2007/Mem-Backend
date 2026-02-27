@@ -63,6 +63,7 @@ try:
     from ingest.earnings_calendar_adapter import EarningsCalendarAdapter
     from ingest.fca_short_interest_adapter import FCAShortInterestAdapter
     from ingest.lse_flow_adapter import LSEFlowAdapter
+    from ingest.discovery_pipeline import DiscoveryPipeline
     HAS_INGEST = True
 except ImportError:
     HAS_INGEST = False
@@ -415,6 +416,15 @@ if HAS_INGEST:
         _logging.getLogger(__name__).error('Failed to start ingest scheduler: %s', _e)
         _ingest_scheduler = None
 
+# Initialise discovery pipeline (after KG is ready)
+_discovery_pipeline = None
+if HAS_INGEST:
+    try:
+        _discovery_pipeline = DiscoveryPipeline(kg=_kg, db_path=_DB_PATH)
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('Failed to init discovery pipeline: %s', _e)
+
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -766,6 +776,85 @@ def stats():
         extras['kb_insufficient_events_7d'] = 0
 
     return jsonify({**base, **extras})
+
+
+@app.route('/discover/<ticker>', methods=['POST'])
+def discover_ticker(ticker: str):
+    """
+    POST /discover/<ticker>
+
+    Trigger the universal discovery pipeline for a single ticker.
+    Runs all enrichment stages that are missing or stale in the KB,
+    commits atoms back to the shared KB, and returns a summary of
+    what stages ran and how many atoms were written.
+
+    Body (optional):
+      { "force": true }   — ignore staleness thresholds, run all stages
+
+    Returns:
+      {
+        "ticker":         "RR.L",
+        "status":         "enriched",      // fresh | enriched | partial | failed
+        "stages_run":     ["price", "historical", "patterns"],
+        "stages_skipped": ["options"],
+        "atoms_written":  24,
+        "duration_ms":    3450,
+        "staleness":      { "last_price": 95.3, "signal_direction": 182.1 }
+      }
+
+    Use this endpoint to:
+      - Manually refresh a ticker before a presentation or briefing
+      - Verify the discovery pipeline works for a new ticker
+      - Trigger enrichment without waiting for the next scheduled adapter run
+      - Debug why a ticker has thin KB coverage
+    """
+    if _discovery_pipeline is None:
+        return jsonify({'error': 'discovery pipeline not available'}), 503
+
+    ticker = ticker.upper().strip()
+    if not ticker:
+        return jsonify({'error': 'ticker is required'}), 400
+
+    data  = request.get_json(force=True, silent=True) or {}
+    force = bool(data.get('force', False))
+
+    # Assess staleness first (always returned for transparency)
+    staleness = _discovery_pipeline.assess_staleness(ticker)
+
+    if not staleness and not force:
+        return jsonify({
+            'ticker':         ticker,
+            'status':         'fresh',
+            'stages_run':     [],
+            'stages_skipped': [],
+            'atoms_written':  0,
+            'duration_ms':    0,
+            'staleness':      {},
+            'message':        'All atoms are fresh — use {"force": true} to re-run anyway',
+        })
+
+    # If forced, temporarily mark all thresholds as 0 so everything runs
+    if force and not staleness:
+        from ingest.discovery_pipeline import STALENESS_THRESHOLDS
+        staleness = {p: float('inf') for p in STALENESS_THRESHOLDS}
+
+    try:
+        user_id = getattr(g, 'user_id', None)
+        result  = _discovery_pipeline.discover(ticker, trigger='manual', user_id=user_id)
+        return jsonify({
+            'ticker':         result.ticker,
+            'status':         result.status,
+            'stages_run':     result.stages_run,
+            'stages_skipped': result.stages_skipped,
+            'atoms_written':  result.atoms_written,
+            'duration_ms':    result.duration_ms,
+            'staleness':      {k: round(v, 1) for k, v in staleness.items()
+                               if v != float('inf')},
+        })
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('discovery failed for %s: %s', ticker, e)
+        return jsonify({'error': str(e), 'ticker': ticker}), 500
 
 
 @app.route('/ingest', methods=['POST'])
@@ -1828,6 +1917,25 @@ def chat_endpoint():
                     _working_memory.fetch_on_demand(ticker, wm_session_id, _DB_PATH)
                 live_context = _working_memory.get_session_snippet(wm_session_id)
                 live_fetched = _working_memory.get_fetched_tickers(wm_session_id)
+        except Exception:
+            pass
+
+    # ── Async discovery — fire-and-forget, never blocks response ──────────
+    # Triggers background enrichment for stale or missing tickers.
+    # Next request for the same ticker gets a richer KB-grounded answer.
+    if _discovery_pipeline is not None:
+        try:
+            from retrieval import _extract_tickers as _et_disc
+            _disc_tickers = _et_disc(message)
+            for _dt in _disc_tickers[:3]:
+                _stale = _discovery_pipeline.assess_staleness(_dt)
+                if _stale:
+                    import threading as _threading
+                    _threading.Thread(
+                        target=_discovery_pipeline.discover,
+                        args=(_dt, 'user_query', chat_user_id),
+                        daemon=True,
+                    ).start()
         except Exception:
             pass
 
