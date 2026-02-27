@@ -20,7 +20,8 @@ import pathlib
 DB_PATH  = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('TRADING_KB_DB', 'trading_knowledge.db')
 OUTPUT   = pathlib.Path("tests/fixtures/kb_seed.sql")
 
-SHARED_TABLES = [
+# Core tables — export must fail if these are absent
+SHARED_TABLES_REQUIRED = [
     "facts",
     "fact_conflicts",
     "causal_edges",
@@ -28,9 +29,12 @@ SHARED_TABLES = [
     "signal_calibration",
     "extraction_queue",
     "edgar_realtime_seen",
-    # KB structure / governance
     "taxonomy",
     "fact_categories",
+]
+
+# Optional governance tables — exported if present, silently skipped if not
+SHARED_TABLES_OPTIONAL = [
     "predicate_vocabulary",
     "working_state",
     "governance_metrics",
@@ -42,6 +46,8 @@ SHARED_TABLES = [
     "repair_rollback_log",
     "discovery_log",
 ]
+
+SHARED_TABLES = SHARED_TABLES_REQUIRED + SHARED_TABLES_OPTIONAL  # for export loop
 
 USER_TABLES = [
     "user_auth",
@@ -125,7 +131,7 @@ def main() -> None:
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
 
-    # ── 1. Pre-flight: all tables must exist ──────────────────────────────────
+    # ── 1. Pre-flight: required tables must exist, optional ones are skipped ────
     print(f"Running pre-flight table check on {DB_PATH}...")
     existing = {
         row[0]
@@ -133,14 +139,22 @@ def main() -> None:
             "SELECT name FROM sqlite_master WHERE type='table'"
         )
     }
-    missing = [t for t in SHARED_TABLES + USER_TABLES if t not in existing]
-    if missing:
-        for t in missing:
+    # Hard-fail only on required tables
+    missing_required = [t for t in SHARED_TABLES_REQUIRED + USER_TABLES if t not in existing]
+    if missing_required:
+        for t in missing_required:
             print(f"  MISSING TABLE: {t}")
-        die(f"{len(missing)} table(s) missing.\n"
+        die(f"{len(missing_required)} required table(s) missing.\n"
             "       Run the app once (python api.py) so all ensure_*_tables() calls fire,\n"
             "       then re-run this script.")
-    print("All tables present.")
+    # Warn-only for optional governance tables
+    missing_optional = [t for t in SHARED_TABLES_OPTIONAL if t not in existing]
+    for t in missing_optional:
+        print(f"  SKIP optional table (not yet created): {t}")
+    print(f"All required tables present. ({len(missing_optional)} optional table(s) skipped)")
+    # Update export list to only tables that exist
+    global SHARED_TABLES
+    SHARED_TABLES = [t for t in SHARED_TABLES if t in existing]
 
     # ── 2. Quality gate ───────────────────────────────────────────────────────
     print("\nRunning quality gate...")
