@@ -57,7 +57,9 @@ _INTENT_MAP: List[Tuple[List[str], str]] = [
     # Sector rotation
     (['sector rotation', 'sector leader', 'sector laggard', 'rotate',
       'rotation', 'sector momentum', 'leading sector', 'sector trend',
-      'best sector', 'hot sector', 'sector play'], 'sector_rotation'),
+      'best sector', 'hot sector', 'sector play',
+      'what sector', 'which sector', 'sector play', 'sectors are',
+      'sector perform', 'top sector', 'strongest sector'], 'sector_rotation'),
     # Momentum
     (['momentum', 'trending', 'breakout', 'trend following', 'strong trend',
       'bull run', 'uptrend', 'moving higher', 'strength', 'trend play',
@@ -78,7 +80,7 @@ _INTENT_MAP: List[Tuple[List[str], str]] = [
       'top setups', 'where to invest', 'what to trade', 'what should i trade',
       'investment idea', 'investment ideas', 'new position', 'open position',
       'trade idea', 'best setup', 'strong setup', 'high conviction',
-      'where is value', 'market opportunity', 'find me', 'show me'], 'broad_screen'),
+      'where is value', 'market opportunity'], 'broad_screen'),
 ]
 
 
@@ -86,6 +88,7 @@ def classify_intent(message: str) -> List[str]:
     """
     Map a free-text message to a list of opportunity modes.
     Returns ['broad_screen'] as the default if nothing matches.
+    Suppresses broad_screen if any specific mode matched.
     """
     msg = message.lower()
     found = []
@@ -93,7 +96,15 @@ def classify_intent(message: str) -> List[str]:
         if any(kw in msg for kw in keywords):
             if mode not in found:
                 found.append(mode)
-    return found if found else ['broad_screen']
+    if not found:
+        return ['broad_screen']
+    # If a specific mode was detected, drop broad_screen unless it's the only one
+    _SPECIFIC_MODES = {'intraday', 'momentum', 'squeeze', 'sector_rotation',
+                       'gap_fill', 'mean_reversion', 'macro_gap'}
+    has_specific = any(m in _SPECIFIC_MODES for m in found)
+    if has_specific and 'broad_screen' in found and len(found) > 1:
+        found = [m for m in found if m != 'broad_screen']
+    return found
 
 
 # ── Atom loading helpers ──────────────────────────────────────────────────────
