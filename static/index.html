@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org https://fonts.googleapis.com; frame-src https://oauth.telegram.org; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self';">
 <title>Trading Galaxy — Internal Tool</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -468,9 +469,19 @@ select option { background: var(--surface); }
 
 <!-- AUTH ──────────────────────────────────────────────────────────── -->
 <div class="screen active" id="screen-auth">
-    <div style="margin-bottom:32px;">
+    <div style="margin-bottom:24px;">
     <div style="font-size:24px;font-weight:700;margin-bottom:6px;">Sign in to Trading Galaxy</div>
     <div class="text-muted text-sm">Session persists across refreshes. Sign out to clear.</div>
+  </div>
+  <div style="margin-bottom:24px;display:flex;flex-direction:column;align-items:flex-start;gap:10px;">
+    <div style="font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:2px;">Quick Sign-in</div>
+    <div id="tg-widget-auth"></div>
+    <div id="tg-widget-auth-msg" style="font-size:12px;color:var(--muted);"></div>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+    <div style="flex:1;height:1px;background:var(--border);"></div>
+    <span style="font-size:11px;color:var(--muted);letter-spacing:0.08em;">OR USE EMAIL</span>
+    <div style="flex:1;height:1px;background:var(--border);"></div>
   </div>
   <div class="auth-panels">
     <div class="card">
@@ -767,6 +778,23 @@ function showToast(msg, type = 'error') {
   toastTimer = setTimeout(() => { el.style.display = 'none'; }, 4000);
 }
 
+// ── Inject Telegram widget into auth screen ───────────────────────────────────
+let _tgAuthWidgetInjected = false;
+function _injectAuthTgWidget() {
+  if (_tgAuthWidgetInjected) return;
+  _tgAuthWidgetInjected = true;
+  const container = document.getElementById('tg-widget-auth');
+  if (!container) return;
+  const s = document.createElement('script');
+  s.src = 'https://telegram.org/js/telegram-widget.js?22';
+  s.setAttribute('data-telegram-login', 'TheTelescopeBot');
+  s.setAttribute('data-size', 'large');
+  s.setAttribute('data-radius', '5');
+  s.setAttribute('data-onauth', 'onTelegramAuth(user)');
+  s.setAttribute('data-request-access', 'write');
+  container.appendChild(s);
+}
+
 // ── Navigation ────────────────────────────────────────────────────────────────
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -783,6 +811,7 @@ function showScreen(name) {
   if (name === 'tips')      loadTipsHistory();
   if (name === 'portfolio') { loadPortfolioModel(); loadPortfolioHoldings(); loadTickerList(); loadSimBannerIfSet(); }
   if (name === 'markets')   initMarketsScreen();
+  if (name === 'auth') _injectAuthTgWidget();
 }
 
 document.querySelectorAll('.nav-item').forEach(el => {
