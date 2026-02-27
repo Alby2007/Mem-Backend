@@ -104,9 +104,9 @@ _RATES_PROXY   = 'tlt'   # long-duration treasuries — near_high = risk-off (ra
 _MARKET_PROXY  = 'spy'   # broad equity market
 
 # signal_direction values that indicate bullish positioning
-_BULLISH_SIGNALS = {'long', 'near_high', 'near_52w_high'}
+_BULLISH_SIGNALS = {'long', 'near_high', 'near_52w_high', 'bullish'}
 # signal_direction values that indicate bearish positioning
-_BEARISH_SIGNALS = {'short', 'near_low',  'near_52w_low'}
+_BEARISH_SIGNALS = {'short', 'near_low', 'near_52w_low', 'bearish'}
 
 # upside_pct thresholds (in percent)
 _UPSIDE_STRONG    = 15.0   # >= 15%: meaningful analyst conviction
