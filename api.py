@@ -3243,6 +3243,7 @@ def analytics_counterfactual():
 
 
 @app.route('/portfolio/summary', methods=['GET'])
+@limiter.exempt
 def portfolio_summary():
     """
     Aggregated portfolio view from current KB signal atoms.
