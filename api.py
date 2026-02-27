@@ -423,6 +423,12 @@ _session_streaks: dict = {}
 # { session_id: [list of canonical ticker strings] }
 _session_tickers: dict = {}
 
+# Per-session conversation history for multi-turn context
+# { session_id: [{'role': 'user'|'assistant', 'content': str}, ...] }
+# Capped at _CHAT_HISTORY_TURNS pairs (user + assistant = 2 entries per turn)
+_session_history: dict = {}
+_CHAT_HISTORY_TURNS = 3   # keep last 3 (question, answer) pairs = 6 messages
+
 # Start ingest scheduler (adapters run on their own intervals)
 _ingest_scheduler = None
 if HAS_INGEST:
@@ -1496,7 +1502,10 @@ def adapt_reset():
     session_id = data.get('session_id', 'default')
     if session_id in _session_streaks:
         _session_streaks[session_id] = {'streak': 0, 'last_stress': 0.0}
-    return jsonify({'session_id': session_id, 'reset': True})
+    # Also clear conversation history so new topic starts fresh
+    _session_history.pop(session_id, None)
+    _session_tickers.pop(session_id, None)
+    return jsonify({'session_id': session_id, 'reset': True, 'history_cleared': True})
 
 
 @app.route('/kb/graph', methods=['POST'])
@@ -2349,6 +2358,15 @@ def chat_endpoint():
         web_searched=web_searched or None,
     )
 
+    # ── Inject conversation history for multi-turn coherence ─────────────
+    # Insert prior (user, assistant) pairs between the system message and the
+    # current user turn so the LLM knows what it already said this session.
+    # Format: [system, <hist_user>, <hist_asst>, ..., current_user]
+    _hist = _session_history.get(session_id, [])
+    if _hist and len(messages) >= 2:
+        # messages[0] = system, messages[-1] = current user turn
+        messages = [messages[0]] + list(_hist) + [messages[-1]]
+
     answer = ollama_chat(messages, model=model)
     if answer is None:
         if HAS_WORKING_MEMORY and _working_memory:
@@ -2362,6 +2380,35 @@ def chat_endpoint():
     if web_searched:
         response['web_searched'] = web_searched
 
+    # ── Store this turn in conversation history ───────────────────────────
+    # Condense the user turn to just the raw question (not the full KB blob)
+    # so history doesn't balloon the context window.
+    _hist_buf = _session_history.setdefault(session_id, [])
+    _hist_buf.append({'role': 'user',      'content': message})
+    _hist_buf.append({'role': 'assistant', 'content': answer})
+    # Cap to last _CHAT_HISTORY_TURNS pairs
+    _max_msgs = _CHAT_HISTORY_TURNS * 2
+    if len(_hist_buf) > _max_msgs:
+        _session_history[session_id] = _hist_buf[-_max_msgs:]
+
+    # ── Also persist current topic into working_state for cross-session ──
+    if HAS_WORKING_STATE:
+        try:
+            ws = get_working_state_store(_DB_PATH)
+            # Derive a compact topic summary from the tickers seen + message
+            _ws_tickers = _session_tickers.get(session_id, [])
+            _ws_topic   = (', '.join(_ws_tickers[:3]) if _ws_tickers
+                           else message[:60])
+            ws.maybe_persist(
+                session_id, turn_count,
+                goal=goal,
+                topic=_ws_topic,
+                last_intent=message[:120],
+                force=False,
+            )
+        except Exception:
+            pass
+
     # ── Commit working memory atoms back to KB ────────────────────────────
     if HAS_WORKING_MEMORY and _working_memory and live_fetched:
         try:
@@ -2373,6 +2420,27 @@ def chat_endpoint():
             _working_memory.close_without_commit(wm_session_id)
 
     return jsonify(response)
+
+
+@app.route('/chat/clear', methods=['POST'])
+def chat_clear():
+    """
+    POST /chat/clear
+    Body: { "session_id": "default" }
+
+    Clear the in-memory conversation history for a session.
+    Call this when the user explicitly starts a new topic or conversation.
+    Does NOT affect the KB or working_state persistence.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    session_id = data.get('session_id', 'default')
+    turns_cleared = len(_session_history.pop(session_id, [])) // 2
+    _session_tickers.pop(session_id, None)
+    return jsonify({
+        'session_id':    session_id,
+        'turns_cleared': turns_cleared,
+        'cleared':       True,
+    })
 
 
 @app.route('/chat/models', methods=['GET'])
