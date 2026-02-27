@@ -563,18 +563,22 @@ def ingest_status():
         try:
             # Map adapter name → source prefix pattern
             _src_patterns = {
-                'yfinance':          ['exchange_feed_yahoo%', 'yfinance%'],
-                'signal_enrichment': ['derived_signal%', 'signal_enrichment%'],
-                'rss_news':          ['news_wire%', 'rss_%'],
-                'llm_extraction':    ['llm_extract%'],
-                'fred':              ['macro_data%', 'fred%'],
-                'edgar':             ['regulatory_filing%', 'edgar%'],
-                'bne':               ['bne%'],
-                'options':           ['options%'],
-                'earnings_calendar': ['earnings%'],
-                'lse_flow':          ['lse%', 'uk_%'],
-                'fca_short_interest':['fca%'],
-                'edgar_realtime':    ['edgar_realtime%'],
+                'yfinance':              ['exchange_feed_yahoo%', 'yfinance%'],
+                'signal_enrichment':     ['derived_signal%', 'signal_enrichment%'],
+                'rss_news':              ['news_wire%', 'rss_%'],
+                'llm_extraction':        ['llm_extract%'],
+                'fred':                  ['macro_data_fred%', 'fred%'],
+                'edgar':                 ['regulatory_filing_sec%', 'edgar%'],
+                'bne':                   ['bne%'],
+                'options':               ['options%'],
+                'earnings_calendar':     ['earnings%'],
+                'lse_flow':              ['lse%', 'uk_%', 'alt_data_lse%'],
+                'fca_short_interest':    ['fca%', 'alt_data_fca%'],
+                'edgar_realtime':        ['edgar_realtime%'],
+                'insider_transactions':  ['regulatory_filing_sec_form4%'],
+                'short_interest':        ['alt_data_finra%'],
+                'sector_rotation':       ['derived_signal_sector_rotation%'],
+                'economic_calendar_macro': ['macro_data_calendar%'],
             }
             for name, entry in adapter_status.items():
                 patterns = _src_patterns.get(name, [])
