@@ -126,8 +126,20 @@ _SYSTEM_LIVE_DATA_RULE = (
     "(e) If the LIVE DATA block says 'fetched live at [timestamp]', cite that timestamp."
 )
 
+_SYSTEM_CONTINUITY_RULE = (
+    "\n13. CONVERSATION CONTINUITY: When prior conversation turns appear in the message history, "
+    "you are in an ongoing session. You MUST treat all prior turns as established context. "
+    "If a follow-up question references 'my portfolio', 'this', 'it', 'these holdings', or similar, "
+    "connect it explicitly to the holdings and signals discussed in prior turns. "
+    "Do NOT re-introduce yourself or re-explain what you are. "
+    "Do NOT repeat the full portfolio breakdown if already given — instead, build on it. "
+    "When a new pattern or signal is introduced (e.g. BEARISH BREAKER on GOOGL), "
+    "relate it directly to the holdings already discussed: which holdings are affected, "
+    "how it changes the prior analysis, what the user should watch given their specific positions."
+)
+
 _SYSTEM_SEARCH_RULE = (
-    "\n13. WEB SEARCH RESULTS block (when present) contains live news snippets fetched "
+    "\n14. WEB SEARCH RESULTS block (when present) contains live news snippets fetched "
     "from the web this session via DuckDuckGo or Google News RSS. "
     "These snippets are unverified (confidence 0.65) and have NOT been committed to the KB. "
     "Use them to inform your answer for the current conversation only. "
@@ -162,6 +174,7 @@ def build(
     live_context: Optional[str] = None,
     resolved_aliases: Optional[dict] = None,
     web_searched: Optional[str] = None,
+    has_history: bool = False,
 ) -> list[dict]:
     """
     Build the [system, user] message list for Ollama.
@@ -201,6 +214,9 @@ def build(
                 f"You MUST answer from those atoms. "
                 f"DO NOT say you have no data for '{raw}'."
             )
+
+    if has_history:
+        system_text += _SYSTEM_CONTINUITY_RULE
 
     if live_context and not web_searched:
         system_text += _SYSTEM_LIVE_DATA_RULE

@@ -438,6 +438,11 @@ _session_streaks: dict = {}
 # { session_id: [list of canonical ticker strings] }
 _session_tickers: dict = {}
 
+# Per-session portfolio tickers — set when user submits/views portfolio,
+# persists across turns so "how does X tie in to my portfolio" always
+# retrieves all portfolio atoms even after a single-ticker follow-up overwrites _session_tickers
+_session_portfolio_tickers: dict = {}
+
 # Start ingest scheduler (adapters run on their own intervals)
 _ingest_scheduler = None
 if HAS_INGEST:
@@ -1513,6 +1518,7 @@ def adapt_reset():
         _session_streaks[session_id] = {'streak': 0, 'last_stress': 0.0}
     # Also clear ticker carry-forward so new topic starts fresh
     _session_tickers.pop(session_id, None)
+    _session_portfolio_tickers.pop(session_id, None)
     return jsonify({'session_id': session_id, 'reset': True})
 
 
@@ -2013,11 +2019,28 @@ def chat_endpoint():
     except Exception:
         _cur_tickers = []
 
+    # Populate portfolio tickers on first portfolio query this session
+    if not _session_portfolio_tickers.get(session_id) and chat_user_id and HAS_PRODUCT_LAYER:
+        try:
+            _ph = get_portfolio(_DB_PATH, chat_user_id)
+            _pticks = [h['ticker'] for h in (_ph or []) if h.get('ticker')]
+            if _pticks:
+                _session_portfolio_tickers[session_id] = _pticks
+        except Exception:
+            pass
+
     _retrieve_message = message
+    _aug_tickers: list = []
     if not _cur_tickers and session_id in _session_tickers:
-        _prev = _session_tickers[session_id]
-        if _prev:
-            _retrieve_message = message + ' ' + ' '.join(_prev)
+        _aug_tickers = list(_session_tickers[session_id])
+    # Always merge portfolio tickers so follow-ups ("how does it tie in to my portfolio")
+    # retrieve KB atoms for ALL holdings, not just the last-mentioned ticker
+    _port_ticks = _session_portfolio_tickers.get(session_id, [])
+    for _pt in _port_ticks:
+        if _pt not in _aug_tickers and _pt not in _cur_tickers:
+            _aug_tickers.append(_pt)
+    if _aug_tickers:
+        _retrieve_message = message + ' ' + ' '.join(_aug_tickers)
 
     # ── Retrieve KB context ────────────────────────────────────────────
     snippet, atoms = retrieve(_retrieve_message, conn, limit=limit, nudges=nudges)
@@ -2371,6 +2394,16 @@ def chat_endpoint():
         ):
             _resolved_aliases[_m.group(1)] = _m.group(2).upper()
 
+    # Detect whether prior conversation turns will be spliced in
+    _has_prior_turns = False
+    if _conv_store is not None:
+        try:
+            _conv_session_id_check = _sid_for_user(chat_user_id) if HAS_CONV_STORE else session_id
+            _check_hist = _conv_store.get_recent_messages_for_context(_conv_session_id_check, n_turns=2)
+            _has_prior_turns = len(_check_hist) > 1
+        except Exception:
+            pass
+
     # ── Build full prompt (pass 2 or single-pass if no data request) ──────
     messages = build_prompt(
         user_message=message,
@@ -2383,6 +2416,7 @@ def chat_endpoint():
         live_context=live_context or None,
         resolved_aliases=_resolved_aliases or None,
         web_searched=web_searched or None,
+        has_history=_has_prior_turns,
     )
 
     # ── Persist user turn + inject DB-backed conversation history ──────────
@@ -2559,6 +2593,7 @@ def chat_clear():
     purge      = bool(data.get('purge', False))
     conv_sid   = _sid_for_user(user_id) if HAS_CONV_STORE else data.get('session_id', 'default')
     _session_tickers.pop(data.get('session_id', 'default'), None)
+    _session_portfolio_tickers.pop(data.get('session_id', 'default'), None)
     deleted = 0
     if purge and _conv_store is not None:
         try:
