@@ -25,25 +25,46 @@ from __future__ import annotations
 import logging
 from functools import wraps
 
+try:
+    from flask import request, g as _g
+except ImportError:
+    pass
+
 _log = logging.getLogger(__name__)
 
 # Per-class rate limit strings
 RATE_LIMITS: dict[str, str] = {
     'auth':      '10 per minute',
-    'chat':      '30 per hour',
+    'chat':      '60 per hour',
     'snapshot':  '5 per hour',
     'patterns':  '60 per hour',
-    'portfolio': '20 per hour',
-    'write':     '30 per hour',
+    'portfolio': '60 per hour',
+    'write':     '60 per hour',
     'default':   '200 per day',
 }
+
+
+def _get_user_or_ip() -> str:
+    """Rate-limit key: authenticated user_id when available, remote IP otherwise.
+    This gives each user their own bucket instead of all testers sharing one IP.
+    """
+    try:
+        uid = getattr(_g, 'user_id', None)
+        if uid:
+            return f'user:{uid}'
+    except RuntimeError:
+        pass
+    try:
+        return request.remote_addr or 'unknown'
+    except RuntimeError:
+        return 'unknown'
 
 try:
     from flask_limiter import Limiter
     from flask_limiter.util import get_remote_address
 
     limiter = Limiter(
-        key_func=get_remote_address,
+        key_func=_get_user_or_ip,
         default_limits=[RATE_LIMITS['default'], '200 per hour'],
         storage_uri='memory://',
     )
