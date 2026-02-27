@@ -547,9 +547,42 @@ def ingest_status():
             'adapters': {},
         })
 
+    adapter_status = _ingest_scheduler.get_status()
+    # Enrich each adapter entry with live KB atom count by source prefix
+    try:
+        _sc = sqlite3.connect(_DB_PATH, timeout=5)
+        try:
+            # Map adapter name → source prefix pattern
+            _src_patterns = {
+                'yfinance':          'exchange_feed_yahoo%',
+                'signal_enrichment': 'signal_enrichment%',
+                'rss_news':          'rss_%',
+                'llm_extraction':    'llm_extraction%',
+                'fred':              'fred%',
+                'edgar':             'edgar%',
+                'bne':               'bne%',
+                'options':           'options%',
+                'earnings_calendar': 'earnings%',
+                'lse_flow':          'lse%',
+                'fca_short_interest':'fca%',
+                'edgar_realtime':    'edgar_realtime%',
+            }
+            for name, entry in adapter_status.items():
+                pat = _src_patterns.get(name)
+                if pat:
+                    row = _sc.execute(
+                        "SELECT COUNT(*) FROM facts WHERE source LIKE ?", (pat,)
+                    ).fetchone()
+                    entry['kb_atoms'] = row[0] if row else 0
+                else:
+                    entry['kb_atoms'] = 0
+        finally:
+            _sc.close()
+    except Exception:
+        pass
     return jsonify({
         'scheduler': 'running',
-        'adapters': _ingest_scheduler.get_status(),
+        'adapters': adapter_status,
     })
 
 
@@ -2063,6 +2096,30 @@ def chat_endpoint():
             from retrieval import _extract_tickers
             from knowledge.working_memory import _YF_TICKER_MAP
             tickers_in_query = _extract_tickers(message)
+            # Filter out junk words that _extract_tickers pulls from pattern card text
+            # (e.g. BEARISH, BULLISH, ORDER, BREAKER, CONFIRMED, ZONE, QUALITY, etc.)
+            # A valid ticker must: <=6 chars OR contain digits/dots/hyphens/^ OR be in the YF map.
+            _JUNK_WORDS = {
+                'BEARISH','BULLISH','ORDER','BREAKER','CONFIRMED','UNCONFIRMED','PARTIAL',
+                'SIGNAL','QUALITY','ZONE','PATTERN','LONG','SHORT','NEUTRAL','AVOID',
+                'HIGH','LOW','MID','RANGE','NEAR','MEDIUM','STRONG','WEAK','MACRO',
+                'CONVICTION','TIER','PRICE','TARGET','REGIME','DIRECTION','RETURN',
+                'YEAR','MONTH','WEEK','DAY','LIVE','DATA','CONTEXT','DETECTED',
+                'TIMEFRAME','SCORE','PERIOD','OPEN','CLOSE','VOLUME','MARKET',
+                'SECTOR','FACTOR','RISK','CATALYST','THESIS','BASIS','COST',
+                'HOLDINGS','HOLDING','PORTFOLIO','ANALYSIS','ANALYSIS','PLEASE',
+                'DISCUSS','PROVIDE','CONTEXT','INSIGHT','GIVEN','BASED','NOTE',
+            }
+            tickers_in_query = [
+                t for t in tickers_in_query
+                if t not in _JUNK_WORDS
+                and (
+                    len(t) <= 5               # most real tickers are ≤5 chars
+                    or any(c in t for c in ('.', '-', '=', '^', '/'))  # commodity/forex/index format
+                    or t in _YF_TICKER_MAP    # explicitly mapped
+                    or any(c.isdigit() for c in t)  # e.g. BRK-B kept by '-' rule above
+                )
+            ]
             # If message has no explicit tickers (e.g. "analyse my portfolio"),
             # fall back to: (1) DB portfolio holdings, (2) session carry-forward,
             # (3) KB atom subjects — so on-demand fetch fires for every missing holding.

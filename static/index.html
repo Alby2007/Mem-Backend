@@ -1354,12 +1354,17 @@ async function refreshDashboard() {
     const el = document.getElementById('dash-adapters');
     if (!adapters.length) { el.innerHTML = '<div class="empty text-sm text-muted">No adapters</div>'; return; }
     el.innerHTML = adapters.map(a => {
-      const ok = !a.is_running && a.last_success_at;
+      const hasError = !!a.last_error;
+      const neverRun = !a.last_run_at;
+      const running  = a.is_running;
+      const dotColour = running ? 'amber' : (hasError ? 'red' : (neverRun ? 'amber' : 'green'));
+      const dotHtml = `<span class="status-dot" style="background:${dotColour === 'green' ? 'var(--accent-green,#4ade80)' : dotColour === 'amber' ? '#f59e0b' : 'var(--accent-red,#f87171)'}"></span>`;
+      const kbAtoms = a.kb_atoms ?? a.total_atoms ?? 0;
       return `<div class="adapter-row">
-        ${dot(ok)}
+        ${dotHtml}
         <span class="adapter-name">${escHtml(a.name)}</span>
         <span class="adapter-time">${a.last_run_at ? fmtTime(a.last_run_at) : 'never'}</span>
-        <span class="text-xs mono-muted">${a.total_atoms ?? 0} atoms</span>
+        <span class="text-xs mono-muted">${kbAtoms} atoms</span>
       </div>`;
     }).join('');
   } catch { document.getElementById('dash-adapters').innerHTML = '<div class="empty text-sm text-muted">Ingest status unavailable</div>'; }
