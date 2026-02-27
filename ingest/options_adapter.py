@@ -121,6 +121,11 @@ _OPTIONS_TICKERS = [
     'GSK.L', 'RIO.L', 'LLOY.L', 'BARC.L', 'NWG.L',
     'LSEG.L', 'BA.L', 'RR.L', 'VOD.L', 'BATS.L',
     'NG.L', 'REL.L', 'TSCO.L', 'AAL.L',
+    # User portfolio holdings — US single names with active options markets
+    'COIN', 'HOOD', 'MSTR', 'PLTR', 'NVDA',
+    'XYZ',   # Block Inc. (formerly SQ)
+    # High-conviction US names with strong KB atom coverage
+    'AMZN', 'META', 'GOOGL', 'AAPL', 'MSFT', 'MA',
 ]
 
 # FTSE names with thin options liquidity — smart_money_signal and iv_rank
