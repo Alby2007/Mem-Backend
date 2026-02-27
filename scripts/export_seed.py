@@ -62,8 +62,12 @@ USER_TABLES = [
     "ticker_staging",
     "snapshot_delivery_log",
     "tip_delivery_log",
-    "tip_feedback",
     "audit_log",
+]
+
+# User tables that are created lazily — schema exported if present, skipped if not
+USER_TABLES_OPTIONAL = [
+    "tip_feedback",
     "alerts",
 ]
 
@@ -140,6 +144,7 @@ def main() -> None:
         )
     }
     # Hard-fail only on required tables
+    all_optional = SHARED_TABLES_OPTIONAL + USER_TABLES_OPTIONAL
     missing_required = [t for t in SHARED_TABLES_REQUIRED + USER_TABLES if t not in existing]
     if missing_required:
         for t in missing_required:
@@ -147,14 +152,16 @@ def main() -> None:
         die(f"{len(missing_required)} required table(s) missing.\n"
             "       Run the app once (python api.py) so all ensure_*_tables() calls fire,\n"
             "       then re-run this script.")
-    # Warn-only for optional governance tables
-    missing_optional = [t for t in SHARED_TABLES_OPTIONAL if t not in existing]
+    # Warn-only for optional tables
+    missing_optional = [t for t in all_optional if t not in existing]
     for t in missing_optional:
         print(f"  SKIP optional table (not yet created): {t}")
     print(f"All required tables present. ({len(missing_optional)} optional table(s) skipped)")
-    # Update export list to only tables that exist
+    # Update export lists to only tables that actually exist
     global SHARED_TABLES
     SHARED_TABLES = [t for t in SHARED_TABLES if t in existing]
+    global USER_TABLES
+    USER_TABLES = USER_TABLES + [t for t in USER_TABLES_OPTIONAL if t in existing]
 
     # ── 2. Quality gate ───────────────────────────────────────────────────────
     print("\nRunning quality gate...")
