@@ -4252,6 +4252,144 @@ def auth_logout():
     return jsonify({'logged_out': True})
 
 
+_TG_LOGIN_CODES: dict = {}  # code -> {chat_id, user_data, expires}
+
+@app.route('/auth/telegram/code', methods=['POST'])
+@limiter.exempt
+def auth_telegram_code():
+    """
+    POST /auth/telegram/code
+    Generate a one-time login code. Frontend opens t.me/bot?start=<code>.
+    Returns: { "code": "ABC12345" }
+    """
+    import secrets, time as _time
+    code = secrets.token_hex(4).upper()  # e.g. "A3F9C12E"
+    _TG_LOGIN_CODES[code] = {'chat_id': None, 'user_data': None, 'expires': _time.time() + 300}
+    # Prune expired codes
+    expired = [k for k, v in _TG_LOGIN_CODES.items() if v['expires'] < _time.time()]
+    for k in expired:
+        del _TG_LOGIN_CODES[k]
+    return jsonify({'code': code})
+
+
+@app.route('/auth/telegram/verify', methods=['POST'])
+@limiter.exempt
+def auth_telegram_verify():
+    """
+    POST /auth/telegram/verify
+    Body: { "code": "ABC12345" }
+    Returns: { "access_token": "...", "user_id": "tg_123", "first_name": "..." }
+    """
+    import time as _time, base64 as _b64, json as _json
+    data = request.get_json(force=True, silent=True) or {}
+    code = (data.get('code') or '').strip().upper()
+    entry = _TG_LOGIN_CODES.get(code)
+    if not entry:
+        return jsonify({'error': 'Invalid code'}), 400
+    if _time.time() > entry['expires']:
+        del _TG_LOGIN_CODES[code]
+        return jsonify({'error': 'Code expired'}), 400
+    if not entry.get('chat_id'):
+        return jsonify({'error': 'Code not yet confirmed — send it to the bot first'}), 202
+    # Consume the code
+    tg_data = entry.get('user_data') or {}
+    chat_id = entry['chat_id']
+    del _TG_LOGIN_CODES[code]
+    user_id = f"tg_{chat_id}"
+    # Upsert user
+    try:
+        import sqlite3 as _sq
+        conn = _sq.connect(_DB_PATH, timeout=10)
+        try:
+            from users.user_store import ensure_user_tables
+            ensure_user_tables(conn)
+            conn.execute(
+                "INSERT OR IGNORE INTO user_preferences (user_id, onboarding_complete) VALUES (?, 0)",
+                (user_id,),
+            )
+            conn.execute(
+                "UPDATE user_preferences SET telegram_chat_id=? WHERE user_id=?",
+                (str(chat_id), user_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    # Issue token
+    if HAS_AUTH:
+        try:
+            from middleware.auth import create_access_token
+            access_token = create_access_token(user_id)
+        except Exception:
+            access_token = _b64.urlsafe_b64encode(_json.dumps(
+                {'user_id': user_id, 'sub': user_id, 'exp': int(_time.time()) + 86400 * 30}
+            ).encode()).decode()
+    else:
+        access_token = _b64.urlsafe_b64encode(_json.dumps(
+            {'user_id': user_id, 'sub': user_id, 'exp': int(_time.time()) + 86400 * 30}
+        ).encode()).decode()
+    return jsonify({
+        'access_token': access_token,
+        'user_id':      user_id,
+        'first_name':   tg_data.get('first_name', ''),
+        'username':     tg_data.get('username', ''),
+        'tg_data':      tg_data,
+    })
+
+
+@app.route('/telegram/bot', methods=['POST'])
+@limiter.exempt
+def telegram_bot_webhook():
+    """
+    POST /telegram/bot  — Telegram bot webhook
+    Handles /start <code> messages to confirm login codes.
+    """
+    import time as _time, json as _json
+    update = request.get_json(force=True, silent=True) or {}
+    msg = update.get('message', {})
+    text = (msg.get('text') or '').strip()
+    chat = msg.get('chat', {})
+    chat_id = chat.get('id')
+    from_user = msg.get('from', {})
+
+    bot_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+
+    def _bot_send(cid, text_msg):
+        if not bot_token:
+            return
+        try:
+            import urllib.request as _ur, urllib.parse as _up
+            payload = _json.dumps({'chat_id': cid, 'text': text_msg}).encode()
+            req = _ur.Request(
+                f'https://api.telegram.org/bot{bot_token}/sendMessage',
+                data=payload, headers={'Content-Type': 'application/json'}
+            )
+            _ur.urlopen(req, timeout=5)
+        except Exception:
+            pass
+
+    if text.startswith('/start'):
+        parts = text.split(maxsplit=1)
+        code = parts[1].strip().upper() if len(parts) > 1 else ''
+        if code and code in _TG_LOGIN_CODES:
+            entry = _TG_LOGIN_CODES[code]
+            if _time.time() < entry['expires']:
+                entry['chat_id'] = chat_id
+                entry['user_data'] = {
+                    'id':         chat_id,
+                    'first_name': from_user.get('first_name', ''),
+                    'last_name':  from_user.get('last_name', ''),
+                    'username':   from_user.get('username', ''),
+                }
+                _bot_send(chat_id, f"✅ Logged in! Return to the Trading Galaxy dashboard.")
+            else:
+                _bot_send(chat_id, "⚠️ That login code has expired. Please request a new one.")
+        else:
+            _bot_send(chat_id, "👋 Welcome to Trading Galaxy! Use the Sign in button on the dashboard to get a login code.")
+    return jsonify({'ok': True})
+
+
 @app.route('/auth/telegram', methods=['POST'])
 @limiter.exempt
 def auth_telegram():
