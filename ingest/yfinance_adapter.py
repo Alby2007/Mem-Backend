@@ -74,6 +74,13 @@ _DEFAULT_TICKERS = [
     'GLD',
     '^GSPC',    # S&P 500 correlation
     '^VIX',
+    # US macro confirmation proxies (required by signal_enrichment_adapter)
+    'SPY', 'HYG', 'TLT',
+    # User portfolio holdings — ensure live price + signal enrichment every cycle
+    'ARKK', 'COIN', 'HOOD', 'MSTR', 'PLTR', 'NVDA',
+    'XYZ',      # Block Inc. (SQ rebranded)
+    # High-conviction watchlist — US mega-cap with strong KB coverage
+    'AMZN', 'META', 'GOOGL', 'AAPL', 'MSFT', 'MA',
 ]
 
 # Parallel workers for per-ticker info() calls
