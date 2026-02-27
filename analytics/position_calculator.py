@@ -14,10 +14,13 @@ No external dependencies. Pure arithmetic.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Optional
 
 from analytics.pattern_detector import PatternSignal
+
+if TYPE_CHECKING:
+    from analytics.signal_forecaster import ForecastResult
 
 
 @dataclass
@@ -58,6 +61,9 @@ class PositionRecommendation:
     kb_conviction_alignment: bool
     kb_regime_alignment:     bool
     composite_score:         float
+
+    # Probabilistic forecast — attached by TipScheduler after calculate_position()
+    forecast: Optional['ForecastResult'] = field(default=None, compare=False)
 
 
 def calculate_position(

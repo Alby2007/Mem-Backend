@@ -202,6 +202,26 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict) -> None:
         except Exception:
             pass
 
+        # Probabilistic forecast — seeded for ledger reproducibility
+        forecast = None
+        if position is not None:
+            try:
+                from analytics.signal_forecaster import SignalForecaster
+                from datetime import datetime, timezone
+                issued_at_iso = datetime.now(timezone.utc).isoformat()
+                forecaster = SignalForecaster(db_path)
+                forecast = forecaster.forecast(
+                    ticker       = sig.ticker,
+                    pattern_type = sig.pattern_type,
+                    timeframe    = sig.timeframe,
+                    account_size = position.account_size,
+                    risk_pct     = position.risk_pct,
+                    seed         = f'{sig.ticker}{sig.pattern_type}{issued_at_iso}',
+                )
+                position.forecast = forecast
+            except Exception as _fe:
+                _log.debug('TipScheduler: forecast failed for %s: %s', sig.ticker, _fe)
+
         message  = format_tip(sig, position, tier=tier, calibration=calibration)
 
         notifier = TelegramNotifier()
@@ -216,6 +236,28 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict) -> None:
             message_length = len(message),
             local_date     = local_date,
         )
+
+        # Record to prediction ledger after successful send
+        if sent and forecast is not None and position is not None:
+            try:
+                from analytics.prediction_ledger import PredictionLedger
+                ledger = PredictionLedger(db_path)
+                ledger.record_prediction(
+                    ticker         = sig.ticker,
+                    pattern_type   = sig.pattern_type,
+                    timeframe      = sig.timeframe,
+                    entry_price    = position.suggested_entry,
+                    target_1       = position.target_1,
+                    target_2       = position.target_2,
+                    stop_loss      = position.stop_loss,
+                    p_hit_t1       = forecast.p_hit_t1,
+                    p_hit_t2       = forecast.p_hit_t2,
+                    p_stopped_out  = forecast.p_stopped_out,
+                    market_regime  = forecast.market_regime,
+                    conviction_tier = tier,
+                )
+            except Exception as _le:
+                _log.debug('TipScheduler: ledger record failed for %s: %s', sig.ticker, _le)
 
         if sent:
             _log.info('TipScheduler: delivered %s %s tip to user %s',

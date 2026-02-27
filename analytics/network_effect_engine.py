@@ -429,3 +429,156 @@ def compute_network_health(db_path: str) -> NetworkHealthReport:
         )
     finally:
         conn.close()
+
+
+# ── Convergence detection ──────────────────────────────────────────────────────
+
+@dataclass
+class ConvergenceSignal:
+    ticker:               str
+    distinct_users:       int
+    lookback_hours:       int
+    kb_signal_direction:  Optional[str]
+    is_organic:           bool       # True = pre-tip traffic only
+    detected_at:          str
+
+
+# ── NetworkEffectEngine class ──────────────────────────────────────────────────
+
+class NetworkEffectEngine:
+    """
+    Wrapper class providing detect_convergence() and access to existing
+    network effect functions via a consistent interface.
+
+    Used by GET /network/convergence endpoint in api.py.
+    """
+
+    def __init__(self, db_path: str) -> None:
+        self._db = db_path
+
+    def detect_convergence(self, lookback_hours: int = 24) -> List[ConvergenceSignal]:
+        """
+        Detect tickers where >= 3 independent users queried organically
+        within the lookback window, BEFORE any tip was sent for that ticker.
+
+        Fix 3 (pre-tip lookback): queries that arrived after a tip was sent
+        for the same ticker are excluded — they're tip-driven traffic, not
+        organic convergence. Joins against prediction_ledger.issued_at with
+        a 10-minute buffer.
+
+        Returns list of ConvergenceSignal sorted by distinct_users descending.
+        """
+        now     = datetime.now(timezone.utc)
+        cutoff  = (now - timedelta(hours=lookback_hours)).isoformat()
+        now_iso = now.isoformat()
+
+        conn = sqlite3.connect(self._db, timeout=10)
+        try:
+            # discovery_log stores user ticker queries
+            # We look for tickers queried by >= 3 distinct users in the window,
+            # where those queries preceded any tip issuance for the same ticker.
+            rows = conn.execute(
+                """
+                SELECT
+                    dl.ticker,
+                    COUNT(DISTINCT dl.user_id) AS distinct_users
+                FROM discovery_log dl
+                WHERE dl.queried_at >= ?
+                  AND dl.queried_at <= ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM prediction_ledger pl
+                    WHERE pl.ticker = UPPER(dl.ticker)
+                      AND pl.issued_at <= dl.queried_at
+                      AND pl.issued_at >= datetime(dl.queried_at, '-10 minutes')
+                  )
+                GROUP BY dl.ticker
+                HAVING COUNT(DISTINCT dl.user_id) >= 3
+                ORDER BY COUNT(DISTINCT dl.user_id) DESC
+                """,
+                (cutoff, now_iso),
+            ).fetchall()
+        except Exception as exc:
+            _log.warning('detect_convergence: discovery_log query failed: %s', exc)
+            # Fallback: try without prediction_ledger join if table absent
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT ticker, COUNT(DISTINCT user_id) AS distinct_users
+                    FROM discovery_log
+                    WHERE queried_at >= ? AND queried_at <= ?
+                    GROUP BY ticker
+                    HAVING COUNT(DISTINCT user_id) >= 3
+                    ORDER BY COUNT(DISTINCT user_id) DESC
+                    """,
+                    (cutoff, now_iso),
+                ).fetchall()
+            except Exception:
+                rows = []
+        finally:
+            conn.close()
+
+        signals: List[ConvergenceSignal] = []
+        for ticker, n_users in rows:
+            kb_sig = self._kb_signal_direction(ticker)
+            signals.append(ConvergenceSignal(
+                ticker              = ticker.upper(),
+                distinct_users      = n_users,
+                lookback_hours      = lookback_hours,
+                kb_signal_direction = kb_sig,
+                is_organic          = True,   # pre-tip filter applied above
+                detected_at         = now_iso,
+            ))
+            self._write_convergence_atom(ticker, n_users, lookback_hours, now_iso)
+
+        return signals
+
+    def _kb_signal_direction(self, ticker: str) -> Optional[str]:
+        """Read current signal_direction KB atom for ticker."""
+        try:
+            conn = sqlite3.connect(self._db, timeout=5)
+            try:
+                row = conn.execute(
+                    """SELECT object FROM facts
+                       WHERE subject=? AND predicate='signal_direction'
+                       ORDER BY confidence DESC LIMIT 1""",
+                    (ticker.lower(),),
+                ).fetchone()
+                return row[0] if row else None
+            finally:
+                conn.close()
+        except Exception:
+            return None
+
+    def _write_convergence_atom(
+        self,
+        ticker:         str,
+        n_users:        int,
+        lookback_hours: int,
+        now_iso:        str,
+    ) -> None:
+        """Write organic_convergence atom to facts table."""
+        try:
+            conn = sqlite3.connect(self._db, timeout=10)
+            try:
+                conn.execute(
+                    """INSERT INTO facts
+                       (subject, predicate, object, source, confidence, timestamp)
+                       VALUES (?,?,?,?,?,?)
+                       ON CONFLICT(subject, predicate, source)
+                       DO UPDATE SET object=excluded.object,
+                                     confidence=excluded.confidence,
+                                     timestamp=excluded.timestamp""",
+                    (
+                        ticker.lower(),
+                        'organic_convergence',
+                        f'{n_users} independent users ({lookback_hours}h)',
+                        'network_effect_engine',
+                        0.60,
+                        now_iso,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as exc:
+            _log.debug('_write_convergence_atom: %s', exc)

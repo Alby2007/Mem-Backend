@@ -325,6 +325,36 @@ if HAS_HYBRID:
     except Exception:
         pass
 
+# ── Intelligence layer: CausalShockEngine + PredictionLedger ──────────────────
+# Both injected into _kg so add_fact() can fire hooks on every atom write.
+
+_shock_engine = None
+try:
+    from analytics.causal_shock_engine import CausalShockEngine as _CSE
+    _shock_engine = _CSE(_DB_PATH)
+    _kg.set_shock_engine(_shock_engine)
+except Exception as _e:
+    import logging as _logging
+    _logging.getLogger(__name__).warning('CausalShockEngine init failed: %s', _e)
+
+_prediction_ledger = None
+try:
+    from analytics.prediction_ledger import PredictionLedger as _PL
+    _prediction_ledger = _PL(_DB_PATH)
+    _kg.set_ledger(_prediction_ledger)
+except Exception as _e:
+    import logging as _logging
+    _logging.getLogger(__name__).warning('PredictionLedger init failed: %s', _e)
+
+_thesis_monitor = None
+try:
+    from knowledge.thesis_builder import ThesisMonitor as _TM
+    _thesis_monitor = _TM(_DB_PATH)
+    _kg.set_thesis_monitor(_thesis_monitor)
+except Exception as _e:
+    import logging as _logging
+    _logging.getLogger(__name__).warning('ThesisMonitor init failed: %s', _e)
+
 # Auto-seed on first boot: if the DB is empty and the seed file exists, load it.
 # This means `docker-compose up` gives collaborators a populated KB immediately —
 # no manual load step required.
@@ -4599,6 +4629,310 @@ def network_cohort(ticker: str):
             'consensus_strength':   signal.consensus_strength,
             'stop_cluster':         signal.stop_cluster,
             'contrarian_flag':      signal.contrarian_flag,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Intelligence layer endpoints ──────────────────────────────────────────────
+
+@app.route('/ledger/performance', methods=['GET'])
+@limiter.exempt
+def ledger_performance():
+    """
+    GET /ledger/performance
+
+    Public endpoint (no auth required) returning the system's prediction
+    accuracy record: Brier score, calibration curve, regime breakdown.
+    This is the March 24th validation story told in a single API call.
+    """
+    if _prediction_ledger is None:
+        return jsonify({'error': 'prediction_ledger_not_initialised'}), 503
+    try:
+        report = _prediction_ledger.get_performance_report()
+        return jsonify(report)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/forecast/<ticker>/<pattern_type>', methods=['GET'])
+@require_auth
+def forecast_signal(ticker: str, pattern_type: str):
+    """
+    GET /forecast/<ticker>/<pattern_type>?timeframe=1d&account_size=10000&risk_pct=1.0
+
+    On-demand probabilistic forecast for a (ticker, pattern_type) pair.
+    Unseeded — natural Monte Carlo variance is acceptable here.
+    Uses calibration data + current KB atoms (IV rank, macro, short interest).
+    """
+    try:
+        from analytics.signal_forecaster import SignalForecaster
+        timeframe    = request.args.get('timeframe', '1d')
+        account_size = float(request.args.get('account_size', 10000))
+        risk_pct     = float(request.args.get('risk_pct', 1.0))
+        forecaster   = SignalForecaster(_DB_PATH)
+        result       = forecaster.forecast(
+            ticker       = ticker,
+            pattern_type = pattern_type,
+            timeframe    = timeframe,
+            account_size = account_size,
+            risk_pct     = risk_pct,
+            seed         = None,  # unseeded — exploratory call
+        )
+        return jsonify({
+            'ticker':                result.ticker,
+            'pattern_type':          result.pattern_type,
+            'timeframe':             result.timeframe,
+            'market_regime':         result.market_regime,
+            'p_hit_t1':              result.p_hit_t1,
+            'p_hit_t2':              result.p_hit_t2,
+            'p_stopped_out':         result.p_stopped_out,
+            'expected_value_gbp':    result.expected_value_gbp,
+            'ci_90_low':             result.ci_90_low,
+            'ci_90_high':            result.ci_90_high,
+            'days_to_target_median': result.days_to_target_median,
+            'regime_adjustment_pct': result.regime_adjustment_pct,
+            'iv_adjustment_pct':     result.iv_adjustment_pct,
+            'macro_adjustment_pct':  result.macro_adjustment_pct,
+            'short_adjustment_pct':  result.short_adjustment_pct,
+            'calibration_samples':   result.calibration_samples,
+            'used_prior':            result.used_prior,
+            'generated_at':          result.generated_at,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/causal/shocks', methods=['GET'])
+@require_auth
+def causal_shocks():
+    """
+    GET /causal/shocks?n=50
+
+    Returns the n most recent causal shock propagation events from the
+    in-memory shock log. Shows what macro event triggered what, which tickers
+    were affected, and how many atoms were written.
+    """
+    if _shock_engine is None:
+        return jsonify({'shocks': [], 'note': 'shock_engine_not_initialised'})
+    try:
+        n      = min(int(request.args.get('n', 50)), 200)
+        shocks = _shock_engine.get_recent_shocks(n=n)
+        return jsonify({'shocks': shocks, 'count': len(shocks)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/signals/stress-test', methods=['POST'])
+@require_auth
+def signals_stress_test():
+    """
+    POST /signals/stress-test
+    Body: { "ticker": "HSBA.L", "pattern_id": 42 }
+
+    Runs signal-level adversarial testing on a specific open pattern signal.
+    Returns survival_rate, invalidating_scenarios, robustness_label.
+    """
+    try:
+        from analytics.adversarial_tester import AdversarialTester
+        from users.user_store import get_open_patterns
+        data       = request.get_json(silent=True) or {}
+        ticker     = data.get('ticker', '')
+        pattern_id = data.get('pattern_id')
+        if not ticker:
+            return jsonify({'error': 'ticker required'}), 400
+
+        patterns = get_open_patterns(_DB_PATH, min_quality=0.0, limit=500)
+        pattern  = None
+        for p in patterns:
+            if p['ticker'].upper() == ticker.upper():
+                if pattern_id is None or p['id'] == pattern_id:
+                    pattern = p
+                    break
+        if pattern is None:
+            return jsonify({'error': 'no open pattern found for ticker'}), 404
+
+        tester = AdversarialTester(_DB_PATH)
+        result = tester.stress_test_signal(ticker, pattern)
+        return jsonify({
+            'ticker':                 ticker.upper(),
+            'pattern_type':           pattern.get('pattern_type'),
+            'survival_rate':          result.survival_rate,
+            'robustness_label':       result.robustness_label,
+            'invalidating_scenarios': result.invalidating_scenarios,
+            'earnings_warning':       result.earnings_proximity_warning,
+            'scenarios_tested':       result.scenarios_tested,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/network/convergence', methods=['GET'])
+@require_auth
+def network_convergence():
+    """
+    GET /network/convergence?lookback_hours=24
+
+    Returns tickers where >= 3 independent users have queried organically
+    (pre-tip lookback window — post-tip traffic excluded).
+    """
+    try:
+        from analytics.network_effect_engine import NetworkEffectEngine
+        lookback = int(request.args.get('lookback_hours', 24))
+        engine   = NetworkEffectEngine(_DB_PATH)
+        signals  = engine.detect_convergence(lookback_hours=lookback)
+        return jsonify({
+            'convergence_signals': [
+                {
+                    'ticker':          s.ticker,
+                    'distinct_users':  s.distinct_users,
+                    'lookback_hours':  s.lookback_hours,
+                    'kb_signal':       s.kb_signal_direction,
+                    'organic':         s.is_organic,
+                    'detected_at':     s.detected_at,
+                }
+                for s in signals
+            ],
+            'count': len(signals),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/ledger/open', methods=['GET'])
+@require_auth
+def ledger_open():
+    """
+    GET /ledger/open
+
+    Returns all open (unresolved) prediction ledger entries.
+    Useful for monitoring live predictions.
+    """
+    if _prediction_ledger is None:
+        return jsonify({'error': 'prediction_ledger_not_initialised'}), 503
+    try:
+        predictions = _prediction_ledger.get_open_predictions()
+        return jsonify({'predictions': predictions, 'count': len(predictions)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/thesis', methods=['GET'])
+@require_auth
+def thesis_list():
+    """
+    GET /thesis
+
+    List all theses stored for the authenticated user.
+    """
+    try:
+        from knowledge.thesis_builder import ThesisBuilder
+        user_id = g.get('user_id') or request.args.get('user_id', '')
+        if not user_id:
+            return jsonify({'error': 'user_id required'}), 400
+        builder = ThesisBuilder(_DB_PATH)
+        theses  = builder.list_user_theses(user_id)
+        return jsonify({'theses': theses, 'count': len(theses)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/thesis/build', methods=['POST'])
+@require_auth
+def thesis_build():
+    """
+    POST /thesis/build
+    Body: { "ticker": "HSBA.L", "premise": "...", "direction": "bullish" }
+
+    Build a formal thesis from a natural language premise.
+    Evaluates KB evidence, derives invalidation condition, stores as KB atoms.
+    """
+    try:
+        from knowledge.thesis_builder import ThesisBuilder
+        data      = request.get_json(silent=True) or {}
+        ticker    = data.get('ticker', '').strip()
+        premise   = data.get('premise', '').strip()
+        direction = data.get('direction', 'bullish').strip().lower()
+        user_id   = g.get('user_id') or data.get('user_id', '')
+
+        if not ticker or not premise:
+            return jsonify({'error': 'ticker and premise are required'}), 400
+        if direction not in ('bullish', 'bearish'):
+            return jsonify({'error': 'direction must be bullish or bearish'}), 400
+
+        builder = ThesisBuilder(_DB_PATH)
+        result  = builder.build(
+            ticker    = ticker,
+            premise   = premise,
+            direction = direction,
+            user_id   = user_id,
+        )
+        return jsonify({
+            'thesis_id':              result.thesis_id,
+            'ticker':                 result.ticker,
+            'direction':              result.direction,
+            'thesis_status':          result.thesis_status,
+            'thesis_score':           result.thesis_score,
+            'supporting_evidence':    result.supporting_evidence,
+            'contradicting_evidence': result.contradicting_evidence,
+            'invalidation_condition': result.invalidation_condition,
+            'created_at':             result.created_at,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/thesis/<thesis_id>', methods=['GET'])
+@require_auth
+def thesis_get(thesis_id: str):
+    """
+    GET /thesis/<thesis_id>
+
+    Retrieve a stored thesis with its current evidence evaluation.
+    """
+    try:
+        from knowledge.thesis_builder import ThesisBuilder
+        builder    = ThesisBuilder(_DB_PATH)
+        evaluation = builder.evaluate(thesis_id)
+        if evaluation is None:
+            return jsonify({'error': 'thesis not found'}), 404
+        return jsonify({
+            'thesis_id':    evaluation.thesis_id,
+            'ticker':       evaluation.ticker,
+            'status':       evaluation.status,
+            'score':        evaluation.score,
+            'supporting':   evaluation.supporting,
+            'contradicting':evaluation.contradicting,
+            'evaluated_at': evaluation.evaluated_at,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/thesis/<thesis_id>/check', methods=['POST'])
+@require_auth
+def thesis_check(thesis_id: str):
+    """
+    POST /thesis/<thesis_id>/check
+
+    Force re-evaluation of a stored thesis against current KB state.
+    Updates thesis_status in thesis_index.
+    """
+    try:
+        from knowledge.thesis_builder import ThesisBuilder
+        builder    = ThesisBuilder(_DB_PATH)
+        evaluation = builder.evaluate(thesis_id)
+        if evaluation is None:
+            return jsonify({'error': 'thesis not found'}), 404
+        return jsonify({
+            'thesis_id':    evaluation.thesis_id,
+            'ticker':       evaluation.ticker,
+            'status':       evaluation.status,
+            'score':        evaluation.score,
+            'supporting':   evaluation.supporting,
+            'contradicting':evaluation.contradicting,
+            'evaluated_at': evaluation.evaluated_at,
+            'note':         'thesis re-evaluated against current KB state',
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500

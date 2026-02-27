@@ -1,12 +1,12 @@
 # deploy/Caddyfile
 #
-# Replace api.yourdomain.com with your actual domain before deploying.
+# Domain: api.tradinggalaxy.dev
 # Caddy auto-provisions a Let's Encrypt TLS certificate — no certbot needed.
 #
 # To test with an IP only (no domain), replace the domain block with:
 #   :80 { reverse_proxy trading-galaxy:5050 }
 
-api.yourdomain.com {
+api.tradinggalaxy.dev {
     # Automatic HTTPS — Caddy handles ACME challenge and renewal
     tls {
         protocols tls1.2 tls1.3
@@ -56,6 +56,6 @@ api.yourdomain.com {
 
 # Redirect bare HTTP → HTTPS (Caddy handles this automatically, but
 # explicit is clearer for ops review)
-http://api.yourdomain.com {
-    redir https://api.yourdomain.com{uri} permanent
+http://api.tradinggalaxy.dev {
+    redir https://api.tradinggalaxy.dev{uri} permanent
 }

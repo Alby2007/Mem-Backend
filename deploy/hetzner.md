@@ -9,8 +9,8 @@ systemd-managed Docker, and zero-downtime updates via `git pull && docker compos
 
 | Spec | Value | Notes |
 |---|---|---|
-| Type | **CX22** (2 vCPU, 4 GB RAM) | Without Ollama — cheapest that runs comfortably |
-| Type | **CX32** (4 vCPU, 8 GB RAM) | With Ollama (llama3.2 3B needs ~4 GB RAM) |
+| Type | **CPX22** (2 vCPU, 4 GB RAM, AMD) | Without Ollama — cheapest that runs comfortably |
+| Type | **CPX32** (4 vCPU, 8 GB RAM, AMD) | With Ollama (llama3.2 3B needs ~4 GB RAM) |
 | OS | **Ubuntu 24.04 LTS** | |
 | Region | Anywhere close to your users (nbg1 = Nuremberg, fsn1 = Falkenstein) |
 | Firewall | Allow TCP 22, 80, 443 only | Block 5050, 11434 — Caddy handles all ingress |
@@ -293,12 +293,12 @@ watch -n 5 'curl -sf https://api.yourdomain.com/health | python3 -m json.tool'
 
 | Scenario | RAM needed | Recommended VPS |
 |---|---|---|
-| API + Caddy only (no LLM) | ~500 MB | CX22 (4 GB) — comfortable |
-| + Ollama llama3.2 (3B) | ~4.5 GB | CX32 (8 GB) — snug |
-| + Ollama llama3.1 (8B) | ~8 GB | CX42 (16 GB) |
+| API + Caddy only (no LLM) | ~500 MB | **CPX22** (4 GB) — comfortable |
+| + Ollama llama3.2 (3B) | ~4.5 GB | **CPX32** (8 GB) — snug |
+| + Ollama llama3.1 (8B) | ~8 GB | **CPX42** (16 GB) |
 | Full production load | scale horizontally | Put DB on separate volume, add load balancer |
 
-For the intern launch, **CX22 without Ollama** is the right call. You get the
+For the intern launch, **CPX22 without Ollama** is the right call. You get the
 full data pipeline (yfinance, FRED, EDGAR, FCA, pattern detection, calibration)
 with no LLM cost. The LLM layer can be added later on a larger box or pointed at
 a remote Ollama instance via `OLLAMA_BASE_URL`.

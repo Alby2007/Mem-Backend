@@ -173,6 +173,75 @@ def _parse_skew_filter(skew_filter: Optional[dict]) -> Optional[dict]:
         return None
 
 
+def _fmt_pct(p: float) -> str:
+    """Format a 0.0–1.0 probability as a percentage string."""
+    return f'{int(round(p * 100))}%'
+
+
+def _forecast_block(forecast: object, currency: str) -> list:
+    """
+    Render the probabilistic forecast block lines for a tip.
+    Only called when position.forecast is not None.
+    """
+    lines = [
+        '',
+        '━━━━━━━━━━━━━━━',
+        '🎯 *PROBABILITY FORECAST*',
+        '━━━━━━━━━━━━━━━',
+    ]
+    try:
+        p_t1  = getattr(forecast, 'p_hit_t1', None)
+        p_t2  = getattr(forecast, 'p_hit_t2', None)
+        p_stp = getattr(forecast, 'p_stopped_out', None)
+        ev    = getattr(forecast, 'expected_value_gbp', None)
+        ci_lo = getattr(forecast, 'ci_90_low', None)
+        ci_hi = getattr(forecast, 'ci_90_high', None)
+        days  = getattr(forecast, 'days_to_target_median', None)
+        reg_adj = getattr(forecast, 'regime_adjustment_pct', 0.0)
+        iv_adj  = getattr(forecast, 'iv_adjustment_pct', 0.0)
+        regime  = getattr(forecast, 'market_regime', None)
+        used_prior = getattr(forecast, 'used_prior', False)
+
+        sym = {'GBP': '£', 'USD': '$', 'EUR': '€'}.get(currency.upper(), currency)
+
+        if p_t1 is not None and p_t2 is not None and p_stp is not None:
+            lines.append(
+                'P\\(T1\\): ' + _escape_mdv2(_fmt_pct(p_t1)) + ' \u00b7 '
+                'P\\(T2\\): ' + _escape_mdv2(_fmt_pct(p_t2)) + ' \u00b7 '
+                'P\\(Stop\\): ' + _escape_mdv2(_fmt_pct(p_stp))
+            )
+        if ev is not None:
+            ev_str = f'{sym}{abs(ev):,.0f}'
+            sign   = '\\+' if ev >= 0 else '\\-'
+            lines.append('EV: ' + sign + _escape_mdv2(ev_str) + ' at 1% risk')
+        if days is not None:
+            lines.append('Median days to target: ' + _escape_mdv2(str(days)))
+        if ci_lo is not None and ci_hi is not None:
+            sym_lo = '\\-' if ci_lo < 0 else '\\+'
+            sym_hi = '\\-' if ci_hi < 0 else '\\+'
+            lines.append(
+                '90% CI: ' + sym_lo + _escape_mdv2(f'{sym}{abs(ci_lo):,.0f}') +
+                ' \u2192 ' + sym_hi + _escape_mdv2(f'{sym}{abs(ci_hi):,.0f}')
+            )
+        adj_parts = []
+        if reg_adj and regime:
+            sign = '\\+' if reg_adj >= 0 else ''
+            adj_parts.append(
+                'Regime adj: ' + sign + _escape_mdv2(f'{reg_adj:.0f}%') +
+                ' \\(' + _escape_mdv2(regime.replace('_', ' ')) + '\\)'
+            )
+        if iv_adj:
+            sign = '\\+' if iv_adj >= 0 else ''
+            adj_parts.append('IV adj: ' + sign + _escape_mdv2(f'{iv_adj:.0f}%'))
+        if adj_parts:
+            lines.append(' \u00b7 '.join(adj_parts))
+        if used_prior:
+            lines.append('_\\(Using population\\-level priors \u2014 insufficient history\\)_')
+    except Exception:
+        pass
+    return lines
+
+
 def format_tip(
     pattern:     PatternSignal,
     position:    Optional[PositionRecommendation],
@@ -289,6 +358,11 @@ def format_tip(
                     )
         except Exception:
             pass
+
+    # Probability forecast block — rendered when SignalForecaster ran successfully
+    if position and getattr(position, 'forecast', None) is not None:
+        currency = position.account_currency
+        lines += _forecast_block(position.forecast, currency)
 
     lines += kb_lines
     return '\n'.join(lines)

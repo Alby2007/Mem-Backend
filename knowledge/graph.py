@@ -53,7 +53,22 @@ class TradingKnowledgeGraph:
         self.db_path = db_path
         self.conn = None
         self._local = threading.local()
+        self._shock_engine = None   # set via set_shock_engine() in api.py
+        self._ledger = None         # set via set_ledger() in api.py
+        self._thesis_monitor = None # set via set_thesis_monitor() in api.py
         self._initialize_db()
+
+    def set_shock_engine(self, engine) -> None:
+        """Inject CausalShockEngine. Called once at api.py startup."""
+        self._shock_engine = engine
+
+    def set_ledger(self, ledger) -> None:
+        """Inject PredictionLedger for intraday price resolution. Called once at api.py startup."""
+        self._ledger = ledger
+
+    def set_thesis_monitor(self, monitor) -> None:
+        """Inject ThesisMonitor for proactive thesis invalidation alerts. Called once at api.py startup."""
+        self._thesis_monitor = monitor
 
     def thread_local_conn(self) -> sqlite3.Connection:
         """Return a per-thread SQLite connection. Safe for use in Flask request handlers."""
@@ -323,6 +338,28 @@ class TradingKnowledgeGraph:
                     )
             except Exception:
                 pass  # never let conflict detection break the ingest path
+
+        # Causal shock propagation — fires for ~5 macro predicates, O(1) check
+        if self._shock_engine is not None:
+            try:
+                self._shock_engine.on_atom_written(subj, pred, obj)
+            except Exception:
+                pass  # never let shock engine break the ingest path
+
+        # Prediction ledger intraday resolution — fires only for last_price atoms
+        if self._ledger is not None and pred == 'last_price':
+            try:
+                price = float(obj.split()[0].replace(',', ''))
+                self._ledger.on_price_written(subj, price)
+            except Exception:
+                pass  # never let ledger break the ingest path
+
+        # Thesis monitor — checks for invalidation condition approach on macro predicates
+        if self._thesis_monitor is not None:
+            try:
+                self._thesis_monitor.on_atom_written(subj, pred, obj)
+            except Exception:
+                pass  # never let thesis monitor break the ingest path
 
         return True
     
