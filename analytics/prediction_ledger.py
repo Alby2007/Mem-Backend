@@ -73,9 +73,16 @@ CREATE TABLE IF NOT EXISTS prediction_ledger (
     outcome         TEXT,
     resolved_at     TEXT,
     resolved_price  REAL,
-    brier_t1        REAL,
-    UNIQUE(ticker, pattern_type, date(issued_at))
+    brier_t1        REAL
 )
+"""
+
+# SQLite does not allow expressions in inline UNIQUE constraints.
+# The system-level dedup (one row per ticker+pattern_type per calendar day)
+# is enforced by this partial unique index on the date() of issued_at.
+_CREATE_DEDUP_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_daily_dedup
+ON prediction_ledger(ticker, pattern_type, date(issued_at))
 """
 
 # ── Trading day helpers ────────────────────────────────────────────────────────
@@ -115,6 +122,7 @@ class PredictionLedger:
         conn = self._connect()
         try:
             conn.execute(_CREATE_TABLE)
+            conn.execute(_CREATE_DEDUP_INDEX)
             conn.commit()
         finally:
             conn.close()

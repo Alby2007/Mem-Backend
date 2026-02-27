@@ -93,9 +93,11 @@ class ForecastResult:
     market_regime:        Optional[str]
 
     # Probabilities (adjusted, post-Monte Carlo)
+    # p_hit_t1 + p_hit_t2 + p_stopped_out + p_expired = 1.0
     p_hit_t1:             float   # probability of reaching T1
     p_hit_t2:             float   # probability of reaching T2
     p_stopped_out:        float   # probability of stop hit before T1
+    p_expired:            float   # probability of expiry without hitting T1 or stop
 
     # Expected value
     expected_value_gbp:   float   # EV at stated risk; positive = favourable
@@ -400,6 +402,8 @@ class SignalForecaster:
             mc.p_t1, mc.p_t2, mc.p_stop, ev_gbp, n_samples, used_prior,
         )
 
+        p_expired = round(max(0.0, 1.0 - mc.p_t1 - mc.p_t2 - mc.p_stop), 3)
+
         return ForecastResult(
             ticker                = ticker_up,
             pattern_type          = pattern_type,
@@ -408,6 +412,7 @@ class SignalForecaster:
             p_hit_t1              = round(mc.p_t1,  3),
             p_hit_t2              = round(mc.p_t2,  3),
             p_stopped_out         = round(mc.p_stop, 3),
+            p_expired             = p_expired,
             expected_value_gbp    = round(ev_gbp,    2),
             ci_90_low             = round(ci_low_gbp,  2),
             ci_90_high            = round(ci_high_gbp, 2),

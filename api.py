@@ -4687,6 +4687,7 @@ def forecast_signal(ticker: str, pattern_type: str):
             'p_hit_t1':              result.p_hit_t1,
             'p_hit_t2':              result.p_hit_t2,
             'p_stopped_out':         result.p_stopped_out,
+            'p_expired':             result.p_expired,
             'expected_value_gbp':    result.expected_value_gbp,
             'ci_90_low':             result.ci_90_low,
             'ci_90_high':            result.ci_90_high,
