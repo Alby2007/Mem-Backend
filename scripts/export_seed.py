@@ -128,6 +128,8 @@ def _escape(v: object) -> str:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    global SHARED_TABLES, USER_TABLES
+
     if not os.path.exists(DB_PATH):
         die(f"database not found at '{DB_PATH}'\n"
             "       Pass the path as the first argument: python scripts/export_seed.py /path/to/db")
@@ -158,7 +160,6 @@ def main() -> None:
         print(f"  SKIP optional table (not yet created): {t}")
     print(f"All required tables present. ({len(missing_optional)} optional table(s) skipped)")
     # Update export lists to only tables that actually exist
-    global SHARED_TABLES, USER_TABLES
     SHARED_TABLES = [t for t in SHARED_TABLES if t in existing]
     USER_TABLES = USER_TABLES + [t for t in USER_TABLES_OPTIONAL if t in existing]
 
