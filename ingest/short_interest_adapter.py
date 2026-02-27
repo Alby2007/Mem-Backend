@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import io
 import logging
-import re
 import sqlite3
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -51,10 +50,7 @@ from ingest.base import BaseIngestAdapter, RawAtom
 
 _logger = logging.getLogger(__name__)
 
-_FINRA_INDEX_URL = (
-    'https://cdn.finra.org/equity/regsho/biweekly/regsho-biweekly-index.html'
-)
-_FINRA_FILE_URL  = (
+_FINRA_FILE_URL = (
     'https://cdn.finra.org/equity/regsho/biweekly/CNMSshvol{date}.txt'
 )
 _TIMEOUT  = 30
@@ -80,28 +76,56 @@ _DEFAULT_TICKERS = [
 ]
 
 
+def _candidate_finra_dates(lookback_days: int = 60) -> List[str]:
+    """
+    Generate candidate FINRA biweekly settlement dates working backwards from today.
+    FINRA publishes around the 15th and last business day of each month.
+    Returns list of YYYYMMDD strings, most recent first.
+    """
+    from datetime import date, timedelta
+    today = datetime.now(timezone.utc).date()
+    candidates = []
+    # Generate candidate mid-month and end-of-month dates for past N days
+    for days_back in range(0, lookback_days, 1):
+        d = today - timedelta(days=days_back)
+        # Include 15th, 14th, 13th, 28th-31st of each month as candidates
+        if d.day in (15, 14, 13, 31, 30, 29, 28):
+            candidates.append(d.strftime('%Y%m%d'))
+    return candidates
+
+
 def _get_latest_finra_date() -> Optional[str]:
     """
-    Scrape FINRA biweekly index page to find the most recent file date.
-    Returns date string in YYYYMMDD format, or None on failure.
+    Find the most recent available FINRA biweekly file by probing candidate dates.
+    Tries HEAD requests to avoid downloading large files unnecessarily.
+    Returns date string in YYYYMMDD format, or None if none found.
     """
-    try:
-        resp = requests.get(_FINRA_INDEX_URL, timeout=_TIMEOUT)
-        resp.raise_for_status()
-        # Look for patterns like CNMSshvol20260215.txt in the page
-        matches = re.findall(r'CNMSshvol(\d{8})\.txt', resp.text)
-        if matches:
-            return sorted(matches)[-1]  # most recent
-    except Exception as exc:
-        _logger.warning('ShortInterestAdapter: index fetch failed: %s', exc)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (compatible; TradingKB/1.0)',
+        'Accept': 'text/plain,*/*',
+    }
+    for date_str in _candidate_finra_dates():
+        url = _FINRA_FILE_URL.format(date=date_str)
+        try:
+            resp = requests.head(url, headers=headers, timeout=10, allow_redirects=True)
+            if resp.status_code == 200:
+                _logger.info('ShortInterestAdapter: found FINRA file for date %s', date_str)
+                return date_str
+        except Exception:
+            continue
+    _logger.warning('ShortInterestAdapter: no FINRA file found in candidate dates')
     return None
 
 
 def _fetch_finra_file(date_str: str) -> Optional[str]:
     """Download FINRA short interest file for a given date string (YYYYMMDD)."""
     url = _FINRA_FILE_URL.format(date=date_str)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (compatible; TradingKB/1.0)',
+        'Accept': 'text/plain,*/*',
+    }
     try:
-        resp = requests.get(url, timeout=_TIMEOUT)
+        resp = requests.get(url, headers=headers, timeout=_TIMEOUT)
         resp.raise_for_status()
         return resp.text
     except Exception as exc:
