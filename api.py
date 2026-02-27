@@ -2040,6 +2040,25 @@ def chat_endpoint():
             from retrieval import _extract_tickers
             from knowledge.working_memory import _YF_TICKER_MAP
             tickers_in_query = _extract_tickers(message)
+            # If message has no explicit tickers (e.g. "analyse my portfolio"),
+            # fall back to: (1) DB portfolio holdings, (2) session carry-forward,
+            # (3) KB atom subjects — so on-demand fetch fires for every missing holding.
+            if not tickers_in_query:
+                # Priority 1: user's DB portfolio (most reliable for "analyse my portfolio")
+                if chat_user_id and HAS_PRODUCT_LAYER:
+                    try:
+                        _ph = get_portfolio(_DB_PATH, chat_user_id)
+                        tickers_in_query = [h['ticker'] for h in (_ph or []) if h.get('ticker')]
+                    except Exception:
+                        pass
+                # Priority 2: session carry-forward from previous turns
+                if not tickers_in_query:
+                    tickers_in_query = list(_session_tickers.get(session_id, []))
+                # Priority 3: subjects from KB atoms returned for this query
+                if not tickers_in_query and atoms:
+                    tickers_in_query = list({
+                        a['subject'].upper() for a in atoms if 'subject' in a
+                    })
             # Tickers completely absent from KB — always fetch
             missing_from_kb = [
                 t for t in tickers_in_query[:MAX_ON_DEMAND_TICKERS]
