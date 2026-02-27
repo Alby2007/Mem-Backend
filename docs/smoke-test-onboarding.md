@@ -304,17 +304,78 @@ Content-Security-Policy: default-src 'none'
 
 ---
 
+## 14 — Chat with KB retrieval
+
+Verifies that the chat endpoint is reachable, calls the KB retrieval pipeline, and returns a grounded response. **Without this step, a broken KB retrieval path would not be caught by steps 1–13.**
+
+```bash
+# Uses NEW_ACCESS from step 10 (post-rotation token)
+CHAT_RESP=$(curl -sf -X POST http://localhost:5050/chat \
+  -H "Authorization: Bearer $NEW_ACCESS" \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "What is the signal on NVDA?", "session_id": "smoketest-chat-1"}')
+
+echo "$CHAT_RESP" | jq .
+```
+
+**Check 1 — KB atoms were retrieved (not a zero-atom response):**
+```bash
+ATOMS_USED=$(echo "$CHAT_RESP" | jq '.kb_atoms_used // .atoms | length')
+[ "$ATOMS_USED" -gt 0 ] \
+  && echo "PASS KB retrieval working ($ATOMS_USED atoms)" \
+  || echo "FAIL — zero atoms returned, KB retrieval may be broken"
+```
+
+**Check 2 — Response contains a snippet (KB context was built):**
+```bash
+echo "$CHAT_RESP" | jq -e '.snippet // .response' > /dev/null \
+  && echo "PASS snippet/response field present" \
+  || echo "FAIL — no snippet or response field"
+```
+
+**Check 3 — Stress score present (epistemic pipeline ran):**
+```bash
+echo "$CHAT_RESP" | jq -e '.stress.composite_stress' > /dev/null \
+  && echo "PASS epistemic stress computed" \
+  || echo "FAIL — stress field missing"
+```
+
+**Check 4 — Unauthenticated chat is rejected:**
+```bash
+curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:5050/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "What is NVDA?"}' \
+  | grep -q 401 && echo "PASS unauthenticated chat rejected" || echo "FAIL"
+```
+
+**Check 5 — Ingest status shows adapters running:**
+```bash
+STATUS=$(curl -sf http://localhost:5050/ingest/status \
+  -H "Authorization: Bearer $NEW_ACCESS")
+echo "$STATUS" | jq '.scheduler'
+echo "$STATUS" | jq '.adapters | keys'
+# Expect scheduler="running", adapters list includes yfinance, fred, edgar, rss_news etc.
+```
+
+> **Note on port:** The smoke test uses port `5050` throughout (gunicorn production port).  
+> If testing locally without Docker + Caddy, Flask dev server uses `5050` by default.  
+> The Caddy reverse proxy forwards `443` → `5050` in production — test against the  
+> HTTPS URL (`https://api.tradinggalaxy.dev/chat`) after the Hetzner deployment is live.
+
+---
+
 ## Pass criteria
 
-All checks marked **PASS** in steps 2–13.  
-`/health/detailed` returns `"status": "ok"`.  
+All checks marked **PASS** in steps 2–14.  
+`/health` returns `{"status": "ok", "facts": <non-zero>}`.  
 No `500` responses anywhere in the flow.  
-Telegram test message received (step 8).
+Telegram test message received (step 8).  
+Step 14 KB retrieval returns ≥ 1 atom and a stress score.
 
 ---
 
 ## Teardown
 
 ```bash
-docker-compose down -v
+docker compose down -v
 ```

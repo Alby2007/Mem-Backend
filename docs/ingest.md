@@ -332,6 +332,189 @@ Polls `Alby2007/Mem-Backend` GitHub Releases. If the latest `seed-YYYYMMDD-HHMM`
 
 ---
 
+## Adapter: BoEAdapter
+
+**Source:** Bank of England Statistical Interactive Dataset (public, no key)
+**Interval:** 24 hours
+**Requires:** None
+
+Pulls UK macro indicators from the BoE API and derives regime atoms for the UK market context.
+
+**Atoms produced:**
+
+| Subject | Predicate | Example value |
+|---|---|---|
+| `uk_macro` | `boe_base_rate` | `5.25%` |
+| `uk_macro` | `central_bank_stance` | `restrictive` / `neutral` / `accommodative` |
+| `uk_macro` | `uk_cpi_yoy` | `CPI YoY: 4.0%` |
+| `uk_macro` | `inflation_environment` | `high_inflation` / `normalising` / `low_inflation` |
+| `uk_macro` | `uk_gdp_growth` | `GDP growth: 0.1%` |
+| `uk_macro` | `growth_environment` | `contraction` / `stagnation` / `moderate` / `strong` |
+| `uk_macro` | `uk_unemployment` | `4.2%` |
+| `uk_macro` | `regime_label` | `restrictive_stagflation` |
+| `uk_yields` | `uk_gilt_10y` | `4.35%` |
+| `uk_yields` | `yield_environment` | `elevated` |
+
+Source prefix: `macro_data_boe` (authority 0.80, half-life 60d)
+
+---
+
+## Adapter: OptionsAdapter
+
+**Source:** Yahoo Finance options chains via `yfinance`
+**Interval:** 15 minutes
+**Requires:** None
+
+Fetches options chains for liquid FTSE names and computes options-regime atoms. Low-liquidity FTSE names have confidence caps enforced via `_LOW_OPTIONS_LIQUIDITY` frozenset.
+
+**Atoms produced:**
+
+| Predicate | Description | Confidence |
+|---|---|---|
+| `iv_rank` | 30-day IV percentile of the 52-week range (0–100) | 0.80 (0.40 for thin names) |
+| `put_call_ratio` | Sum put OI / sum call OI, front two expirations | 0.80 |
+| `options_regime` | `compressed` / `normal` / `elevated_vol` | 0.80 |
+| `smart_money_signal` | `call_sweep` / `put_sweep` / `none` | 0.75 (0.35 for thin names) |
+| `iv_skew_ratio` | OTM put IV / ATM IV | 0.75 |
+| `iv_skew_25d` | OTM put IV − OTM call IV (5% wings) | 0.75 |
+| `skew_regime` | `normal` / `elevated` / `spike` | 0.75 |
+| `spy_skew_ratio` | Market-level SPY skew (tail risk proxy) | 0.80 |
+| `tail_risk` | `normal` / `moderate` / `elevated` / `extreme` | 0.80 |
+
+---
+
+## Adapter: SignalEnrichmentAdapter
+
+**Source:** KB atoms (cross-referencing historical, price, and options data already in the KB)
+**Interval:** 30 minutes
+**Requires:** None (reads from KB, no external API)
+
+Derives higher-level signal atoms by combining raw data atoms into actionable signals.
+
+**Atoms produced:**
+
+| Predicate | Description |
+|---|---|
+| `price_regime` | `uptrend` / `downtrend` / `range_bound` (from price + MA atoms) |
+| `volume_trend` | `accumulation` / `distribution` / `neutral` |
+| `momentum_signal` | `strong_bull` / `bull` / `neutral` / `bear` / `strong_bear` |
+| `risk_reward_ratio` | Computed from price target, entry, and stop-loss atoms |
+| `thesis_risk_level` | `low` / `moderate` / `high` / `extreme` |
+| `conviction_tier` | `tier_1` / `tier_2` / `tier_3` (multi-factor conviction score) |
+| `position_size_pct` | Suggested position size % of portfolio |
+| `upside_pct` | % upside to price target |
+
+---
+
+## Adapter: LLMExtractionAdapter
+
+**Source:** `extraction_queue` table (fed by `RSSAdapter`)
+**Interval:** 60 minutes
+**Requires:** Ollama running with `OLLAMA_EXTRACTION_MODEL` (default `phi3`)
+
+Runs LLM extraction over queued RSS headlines to produce structured signal atoms. Falls back gracefully if Ollama is unavailable.
+
+**Atoms produced:** Structured entities and signals extracted from news text — predicate and object depend on the headline content. Examples: `catalyst`, `risk_factor`, `key_finding`, `signal_direction`.
+
+**Source prefix:** `llm_extracted_news_*` (authority 0.65, half-life 12h)
+
+---
+
+## Adapter: EDGARRealtimeAdapter
+
+**Source:** SEC EDGAR full-text search API (public, no key)
+**Interval:** 30 minutes
+**Requires:** `EDGAR_USER_AGENT` env var
+
+Polls for 8-K filings specifically (material events) with a 30-minute cadence. Deduplicates via `edgar_realtime_seen` table — each filing accession number is stored so re-runs never produce duplicate atoms.
+
+**Atoms produced:** Same format as `EDGARAdapter` — `catalyst | "sec 8-k (date): title"` at confidence 0.85.
+
+**Difference from EDGARAdapter:** EDGARRealtime polls only 8-K (immediate material events) every 30 min; the base EDGAR adapter polls all form types every 6 hours.
+
+---
+
+## Adapter: LSEFlowAdapter
+
+**Source:** Yahoo Finance intraday OHLCV (`.L` suffix tickers)
+**Interval:** 60 minutes
+**Requires:** None
+
+Derives institutional order-flow signals for LSE-listed equities using three microstructure proxies: block-trade volume ratio (BTVR), volume-weighted price trend (VWPT), and price-volume divergence (PVD, the Wyckoff accumulation signature).
+
+**Atoms produced:**
+
+| Predicate | Example value | Confidence |
+|---|---|---|
+| `institutional_flow` | `accumulating` / `distributing` / `neutral` | 0.55 |
+| `block_volume_ratio` | `2.4` (today's vol / 20d avg) | 0.55 |
+| `flow_conviction` | `high` / `moderate` / `low` | 0.55 |
+| `volume_trend_5d` | `rising` / `falling` / `flat` | 0.55 |
+| `price_range_compression` | `compressed` / `normal` / `expanded` | 0.55 |
+
+Source prefix: `alt_data_lse_flow` (authority 0.55, half-life 3d)
+
+---
+
+## Adapter: EarningsCalendarAdapter
+
+**Source:** KB atoms (reads `next_earnings_date` atoms written by `YFinanceAdapter`) + yfinance options chains for implied move
+**Interval:** 60 minutes
+**Requires:** None
+
+Reads earnings dates already in the KB and enriches them with proximity risk flags and implied move estimates.
+
+**Atoms produced:**
+
+| Predicate | Example value | Notes |
+|---|---|---|
+| `earnings_date` | `2026-04-30` | YYYY-MM-DD |
+| `days_to_earnings` | `3` | Integer days |
+| `earnings_risk` | `elevated` / `moderate` / `low` | Based on proximity |
+| `earnings_implied_move` | `±4.2%` | From ATM straddle; falls back to `volatility_30d × sqrt(1/252)` for thin markets |
+| `pre_earnings_flag` | `within_48h` / `within_7d` / `clear` | Used by tip formatter to warn on position sizing |
+
+Source prefix: `earnings_calendar_{ticker}` (authority 0.85, half-life 7d)
+
+---
+
+## Adapter: PatternAdapter
+
+**Source:** KB atoms (reads OHLCV-derived atoms and signal atoms)
+**Interval:** 60 minutes
+**Requires:** None (reads from KB)
+
+Detects multi-factor chart and signal patterns over rolling windows. Writes `PatternSignal` rows to the `pattern_signals` table (not the `facts` table).
+
+**Pattern types detected:** conviction patterns, momentum patterns, composite multi-timeframe patterns.
+
+**Endpoint:** Results surfaced via `GET /patterns/live` and `GET /patterns/<id>`.
+
+---
+
+## Full Adapter Stack
+
+| Adapter | Interval | Data source | Key atoms |
+|---|---|---|---|
+| `YFinanceAdapter` | 5 min | Yahoo Finance | `last_price`, `signal_direction`, `price_target`, `sector` |
+| `OptionsAdapter` | 15 min | Yahoo Finance options | `iv_rank`, `put_call_ratio`, `tail_risk` |
+| `RSSAdapter` | 15 min | 5 financial RSS feeds | `key_finding` (headlines) |
+| `SignalEnrichmentAdapter` | 30 min | KB cross-reference | `conviction_tier`, `momentum_signal`, `position_size_pct` |
+| `EDGARRealtimeAdapter` | 30 min | SEC EDGAR 8-K | `catalyst` (real-time filings) |
+| `PatternAdapter` | 60 min | KB atoms | `pattern_signals` table |
+| `LLMExtractionAdapter` | 60 min | extraction_queue | Structured LLM-extracted signals |
+| `LSEFlowAdapter` | 60 min | yfinance intraday | `institutional_flow`, `block_volume_ratio` |
+| `EarningsCalendarAdapter` | 60 min | KB + yfinance options | `earnings_implied_move`, `pre_earnings_flag` |
+| `EDGARAdapter` | 6 hours | SEC EDGAR all forms | `catalyst`, `risk_factor` (Form 4 insider) |
+| `BoEAdapter` | 24 hours | BoE Statistical API | `boe_base_rate`, UK `regime_label` |
+| `FREDAdapter` | 24 hours | St. Louis Fed FRED | US `regime_label`, `central_bank_stance` |
+| `FCAShortInterestAdapter` | 24 hours | FCA XLSX | `fca_short_interest` |
+| `HistoricalBackfillAdapter` | On-demand | yfinance 5yr daily | `return_3y/5y`, `max_drawdown_5y`, `volatility_5y` |
+
+`SeedSyncClient` runs hourly (outside the scheduler) to sync the shared KB seed from GitHub Releases.
+
+---
+
 ## Adding a New Adapter
 
 1. Create `ingest/my_adapter.py` subclassing `BaseIngestAdapter`
