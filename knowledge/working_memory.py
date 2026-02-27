@@ -129,6 +129,8 @@ _YF_TICKER_MAP: dict[str, str] = {
     'DOT':    'DOT-USD', 'LINK':   'LINK-USD','MATIC':  'MATIC-USD',
     'LTC':    'LTC-USD', 'BCH':    'BCH-USD', 'SHIB':   'SHIB-USD',
     'UNI':    'UNI-USD', 'ATOM':   'ATOM-USD','XLM':    'XLM-USD',
+    # Rebranded / renamed tickers
+    'SQ':     'XYZ',    # Block Inc. (formerly Square) rebranded ticker
     # Pass-through: already-resolved yfinance symbols (from TICKER_ALIASES)
     'BTC-USD':'BTC-USD', 'ETH-USD':'ETH-USD', 'SOL-USD':'SOL-USD',
     'XRP-USD':'XRP-USD', 'BNB-USD':'BNB-USD', 'ADA-USD':'ADA-USD',
