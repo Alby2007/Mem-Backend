@@ -17,7 +17,7 @@ import pathlib
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-DB_PATH  = sys.argv[1] if len(sys.argv) > 1 else "trading_knowledge.db"
+DB_PATH  = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('TRADING_KB_DB', 'trading_knowledge.db')
 OUTPUT   = pathlib.Path("tests/fixtures/kb_seed.sql")
 
 SHARED_TABLES = [

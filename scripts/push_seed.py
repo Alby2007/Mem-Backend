@@ -146,8 +146,12 @@ def main() -> None:
     # 4. Prune old releases (keep last 21)
     prune_old_releases()
 
+    # Write tag file so /seed/status can report last push without GitHub API call
+    pathlib.Path('.seed_tag').write_text(tag)
+
     print(f'\nDone. Tag: {tag}')
     print(f'Release URL: {release.get("html_url", "?")}')
+    print(f'Seed tag recorded in .seed_tag')
 
 
 if __name__ == '__main__':

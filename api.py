@@ -17,6 +17,7 @@ Endpoints:
 from __future__ import annotations
 
 import os
+import pathlib
 import re
 
 try:
@@ -4176,6 +4177,53 @@ def auth_me():
         return jsonify(user or {'user_id': user_id})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ── Seed distribution endpoints ───────────────────────────────────────────────
+
+@app.route('/seed/status', methods=['GET'])
+@limiter.exempt
+def seed_status():
+    """
+    GET /seed/status
+
+    Returns the current seed tag pushed to GitHub, local fact count, last push
+    time, and next scheduled push times. Clients use this to check whether
+    they need to pull a new seed without hitting the GitHub API directly.
+    """
+    import sqlite3 as _sqlite3
+    from datetime import datetime as _dt, timezone as _tz
+
+    # Read last push tag from .seed_tag file if present (written by push_seed.py)
+    tag_file = pathlib.Path('.seed_tag')
+    last_tag = tag_file.read_text().strip() if tag_file.exists() else None
+
+    # Fact count from live DB
+    try:
+        _c = sqlite3.connect(_DB_PATH, timeout=5)
+        total_facts = _c.execute('SELECT COUNT(*) FROM facts').fetchone()[0]
+        _c.close()
+    except Exception:
+        total_facts = None
+
+    # Next push times: 09:00, 13:00, 17:00 UTC
+    now_utc = _dt.now(_tz.utc)
+    push_hours = [9, 13, 17]
+    next_pushes = []
+    for h in push_hours:
+        candidate = now_utc.replace(hour=h, minute=0, second=0, microsecond=0)
+        if candidate <= now_utc:
+            from datetime import timedelta as _td
+            candidate += _td(days=1)
+        next_pushes.append(candidate.strftime('%Y-%m-%dT%H:%M:%SZ'))
+
+    return jsonify({
+        'last_tag':    last_tag,
+        'total_facts': total_facts,
+        'next_pushes': next_pushes,
+        'db_path':     _DB_PATH,
+        'server_time': now_utc.strftime('%Y-%m-%dT%H:%M:%SZ'),
+    })
 
 
 # ── Frontend-Ready endpoints ──────────────────────────────────────────────────
