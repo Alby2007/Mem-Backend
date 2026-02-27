@@ -540,6 +540,7 @@ def health():
 
 
 @app.route('/ingest/status', methods=['GET'])
+@limiter.exempt
 def ingest_status():
     """
     Health check for the ingest scheduler.
@@ -917,6 +918,7 @@ def ingest_patterns():
 
 
 @app.route('/stats', methods=['GET'])
+@limiter.exempt
 def stats():
     base = _kg.get_stats()
     conn = _kg.thread_local_conn()
