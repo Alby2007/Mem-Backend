@@ -4252,6 +4252,104 @@ def auth_logout():
     return jsonify({'logged_out': True})
 
 
+@app.route('/auth/telegram', methods=['POST'])
+@limiter.exempt
+def auth_telegram():
+    """
+    POST /auth/telegram
+
+    Exchange Telegram Login Widget auth data for an app access token.
+    The Telegram data hash is verified against TELEGRAM_BOT_TOKEN.
+
+    Body (from Telegram widget):
+      { "id": 123456, "first_name": "Alice", "username": "alice",
+        "photo_url": "...", "auth_date": 1700000000, "hash": "abc..." }
+
+    Returns: { "access_token": "...", "user_id": "tg_123456" }
+    """
+    import hashlib
+    import hmac
+    import time
+
+    data = request.get_json(force=True, silent=True) or {}
+    tg_id = data.get('id')
+    if not tg_id:
+        return jsonify({'error': 'Telegram auth data missing id'}), 400
+
+    # Verify hash against bot token (if token is configured)
+    bot_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    if bot_token:
+        try:
+            check_hash = data.get('hash', '')
+            data_check = {k: v for k, v in data.items() if k != 'hash'}
+            data_check_str = '\n'.join(f'{k}={v}' for k, v in sorted(data_check.items()))
+            secret = hashlib.sha256(bot_token.encode()).digest()
+            computed = hmac.new(secret, data_check_str.encode(), hashlib.sha256).hexdigest()  # noqa: E501
+            if not hmac.compare_digest(computed, check_hash):
+                return jsonify({'error': 'Telegram auth hash invalid'}), 401
+            auth_date = int(data.get('auth_date', 0))
+            if time.time() - auth_date > 86400:
+                return jsonify({'error': 'Telegram auth data expired'}), 401
+        except Exception as e:
+            return jsonify({'error': f'Hash verification error: {e}'}), 400
+
+    # Build a stable user_id from Telegram ID
+    user_id = f"tg_{tg_id}"
+
+    if not HAS_AUTH:
+        # Auth layer absent — issue a minimal token so the UI can proceed
+        import base64 as _b64, json as _json
+        minimal = _b64.urlsafe_b64encode(_json.dumps({
+            'user_id': user_id, 'sub': user_id, 'exp': int(time.time()) + 86400 * 30,
+        }).encode()).decode()
+        return jsonify({'access_token': minimal, 'user_id': user_id, 'token_type': 'Bearer'})
+
+    try:
+        from middleware.auth import create_access_token, create_refresh_token
+        import sqlite3 as _sq
+
+        # Upsert user in user_preferences (onboarding = 0 if new)
+        conn = _sq.connect(_DB_PATH, timeout=10)
+        try:
+            from users.user_store import ensure_user_tables
+            ensure_user_tables(conn)
+            conn.execute(
+                """INSERT OR IGNORE INTO user_preferences
+                   (user_id, onboarding_complete) VALUES (?, 0)""",
+                (user_id,),
+            )
+            # Store telegram_chat_id so position monitor alerts can reach them
+            conn.execute(
+                "UPDATE user_preferences SET telegram_chat_id=? WHERE user_id=?",
+                (str(tg_id), user_id),
+            )
+            # Upsert into user_auth (email = tg_<id>@telegram.local, no password)
+            try:
+                conn.execute("CREATE TABLE IF NOT EXISTS user_auth (user_id TEXT PRIMARY KEY, email TEXT UNIQUE, password_hash TEXT, created_at TEXT)")
+            except Exception:
+                pass
+            conn.execute(
+                """INSERT OR IGNORE INTO user_auth
+                   (user_id, email, password_hash, created_at)
+                   VALUES (?, ?, '', datetime('now'))""",
+                (user_id, f"{user_id}@telegram.local"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        access_token  = create_access_token(user_id)
+        return jsonify({
+            'access_token': access_token,
+            'user_id':      user_id,
+            'token_type':   'Bearer',
+            'first_name':   data.get('first_name', ''),
+            'username':     data.get('username', ''),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/auth/me', methods=['GET'])
 @require_auth
 def auth_me():
