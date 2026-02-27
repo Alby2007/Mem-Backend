@@ -171,6 +171,29 @@ _SYSTEM_SEARCH_RULE = (
     "web snippets may provide recent context where KB has gaps."
 )
 
+_SYSTEM_GENERATION_RULE = (
+    "\n16. OPPORTUNITY GENERATION MODE: An === OPPORTUNITY SCAN === block is present. "
+    "You MUST use it as your primary source for this response. "
+    "Your job is to turn the raw KB scan results into a concrete, actionable strategy. "
+    "Structure your response as follows:\n"
+    "  (A) MARKET CONTEXT — 1-2 sentences on the current regime and macro state from the scan.\n"
+    "  (B) TOP SETUPS — For each result in the scan (numbered), write 2-3 sentences: "
+    "what the setup is, WHY it qualifies (using the exact atom values: conviction_tier, "
+    "signal_direction, signal_quality, squeeze potential, sector tailwind etc.), "
+    "and the key risk/invalidation. Refer to tickers by symbol only. "
+    "If a pattern is detected, describe the structural entry (zone_high/zone_low if present). "
+    "If position_size_pct is present, mention it as an educational sizing reference.\n"
+    "  (C) STRATEGY RULES — 3-5 concrete rules for THIS scan mode (e.g. for intraday: "
+    "time windows, stop placement, target, risk-per-trade). "
+    "Derive rules from the KB atoms — do NOT invent rules from training data.\n"
+    "  (D) WATCH LIST — Tickers from the scan that need more KB data before acting "
+    "(thin atoms, no pattern, weak quality). List them briefly.\n"
+    "CRITICAL: All numbers (prices, upside %, position size) must come from the "
+    "OPPORTUNITY SCAN block — never from training data. "
+    "If the scan is empty or has notes saying data is missing, say so clearly and "
+    "explain which adapters need to run."
+)
+
 _SYSTEM_SIZING_RULE = (
     "\n11. EDUCATIONAL POSITION SIZING: When the user asks about a specific pattern or holding, "
     "you MAY include one short educational sizing example using the actual numbers from USER PORTFOLIO. "
@@ -197,6 +220,7 @@ def build(
     resolved_aliases: Optional[dict] = None,
     web_searched: Optional[str] = None,
     has_history: bool = False,
+    opportunity_scan_context: Optional[str] = None,
 ) -> list[dict]:
     """
     Build the [system, user] message list for Ollama.
@@ -259,6 +283,9 @@ def build(
         )):
             system_text += _SYSTEM_POSITIONS_RULE
 
+    if opportunity_scan_context:
+        system_text += _SYSTEM_GENERATION_RULE
+
     # ── User turn ─────────────────────────────────────────────────────────────
     user_parts: list[str] = []
 
@@ -282,6 +309,10 @@ def build(
     # Portfolio context — injected after live data, before the question
     if portfolio_context:
         user_parts.append(portfolio_context)
+
+    # Opportunity scan — injected after portfolio, right before the question
+    if opportunity_scan_context:
+        user_parts.append(opportunity_scan_context)
 
     # If snippet contains alias instructions, echo them right before the question
     # so they are the last thing the LLM reads before answering

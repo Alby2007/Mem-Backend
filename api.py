@@ -982,6 +982,103 @@ def stats():
     return jsonify({**base, **extras})
 
 
+@app.route('/opportunities', methods=['POST'])
+def opportunities_endpoint():
+    """
+    POST /opportunities
+
+    Run an on-demand opportunity scan against the KB and return structured results.
+    No LLM call — pure KB scan, fast (<100ms).
+
+    Body (optional):
+      {
+        "query":  "make me a daytime trading strategy",  // free-text OR
+        "modes":  ["intraday", "momentum"],               // explicit mode list
+        "limit":  6                                       // max results per mode
+      }
+
+    Modes: broad_screen | intraday | momentum | gap_fill | sector_rotation |
+           squeeze | macro_gap | mean_reversion
+
+    Returns:
+      {
+        "mode":           "intraday+momentum",
+        "generated_at":   "2026-02-27T16:00:00Z",
+        "market_regime":  "risk_off_contraction",
+        "market_context": "Market regime: risk off contraction | ...",
+        "results": [
+          {
+            "ticker":          "NVDA",
+            "mode":            "momentum",
+            "score":           4.2,
+            "conviction_tier": "high",
+            "signal_direction":"long",
+            "signal_quality":  "confirmed",
+            "upside_pct":      "18.5",
+            "position_size_pct": "3.2",
+            "thesis":          "Price 875.0 (mid range) | signal long | ...",
+            "rationale":       "bullish signal | confirmed signal | sector tailwind",
+            "pattern":         "FVG bullish 1d",
+            "extra":           { "sector_tailwind": "positive", ... }
+          }, ...
+        ],
+        "scan_notes": []
+      }
+    """
+    try:
+        from analytics.opportunity_engine import (
+            run_opportunity_scan, format_scan_as_context,
+        )
+        from dataclasses import asdict
+    except ImportError:
+        return jsonify({'error': 'opportunity engine not available'}), 503
+
+    data   = request.get_json(force=True, silent=True) or {}
+    query  = data.get('query', '')
+    modes  = data.get('modes') or None
+    limit  = int(data.get('limit', 6))
+
+    if not query and not modes:
+        query = 'broad screen'
+
+    try:
+        scan = run_opportunity_scan(
+            query=query,
+            db_path=_DB_PATH,
+            modes=modes,
+            limit_per_mode=limit,
+        )
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).error('opportunities scan failed: %s', e)
+        return jsonify({'error': str(e)}), 500
+
+    return jsonify({
+        'mode':           scan.mode,
+        'generated_at':   scan.generated_at,
+        'market_regime':  scan.market_regime,
+        'market_context': scan.market_context,
+        'results': [
+            {
+                'ticker':            r.ticker,
+                'mode':              r.mode,
+                'score':             round(r.score, 3),
+                'conviction_tier':   r.conviction_tier,
+                'signal_direction':  r.signal_direction,
+                'signal_quality':    r.signal_quality,
+                'upside_pct':        r.upside_pct,
+                'position_size_pct': r.position_size_pct,
+                'thesis':            r.thesis,
+                'rationale':         r.rationale,
+                'pattern':           r.pattern,
+                'extra':             r.extra,
+            }
+            for r in scan.results
+        ],
+        'scan_notes': scan.scan_notes,
+    })
+
+
 @app.route('/discover/<ticker>', methods=['POST'])
 def discover_ticker(ticker: str):
     """
@@ -2474,6 +2571,51 @@ def chat_endpoint():
         except Exception:
             pass
 
+    # ── Opportunity generation scan ────────────────────────────────────────
+    # Detects open-ended generation queries ("make me a daytime strategy",
+    # "where are gaps", "find momentum plays") and injects a structured
+    # KB scan block into the prompt so the LLM can build a concrete strategy.
+    _opportunity_scan_context: Optional[str] = None
+    try:
+        from analytics.opportunity_engine import (
+            classify_intent as _classify_intent,
+            run_opportunity_scan as _run_opportunity_scan,
+            format_scan_as_context as _format_scan_as_context,
+        )
+        _gen_modes = _classify_intent(message)
+        # Only fire for genuine generation queries — exclude pure portfolio / single-ticker queries
+        _GEN_SKIP_KEYWORDS = (
+            'what is', 'what\'s', 'tell me about', 'explain', 'why is', 'how is',
+            'price of', 'signal for', 'analyse my portfolio', 'analyze my portfolio',
+            'portfolio', 'my holdings',
+        )
+        _is_gen_query = not any(kw in message.lower() for kw in _GEN_SKIP_KEYWORDS)
+        # Also require the message to have some generation-flavoured phrasing
+        _GEN_TRIGGER_WORDS = (
+            'strategy', 'strateg', 'trade', 'trading', 'opportunity', 'opportunit',
+            'setup', 'setups', 'find me', 'show me', 'make me', 'give me',
+            'where are', 'what sectors', 'momentum', 'squeeze', 'gap', 'intraday',
+            'daytime', 'ideas', 'idea', 'rotation', 'reversal', 'breakout',
+            'best trade', 'top trade', 'mean reversion', 'play',
+        )
+        _has_gen_trigger = any(kw in message.lower() for kw in _GEN_TRIGGER_WORDS)
+        if _is_gen_query and _has_gen_trigger and _gen_modes:
+            _scan = _run_opportunity_scan(
+                query=message,
+                db_path=_DB_PATH,
+                modes=_gen_modes,
+                limit_per_mode=6,
+            )
+            _opportunity_scan_context = _format_scan_as_context(_scan)
+            response['opportunity_scan'] = {
+                'mode':    _scan.mode,
+                'results': len(_scan.results),
+                'regime':  _scan.market_regime,
+            }
+    except Exception as _opp_err:
+        import logging as _logging
+        _logging.getLogger(__name__).warning('opportunity scan failed: %s', _opp_err)
+
     # ── Build full prompt (pass 2 or single-pass if no data request) ──────
     messages = build_prompt(
         user_message=message,
@@ -2487,6 +2629,7 @@ def chat_endpoint():
         resolved_aliases=_resolved_aliases or None,
         web_searched=web_searched or None,
         has_history=_has_prior_turns,
+        opportunity_scan_context=_opportunity_scan_context,
     )
 
     # ── Persist user turn + inject DB-backed conversation history ──────────
