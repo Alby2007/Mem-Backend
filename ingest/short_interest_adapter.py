@@ -50,8 +50,15 @@ from ingest.base import BaseIngestAdapter, RawAtom
 
 _logger = logging.getLogger(__name__)
 
-_FINRA_FILE_URL = (
-    'https://cdn.finra.org/equity/regsho/biweekly/CNMSshvol{date}.txt'
+# FINRA Group short interest API — public, no key required
+# Returns JSON with short interest per symbol for most recent settlement date
+_FINRA_API_URL = (
+    'https://api.finra.org/data/group/OTCMarket/name/consolidatedShortInterest'
+    '?limit=5000&offset={offset}'
+)
+# FINRA also publishes via their public data portal (no auth)
+_FINRA_PORTAL_URL = (
+    'https://www.finra.org/finra-data/browse-catalog/equity-short-interest/data'
 )
 _TIMEOUT  = 30
 _SOURCE   = 'alt_data_finra_shorts'
@@ -76,70 +83,53 @@ _DEFAULT_TICKERS = [
 ]
 
 
-def _candidate_finra_dates(lookback_days: int = 60) -> List[str]:
+def _fetch_finra_short_interest(tickers: List[str]) -> Dict[str, dict]:
     """
-    Generate candidate FINRA biweekly settlement dates working backwards from today.
-    FINRA publishes around the 15th and last business day of each month.
-    Returns list of YYYYMMDD strings, most recent first.
+    Fetch short interest data from FINRA public API for specific tickers.
+    Uses the FINRA equity short interest API (no auth required).
+    Returns {ticker_upper: {'short_shares': int, 'settlement_date': str}}
     """
-    from datetime import date, timedelta
-    today = datetime.now(timezone.utc).date()
-    candidates = []
-    # Generate candidate mid-month and end-of-month dates for past N days
-    for days_back in range(0, lookback_days, 1):
-        d = today - timedelta(days=days_back)
-        # Include 15th, 14th, 13th, 28th-31st of each month as candidates
-        if d.day in (15, 14, 13, 31, 30, 29, 28):
-            candidates.append(d.strftime('%Y%m%d'))
-    return candidates
-
-
-def _get_latest_finra_date() -> Optional[str]:
-    """
-    Find the most recent available FINRA biweekly file by probing candidate dates.
-    Tries HEAD requests to avoid downloading large files unnecessarily.
-    Returns date string in YYYYMMDD format, or None if none found.
-    """
+    ticker_set = {t.upper() for t in tickers}
+    result: Dict[str, dict] = {}
     headers = {
+        'Accept': 'application/json',
         'User-Agent': 'Mozilla/5.0 (compatible; TradingKB/1.0)',
-        'Accept': 'text/plain,*/*',
     }
-    for date_str in _candidate_finra_dates():
-        url = _FINRA_FILE_URL.format(date=date_str)
+
+    for ticker in ticker_set:
         try:
-            resp = requests.head(url, headers=headers, timeout=10, allow_redirects=True)
-            if resp.status_code == 200:
-                _logger.info('ShortInterestAdapter: found FINRA file for date %s', date_str)
-                return date_str
-        except Exception:
+            url = (
+                f'https://api.finra.org/data/group/OTCMarket/name/consolidatedShortInterest'
+                f'?limit=1&offset=0'
+                f'&compareFilters=[{{"fieldName":"symbolCode","compareType":"EQUAL","fieldValue":"{ticker}"}}]'
+                f'&sortFields=[{{"fieldName":"settlementDate","sortType":"DESC"}}]'
+            )
+            resp = requests.get(url, headers=headers, timeout=_TIMEOUT)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            if not data:
+                continue
+            row = data[0] if isinstance(data, list) else data
+            short_shares = int(row.get('shortInterestQty', 0) or 0)
+            settle_date  = str(row.get('settlementDate', ''))
+            if short_shares > 0:
+                result[ticker] = {
+                    'short_shares': short_shares,
+                    'total_volume': 0,  # not provided by this endpoint
+                    'date': settle_date,
+                }
+        except Exception as exc:
+            _logger.debug('ShortInterestAdapter: API fetch failed for %s: %s', ticker, exc)
             continue
-    _logger.warning('ShortInterestAdapter: no FINRA file found in candidate dates')
-    return None
 
-
-def _fetch_finra_file(date_str: str) -> Optional[str]:
-    """Download FINRA short interest file for a given date string (YYYYMMDD)."""
-    url = _FINRA_FILE_URL.format(date=date_str)
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (compatible; TradingKB/1.0)',
-        'Accept': 'text/plain,*/*',
-    }
-    try:
-        resp = requests.get(url, headers=headers, timeout=_TIMEOUT)
-        resp.raise_for_status()
-        return resp.text
-    except Exception as exc:
-        _logger.warning('ShortInterestAdapter: file fetch failed (%s): %s', url, exc)
-        return None
+    return result
 
 
 def _parse_finra_file(text: str, tickers: List[str]) -> Dict[str, dict]:
     """
-    Parse FINRA consolidated short interest file.
-
-    Format (tab-delimited):
-      Market|Symbol|ShortVolume|ShortExemptVolume|TotalVolume|Date
-
+    Parse FINRA consolidated short interest file (tab/pipe-delimited).
+    Fallback: used only if file-based fetch is available.
     Returns {ticker_upper: {'short_shares': int, 'total_volume': int, 'date': str}}
     """
     ticker_set = {t.upper() for t in tickers}
@@ -255,19 +245,10 @@ class ShortInterestAdapter(BaseIngestAdapter):
         atoms: List[RawAtom] = []
         now = datetime.now(timezone.utc).isoformat()
 
-        # Find and download latest FINRA file
-        date_str = _get_latest_finra_date()
-        if not date_str:
-            _logger.warning('ShortInterestAdapter: could not determine latest FINRA date')
-            return atoms
-
-        text = _fetch_finra_file(date_str)
-        if not text:
-            return atoms
-
-        short_data = _parse_finra_file(text, self.tickers)
+        # Fetch via FINRA public API (per-ticker JSON, no file download needed)
+        short_data = _fetch_finra_short_interest(self.tickers)
         if not short_data:
-            _logger.info('ShortInterestAdapter: no matching tickers in FINRA file %s', date_str)
+            _logger.info('ShortInterestAdapter: no short interest data returned from FINRA API')
             return atoms
 
         for ticker, data in short_data.items():
