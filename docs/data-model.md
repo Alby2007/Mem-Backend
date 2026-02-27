@@ -246,7 +246,10 @@ Used by `knowledge/authority.py` for re-ranking retrieved atoms.
 The `metadata` JSON field carries supplementary fields that don't fit the triple model:
 
 ```jsonc
-// Price atom
+// UK equity price atom
+{ "as_of": "2026-02-24T15:04:17Z", "currency": "GBP", "quote_type": "EQUITY", "exchange": "LSE" }
+
+// US equity price atom
 { "as_of": "2026-02-24T15:04:17Z", "currency": "USD", "quote_type": "EQUITY" }
 
 // Superseded atom (stale)
@@ -278,13 +281,115 @@ The `metadata` JSON field carries supplementary fields that don't fit the triple
 
 ## Subjects in the KB
 
-### Equity tickers
-All stored lowercase: `aapl`, `msft`, `googl`, `amzn`, `nvda`, `meta`, `tsla`, `jpm`, `v`, `unh`, `avgo`, `crm`, `adbe`, `amd`, `intc`, `qcom`, `mu`, `now`, `orcl`, `ibm`, `bac`, `gs`, `ms`, `wfc`, `axp`, `xom`, `cvx`, `cop`, `slb`, `mro`, `jnj`, `lly`, `abbv`, `mrk`, `pfe`, `hd`, `low`, `nke`, `sbux`, `mcd`, `pg`, `ko`, `pep`, `wmt`, `cost`, `amgn`, `brkb`
+> **This is a UK-first system.** The primary watchlist is FTSE 100 heavyweights with `.L` suffix tickers. US tickers are included as global macro anchors and cross-asset context. The frontend should treat `.L` tickers as the primary equity universe and US names as secondary.
 
-### ETFs
-`spy`, `qqq`, `iwm`, `xlf`, `xle`, `xlk`, `xlv`, `xli`, `xlc`, `xly`, `xlp`, `xlu`, `xlre`, `xlb`, `tlt`, `hyg`, `lqd`, `gld`, `slv`, `uup`
+---
+
+### UK / LSE equities — `.L` suffix convention
+
+All stored **lowercase** with the `.l` suffix preserved: e.g. `shel.l`, `azn.l`, `hsba.l`.
+
+**FTSE 100 heavyweights (default watchlist):**
+
+| Ticker | Company | Sector |
+|---|---|---|
+| `shel.l` | Shell | Energy |
+| `azn.l` | AstraZeneca | Pharmaceuticals |
+| `hsba.l` | HSBC | Banks |
+| `ulvr.l` | Unilever | Consumer Staples |
+| `bp.l` | BP | Energy |
+| `gsk.l` | GSK | Pharmaceuticals |
+| `rio.l` | Rio Tinto | Mining |
+| `bats.l` | BAT | Consumer Staples |
+| `vod.l` | Vodafone | Telecoms |
+| `lloy.l` | Lloyds Banking | Banks |
+| `barc.l` | Barclays | Banks |
+| `nwg.l` | NatWest | Banks |
+| `lseg.l` | London Stock Exchange Group | Financials |
+| `rel.l` | RELX | Professional Services |
+| `ng.l` | National Grid | Utilities |
+| `ba.l` | BAE Systems | Defence |
+| `qq.l` | Qinetiq | Defence |
+| `rr.l` | Rolls-Royce | Aerospace / Defence |
+| `tsco.l` | Tesco | Retail |
+| `mks.l` | Marks & Spencer | Retail |
+| `pson.l` | Pearson | Education / Media |
+| `psn.l` | Persimmon | Housebuilders |
+
+**Dynamic watchlist:** Additional `.L` tickers are added via the Discovery Pipeline when `coverage_count ≥ 3`. Query `GET /universe/coverage` for the current full list.
+
+**`.L` ticker rules for frontend engineers:**
+- Always display with uppercase suffix: `SHEL.L`, `AZN.L`, etc.
+- The KB stores them lowercase internally: `shel.l`, `azn.l`
+- `GET /context/SHEL.L` and `GET /context/shel.l` both work — the API normalises to lowercase
+- FX pairs use `=X` suffix: `gbpusd=x`, `eurgbp=x`
+- FTSE indices use `^` prefix: `^ftse` (FTSE 100), `^ftmc` (FTSE 250)
+
+---
+
+### US equities (global macro anchors)
+
+Stored lowercase without suffix. Included as cross-asset context for global macro regime classification and portfolio correlation analysis.
+
+`aapl`, `msft`, `googl`, `amzn`, `nvda`, `meta`, `tsla`, `jpm`, `v`, `unh`, `avgo`, `crm`, `adbe`, `amd`, `intc`, `qcom`, `mu`, `now`, `orcl`, `ibm`, `bac`, `gs`, `ms`, `wfc`, `axp`, `xom`, `cvx`, `cop`, `slb`, `mro`, `jnj`, `lly`, `abbv`, `mrk`, `pfe`, `hd`, `low`, `nke`, `sbux`, `mcd`, `pg`, `ko`, `pep`, `wmt`, `cost`, `amgn`, `brk-b`
+
+---
+
+### ETFs and macro proxies
+
+| Subject | Type | Role |
+|---|---|---|
+| `spy`, `qqq`, `iwm`, `dia`, `vti` | US broad ETFs | Global risk appetite proxy |
+| `xlf`, `xle`, `xlk`, `xlv`, `xli`, `xlc`, `xly`, `xlp`, `xlu`, `xlre`, `xlb` | US sector ETFs | Sector rotation signal |
+| `tlt`, `hyg`, `lqd` | Bond ETFs | Rates / credit regime |
+| `gld`, `slv` | Commodity ETFs | Inflation hedge |
+| `uup` | USD index ETF | Dollar strength |
+| `^ftse` | FTSE 100 index | UK equity market level |
+| `^ftmc` | FTSE 250 index | UK mid-cap / domestic economy |
+| `^gspc` | S&P 500 index | US equity market level |
+| `^vix` | VIX index | Volatility / fear gauge |
+| `gbpusd=x` | GBP/USD FX pair | Sterling strength |
+| `eurgbp=x` | EUR/GBP FX pair | UK-EU trade signal |
+
+---
 
 ### Macro subjects
-`us_macro`, `us_labor`, `us_yields`, `us_credit`, `global_macro_regime`, `financial_news`
 
-`global_macro_regime` holds all `regime_history_YYYY_MM` atoms (52 months of classified macro history at launch).
+| Subject | Populated by | Content |
+|---|---|---|
+| `us_macro` | `FREDAdapter` | Fed funds rate, CPI, GDP, regime label |
+| `us_labor` | `FREDAdapter` | Unemployment rate |
+| `us_yields` | `FREDAdapter` | 2y/10y treasury yields, yield curve spread |
+| `us_credit` | `FREDAdapter` | HY spread |
+| `uk_macro` | `BoEAdapter` | BoE base rate, UK CPI, GDP, regime label |
+| `uk_yields` | `BoEAdapter` | UK gilt 10y/2y yields, yield environment |
+| `global_macro_regime` | `RegimeHistoryClassifier` | Monthly regime history atoms (`regime_history_YYYY_MM`) |
+| `financial_news` | `RSSAdapter` | Headline `key_finding` atoms with ticker mentions |
+
+`global_macro_regime` holds 52 months of classified macro history at launch.
+
+---
+
+### UK-specific predicates
+
+These predicates are unique to UK/LSE equities and will not appear on US subjects:
+
+| Predicate | Source | Example value | Notes |
+|---|---|---|---|
+| `fca_short_interest` | `FCAShortInterestAdapter` | `3.45% (Bridgewater Associates)` | FCA-disclosed short positions ≥ 0.5% |
+| `institutional_flow` | `LSEFlowAdapter` | `accumulating` / `distributing` / `neutral` | BTVR + VWPT + PVD microstructure proxies |
+| `block_volume_ratio` | `LSEFlowAdapter` | `2.4` | Today's volume / 20-day average |
+| `flow_conviction` | `LSEFlowAdapter` | `high` / `moderate` / `low` | Composite microstructure signal strength |
+| `price_range_compression` | `LSEFlowAdapter` | `compressed` / `normal` | Wyckoff accumulation proxy |
+| `uk_options_regime` | `OptionsAdapter` | `compressed` / `elevated_vol` | From LSE-listed options chains |
+| `boe_base_rate` | `BoEAdapter` | `5.25%` | On `uk_macro` subject |
+| `uk_cpi_yoy` | `BoEAdapter` | `CPI YoY: 4.0%` | On `uk_macro` subject |
+| `uk_gilt_10y` | `BoEAdapter` | `4.35%` | On `uk_yields` subject |
+
+**Source prefixes for UK data:**
+
+| Prefix | Authority | Source |
+|---|---|---|
+| `macro_data_boe` | 0.80 | Bank of England Statistical API |
+| `regulatory_filing_fca` | 0.90 | FCA short position disclosures |
+| `alt_data_lse_flow` | 0.55 | LSE microstructure flow signals |
