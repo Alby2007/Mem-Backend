@@ -65,6 +65,11 @@ _SYSTEM_NO_HALLUCINATION = (
     "industry descriptions, or ANY narrative not present verbatim in the KB atoms. "
     "This includes sector/industry labels like 'insurance', 'banking', 'technology', 'pharma' — "
     "ONLY use the exact 'sector' atom value from the KB if one exists for that ticker. "
+    "CRITICAL — NO INVENTED COMPANY NAMES: Never write the company's full name next to a ticker symbol "
+    "unless the KB explicitly contains a 'name' or 'company' atom for it. "
+    "Do NOT write things like 'ARKK (ARK Innovation ETF)', 'COIN (Coinbase Global)', "
+    "'HOOD (Robinhood)', 'MSTR (MicroStrategy)', 'PLTR (Palantir)', etc. "
+    "Refer to holdings by their ticker symbol only: 'ARKK', 'COIN', 'HOOD', etc. "
     "If the KB has no text atoms for this topic, say so — do not fill the gap with training-data knowledge."
 )
 
@@ -77,6 +82,23 @@ _SYSTEM_THIN_COVERAGE = (
 _SYSTEM_DIAGNOSIS_SUFFIX = (
     "\n9. The knowledge base has a structural gap ({primary_type}) for this topic. "
     "Acknowledge the gap and indicate what additional data would improve the answer."
+)
+
+_SYSTEM_POSITIONS_RULE = (
+    "\n15. POSITION OPPORTUNITY QUERIES: When the user asks about 'good positions', "
+    "'open positions', 'best setups', 'what to trade', 'investment opportunities', or similar, "
+    "do NOT write a generic narrative paragraph for every holding. Instead: "
+    "(1) Rank all holdings by signal strength using these KB atoms in order: "
+    "conviction_tier (high > medium > low > avoid), signal_direction (long/bullish > neutral > short/bearish), "
+    "signal_quality (confirmed > partial > weak > unconfirmed), macro_confirmation (confirmed > partial > unconfirmed). "
+    "(2) Present the top 1-3 setups as the strongest opportunities, stating WHY each qualifies "
+    "based on the actual atom values — e.g. 'COIN has conviction_tier=medium, signal_direction=long, "
+    "confirmed signal, near 52w low — the strongest current setup in your portfolio.' "
+    "(3) Group remaining holdings into: 'Monitor — signal present but weak' and 'No signal yet'. "
+    "(4) If NO holding has conviction_tier=high or signal_quality=confirmed, say so explicitly "
+    "and identify which single holding has the most positive combination of available signals. "
+    "(5) Never recommend opening new positions in assets with conviction_tier=avoid or signal_direction=bearish. "
+    "Use only KB atoms — never invent signal strength or conviction from training data."
 )
 
 _SYSTEM_PORTFOLIO_RULE = (
@@ -227,6 +249,15 @@ def build(
     if portfolio_context:
         system_text += _SYSTEM_PORTFOLIO_RULE
         system_text += _SYSTEM_SIZING_RULE
+        # Detect position-opportunity queries and inject the ranking rule
+        _msg_lower = user_message.lower()
+        if any(kw in _msg_lower for kw in (
+            'good position', 'open position', 'best setup', 'best position',
+            'what to trade', 'trade now', 'investment opportunit', 'opportunity',
+            'what should i', 'where to invest', 'strongest signal', 'top setup',
+            'new position', 'enter a position', 'add to',
+        )):
+            system_text += _SYSTEM_POSITIONS_RULE
 
     # ── User turn ─────────────────────────────────────────────────────────────
     user_parts: list[str] = []
