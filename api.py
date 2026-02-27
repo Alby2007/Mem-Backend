@@ -158,6 +158,12 @@ except ImportError:
     HAS_WORKING_STATE = False
 
 try:
+    from knowledge.conversation_store import ConversationStore as _ConvStore, session_id_for_user as _sid_for_user
+    HAS_CONV_STORE = True
+except ImportError:
+    HAS_CONV_STORE = False
+
+try:
     from knowledge.kb_insufficiency_classifier import classify_insufficiency
     HAS_CLASSIFIER = True
 except ImportError:
@@ -355,6 +361,15 @@ except Exception as _e:
     import logging as _logging
     _logging.getLogger(__name__).warning('ThesisMonitor init failed: %s', _e)
 
+# ── ConversationStore — persistent chat history + KB atom graduation ──────────
+_conv_store = None
+if HAS_CONV_STORE:
+    try:
+        _conv_store = _ConvStore(_DB_PATH)
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning('ConversationStore init failed: %s', _e)
+
 # Auto-seed on first boot: if the DB is empty and the seed file exists, load it.
 # This means `docker-compose up` gives collaborators a populated KB immediately —
 # no manual load step required.
@@ -422,12 +437,6 @@ _session_streaks: dict = {}
 # Per-session last-seen tickers for follow-up carry-forward
 # { session_id: [list of canonical ticker strings] }
 _session_tickers: dict = {}
-
-# Per-session conversation history for multi-turn context
-# { session_id: [{'role': 'user'|'assistant', 'content': str}, ...] }
-# Capped at _CHAT_HISTORY_TURNS pairs (user + assistant = 2 entries per turn)
-_session_history: dict = {}
-_CHAT_HISTORY_TURNS = 3   # keep last 3 (question, answer) pairs = 6 messages
 
 # Start ingest scheduler (adapters run on their own intervals)
 _ingest_scheduler = None
@@ -1502,10 +1511,9 @@ def adapt_reset():
     session_id = data.get('session_id', 'default')
     if session_id in _session_streaks:
         _session_streaks[session_id] = {'streak': 0, 'last_stress': 0.0}
-    # Also clear conversation history so new topic starts fresh
-    _session_history.pop(session_id, None)
+    # Also clear ticker carry-forward so new topic starts fresh
     _session_tickers.pop(session_id, None)
-    return jsonify({'session_id': session_id, 'reset': True, 'history_cleared': True})
+    return jsonify({'session_id': session_id, 'reset': True})
 
 
 @app.route('/kb/graph', methods=['POST'])
@@ -2358,14 +2366,30 @@ def chat_endpoint():
         web_searched=web_searched or None,
     )
 
-    # ── Inject conversation history for multi-turn coherence ─────────────
-    # Insert prior (user, assistant) pairs between the system message and the
-    # current user turn so the LLM knows what it already said this session.
-    # Format: [system, <hist_user>, <hist_asst>, ..., current_user]
-    _hist = _session_history.get(session_id, [])
-    if _hist and len(messages) >= 2:
-        # messages[0] = system, messages[-1] = current user turn
-        messages = [messages[0]] + list(_hist) + [messages[-1]]
+    # ── Persist user turn + inject DB-backed conversation history ──────────
+    # ConversationStore is server-authoritative: the client only sends the
+    # current message. Prior turns are loaded from SQLite and spliced in.
+    _conv_session_id = _sid_for_user(chat_user_id) if HAS_CONV_STORE else session_id
+    _user_msg_record = None
+    if _conv_store is not None:
+        try:
+            _user_msg_record = _conv_store.add_message(
+                _conv_session_id, 'user', message, user_id=chat_user_id
+            )
+            _db_history = _conv_store.get_recent_messages_for_context(
+                _conv_session_id, n_turns=8
+            )
+            # Exclude the message we just inserted so it isn't doubled
+            _just_id = _user_msg_record.get('id') if _user_msg_record else None
+            _db_hist_msgs = [
+                {'role': m['role'], 'content': m['content']}
+                for m in _db_history
+                if m.get('id') != _just_id
+            ]
+            if _db_hist_msgs and len(messages) >= 2:
+                messages = [messages[0]] + _db_hist_msgs + [messages[-1]]
+        except Exception:
+            pass
 
     answer = ollama_chat(messages, model=model)
     if answer is None:
@@ -2380,34 +2404,113 @@ def chat_endpoint():
     if web_searched:
         response['web_searched'] = web_searched
 
-    # ── Store this turn in conversation history ───────────────────────────
-    # Condense the user turn to just the raw question (not the full KB blob)
-    # so history doesn't balloon the context window.
-    _hist_buf = _session_history.setdefault(session_id, [])
-    _hist_buf.append({'role': 'user',      'content': message})
-    _hist_buf.append({'role': 'assistant', 'content': answer})
-    # Cap to last _CHAT_HISTORY_TURNS pairs
-    _max_msgs = _CHAT_HISTORY_TURNS * 2
-    if len(_hist_buf) > _max_msgs:
-        _session_history[session_id] = _hist_buf[-_max_msgs:]
-
-    # ── Also persist current topic into working_state for cross-session ──
-    if HAS_WORKING_STATE:
+    # ── Persist assistant turn + async atom extraction → KB graduation ────
+    if _conv_store is not None:
         try:
-            ws = get_working_state_store(_DB_PATH)
-            # Derive a compact topic summary from the tickers seen + message
-            _ws_tickers = _session_tickers.get(session_id, [])
-            _ws_topic   = (', '.join(_ws_tickers[:3]) if _ws_tickers
-                           else message[:60])
-            ws.maybe_persist(
-                session_id, turn_count,
-                goal=goal,
-                topic=_ws_topic,
-                last_intent=message[:120],
-                force=False,
+            _stress_val = stress_dict.get('composite_stress') if stress_dict else None
+            _asst_meta  = {
+                'tickers':  _session_tickers.get(session_id, []),
+                'stress':   _stress_val,
+                'atoms':    len(atoms),
+            }
+            _asst_msg_record = _conv_store.add_message(
+                _conv_session_id, 'assistant', answer,
+                metadata=_asst_meta, user_id=chat_user_id
             )
         except Exception:
-            pass
+            _asst_msg_record = None
+
+        # Async thread: extract atoms → graduate to KB → force working_state persist
+        import threading as _threading
+        _atom_msg_id  = _asst_msg_record.get('id') if _asst_msg_record else None
+        _atom_user_q  = message
+        _atom_answer  = answer
+        _atom_cs_id   = _conv_session_id
+        _atom_sess_id = session_id
+        _atom_turn    = turn_count
+        _atom_goal    = goal
+
+        def _extract_and_graduate():
+            try:
+                if _atom_msg_id is None:
+                    return
+                # ── Step 1: atom extraction via local Ollama ────────────────
+                from llm.ollama_client import chat as _oc
+                _atom_prompt = [
+                    {'role': 'system', 'content': (
+                        'You are a knowledge extractor for a trading intelligence system. '
+                        'Extract exactly 3-6 knowledge atoms from the conversation turn. '
+                        'Prefer these predicates where applicable: '
+                        'signal_direction, conviction_tier, price_target, risk_factor, '
+                        'catalyst, thesis_premise, invalidation_condition, sector_bias, '
+                        'user_interest, pattern_preference, regime_view. '
+                        'Each atom must be a JSON object with keys: '
+                        'subject (ticker or concept), predicate (from vocabulary or freeform), '
+                        'object (value), atom_type (fact|intent|topic|signal), source (user|assistant). '
+                        'Respond with ONLY a JSON array. No preamble, no explanation.'
+                    )},
+                    {'role': 'user', 'content': (
+                        f'User said: "{_atom_user_q[:300]}"\n'
+                        f'Assistant replied: "{_atom_answer[:400]}"'
+                    )},
+                ]
+                _raw = _oc(_atom_prompt, model='llama3.2')
+                if not _raw:
+                    return
+                import json as _json
+                _s = _raw.find('[')
+                _e = _raw.rfind(']') + 1
+                if _s == -1 or _e <= 0:
+                    return
+                _atoms = _json.loads(_raw[_s:_e])
+                if not isinstance(_atoms, list):
+                    return
+                _conv_store.add_turn_atoms(_atom_msg_id, _atom_cs_id, _atoms)
+
+                # ── Step 2: KB graduation ────────────────────────────────────
+                import math as _math
+                _salient = _conv_store.get_salient_atoms(_atom_cs_id, limit=30, min_salience=0.1)
+                _graduated = []
+                for _at in _salient:
+                    if _at.get('graduated'):
+                        continue
+                    _is_user_intent = (
+                        _at.get('source') == 'user' and
+                        _at.get('atom_type') == 'intent'
+                    )
+                    _threshold = 0.25 if _is_user_intent else 0.40
+                    if _at['effective_salience'] >= _threshold:
+                        try:
+                            _kg.add_fact(
+                                _at['subject'], _at['predicate'], _at['object'],
+                                source='conversation',
+                                confidence=round(_at['effective_salience'], 3),
+                            )
+                            _conv_store.mark_atom_graduated(_at['id'])
+                            _graduated.append(_at)
+                        except Exception:
+                            pass
+
+                # ── Step 3: working_state persist with richer topic ──────────
+                if HAS_WORKING_STATE and _graduated:
+                    try:
+                        _ws2 = get_working_state_store(_DB_PATH)
+                        _top_subj = list(dict.fromkeys(
+                            a['subject'] for a in _graduated
+                        ))[:3]
+                        _ws2.maybe_persist(
+                            _atom_sess_id, _atom_turn,
+                            goal=_atom_goal,
+                            topic=', '.join(_top_subj),
+                            last_intent=_atom_user_q[:120],
+                            force=True,
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        _threading.Thread(target=_extract_and_graduate, daemon=True).start()
 
     # ── Commit working memory atoms back to KB ────────────────────────────
     if HAS_WORKING_MEMORY and _working_memory and live_fetched:
@@ -2426,21 +2529,119 @@ def chat_endpoint():
 def chat_clear():
     """
     POST /chat/clear
-    Body: { "session_id": "default" }
+    Body: { "session_id": "...", "user_id": "...", "purge": false }
 
-    Clear the in-memory conversation history for a session.
-    Call this when the user explicitly starts a new topic or conversation.
-    Does NOT affect the KB or working_state persistence.
+    Clear conversation history for a session.
+    purge=true also deletes DB messages; purge=false (default) only resets
+    in-memory ticker state (DB history is preserved for the timeline).
     """
     data = request.get_json(force=True, silent=True) or {}
-    session_id = data.get('session_id', 'default')
-    turns_cleared = len(_session_history.pop(session_id, [])) // 2
-    _session_tickers.pop(session_id, None)
+    user_id    = data.get('user_id') or getattr(g, 'user_id', None)
+    purge      = bool(data.get('purge', False))
+    conv_sid   = _sid_for_user(user_id) if HAS_CONV_STORE else data.get('session_id', 'default')
+    _session_tickers.pop(data.get('session_id', 'default'), None)
+    deleted = 0
+    if purge and _conv_store is not None:
+        try:
+            deleted = _conv_store.delete_session_messages(conv_sid)
+        except Exception:
+            pass
     return jsonify({
-        'session_id':    session_id,
-        'turns_cleared': turns_cleared,
+        'session_id':    conv_sid,
+        'turns_deleted': deleted,
+        'purge':         purge,
         'cleared':       True,
     })
+
+
+@app.route('/chat/history', methods=['GET'])
+def chat_history():
+    """
+    GET /chat/history?limit=50&offset=0&search=
+
+    Read-only conversation timeline for the authenticated user.
+    Returns chronological user turns with paired assistant previews,
+    day labels, atom counts, and graduated atom counts.
+    """
+    if _conv_store is None:
+        return jsonify({'error': 'ConversationStore not available'}), 503
+    user_id  = getattr(g, 'user_id', None) or request.args.get('user_id')
+    conv_sid = _sid_for_user(user_id)
+    limit    = min(int(request.args.get('limit', 50)), 200)
+    offset   = int(request.args.get('offset', 0))
+    search   = request.args.get('search', '').strip()
+    try:
+        entries = _conv_store.get_timeline(conv_sid, limit=limit, offset=offset, search=search)
+        total   = _conv_store.get_total_turn_count(conv_sid)
+        return jsonify({'session_id': conv_sid, 'entries': entries,
+                        'total': total, 'offset': offset})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/chat/history/<int:message_id>', methods=['GET'])
+def chat_history_turn(message_id):
+    """
+    GET /chat/history/<message_id>
+
+    Return the full text of a user turn and its paired assistant response.
+    """
+    if _conv_store is None:
+        return jsonify({'error': 'ConversationStore not available'}), 503
+    try:
+        pair = _conv_store.get_message_pair(message_id)
+        if not pair:
+            return jsonify({'error': 'Message not found'}), 404
+        return jsonify(pair)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/chat/atoms', methods=['GET'])
+def chat_atoms():
+    """
+    GET /chat/atoms?limit=50
+
+    Return conversation atoms extracted from the user's session with
+    effective salience scores and KB graduation status.
+    Useful for interns to verify the atom extraction pipeline is working.
+    """
+    if _conv_store is None:
+        return jsonify({'error': 'ConversationStore not available'}), 503
+    user_id  = getattr(g, 'user_id', None) or request.args.get('user_id')
+    conv_sid = _sid_for_user(user_id)
+    limit    = min(int(request.args.get('limit', 50)), 200)
+    try:
+        atoms     = _conv_store.get_atoms_with_status(conv_sid, limit=limit)
+        total     = len(atoms)
+        graduated = sum(1 for a in atoms if a.get('graduated'))
+        return jsonify({
+            'session_id':     conv_sid,
+            'total_atoms':    total,
+            'graduated_to_kb': graduated,
+            'pending':        total - graduated,
+            'atoms':          atoms,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/chat/metrics', methods=['GET'])
+def chat_metrics():
+    """
+    GET /chat/metrics
+
+    Longitudinal cognitive metrics for the user's conversation session:
+    atom growth rate, source ratios, concept entropy, graduation stats.
+    """
+    if _conv_store is None:
+        return jsonify({'error': 'ConversationStore not available'}), 503
+    user_id  = getattr(g, 'user_id', None) or request.args.get('user_id')
+    conv_sid = _sid_for_user(user_id)
+    try:
+        return jsonify(_conv_store.get_cognitive_metrics(conv_sid))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/chat/models', methods=['GET'])
