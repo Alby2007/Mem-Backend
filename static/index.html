@@ -1387,7 +1387,7 @@ window.onTelegramAuth = async function(tgData) {
 
 // Login button: open Telegram OAuth popup
 document.getElementById('tg-login-btn').addEventListener('click', () => {
-  const botName = window.TG_BOT_NAME || 'TradingGalaxyBot';
+  const botName = window.TG_BOT_NAME || 'TheTelescopeBot';
   const origin  = encodeURIComponent(window.location.origin);
   const url = `https://oauth.telegram.org/auth?bot_id=${botName}&origin=${origin}&return_to=${origin}&request_access=write`;
   const popup = window.open(url, 'tg_oauth', 'width=550,height=470,resizable=yes,scrollbars=yes');
