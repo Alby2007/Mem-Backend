@@ -4369,6 +4369,7 @@ def health_detailed():
 
     result['tip_scheduler']      = 'running' if (_tip_scheduler and getattr(_tip_scheduler, '_thread', None) and _tip_scheduler._thread.is_alive()) else 'stopped'
     result['delivery_scheduler'] = 'running' if (_delivery_scheduler and getattr(_delivery_scheduler, '_thread', None) and _delivery_scheduler._thread.is_alive()) else 'stopped'
+    result['position_monitor']   = 'running' if (_position_monitor and getattr(_position_monitor, '_thread', None) and _position_monitor._thread.is_alive()) else 'stopped'
 
     return jsonify(result)
 
