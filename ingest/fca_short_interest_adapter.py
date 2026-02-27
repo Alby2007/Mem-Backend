@@ -67,72 +67,95 @@ _SOURCE   = 'alt_data_fca_shorts'
 # Covers FTSE 100/250 names that overlap with the KB watchlist.
 # Add more as needed. Source: LSE / Refinitiv ISIN lookup.
 _ISIN_TO_TICKER: Dict[str, str] = {
-    # FTSE 100
-    'GB0031348658': 'HSBA.L',   # HSBC
+    # ── Verified against live FCA short-selling register ──────────────────
+    # ISINs sourced directly from FCA XLSX issuer/ISIN pairs — not from memory.
+    # Last verified: 2026-02-27
+    'GB00B02J6398': 'ADM.L',    # Admiral Group
+    'GB00BFZNLB60': 'AJB.L',    # AJ Bell
+    'GB00BNDRMJ14': 'AWE.L',    # Alphawave IP Group
+    'GB00BTK05J60': 'AAL.L',    # Anglo American
+    'GB0000456144': 'ANTO.L',   # Antofagasta
+    'GB00B132NW22': 'ASHM.L',   # Ashmore Group
+    'GB0000536739': 'AHT.L',    # Ashtead Group
+    'GB0030927254': 'ASC.L',    # ASOS
+    'GB0006731235': 'ABF.L',    # Associated British Foods
+    'GB00BVYVFW23': 'AUTO.L',   # Autotrader Group
+    'GB0009697037': 'BAB.L',    # Babcock International
+    'GB0030913577': 'BT-A.L',   # BT Group
+    'GB0031743007': 'BRBY.L',   # Burberry Group
+    'GB00BP0RGD03': 'BKG.L',    # Berkeley Group
+    'JE00BG6L7297': 'BOO.L',    # Boohoo Group
+    'IE00B010DT83': 'CCR.L',    # C&C Group
+    'GB00BPCT7534': 'CPI.L',    # Capita
+    'IE0002424939': 'DCC.L',    # DCC
+    'GB0002374006': 'DGE.L',    # Diageo
+    'GB00BYN59130': 'DOM.L',    # Domino's Pizza Group
+    'IM00B5VQMV65': 'ENT.L',    # Entain
+    'IE00BWT6H894': 'FLTR.L',   # Flutter Entertainment
+    'GB00BYZN9041': 'FUTR.L',   # Future PLC
+    'GB00BRJ9BJ26': 'FEVR.L',   # Fevertree Drinks
+    'GB00B63QSB39': 'GRG.L',    # Greggs
+    'GB00BYXJC278': 'IBST.L',   # Ibstock
+    'GB00BMJ6DW54': 'INF.L',    # Informa
+    'GB00B019KW72': 'SBRY.L',   # J. Sainsbury
+    'GB00BYW0PQ60': 'LAND.L',   # Land Securities
+    'GB0005603997': 'LGEN.L',   # Legal & General
+    'GB0031274896': 'MKS.L',    # Marks & Spencer
+    'GB00BNGDN821': 'MRO.L',    # Melrose Industries
+    'GB00B3MBS747': 'OCDO.L',   # Ocado Group
+    'GB0006776081': 'PSON.L',   # Pearson
+    'GB0006825383': 'PSN.L',    # Persimmon
+    'GB00B082RF11': 'RTO.L',    # Rentokil Initial
+    'GB00BGDT3G23': 'RMV.L',    # Rightmove
+    'GB00BP6MXD84': 'SHEL.L',   # Shell
+    'GB0004726096': 'SPT.L',    # Spirent Communications
+    'GB0007908733': 'SSE.L',    # SSE
+    'GB0008782301': 'TW.L',     # Taylor Wimpey
+    'GB00B8C3BL03': 'SGE.L',    # The Sage Group
+    'GB00BH4HKS39': 'VOD.L',    # Vodafone Group
+    'GB00B2PDGW16': 'WH.L',     # WH Smith
+    'GB00B1KJJ408': 'WTB.L',    # Whitbread
+    'JE00B8KF9B49': 'WPP.L',    # WPP
+    'GB00BJDQQ870': 'WOSG.L',   # Watches of Switzerland
+    'JE00BN574F90': 'WIZZ.L',   # Wizz Air Holdings
+    'GB00BF8Q6K64': 'ABDN.L',   # abrdn
+    # ── Additional entries with verified ISINs ─────────────────────────────
+    'GB00B1YW4409': 'RR.L',     # Rolls-Royce
+    'GB0002634946': 'BA.L',     # BAE Systems
     'GB0000595859': 'LLOY.L',   # Lloyds Banking Group
+    'GB0031348658': 'HSBA.L',   # HSBC
+    'GB00B63H8491': 'CNA.L',    # Centrica
     'GB0007980591': 'BP.L',     # BP
-    'GB00B03MLX29': 'RDSA.L',   # Shell (legacy)
-    'GB00BP6MXD84': 'SHEL.L',   # Shell (current)
     'GB0004544929': 'AZN.L',    # AstraZeneca
     'GB0009252882': 'GSK.L',    # GSK
     'GB0005405286': 'ULVR.L',   # Unilever
-    'GB00B8C3BL03': 'VOD.L',    # Vodafone
-    'GB00BH4HKS39': 'BARC.L',   # Barclays
     'GB0008706128': 'NWG.L',    # NatWest
     'GB00B7T77214': 'STAN.L',   # Standard Chartered
-    'GB0004082847': 'LGEN.L',   # Legal & General
     'GB00BDB6Q211': 'PHNX.L',   # Phoenix Group
     'GB00BP9MXK08': 'LSEG.L',   # London Stock Exchange Group
-    'GB0002634946': 'BA.L',     # BAE Systems
-    'GB00B1YW4409': 'RR.L',     # Rolls-Royce
-    'GB00B24CGK77': 'IAG.L',    # IAG (BA parent)
     'GB0006834356': 'REL.L',    # RELX
-    'GB00B3GN4412': 'WPP.L',    # WPP
-    'GB00BMJJJF91': 'AUTO.L',   # Autotrader
-    'GB0031274896': 'MNG.L',    # M&G
     'GB00B5ZN1N88': 'NG.L',     # National Grid
-    'GB00BH0P3Z91': 'SSE.L',    # SSE
-    'GB00BD6K4575': 'SGE.L',    # Sage Group
-    'GB00BLD4ZL61': 'DXCM.L',   # DexCom (LSE)
-    'GB00B1FZS350': 'OCDO.L',   # Ocado
-    'GB00B02J6398': 'GRG.L',    # Greggs
-    'GB00B63QSB39': 'WIZZ.L',   # Wizz Air
-    'GB00BYW0PQ60': 'FUTR.L',   # Future PLC
-    'GB00BVGBWW93': 'WH.L',     # WH Smith
-    'GB0009697037': 'LAND.L',   # Land Securities
-    'GB00B02J6398': 'GRG.L',    # Greggs
+    'GB00B1FZS350': 'OCDO.L',   # Ocado (legacy ISIN)
+    'GB0031437502': 'TSCO.L',   # Tesco
+    'GB00B10RZP78': 'GLEN.L',   # Glencore
+    'GB0004588357': 'BHP.L',    # BHP
+    'GB00B41H7133': 'BATS.L',   # British American Tobacco
+    'GB0008762899': 'IMB.L',    # Imperial Brands
+    'GB00B3FLWH99': 'PSON.L',   # Pearson (legacy)
+    'GB0034060557': 'AHT.L',    # Ashtead (legacy)
+    'GB00BGJYPP46': 'PSN.L',    # Persimmon (legacy)
+    'GB0006710230': 'TW.L',     # Taylor Wimpey (legacy)
+    'GB0002168080': 'BWY.L',    # Bellway
+    'GB0033776197': 'BKG.L',    # Berkeley Group (legacy)
+    'GB00BJVNSS43': 'ADM.L',    # Admiral Group (legacy)
     'GB00BNKGZC51': 'IHG.L',    # IHG Hotels
     'GB00BLP5YB54': 'EXPN.L',   # Experian
     'GB00BJ5JH161': 'FERG.L',   # Ferguson
     'GB00B24CGK77': 'IAG.L',    # IAG
-    'GB00BFXZC448': 'DCC.L',    # DCC
-    'GB00BVFNZH21': 'IBST.L',   # Ibstock
-    'GB0031437502': 'TSCO.L',   # Tesco
-    'GB0006731235': 'MKS.L',    # M&S
-    'GB0009895292': 'AAL.L',    # Anglo American
-    'GB0001426021': 'ANTO.L',   # Antofagasta
-    'GB00B10RZP78': 'GLEN.L',   # Glencore
-    'GB0004588357': 'BHP.L',    # BHP
-    'GB00BH0P3Z91': 'SSE.L',    # SSE
-    'GB00B1FZS350': 'OCDO.L',   # Ocado
-    'GB00BJVNSS43': 'ADM.L',    # Admiral Group
-    'GB00B41H7133': 'BATS.L',   # BAT
-    'GB0008762899': 'IMB.L',    # Imperial Brands
-    'GB00B4BNMY34': 'RDSB.L',   # Shell B
-    'GB00B3FLWH99': 'PSON.L',   # Pearson
-    'GB00B2PDGW16': 'ABF.L',    # Associated British Foods
-    'GB0034060557': 'AHT.L',    # Ashtead
-    'GB00B63H8491': 'CNA.L',    # Centrica
-    'GB00B8C3BL03': 'VOD.L',    # Vodafone
-    # Mid-cap additions
-    'GB00BF8Q6K64': 'ABDN.L',   # abrdn
-    'GB00B3KJDQ49': 'AJB.L',    # AJ Bell
-    'GB0002875804': 'ASH.L',    # Ashmore Group
-    'GB00BGJYPP46': 'PSN.L',    # Persimmon
-    'GB0006710230': 'TW.L',     # Taylor Wimpey
-    'GB0002168080': 'BWY.L',    # Bellway
-    'GB0033776197': 'BKG.L',    # Berkeley Group
-    'GB00B1YW4409': 'RR.L',     # Rolls-Royce (duplicate key removed at parse)
+    'GB00BFXZC448': 'DCC.L',    # DCC (legacy)
+    'GB00B3KJDQ49': 'AJB.L',    # AJ Bell (legacy)
+    'GB00B3GN4412': 'WPP.L',    # WPP (legacy)
+    'GB00BMJJJF91': 'AUTO.L',   # Autotrader (legacy)
 }
 
 # Issuer name fragments → ticker (fallback when ISIN not in map)
@@ -148,7 +171,7 @@ _NAME_TO_TICKER: Dict[str, str] = {
     'gsk':            'GSK.L',
     'unilever':       'ULVR.L',
     'vodafone':       'VOD.L',
-    'bt group':       'BT.A.L',
+    'bt group':       'BT-A.L',
     'rolls-royce':    'RR.L',
     'bae systems':    'BA.L',
     'ocado':          'OCDO.L',

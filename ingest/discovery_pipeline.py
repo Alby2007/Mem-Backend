@@ -585,10 +585,14 @@ class DiscoveryPipeline:
             return 0
 
     def _update_coverage(self, ticker: str) -> None:
-        """Increment coverage_count via DynamicWatchlist (handles promotion logic)."""
+        """Increment coverage_count via DynamicWatchlistManager (handles promotion logic)."""
         try:
-            from ingest.dynamic_watchlist import DynamicWatchlist
-            DynamicWatchlist.add_tickers([ticker], self._db_path)
+            from ingest.dynamic_watchlist import DynamicWatchlistManager
+            DynamicWatchlistManager.add_tickers(
+                tickers=[ticker],
+                user_id='discovery_pipeline',
+                db_path=self._db_path,
+            )
         except Exception as e:
             _logger.debug('discovery: coverage update failed for %s: %s', ticker, e)
 
