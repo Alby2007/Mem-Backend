@@ -24,6 +24,7 @@ _BASE_URL          = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 DEFAULT_MODEL      = os.environ.get("OLLAMA_MODEL", "llama3.2")
 EXTRACTION_MODEL   = os.environ.get("OLLAMA_EXTRACTION_MODEL", "phi3")
 VISION_MODEL       = os.environ.get("OLLAMA_VISION_MODEL", "llava")
+DEFAULT_TIMEOUT    = int(os.environ.get("OLLAMA_CHAT_TIMEOUT", "180"))
 
 _CHAT_URL  = f"{_BASE_URL}/api/chat"
 _TAGS_URL  = f"{_BASE_URL}/api/tags"
@@ -33,7 +34,7 @@ def chat(
     messages: List[dict],
     model: str = DEFAULT_MODEL,
     stream: bool = False,
-    timeout: int = 120,
+    timeout: int = DEFAULT_TIMEOUT,
 ) -> Optional[str]:
     """
     Send a list of chat messages to Ollama and return the assistant reply as a string.
@@ -96,6 +97,25 @@ def list_models() -> List[str]:
         return []
 
 
+def warmup(model: str = DEFAULT_MODEL, timeout: int = DEFAULT_TIMEOUT) -> bool:
+    """
+    Send a minimal prompt to Ollama to force the model to load into GPU/CPU memory.
+    Call once at startup so the first real user request does not time out on cold start.
+    Returns True if warmup succeeded, False if Ollama is unreachable or timed out.
+    """
+    _logger.info("[Ollama] warming up model '%s' ...", model)
+    result = chat(
+        messages=[{"role": "user", "content": "hi"}],
+        model=model,
+        timeout=timeout,
+    )
+    if result is not None:
+        _logger.info("[Ollama] warmup complete for model '%s'", model)
+        return True
+    _logger.warning("[Ollama] warmup failed for model '%s' — model may not be pulled yet", model)
+    return False
+
+
 def chat_vision(
     image_b64: str,
     prompt: str,
@@ -140,7 +160,7 @@ def chat_vision(
 def is_available() -> bool:
     """Quick liveness check — True if Ollama is reachable."""
     try:
-        r = _requests.get(f"{_BASE_URL}/api/tags", timeout=5)
+        r = _requests.get(f"{_BASE_URL}/api/tags", timeout=10)
         return r.status_code == 200
     except Exception:
         return False

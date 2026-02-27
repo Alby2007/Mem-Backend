@@ -30,7 +30,7 @@ from typing import List, Optional
 from flask import Flask, g, request, jsonify
 
 try:
-    from llm.ollama_client import chat as ollama_chat, list_models, is_available, DEFAULT_MODEL
+    from llm.ollama_client import chat as ollama_chat, list_models, is_available, warmup, DEFAULT_MODEL
     from llm.prompt_builder import build as build_prompt
     HAS_LLM = True
 except ImportError:
@@ -4407,4 +4407,7 @@ def serve_frontend():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5050))
+    if HAS_LLM:
+        import threading
+        threading.Thread(target=warmup, daemon=True).start()
     app.run(host='0.0.0.0', port=port, debug=False)
