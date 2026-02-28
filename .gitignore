@@ -34,3 +34,9 @@ Mem-Backend/
 
 # Large test fixtures (exceed Cloudflare Pages 25 MiB file limit)
 tests/fixtures/*.sql
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
