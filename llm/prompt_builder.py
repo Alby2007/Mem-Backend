@@ -75,6 +75,15 @@ not present in the context.\
 provides a 'currency' atom for that ticker. If currency is USD say 'USD' or '$', \
 if GBP say '£'. If the currency atom is absent, quote the number with no symbol \
 and note the currency is unconfirmed.\
+9. ANTI-PADDING RULE — CRITICAL: NEVER use vague phrases like "may cause uncertainty", \
+"could lead to volatility", "might affect performance", "can impact markets", or any \
+other generic filler language. These phrases are FORBIDDEN. \
+Instead: (a) quote the specific KB headline verbatim if it is relevant, \
+(b) cite the exact KB figures — price, 1-month return %, signal direction, conviction tier — \
+for each holding, (c) if the KB contains no quantified impact figure for an event, \
+say explicitly: "The KB does not contain a quantified impact figure for this event." \
+Do NOT invent impact magnitudes. Do NOT say "increased volatility in the financials sector" \
+unless a KB atom states a specific volatility figure or regime label for that sector.\
 """
 
 _SYSTEM_NO_HALLUCINATION = (
