@@ -31,3 +31,6 @@ Mem-Backend/
 
 # Local Netlify folder
 .netlify
+
+# Large test fixtures (exceed Cloudflare Pages 25 MiB file limit)
+tests/fixtures/*.sql
