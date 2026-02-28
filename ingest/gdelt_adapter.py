@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -29,7 +30,7 @@ from ingest.base import BaseIngestAdapter, RawAtom
 
 _logger = logging.getLogger(__name__)
 
-_GDELT_DOC_BASE = 'https://api.gdeltproject.org/api/v2/doc/doc'
+_GDELT_DOC_BASE = 'http://api.gdeltproject.org/api/v2/doc/doc'  # http avoids SSL timeout on restricted outbound
 
 # ── Country pairs: (label, query_string, region_tag) ─────────────────────────
 # query_string uses GDELT location names / country codes
@@ -67,7 +68,7 @@ def _gdelt_tone_query(query: str, timespan: str = '1d') -> Optional[float]:
             url,
             headers={'User-Agent': 'TradingKB/1.0', 'Accept': 'application/json'},
         )
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             data = _json.loads(resp.read().decode('utf-8', errors='replace'))
 
         # GDELT tonechart returns {'tonechart': [{'date':..., 'avg':..., 'topcountries':...}, ...]}
@@ -132,6 +133,7 @@ class GDELTAdapter(BaseIngestAdapter):
         region_scores: Dict[str, List[float]] = {}
 
         for pair_label, query, region in _PAIRS:
+            time.sleep(12)  # 5 pairs/min to avoid 429 rate limit
             score = _gdelt_tone_query(query, timespan='1d')
             if score is None:
                 self._logger.warning('No GDELT data for pair %s', pair_label)

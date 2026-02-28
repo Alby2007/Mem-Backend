@@ -91,7 +91,20 @@ _KEYWORD_PREDICATE_BOOST: dict = {
     'beta':        ('volatility_regime',),
     'momentum':    ('signal_direction', 'price_regime', 'signal_quality', 'return_1m', 'return_3m'),
     'extended':    ('signal_quality', 'price_regime'),
-    'conflict':    ('signal_quality', 'macro_confirmation'),
+    'conflict':    ('signal_quality', 'macro_confirmation', 'us_russia_score', 'russia_ukraine_score', 'us_china_score'),
+    'geopolit':   ('us_russia_score', 'russia_ukraine_score', 'us_china_score', 'china_taiwan_score', 'us_iran_score', 'europe_east_risk', 'asia_east_risk', 'middle_east_risk'),
+    'tension':    ('us_russia_score', 'russia_ukraine_score', 'us_china_score', 'china_taiwan_score', 'us_iran_score', 'us_russia_trend', 'russia_ukraine_trend'),
+    'world':      ('us_russia_score', 'russia_ukraine_score', 'us_china_score', 'europe_east_risk', 'asia_east_risk', 'middle_east_risk', 'latam_risk'),
+    'monitor':    ('us_russia_score', 'russia_ukraine_score', 'us_china_score', 'europe_east_risk', 'asia_east_risk', 'middle_east_risk'),
+    'russia':     ('us_russia_score', 'us_russia_trend', 'russia_ukraine_score', 'russia_ukraine_trend', 'europe_east_risk'),
+    'ukraine':    ('russia_ukraine_score', 'russia_ukraine_trend', 'europe_east_risk'),
+    'china':      ('us_china_score', 'us_china_trend', 'china_taiwan_score', 'asia_east_risk'),
+    'taiwan':     ('china_taiwan_score', 'china_taiwan_trend', 'asia_east_risk'),
+    'iran':       ('us_iran_score', 'us_iran_trend', 'middle_east_risk'),
+    'middle east':('us_iran_score', 'middle_east_risk'),
+    'unrest':     ('protest_intensity', 'conflict_events', 'unrest_level', 'europe_east_risk', 'middle_east_risk'),
+    'seismic':    ('indonesia_mining_seismic_activity', 'philippines_nickel_seismic_activity'),
+    'earthquake': ('indonesia_mining_seismic_activity', 'philippines_nickel_seismic_activity'),
     'conviction':  ('conviction_tier', 'signal_quality', 'upside_pct', 'macro_confirmation', 'thesis_risk_level'),
     'size':        ('position_size_pct', 'conviction_tier', 'volatility_scalar'),
     'sizing':      ('position_size_pct', 'conviction_tier', 'volatility_scalar'),
@@ -397,6 +410,55 @@ def retrieve(
         for kw, preds in _KEYWORD_PREDICATE_BOOST.items():
             if kw in term or term in kw:
                 boosted_predicates.update(preds)
+
+    # ── -1. Geo / World Monitor direct subject fetch ──────────────────────────
+    # Fires when the query contains geopolitical or world-monitor keywords.
+    # Fetches ALL atoms from the geo special subjects (gdelt_tension, acled_unrest,
+    # geo_exposure, ucdp_conflict, usgs_risk, usgs_seismic) unconditionally.
+    # These subjects are never returned by ticker/FTS lookup since they have no
+    # conventional ticker symbol.
+    _GEO_KEYWORDS = (
+        'geopolit', 'tension', 'conflict', 'world monitor', 'world',
+        'russia', 'ukraine', 'china', 'taiwan', 'iran', 'middle east',
+        'unrest', 'war', 'military', 'sanction', 'seismic', 'earthquake',
+        'bilateral', 'monitor', 'gdelt', 'acled', 'ucdp',
+        'venezuela', 'latam', 'asia', 'europe east',
+    )
+    _GEO_SUBJECTS = (
+        'gdelt_tension', 'acled_unrest', 'geo_exposure',
+        'ucdp_conflict', 'usgs_risk', 'usgs_seismic',
+    )
+    _is_geo_query = any(kw in msg_lower for kw in _GEO_KEYWORDS)
+    if _is_geo_query:
+        try:
+            _geo_ph = ','.join('?' * len(_GEO_SUBJECTS))
+            c.execute(
+                f"SELECT subject, predicate, object, source, confidence "
+                f"FROM facts WHERE subject IN ({_geo_ph}) "
+                f"ORDER BY confidence DESC",
+                _GEO_SUBJECTS,
+            )
+            _add(c.fetchall())
+        except Exception:
+            pass
+        # Also pull geo-tagged news from world/defense/geopolitical news sources
+        try:
+            c.execute("""
+                SELECT subject, predicate, object, source, confidence
+                FROM facts
+                WHERE source IN (
+                    'news_wire_bbc_world','news_wire_al_jazeera',
+                    'news_wire_defense_news','news_wire_reuters_world',
+                    'geopolitical_data_gdelt','geopolitical_data_acled',
+                    'geopolitical_data_ucdp'
+                )
+                AND predicate IN ('key_finding','headline','summary','event')
+                ORDER BY confidence DESC, timestamp DESC
+                LIMIT 20
+            """)
+            _add(c.fetchall())
+        except Exception:
+            pass
 
     # ── 0. Graph-relational context (PageRank + clustering + BFS paths) ───────
     # Fires on relational/explanatory queries and when no explicit tickers present.
