@@ -422,11 +422,15 @@ def retrieve(
         'russia', 'ukraine', 'china', 'taiwan', 'iran', 'middle east',
         'unrest', 'war', 'military', 'sanction', 'seismic', 'earthquake',
         'bilateral', 'monitor', 'gdelt', 'acled', 'ucdp',
-        'venezuela', 'latam', 'asia', 'europe east',
+        'venezuela', 'latam', 'asia', 'europe east', 'signal',
+        'global', 'international', 'macro', 'regime', 'tariff', 'trade war',
+        'defence', 'defense', 'nato', 'opec', 'energy crisis',
     )
     _GEO_SUBJECTS = (
         'gdelt_tension', 'acled_unrest', 'geo_exposure',
         'ucdp_conflict', 'usgs_risk', 'usgs_seismic',
+        'financial_news', 'global_macro', 'macro_regime',
+        'us_macro', 'fed', 'ecb',
     )
     _is_geo_query = any(kw in msg_lower for kw in _GEO_KEYWORDS)
     if _is_geo_query:
@@ -435,28 +439,47 @@ def retrieve(
             c.execute(
                 f"SELECT subject, predicate, object, source, confidence "
                 f"FROM facts WHERE subject IN ({_geo_ph}) "
-                f"ORDER BY confidence DESC",
+                f"ORDER BY confidence DESC LIMIT 40",
                 _GEO_SUBJECTS,
             )
             _add(c.fetchall())
         except Exception:
             pass
-        # Also pull geo-tagged news from world/defense/geopolitical news sources
+        # Pull geo-tagged news: any source with news_wire prefix, or geo data sources
         try:
             c.execute("""
                 SELECT subject, predicate, object, source, confidence
                 FROM facts
-                WHERE source IN (
-                    'news_wire_bbc_world','news_wire_al_jazeera',
-                    'news_wire_defense_news','news_wire_reuters_world',
-                    'geopolitical_data_gdelt','geopolitical_data_acled',
-                    'geopolitical_data_ucdp'
+                WHERE (
+                    source LIKE 'news_wire_%'
+                    OR source IN (
+                        'geopolitical_data_gdelt','geopolitical_data_acled',
+                        'geopolitical_data_ucdp'
+                    )
                 )
-                AND predicate IN ('key_finding','headline','summary','event')
+                AND predicate IN ('key_finding','headline','summary','event','catalyst','risk_factor')
                 ORDER BY confidence DESC, timestamp DESC
-                LIMIT 20
+                LIMIT 25
             """)
             _add(c.fetchall())
+        except Exception:
+            pass
+        # Also pull financial_news atoms whose text mentions geopolitical terms
+        try:
+            _geo_text_terms = (
+                '%iran%', '%russia%', '%ukraine%', '%china%', '%taiwan%',
+                '%war%', '%sanction%', '%tension%', '%conflict%', '%tariff%',
+                '%military%', '%nato%', '%opec%', '%geopolit%',
+            )
+            for _gterm in _geo_text_terms[:6]:
+                c.execute(
+                    "SELECT subject, predicate, object, source, confidence "
+                    "FROM facts WHERE LOWER(object) LIKE ? "
+                    "AND predicate IN ('key_finding','headline','summary','catalyst','risk_factor') "
+                    "ORDER BY confidence DESC, timestamp DESC LIMIT 5",
+                    (_gterm,)
+                )
+                _add(c.fetchall())
         except Exception:
             pass
 
