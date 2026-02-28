@@ -312,7 +312,15 @@ The system is configured for UK/LSE-first operation:
 
 ## Frontend (Internal Tool)
 
-`static/index.html` — single-page Bloomberg-terminal-style SPA served at `GET /`. Zero build step.
+`static/index.html` — single-page Bloomberg-terminal-style SPA. Served from Netlify CDN at `https://app.trading-galaxy.uk`. Zero build step.
+
+The `API` constant in the script block is environment-aware:
+```js
+const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? ''
+    : 'https://api.trading-galaxy.uk';
+```
+This means the same file works for both local development (same-origin Flask) and production (cross-origin HTTPS API).
 
 **Screens:** Auth · Dashboard · Portfolio · Chat · Tips · Patterns · Network
 
@@ -383,25 +391,68 @@ Classifies each calendar month over 5 years into a macro regime using cross-asse
 
 ## Deployment
 
-The stack runs as three Docker services managed by `docker compose`:
+### Production infrastructure
 
-| Service | Image | Role |
+| Layer | Platform | URL |
 |---|---|---|
-| `trading-galaxy` | Built from `Dockerfile` | Gunicorn (2 workers × 4 threads) serving `api.py` |
-| `caddy` | `caddy:2-alpine` | TLS termination, reverse proxy, security headers |
-| `ollama` | `ollama/ollama` | LLM inference — optional via `--profile llm` |
+| API | Oracle Cloud (OCI) VM — `132.145.33.75` | `https://api.trading-galaxy.uk` |
+| App frontend | Netlify (`imaginative-blancmange-472bba`) | `https://app.trading-galaxy.uk` |
+| Landing page | Netlify (`trading-galaxy-landing`) | `https://trading-galaxy.uk` |
 
-**Domain:** `api.tradinggalaxy.dev` — Caddy provisions Let's Encrypt TLS automatically.
+### OCI server
 
-**Data persistence:** `kb-data` Docker volume — SQLite WAL DB survives container restarts and rebuilds.
+Flask runs directly under **systemd** (`trading-galaxy.service`) on port `5050`.
+[Caddy v2](https://caddyserver.com) handles TLS termination and reverse proxies `localhost:5050`.
+Let's Encrypt certificates are provisioned and renewed automatically by Caddy.
 
-**First-boot seed:** `bash deploy/seed-bootstrap.sh` downloads latest `kb_seed.sql` from GitHub Releases and populates the volume with 378k calibration samples.
+```
+Internet → Caddy :443 → Flask :5050
+Internet → Caddy :80  → 301 → :443
+```
 
-**Zero-downtime deploys:** `git pull && docker compose up -d --build` — Caddy health-checks the upstream and queues requests during the brief restart.
+Caddy config: `deploy/Caddyfile`
 
-**Auto-restart:** systemd `trading-galaxy.service` with `Requires=docker.service` ensures the stack restarts on server reboot.
+Deploy command (from local machine):
+```bash
+ssh -i <key> ubuntu@132.145.33.75 "bash ~/trading-galaxy/deploy/oci-update.sh"
+```
 
-See `deploy/hetzner.md` for the full runbook.
+This script: pulls latest git, updates pip dependencies, restarts `trading-galaxy.service`.
+
+**Data persistence:** SQLite WAL DB at `/opt/trading-galaxy/data/trading_knowledge.db` — survives deploys.
+
+**Environment:** loaded from `/home/ubuntu/trading-galaxy/.env` by the systemd `EnvironmentFile` directive.
+
+### Netlify
+
+Both frontend sites deploy automatically on `git push` to `master` (Netlify git integration).
+To deploy manually via CLI:
+```bash
+# App frontend
+netlify deploy --dir static --prod   # from repo root
+
+# Landing page
+netlify deploy --dir . --prod        # from landing/ dir
+```
+
+Site link state is stored in:
+- Repo root `.netlify/state.json` → `imaginative-blancmange-472bba` (app)
+- `landing/.netlify/state.json` → `64294ec9-9308-4abd-a695-18ab6a473053` (landing)
+
+### CORS
+
+Allowed origins (configured in `api.py` via `flask-cors`):
+
+| Origin | Purpose |
+|---|---|
+| `https://trading-galaxy.uk` | Landing page |
+| `https://www.trading-galaxy.uk` | Landing page www |
+| `https://app.trading-galaxy.uk` | App frontend |
+| `https://*.netlify.app` | Netlify preview deploys |
+| `http://localhost:3000` | Local dev |
+| `http://localhost:5050` | Local dev |
+
+Allowed methods: `GET POST OPTIONS`. Allowed headers: `Authorization Content-Type`.
 
 ---
 

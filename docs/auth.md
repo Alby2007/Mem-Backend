@@ -192,9 +192,15 @@ There is no cookie-based auth. The header must be present on every request.
 ### JavaScript / fetch example
 
 ```js
+const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? ''
+    : 'https://api.trading-galaxy.uk';
+
 async function apiFetch(path, options = {}) {
-  const token = sessionStorage.getItem('access_token');
-  const res = await fetch(`https://api.example.com${path}`, {
+  const token = localStorage.getItem('access_token');
+  let res;
+  try {
+    res = await fetch(API + path, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -203,6 +209,14 @@ async function apiFetch(path, options = {}) {
     },
   });
 
+  } catch (e) {
+    showToast('Connection error — check your internet');
+    return null;
+  }
+  if (res.status === 429) {
+    showToast('Too many requests — please wait a moment');
+    return null;
+  }
   if (res.status === 401) {
     const body = await res.json();
     if (body.error === 'token_expired') {
@@ -261,14 +275,12 @@ The API returns `401` for two distinct situations. **Handle them differently.**
 
 | Storage | Access token | Refresh token | Notes |
 |---------|-------------|---------------|-------|
-| `sessionStorage` | ✅ recommended | ❌ | Cleared on tab close; re-login per session |
-| `localStorage` | ⚠️ acceptable | ✅ recommended | Survives tab close; XSS risk if site has injection vectors |
+| `localStorage` | ✅ **current implementation** | ✅ **current implementation** | Survives tab close — correct for an all-day dashboard |
+| `sessionStorage` | ⚠️ | ❌ | Cleared on tab close; forces re-login per session (bad UX for dashboard) |
 | HttpOnly cookie | ✅ best | ✅ best | Requires backend to set cookie — not current implementation |
-| In-memory (React state) | ✅ safest | ❌ | Lost on refresh — pair with refresh token in `localStorage` |
+| In-memory (React state) | ✅ safest | ❌ | Lost on refresh — not suitable for SPA without service worker |
 
-**Recommended pattern:** access token in memory/`sessionStorage`, refresh token
-in `localStorage`. On app boot, call `/auth/refresh` with the stored refresh
-token to silently restore the session.
+**Current implementation:** both tokens stored in `localStorage` under `tg_token` and `tg_user_id`. This is correct for a dashboard used all day — re-login on every tab close would be unacceptable UX. The XSS risk is mitigated by the `Content-Security-Policy` header in the frontend.
 
 ---
 

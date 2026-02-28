@@ -1,6 +1,8 @@
 # REST API Reference
 
-Base URL: `https://api.tradinggalaxy.dev` (production) · `http://localhost:5050` (local dev)
+Base URL: `https://api.trading-galaxy.uk` (production) · `http://localhost:5050` (local dev)
+
+**CORS:** Cross-origin requests are accepted from `https://trading-galaxy.uk`, `https://app.trading-galaxy.uk`, `https://*.netlify.app`, and `http://localhost:3000` / `http://localhost:5050`. The `Authorization` and `Content-Type` headers are allowed.
 
 All request/response bodies are JSON. All endpoints return `Content-Type: application/json`.
 
@@ -283,6 +285,56 @@ GET /context/NVDA
 
 ---
 
+## `POST /waitlist`
+
+Add an email to the beta waitlist. No authentication required.
+
+**Rate limit:** 3 requests per hour per IP.
+
+**Request**
+```json
+{
+  "email":  "alice@example.com",
+  "source": "landing"
+}
+```
+
+`source` is optional (default `"landing"`).
+
+**Response 200**
+```json
+{ "message": "You're on the list", "already": false }
+```
+
+If the email was already registered:
+```json
+{ "message": "You're already on the list", "already": true }
+```
+
+**Error responses**
+
+| Status | `error` value | Meaning |
+|--------|--------------|--------|
+| 400 | `"Invalid email"` | Missing, malformed, or >254 chars |
+| 429 | — | Rate limit exceeded (3/hour per IP) |
+
+A Telegram notification is sent to the operator on every new signup.
+
+---
+
+## `GET /waitlist/count`
+
+Public signup counter for landing page social proof. No authentication required.
+
+**Response**
+```json
+{ "count": 42 }
+```
+
+Returns `{"count": 0}` on any error — never 5xx.
+
+---
+
 ## Error Responses
 
 All errors return a JSON body with an `error` key:
@@ -290,3 +342,10 @@ All errors return a JSON body with an `error` key:
 ```json
 { "error": "invalid JSON" }
 ```
+
+**Rate limit responses** return HTTP `429` with a plain-text body:
+```
+3 per 1 hour
+```
+
+Handle `429` in your client — show a user-facing message and do not retry immediately.
