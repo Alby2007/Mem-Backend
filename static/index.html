@@ -687,7 +687,7 @@ select option { background: var(--surface); }
     <div>
       <div class="section-title">Tip Configuration</div>
       <div class="card">
-        <div class="form-row"><label>Account Size (USD)</label><input id="tip-account" type="number" placeholder="10000" /></div>
+        <div class="form-row"><label>Account Value</label><div style="display:flex;align-items:center;gap:8px;"><span id="tip-account-display" style="font-size:14px;font-weight:700;color:var(--accent);">—</span><span style="font-size:11px;color:var(--muted);">from portfolio</span></div></div>
         <div class="form-row"><label>Max Risk per Trade (%)</label><input id="tip-risk" type="number" placeholder="1.0" step="0.1" /></div>
         <div class="form-row"><label>Delivery Time</label><input id="tip-time" type="time" value="07:30" /></div>
         <div class="form-row"><label>Timezone</label>
@@ -914,7 +914,7 @@ function showScreen(name) {
   if (name === 'patterns')  loadPatterns();
   if (name === 'network')   loadNetwork();
   if (name === 'history')   loadHistory();
-  if (name === 'tips')      loadTipsHistory();
+  if (name === 'tips')      { loadTipsHistory(); loadTipsAccountValue(); }
   if (name === 'portfolio') { loadPortfolioModel(); loadPortfolioHoldings(); loadTickerList(); loadSimBannerIfSet(); }
   if (name === 'markets')   initMarketsScreen();
   if (name === 'auth')    _injectAuthTgWidget();
@@ -2357,6 +2357,25 @@ document.getElementById('profile-delete-btn').addEventListener('click', async ()
 });
 
 // ── TIPS ──────────────────────────────────────────────────────────────────────
+async function loadTipsAccountValue() {
+  if (!state.userId) return;
+  try {
+    const d = await apiFetch(`/users/${state.userId}/portfolio`);
+    const holdings = d?.holdings || [];
+    if (holdings.length) {
+      const total = holdings.reduce((sum, h) => sum + ((h.quantity || 0) * (h.avg_cost || 0)), 0);
+      state._tipAccountSize = total > 0 ? Math.round(total) : null;
+      const currency = holdings[0]?.currency || 'GBP';
+      const sym = currency === 'GBP' ? '£' : '$';
+      document.getElementById('tip-account-display').textContent =
+        state._tipAccountSize ? `${sym}${state._tipAccountSize.toLocaleString('en-GB')}` : '—';
+    } else {
+      state._tipAccountSize = null;
+      document.getElementById('tip-account-display').textContent = 'No portfolio';
+    }
+  } catch { /* silent */ }
+}
+
 document.getElementById('tip-config-btn').addEventListener('click', async () => {
   if (!state.userId) { showToast('Sign in first'); return; }
   const msg = document.getElementById('tip-config-msg');
@@ -2365,7 +2384,7 @@ document.getElementById('tip-config-btn').addEventListener('click', async () => 
     const d = await apiFetch(`/users/${state.userId}/onboarding`, {
       method: 'POST',
       body: JSON.stringify({
-        account_size:       parseFloat(document.getElementById('tip-account').value) || null,
+        account_size:       state._tipAccountSize || null,
         risk_tolerance:     null,
         delivery_time:      document.getElementById('tip-time').value,
         timezone:           document.getElementById('tip-tz').value,
