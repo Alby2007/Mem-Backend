@@ -21,7 +21,7 @@ from typing import Any, List, Optional
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-_TICKER_RE = re.compile(r'^[A-Z]{1,5}$')
+_TICKER_RE = re.compile(r'^[A-Z0-9]{1,6}([.\-][A-Z0-9]{1,4})?$')
 _TIME_RE    = re.compile(r'^\d{2}:\d{2}$')
 
 _VALID_TIMEFRAMES = frozenset({'15m', '1h', '4h', '1d'})
