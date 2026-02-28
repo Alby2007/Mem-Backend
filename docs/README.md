@@ -17,6 +17,7 @@ Reference documentation for the Trading Galaxy knowledge base.
 | [retrieval.md](retrieval.md) | Retrieval engine strategies, keyword boost map, output formatting, extending |
 | [epistemic.md](epistemic.md) | Authority weights, decay half-lives, contradiction detection, stress signals, working state |
 | [smoke-test-onboarding.md](smoke-test-onboarding.md) | End-to-end security and flow verification runbook |
+| [frontend.md](frontend.md) | Frontend SPA — design system, screens, state, API layer, auth, CSP, local storage |
 
 ---
 
