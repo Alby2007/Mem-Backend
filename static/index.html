@@ -418,6 +418,121 @@ select option { background: var(--surface); }
 .inline-flex { display: inline-flex; align-items: center; gap: 6px; }
 .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
 .filter-bar select, .filter-bar input { padding: 5px 8px; font-size: 12px; }
+
+/* ── Mobile bottom nav ── */
+#mobile-nav {
+  display: none;
+  position: fixed; bottom: 0; left: 0; right: 0; height: 56px;
+  background: var(--surface); border-top: 1px solid var(--border);
+  z-index: 200; overflow-x: auto; overflow-y: hidden;
+  -webkit-overflow-scrolling: touch; scrollbar-width: none;
+}
+#mobile-nav::-webkit-scrollbar { display: none; }
+#mobile-nav-inner {
+  display: flex; align-items: stretch; min-width: max-content; height: 100%;
+}
+.mnav-item {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; padding: 0 14px; cursor: pointer; color: var(--muted);
+  font-size: 9px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+  font-family: var(--font-sans); transition: color .15s; white-space: nowrap; flex-shrink: 0;
+  border-top: 2px solid transparent;
+}
+.mnav-item:active { background: rgba(245,158,11,.06); }
+.mnav-item.active { color: var(--accent); border-top-color: var(--accent); }
+.mnav-icon { font-size: 18px; line-height: 1; }
+
+/* ── Mobile media query ── */
+@media (max-width: 768px) {
+  :root { --sidebar-w: 0px; }
+
+  /* Hide desktop sidebar */
+  #sidebar { display: none !important; }
+
+  /* Show bottom nav */
+  #mobile-nav { display: block; }
+
+  /* Main area: full width, make room for bottom nav */
+  #main {
+    left: 0 !important;
+    padding: 14px 12px;
+    bottom: 56px;
+  }
+
+  /* Topbar: hide low-priority items */
+  #conn-label { display: none; }
+  #kb-count   { display: none; }
+  #topbar     { padding: 0 10px; gap: 8px; }
+  #topbar .wordmark { font-size: 11px; }
+
+  /* Stat grid: 2 columns */
+  .stat-grid { grid-template-columns: repeat(2, 1fr); }
+
+  /* Two / three col: single column */
+  .two-col   { grid-template-columns: 1fr; }
+  .three-col { grid-template-columns: 1fr; }
+
+  /* Auth panels: single column */
+  .auth-panels { grid-template-columns: 1fr; }
+
+  /* Profile row: single column */
+  .profile-row { grid-template-columns: 1fr; }
+
+  /* Profile screen: no fixed max-width, full bleed */
+  #screen-profile { max-width: 100%; margin: 0; }
+
+  /* Auth screen: no extra margin */
+  #screen-auth { margin: 16px auto; }
+
+  /* Pattern grid: single column */
+  .pattern-grid { grid-template-columns: 1fr; }
+
+  /* Chat: recalculate height with bottom nav */
+  #screen-chat {
+    height: calc(100dvh - var(--topbar-h) - 56px - 48px);
+  }
+
+  /* Chat messages: narrower max-width */
+  .msg { max-width: 90%; }
+
+  /* Chat input bar: stack overlay toggle above textarea row */
+  #chat-input-bar { flex-wrap: wrap; }
+  .toggle-wrap { width: 100%; order: -1; }
+
+  /* Markets: already collapses at 900px but ensure on mobile */
+  #markets-body { flex-direction: column; }
+  #kb-panel { width: 100% !important; max-height: 200px; }
+  #screen-markets {
+    height: calc(100dvh - var(--topbar-h) - 56px - 16px);
+  }
+
+  /* Tip card: full width */
+  .tip-card { max-width: 100%; }
+
+  /* Tables: allow horizontal scroll */
+  .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tbl { min-width: 480px; }
+
+  /* Filter bar: wrap tighter */
+  .filter-bar { gap: 6px; }
+  .filter-bar select, .filter-bar input { font-size: 13px; padding: 6px 8px; }
+
+  /* Tip pos grid: 2 cols on mobile instead of 3 */
+  .tip-pos-grid { grid-template-columns: repeat(2, 1fr); }
+  .tip-card-levels { grid-template-columns: repeat(2, 1fr); }
+
+  /* Toast: full width bottom */
+  #toast { left: 12px; right: 12px; bottom: 68px; max-width: unset; }
+
+  /* Conviction card: stack vertically */
+  .conviction-card { flex-wrap: wrap; }
+
+  /* Hide sidebar hover expand (irrelevant on mobile) */
+  #sidebar:hover { width: var(--sidebar-w); }
+
+  /* History atom modal: full screen */
+  #hist-atoms-modal { width: 100%; left: 0; right: 0; }
+}
 </style>
 </head>
 <body>
@@ -859,6 +974,21 @@ select option { background: var(--surface); }
 <!-- Toast -->
 <div id="toast"></div>
 
+<!-- Mobile bottom nav -->
+<nav id="mobile-nav" aria-label="Mobile navigation">
+  <div id="mobile-nav-inner">
+    <div class="mnav-item active" data-screen="dashboard" id="mnav-dashboard"><span class="mnav-icon">▦</span>Dashboard</div>
+    <div class="mnav-item" data-screen="portfolio" id="mnav-portfolio"><span class="mnav-icon">◈</span>Portfolio</div>
+    <div class="mnav-item" data-screen="markets" id="mnav-markets"><span class="mnav-icon">◬</span>Markets</div>
+    <div class="mnav-item" data-screen="chat" id="mnav-chat"><span class="mnav-icon">◎</span>Chat</div>
+    <div class="mnav-item" data-screen="tips" id="mnav-tips"><span class="mnav-icon">◆</span>Tips</div>
+    <div class="mnav-item" data-screen="patterns" id="mnav-patterns"><span class="mnav-icon">⟁</span>Patterns</div>
+    <div class="mnav-item" data-screen="network" id="mnav-network"><span class="mnav-icon">⬡</span>Network</div>
+    <div class="mnav-item" data-screen="history" id="mnav-history"><span class="mnav-icon">◷</span>History</div>
+    <div class="mnav-item" data-screen="profile" id="mnav-profile"><span class="mnav-icon">⊕</span>Profile</div>
+  </div>
+</nav>
+
 <script>
 // ── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -939,10 +1069,14 @@ function _pathForScreen(name) {
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.mnav-item').forEach(n => n.classList.remove('active'));
   const sc = document.getElementById(`screen-${name}`);
   const nv = document.getElementById(`nav-${name}`);
+  const mn = document.getElementById(`mnav-${name}`);
   if (sc) sc.classList.add('active');
   if (nv) nv.classList.add('active');
+  if (mn) mn.classList.add('active');
+  document.getElementById('mobile-nav').style.display = name === 'auth' ? 'none' : '';
   document.body.classList.toggle('auth-mode', name === 'auth');
   if (name === 'dashboard') loadDashboard();
   if (name === 'patterns')  loadPatterns();
@@ -980,7 +1114,7 @@ window.addEventListener('popstate', () => {
   showScreen(name);
 });
 
-document.querySelectorAll('.nav-item').forEach(el => {
+document.querySelectorAll('.nav-item, .mnav-item').forEach(el => {
   el.addEventListener('click', () => {
     const s = el.dataset.screen;
     if (s !== 'auth' && !state.userId) { navigate('auth'); return; }
