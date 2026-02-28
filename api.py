@@ -4181,6 +4181,16 @@ def auth_register():
 
     data = request.get_json(force=True, silent=True) or {}
 
+    # Beta access gate — checked before any other validation
+    _beta_secret = os.environ.get('BETA_PASSWORD', '')
+    _beta_given  = str(data.get('beta_password', ''))
+    if not _beta_secret or _beta_given != _beta_secret:
+        log_audit_event(_DB_PATH, action='register',
+                        ip_address=request.remote_addr,
+                        user_agent=request.user_agent.string,
+                        outcome='failure', detail={'reason': 'invalid beta password'})
+        return jsonify({'error': 'Invalid beta access password.'}), 403
+
     if HAS_VALIDATORS:
         result = validate_register(data)
         if not result.valid:

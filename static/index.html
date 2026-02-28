@@ -505,6 +505,7 @@ select option { background: var(--surface); }
       <div class="form-row"><label>Email</label><input id="reg-email" type="email" placeholder="alice@example.com" /></div>
       <div class="form-row"><label>Password</label><input id="reg-pw" type="password" placeholder="min 8 characters" /></div>
       <div class="form-row"><label>Confirm</label><input id="reg-pw2" type="password" placeholder="••••••••" /></div>
+      <div class="form-row" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--border);"><label style="color:var(--accent);">Beta Access Password</label><input id="reg-beta" type="password" placeholder="Required for beta access" autocomplete="off" /></div>
       <button class="btn btn-outline w-full" id="reg-btn">Create Account</button>
       <div id="reg-msg" class="text-sm mt-8 text-muted"></div>
     </div>
@@ -1458,16 +1459,18 @@ document.getElementById('reg-btn').addEventListener('click', async () => {
   const email = document.getElementById('reg-email').value.trim();
   const pw    = document.getElementById('reg-pw').value;
   const pw2   = document.getElementById('reg-pw2').value;
+  const beta  = document.getElementById('reg-beta').value;
   const msg   = document.getElementById('reg-msg');
   if (!email || !pw) { msg.textContent = 'Email and password required.'; return; }
   if (pw !== pw2)    { msg.textContent = 'Passwords do not match.'; return; }
   if (pw.length < 8) { msg.textContent = 'Password must be at least 8 characters.'; return; }
+  if (!beta)         { msg.style.color = 'var(--red)'; msg.textContent = 'Beta access password is required.'; return; }
   // Derive a stable user_id from the email local part + random suffix
   const uid = email.split('@')[0].toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 32)
               + '_' + Math.random().toString(36).slice(2, 7);
   msg.innerHTML = '<span class="spinner"></span>';
   try {
-    const d = await apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ user_id: uid, email, password: pw }) });
+    const d = await apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ user_id: uid, email, password: pw, beta_password: beta }) });
     if (!d) { msg.textContent = 'Failed.'; return; }
     msg.style.color = 'var(--green)';
     msg.textContent = `Account created — sign in as ${email}`;
