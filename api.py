@@ -4207,13 +4207,17 @@ def auth_register():
 _IS_PROD = os.environ.get('FLASK_ENV', 'production') != 'development'
 
 def _set_auth_cookies(resp, access_token: str, refresh_token: str) -> None:
-    """Set HttpOnly, Secure, SameSite=Strict auth cookies on a response."""
+    """Set HttpOnly, Secure, SameSite=None auth cookies on a response.
+    SameSite=None is required because the frontend (trading-galaxy.uk) and
+    API (api.trading-galaxy.uk) are cross-origin; Strict would block the cookie.
+    Secure=True is mandatory with SameSite=None.
+    """
     resp.set_cookie(
         'tg_access',
         value=access_token,
         httponly=True,
-        secure=_IS_PROD,
-        samesite='Strict',
+        secure=True,            # mandatory with SameSite=None
+        samesite='None',
         path='/',
         max_age=86400,          # 24 h — matches JWT_EXPIRY_HOURS default
     )
@@ -4222,18 +4226,18 @@ def _set_auth_cookies(resp, access_token: str, refresh_token: str) -> None:
             'tg_refresh',
             value=refresh_token,
             httponly=True,
-            secure=_IS_PROD,
-            samesite='Strict',
+            secure=True,
+            samesite='None',
             path='/auth/refresh',   # scoped — only sent to refresh endpoint
             max_age=2592000,        # 30 d — matches JWT_REFRESH_EXPIRY_DAYS default
         )
 
 def _clear_auth_cookies(resp) -> None:
     """Expire both auth cookies immediately."""
-    resp.set_cookie('tg_access',  value='', httponly=True, secure=_IS_PROD,
-                    samesite='Strict', path='/', max_age=0)
-    resp.set_cookie('tg_refresh', value='', httponly=True, secure=_IS_PROD,
-                    samesite='Strict', path='/auth/refresh', max_age=0)
+    resp.set_cookie('tg_access',  value='', httponly=True, secure=True,
+                    samesite='None', path='/', max_age=0)
+    resp.set_cookie('tg_refresh', value='', httponly=True, secure=True,
+                    samesite='None', path='/auth/refresh', max_age=0)
 
 
 @app.route('/auth/token', methods=['POST'])
