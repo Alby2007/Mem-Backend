@@ -206,6 +206,22 @@ select option { background: var(--surface); }
 .auth-title { font-size: 18px; font-weight: 700; margin-bottom: 20px; color: var(--text); }
 .auth-divider { text-align: center; color: var(--muted); font-size: 11px; margin: 8px 0; }
 
+/* ── Profile screen ── */
+#screen-profile { max-width: 520px; margin: 40px auto; }
+.profile-section { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+.profile-section-title { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 14px; }
+.profile-field { margin-bottom: 12px; }
+.profile-field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.profile-field input { width: 100%; box-sizing: border-box; }
+.profile-field input[readonly] { opacity: 0.55; cursor: default; }
+.profile-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.profile-msg { font-size: 12px; margin-top: 8px; min-height: 16px; }
+.profile-save-btn { width: 100%; margin-top: 4px; }
+.profile-danger { border-color: var(--red) !important; }
+.profile-danger .profile-section-title { color: var(--red); }
+.btn-danger { background: transparent; border: 1px solid var(--red); color: var(--red); padding: 8px 16px; border-radius: 5px; cursor: pointer; font-size: 13px; font-weight: 600; width: 100%; transition: background .15s; }
+.btn-danger:hover { background: rgba(239,68,68,.12); }
+
 /* ── Chat screen ── */
 #screen-chat { display: none; flex-direction: column; height: calc(100vh - var(--topbar-h) - 48px); }
 #screen-chat.active { display: flex; }
@@ -459,8 +475,8 @@ select option { background: var(--surface); }
     <span class="nav-icon">◷</span><span class="nav-label">History</span>
   </div>
   <div class="nav-spacer"></div>
-  <div class="nav-item" data-screen="auth" id="nav-auth">
-    <span class="nav-icon">⊕</span><span class="nav-label">Auth</span>
+  <div class="nav-item" data-screen="profile" id="nav-profile">
+    <span class="nav-icon">⊕</span><span class="nav-label">Profile</span>
   </div>
 </nav>
 
@@ -740,6 +756,69 @@ select option { background: var(--surface); }
   </div>
 </div>
 
+<!-- PROFILE ───────────────────────────────────────────────────── -->
+<div class="screen" id="screen-profile">
+  <div style="font-size:20px;font-weight:700;margin-bottom:20px;">Account Profile</div>
+
+  <!-- Account Info -->
+  <div class="profile-section">
+    <div class="profile-section-title">Account Info</div>
+    <div class="profile-field">
+      <label>Email Address</label>
+      <input id="profile-email" type="email" readonly />
+    </div>
+    <div class="profile-row">
+      <div class="profile-field">
+        <label>First Name</label>
+        <input id="profile-first" type="text" placeholder="First name" />
+      </div>
+      <div class="profile-field">
+        <label>Last Name</label>
+        <input id="profile-last" type="text" placeholder="Last name" />
+      </div>
+    </div>
+    <div class="profile-field">
+      <label>Phone Number</label>
+      <input id="profile-phone" type="tel" placeholder="+44 7700 000000" />
+    </div>
+    <button class="btn btn-primary profile-save-btn" id="profile-save-btn">Save Changes</button>
+    <div class="profile-msg" id="profile-save-msg"></div>
+  </div>
+
+  <!-- Change Password -->
+  <div class="profile-section">
+    <div class="profile-section-title">Change Password</div>
+    <div class="profile-field">
+      <label>Current Password</label>
+      <input id="profile-pw-current" type="password" placeholder="Current password" autocomplete="current-password" />
+    </div>
+    <div class="profile-field">
+      <label>New Password</label>
+      <input id="profile-pw-new" type="password" placeholder="Min 8 characters" autocomplete="new-password" />
+    </div>
+    <div class="profile-field">
+      <label>Confirm New Password</label>
+      <input id="profile-pw-confirm" type="password" placeholder="Repeat new password" autocomplete="new-password" />
+    </div>
+    <button class="btn btn-primary profile-save-btn" id="profile-pw-btn">Update Password</button>
+    <div class="profile-msg" id="profile-pw-msg"></div>
+  </div>
+
+  <!-- Sign Out -->
+  <div class="profile-section">
+    <div class="profile-section-title">Session</div>
+    <button class="btn btn-ghost profile-save-btn" id="profile-signout-btn">Sign Out</button>
+  </div>
+
+  <!-- Danger Zone -->
+  <div class="profile-section profile-danger">
+    <div class="profile-section-title">Danger Zone</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Permanently deletes your account and all associated data. This cannot be undone.</div>
+    <button class="btn-danger" id="profile-delete-btn">Delete My Account</button>
+    <div class="profile-msg" id="profile-delete-msg"></div>
+  </div>
+</div>
+
 </main><!-- /main -->
 
 <!-- Toast -->
@@ -805,8 +884,8 @@ function _injectAuthTgWidget() {
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
-const _SCREENS = ['dashboard','portfolio','markets','chat','tips','patterns','network','history'];
-const _NEXT_RE = /^\/[a-z0-9_-]+\/(dashboard|portfolio|markets|chat|tips|patterns|network|history)$/;
+const _SCREENS = ['dashboard','portfolio','markets','chat','tips','patterns','network','history','profile'];
+const _NEXT_RE = /^\/[a-z0-9_-]+\/(dashboard|portfolio|markets|chat|tips|patterns|network|history|profile)$/;
 
 function _screenFromPath(path) {
   // /:username/screen  → screen name
@@ -818,6 +897,7 @@ function _screenFromPath(path) {
 
 function _pathForScreen(name) {
   if (name === 'auth') return '/login';
+  if (name === 'profile') return `/${state.userId || '_'}/profile`;
   return `/${state.userId || '_'}/${name}`;
 }
 
@@ -836,7 +916,8 @@ function showScreen(name) {
   if (name === 'tips')      loadTipsHistory();
   if (name === 'portfolio') { loadPortfolioModel(); loadPortfolioHoldings(); loadTickerList(); loadSimBannerIfSet(); }
   if (name === 'markets')   initMarketsScreen();
-  if (name === 'auth') _injectAuthTgWidget();
+  if (name === 'auth')    _injectAuthTgWidget();
+  if (name === 'profile') loadProfile();
 }
 
 function navigate(name, { replace = false } = {}) {
@@ -2207,6 +2288,69 @@ document.getElementById('chat-input').addEventListener('keydown', e => {
 document.getElementById('chat-input').addEventListener('input', function() {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+// ── PROFILE ───────────────────────────────────────────────────────────────────
+async function loadProfile() {
+  if (!state.userId) return;
+  try {
+    const d = await apiFetch('/auth/me');
+    if (!d) return;
+    document.getElementById('profile-email').value    = d.email || '';
+    document.getElementById('profile-first').value    = d.first_name || '';
+    document.getElementById('profile-last').value     = d.last_name  || '';
+    document.getElementById('profile-phone').value    = d.phone      || '';
+  } catch(e) { /* silent */ }
+}
+
+document.getElementById('profile-save-btn').addEventListener('click', async () => {
+  const msg  = document.getElementById('profile-save-msg');
+  const body = {
+    first_name: document.getElementById('profile-first').value.trim(),
+    last_name:  document.getElementById('profile-last').value.trim(),
+    phone:      document.getElementById('profile-phone').value.trim(),
+  };
+  msg.textContent = '';
+  try {
+    const d = await apiFetch(`/users/${state.userId}/profile`, { method: 'PATCH', body: JSON.stringify(body) });
+    if (!d) return;
+    msg.style.color = 'var(--green)'; msg.textContent = '✓ Profile saved';
+  } catch(e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
+});
+
+document.getElementById('profile-pw-btn').addEventListener('click', async () => {
+  const msg  = document.getElementById('profile-pw-msg');
+  const cur  = document.getElementById('profile-pw-current').value;
+  const nw   = document.getElementById('profile-pw-new').value;
+  const conf = document.getElementById('profile-pw-confirm').value;
+  msg.textContent = '';
+  if (!cur || !nw) { msg.style.color = 'var(--red)'; msg.textContent = 'All fields are required.'; return; }
+  if (nw !== conf) { msg.style.color = 'var(--red)'; msg.textContent = 'New passwords do not match.'; return; }
+  if (nw.length < 8) { msg.style.color = 'var(--red)'; msg.textContent = 'New password must be at least 8 characters.'; return; }
+  try {
+    const d = await apiFetch('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: cur, new_password: nw }) });
+    if (!d) return;
+    msg.style.color = 'var(--green)'; msg.textContent = '✓ Password updated';
+    document.getElementById('profile-pw-current').value = '';
+    document.getElementById('profile-pw-new').value = '';
+    document.getElementById('profile-pw-confirm').value = '';
+  } catch(e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
+});
+
+document.getElementById('profile-signout-btn').addEventListener('click', () => signOut());
+
+document.getElementById('profile-delete-btn').addEventListener('click', async () => {
+  const msg = document.getElementById('profile-delete-msg');
+  if (!confirm('Are you sure you want to permanently delete your account? This cannot be undone.')) return;
+  if (!confirm('Last warning: all your data will be deleted forever. Continue?')) return;
+  try {
+    const d = await apiFetch(`/users/${state.userId}`, { method: 'DELETE' });
+    if (!d) return;
+    state.token = null; state.userId = null; state.holdings = [];
+    localStorage.clear();
+    navigate('auth', { replace: true });
+    showToast('Account deleted.', 'ok');
+  } catch(e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
 });
 
 // ── TIPS ──────────────────────────────────────────────────────────────────────

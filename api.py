@@ -4626,13 +4626,147 @@ def auth_me():
     """
     from flask import g as _g
     user_id = _g.user_id
+    try:
+        conn = sqlite3.connect(_DB_PATH, timeout=10)
+        row = conn.execute(
+            "SELECT email, first_name, last_name, phone FROM user_auth WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        conn.close()
+    except Exception:
+        row = None
+    base = {'user_id': user_id, 'email': g.user_email}
+    if row:
+        base['email']      = row[0] or g.user_email
+        base['first_name'] = row[1] or ''
+        base['last_name']  = row[2] or ''
+        base['phone']      = row[3] or ''
     if not HAS_PRODUCT_LAYER:
-        return jsonify({'user_id': user_id})
+        return jsonify(base)
     try:
         user = get_user(_DB_PATH, user_id)
-        return jsonify(user or {'user_id': user_id})
+        if user:
+            user.update(base)
+            return jsonify(user)
+        return jsonify(base)
+    except Exception as e:
+        return jsonify(base)
+
+
+@app.route('/users/<user_id>/profile', methods=['PATCH'])
+@require_auth
+def update_user_profile(user_id):
+    """
+    PATCH /users/<user_id>/profile
+
+    Update first_name, last_name, phone for the authenticated user.
+    Adds columns to user_auth if they don't exist yet (safe migration).
+    Body: { "first_name": "...", "last_name": "...", "phone": "..." }
+    Returns: { "ok": true, "first_name": ..., "last_name": ..., "phone": ... }
+    """
+    if g.user_id != user_id:
+        return jsonify({'error': 'forbidden'}), 403
+    data = request.get_json(force=True, silent=True) or {}
+    first_name = str(data.get('first_name', '') or '').strip()[:100]
+    last_name  = str(data.get('last_name',  '') or '').strip()[:100]
+    phone      = str(data.get('phone',      '') or '').strip()[:30]
+    try:
+        conn = sqlite3.connect(_DB_PATH, timeout=10)
+        for col in ('first_name', 'last_name', 'phone'):
+            try:
+                conn.execute(f"ALTER TABLE user_auth ADD COLUMN {col} TEXT DEFAULT ''")
+            except Exception:
+                pass
+        conn.execute(
+            "UPDATE user_auth SET first_name=?, last_name=?, phone=? WHERE user_id=?",
+            (first_name, last_name, phone, user_id),
+        )
+        conn.commit()
+        conn.close()
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    return jsonify({'ok': True, 'first_name': first_name, 'last_name': last_name, 'phone': phone})
+
+
+@app.route('/auth/change-password', methods=['POST'])
+@require_auth
+def change_password():
+    """
+    POST /auth/change-password
+
+    Body: { "current_password": "...", "new_password": "..." }
+    Returns: { "ok": true } or 400/401 on failure.
+    """
+    if not HAS_AUTH:
+        return jsonify({'error': 'auth not available'}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    current_pw = str(data.get('current_password', ''))
+    new_pw     = str(data.get('new_password', ''))
+    if not current_pw or not new_pw:
+        return jsonify({'error': 'current_password and new_password are required'}), 400
+    if len(new_pw) < 8:
+        return jsonify({'error': 'new password must be at least 8 characters'}), 400
+    try:
+        import bcrypt as _bcrypt
+        conn = sqlite3.connect(_DB_PATH, timeout=10)
+        row = conn.execute(
+            "SELECT password_hash FROM user_auth WHERE user_id=?", (g.user_id,)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return jsonify({'error': 'user not found'}), 404
+        if not _bcrypt.checkpw(current_pw.encode(), row[0].encode()):
+            conn.close()
+            return jsonify({'error': 'current password is incorrect'}), 401
+        new_hash = _bcrypt.hashpw(new_pw.encode(), _bcrypt.gensalt(rounds=12)).decode()
+        conn.execute(
+            "UPDATE user_auth SET password_hash=? WHERE user_id=?", (new_hash, g.user_id)
+        )
+        conn.commit()
+        conn.close()
+        log_audit_event(_DB_PATH, action='password_change', user_id=g.user_id,
+                        ip_address=request.remote_addr,
+                        user_agent=request.user_agent.string,
+                        outcome='success')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify({'ok': True})
+
+
+@app.route('/users/<user_id>', methods=['DELETE'])
+@require_auth
+def delete_account(user_id):
+    """
+    DELETE /users/<user_id>
+
+    Permanently delete the authenticated user's account.
+    Removes rows from user_auth and user_preferences.
+    Returns: { "deleted": true }
+    """
+    if g.user_id != user_id:
+        return jsonify({'error': 'forbidden'}), 403
+    try:
+        conn = sqlite3.connect(_DB_PATH, timeout=10)
+        conn.execute("DELETE FROM user_auth WHERE user_id=?", (user_id,))
+        try:
+            conn.execute("DELETE FROM user_preferences WHERE user_id=?", (user_id,))
+        except Exception:
+            pass
+        try:
+            conn.execute("DELETE FROM refresh_tokens WHERE user_id=?", (user_id,))
+        except Exception:
+            pass
+        conn.commit()
+        conn.close()
+        log_audit_event(_DB_PATH, action='account_deleted', user_id=user_id,
+                        ip_address=request.remote_addr,
+                        user_agent=request.user_agent.string,
+                        outcome='success')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    resp = jsonify({'deleted': True})
+    _clear_auth_cookies(resp)
+    return resp
 
 
 # ── Seed distribution endpoints ───────────────────────────────────────────────
