@@ -2490,12 +2490,11 @@ async function loadProfile() {
 
   // Telegram link status + widget
   try {
-    const u = await apiFetch(`/users/${state.userId}/onboarding`);
-    const chatId = u?.telegram_chat_id || u?.chat_id || null;
+    const u = await apiFetch(`/users/${state.userId}/onboarding-status`);
     const tgStatus = document.getElementById('profile-tg-status');
     const tgWidget = document.getElementById('profile-tg-widget');
-    if (chatId) {
-      tgStatus.innerHTML = `<span style="color:var(--green);">✓ Linked</span> — Telegram chat ID: <span style="font-family:var(--mono);color:var(--accent);">${escHtml(String(chatId))}</span>`;
+    if (u?.telegram_connected) {
+      tgStatus.innerHTML = `<span style="color:var(--green);">✓ Linked</span>`;
       tgWidget.innerHTML = `<button class="btn btn-ghost btn-sm" id="profile-tg-relink-btn">Re-link Telegram account</button>`;
       document.getElementById('profile-tg-relink-btn').addEventListener('click', () => {
         tgWidget.innerHTML = '';
@@ -2505,7 +2504,11 @@ async function loadProfile() {
       tgStatus.innerHTML = `<span style="color:var(--muted);">Not linked</span>`;
       _injectProfileTgWidget();
     }
-  } catch(e) { /* silent */ }
+  } catch(e) {
+    const tgStatus = document.getElementById('profile-tg-status');
+    if (tgStatus) { tgStatus.innerHTML = `<span style="color:var(--muted);">Not linked</span>`; }
+    _injectProfileTgWidget();
+  }
 }
 
 let _profileTgWidgetInjected = false;
