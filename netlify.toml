@@ -1,5 +1,10 @@
 [build]
-  publish = "static"
+  publish = "public"
+
+[[redirects]]
+  from = "/login/*"
+  to   = "/login/index.html"
+  status = 200
 
 [[headers]]
   for = "/*"
