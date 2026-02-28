@@ -1140,6 +1140,13 @@ ON tip_followups(status, user_id)
 def _ensure_tip_followups_table(conn: sqlite3.Connection) -> None:
     conn.execute(_DDL_TIP_FOLLOWUPS)
     conn.execute(_DDL_TIP_FOLLOWUPS_IDX)
+    # Migrate: add opened_at if table existed with older schema (created_at only)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(tip_followups)")}
+    if 'opened_at' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN opened_at TEXT NOT NULL DEFAULT ''")
+        conn.execute("UPDATE tip_followups SET opened_at = created_at WHERE opened_at = ''")
+    if 'closed_at' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN closed_at TEXT")
     conn.commit()
 
 
