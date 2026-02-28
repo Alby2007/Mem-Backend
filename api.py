@@ -292,6 +292,7 @@ try:
         ],
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Authorization", "Content-Type"],
+        "supports_credentials": True,
         "max_age": 3600,
     }})
 except ImportError:
@@ -4202,6 +4203,39 @@ def auth_register():
     return jsonify(row), 201
 
 
+# ── Cookie helpers ────────────────────────────────────────────────────────────
+_IS_PROD = os.environ.get('FLASK_ENV', 'production') != 'development'
+
+def _set_auth_cookies(resp, access_token: str, refresh_token: str) -> None:
+    """Set HttpOnly, Secure, SameSite=Strict auth cookies on a response."""
+    resp.set_cookie(
+        'tg_access',
+        value=access_token,
+        httponly=True,
+        secure=_IS_PROD,
+        samesite='Strict',
+        path='/',
+        max_age=86400,          # 24 h — matches JWT_EXPIRY_HOURS default
+    )
+    if refresh_token:
+        resp.set_cookie(
+            'tg_refresh',
+            value=refresh_token,
+            httponly=True,
+            secure=_IS_PROD,
+            samesite='Strict',
+            path='/auth/refresh',   # scoped — only sent to refresh endpoint
+            max_age=2592000,        # 30 d — matches JWT_REFRESH_EXPIRY_DAYS default
+        )
+
+def _clear_auth_cookies(resp) -> None:
+    """Expire both auth cookies immediately."""
+    resp.set_cookie('tg_access',  value='', httponly=True, secure=_IS_PROD,
+                    samesite='Strict', path='/', max_age=0)
+    resp.set_cookie('tg_refresh', value='', httponly=True, secure=_IS_PROD,
+                    samesite='Strict', path='/auth/refresh', max_age=0)
+
+
 @app.route('/auth/token', methods=['POST'])
 @rate_limit('auth')
 def auth_token():
@@ -4242,7 +4276,10 @@ def auth_token():
         token_data['refresh_token_expires'] = refresh_data['expires_at']
     except Exception:
         pass
-    return jsonify(token_data)
+    resp = jsonify(token_data)
+    _set_auth_cookies(resp, token_data['access_token'],
+                      token_data.get('refresh_token', ''))
+    return resp
 
 
 @app.route('/auth/refresh', methods=['POST'])
@@ -4265,6 +4302,9 @@ def auth_refresh():
         return jsonify({'error': 'auth not available'}), 503
     data = request.get_json(force=True, silent=True) or {}
     refresh_token = data.get('refresh_token', '').strip()
+    # Fall back to HttpOnly cookie if not in body
+    if not refresh_token:
+        refresh_token = request.cookies.get('tg_refresh', '').strip()
     if not refresh_token:
         return jsonify({'error': 'refresh_token is required'}), 400
     try:
@@ -4273,7 +4313,9 @@ def auth_refresh():
                         ip_address=request.remote_addr,
                         user_agent=request.user_agent.string,
                         outcome='success')
-        return jsonify(result)
+        resp = jsonify(result)
+        _set_auth_cookies(resp, result['access_token'], result['refresh_token'])
+        return resp
     except ValueError as e:
         return jsonify({'error': 'token_expired' if 'expired' in str(e) else 'invalid_token',
                         'detail': str(e)}), 401
@@ -4314,7 +4356,9 @@ def auth_logout():
                     ip_address=request.remote_addr,
                     user_agent=request.user_agent.string,
                     outcome='success')
-    return jsonify({'logged_out': True})
+    resp = jsonify({'logged_out': True})
+    _clear_auth_cookies(resp)
+    return resp
 
 
 _TG_LOGIN_CODES: dict = {}  # code -> {chat_id, user_data, expires}

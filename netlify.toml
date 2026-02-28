@@ -2,7 +2,87 @@
   publish = "public"
 
 [[redirects]]
-  from = "/login/*"
+  from = "/login"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/portfolio"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/chat"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/markets"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/tips"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/patterns"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/network"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/history"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/:username/dashboard"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/:username/portfolio"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/:username/chat"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/:username/markets"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/:username/tips"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/:username/patterns"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/:username/network"
+  to   = "/login/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/:username/history"
   to   = "/login/index.html"
   status = 200
 

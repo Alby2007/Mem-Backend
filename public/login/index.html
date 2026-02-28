@@ -759,12 +759,12 @@ const API = (window.location.hostname === 'localhost' || window.location.hostnam
     : 'https://api.trading-galaxy.uk';
 
 // ── apiFetch ─────────────────────────────────────────────────────────────────
+// credentials:'include' sends HttpOnly cookies cross-origin to api.trading-galaxy.uk
 async function apiFetch(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
-  if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
   let res;
   try {
-    res = await fetch(API + path, { ...opts, headers });
+    res = await fetch(API + path, { ...opts, headers, credentials: 'include' });
   } catch (e) {
     showToast('Connection error — check your internet');
     return null;
@@ -804,7 +804,23 @@ function _injectAuthTgWidget() {
   container.appendChild(s);
 }
 
-// ── Navigation ────────────────────────────────────────────────────────────────
+// ── Router ────────────────────────────────────────────────────────────────────
+const _SCREENS = ['dashboard','portfolio','markets','chat','tips','patterns','network','history'];
+const _NEXT_RE = /^\/[a-z0-9_-]+\/(dashboard|portfolio|markets|chat|tips|patterns|network|history)$/;
+
+function _screenFromPath(path) {
+  // /:username/screen  → screen name
+  const parts = path.replace(/^\//, '').split('/');
+  if (parts.length === 2 && _SCREENS.includes(parts[1])) return parts[1];
+  if (parts[0] === 'login' || path === '/login') return 'auth';
+  return null;
+}
+
+function _pathForScreen(name) {
+  if (name === 'auth') return '/login';
+  return `/${state.userId || '_'}/${name}`;
+}
+
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -823,11 +839,36 @@ function showScreen(name) {
   if (name === 'auth') _injectAuthTgWidget();
 }
 
+function navigate(name, { replace = false } = {}) {
+  if (name !== 'auth' && !state.userId) {
+    // Auth guard — redirect to /login?next=/<username>/<screen>
+    const intended = _pathForScreen(name);
+    const next = _NEXT_RE.test(intended) ? encodeURIComponent(intended) : '';
+    const target = '/login' + (next ? `?next=${next}` : '');
+    window.history.replaceState(null, '', target);
+    showScreen('auth');
+    return;
+  }
+  const path = _pathForScreen(name);
+  if (replace) window.history.replaceState(null, '', path);
+  else         window.history.pushState(null, '', path);
+  showScreen(name);
+}
+
+window.addEventListener('popstate', () => {
+  const name = _screenFromPath(window.location.pathname);
+  if (!name || (name !== 'auth' && !state.userId)) {
+    showScreen('auth');
+    return;
+  }
+  showScreen(name);
+});
+
 document.querySelectorAll('.nav-item').forEach(el => {
   el.addEventListener('click', () => {
     const s = el.dataset.screen;
-    if ((s !== 'auth') && !state.token) { showScreen('auth'); return; }
-    showScreen(s);
+    if (s !== 'auth' && !state.userId) { navigate('auth'); return; }
+    navigate(s);
   });
 });
 
@@ -1363,16 +1404,22 @@ document.getElementById('login-btn').addEventListener('click', async () => {
     const d = await apiFetch('/auth/token', { method: 'POST', body: JSON.stringify({ email, password: pw }) });
     if (!d) { msg.textContent = 'Failed.'; return; }
     _saveSession(d.access_token || d.token, d.user_id);
-    showScreen('dashboard');
+    // Honour ?next= param if it passes the allowlist, else go to dashboard
+    const _nextRaw = new URLSearchParams(window.location.search).get('next') || '';
+    const _nextScreen = _nextRaw && _NEXT_RE.test(_nextRaw)
+      ? _screenFromPath(_nextRaw)
+      : 'dashboard';
+    navigate(_nextScreen || 'dashboard', { replace: true });
   } catch (e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
 });
 
 function _saveSession(token, userId, tgData) {
-  state.token  = token;
+  state.token  = token;   // keep in memory for legacy references
   state.userId = userId;
-  localStorage.setItem('tg_token',   token);
-  localStorage.setItem('tg_user_id', userId);
+  // Tokens are now stored in HttpOnly cookies set by the backend.
+  // Only non-sensitive display data goes in localStorage.
   if (tgData) localStorage.setItem('tg_user_data', JSON.stringify(tgData));
+  localStorage.setItem('tg_user_id', userId);  // display only — not a secret
   _renderTgChip(tgData || null, userId);
 }
 
@@ -1400,13 +1447,16 @@ function _renderTgChip(tgData, userId) {
   }
 }
 
-function signOut() {
+async function signOut() {
   if (state.userId) localStorage.removeItem(`simulated_${state.userId}`);
+  // Ask backend to clear HttpOnly cookies + revoke refresh token
+  try { await fetch(API + '/auth/logout', { method: 'POST', credentials: 'include',
+    headers: { 'Content-Type': 'application/json' } }); } catch { /* ignore */ }
   state.token = null; state.userId = null; state.holdings = [];
-  localStorage.removeItem('tg_token');
   localStorage.removeItem('tg_user_id');
   localStorage.removeItem('tg_user_data');
   _renderTgChip(null, null);
+  window.history.replaceState(null, '', '/login');
   showScreen('auth');
 }
 
@@ -1420,8 +1470,7 @@ window.onTelegramAuth = async function(tgData) {
     if (!d || !d.access_token) { showToast('Telegram auth failed'); return; }
     _saveSession(d.access_token, d.user_id || String(tgData.id), tgData);
     showToast('Signed in as ' + (tgData.first_name || tgData.username), 'ok');
-    showScreen('dashboard');
-    loadDashboard();
+    navigate('dashboard', { replace: true });
   } catch(e) {
     showToast('Sign-in error: ' + e.message);
   }
@@ -2554,28 +2603,32 @@ document.getElementById('hist-atoms-overlay').addEventListener('click', e => {
 (async () => {
   await pingConnection();
   setInterval(pingConnection, 300000);
-  // Restore persisted session
-  const storedToken  = localStorage.getItem('tg_token');
-  const storedUserId = localStorage.getItem('tg_user_id');
-  if (storedToken && storedUserId) {
-    try {
-      // Verify token is still valid
-      state.token  = storedToken;
-      state.userId = storedUserId;
-      const me = await apiFetch('/auth/me');
-      if (me) {
-        const storedTgData = localStorage.getItem('tg_user_data');
-        const tgData = storedTgData ? JSON.parse(storedTgData) : null;
-        _renderTgChip(tgData, storedUserId);
-        showScreen('dashboard');
-        return;
-      }
-    } catch {
-      // Token expired or invalid — clear and show auth
-      localStorage.removeItem('tg_token');
-      localStorage.removeItem('tg_user_id');
-      state.token = null; state.userId = null;
+
+  // Session restore — let the HttpOnly cookie do the work via /auth/me
+  try {
+    const me = await apiFetch('/auth/me');
+    if (me && me.user_id) {
+      state.userId = me.user_id;
+      state.token  = '__cookie__'; // sentinel — actual token is in HttpOnly cookie
+      const storedTgData = localStorage.getItem('tg_user_data');
+      const tgData = storedTgData ? JSON.parse(storedTgData) : null;
+      _renderTgChip(tgData, me.user_id);
+
+      // Route to the screen from the URL if valid, else dashboard
+      const fromPath = _screenFromPath(window.location.pathname);
+      const targetScreen = (fromPath && fromPath !== 'auth') ? fromPath : 'dashboard';
+      navigate(targetScreen, { replace: true });
+      return;
     }
+  } catch { /* no cookie or expired — fall through to auth */ }
+
+  // No valid session — if URL had a protected path, preserve as ?next=
+  const fromPath = _screenFromPath(window.location.pathname);
+  if (fromPath && fromPath !== 'auth') {
+    const nextPath = window.location.pathname;
+    window.history.replaceState(null, '', '/login?next=' + encodeURIComponent(nextPath));
+  } else {
+    window.history.replaceState(null, '', '/login');
   }
   showScreen('auth');
 })();

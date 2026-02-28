@@ -205,15 +205,21 @@ def _check_password(password: str, hashed: str) -> bool:
 
 def require_auth(f):
     """
-    Decorator: validate Bearer JWT, set g.user_id.
+    Decorator: validate JWT, set g.user_id.
+    Accepts token from:
+      1. Authorization: Bearer <token>  header (API clients, backwards compat)
+      2. tg_access HttpOnly cookie       (browser SPA — preferred)
     Returns 401 if token is missing, invalid, or expired.
     """
     @wraps(f)
     def decorated(*args, **kwargs):
         if not HAS_JWT:
             return jsonify({'error': 'auth not available — PyJWT not installed'}), 503
+        # Prefer Authorization header; fall back to HttpOnly cookie
         header = request.headers.get('Authorization', '')
         token = header.removeprefix('Bearer ').strip()
+        if not token:
+            token = request.cookies.get('tg_access', '').strip()
         if not token:
             return jsonify({'error': 'unauthorized', 'detail': 'missing token'}), 401
         try:
