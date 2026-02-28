@@ -38,6 +38,20 @@ except ImportError:
     HAS_LLM = False
 
 try:
+    from llm.groq_client import chat as groq_chat, is_available as groq_available
+    HAS_GROQ = True
+except ImportError:
+    HAS_GROQ = False
+
+def _llm_chat(messages, model=None, **kwargs):
+    """Unified LLM chat: prefer Groq (fast, free API) over local Ollama."""
+    if HAS_GROQ and groq_available():
+        return groq_chat(messages)
+    if HAS_LLM:
+        return ollama_chat(messages, model=model or DEFAULT_MODEL, **kwargs)
+    return None
+
+try:
     from knowledge.working_memory import WorkingMemory, kb_has_atoms, MAX_ON_DEMAND_TICKERS
     _working_memory = WorkingMemory()
     HAS_WORKING_MEMORY = True
@@ -2606,7 +2620,7 @@ def chat_endpoint():
                 {'role': 'user',   'content':
                     f"{_p1_ctx}\n\nQuestion: {message}"},
             ]
-            _p1_raw = ollama_chat(_p1_messages, model=model)
+            _p1_raw = _llm_chat(_p1_messages, model=model)
             if _p1_raw:
                 _mode, _payload = parse_llm_response(_p1_raw)
                 if _mode == 'data_request' and _payload:
@@ -2819,7 +2833,7 @@ def chat_endpoint():
         except Exception:
             pass
 
-    answer = ollama_chat(messages, model=model)
+    answer = _llm_chat(messages, model=model)
     if answer is None:
         if HAS_WORKING_MEMORY and _working_memory:
             _working_memory.close_without_commit(wm_session_id)
