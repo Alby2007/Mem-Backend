@@ -62,7 +62,7 @@ _TF_MAP = {
 }
 
 # Default timeframes run by the adapter
-_DEFAULT_TIMEFRAMES = ['1h', '1d']
+_DEFAULT_TIMEFRAMES = ['15m', '1h', '4h', '1d']
 
 
 # ── KB atom reader ─────────────────────────────────────────────────────────────

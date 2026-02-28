@@ -28,3 +28,6 @@ Thumbs.db
 
 # Nested repos / local tools
 Mem-Backend/
+
+# Local Netlify folder
+.netlify

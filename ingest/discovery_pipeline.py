@@ -330,7 +330,7 @@ class DiscoveryPipeline:
         adapter.run_and_push(self._kg)
 
     def _run_patterns(self, ticker: str) -> None:
-        """Run SMC pattern detection for a single ticker using detect_all_patterns."""
+        """Run SMC pattern detection for a single ticker across all timeframes."""
         try:
             import sqlite3 as _sqlite3
             import yfinance as yf
@@ -338,23 +338,6 @@ class DiscoveryPipeline:
             from knowledge.working_memory import _YF_TICKER_MAP as YF_MAP
         except ImportError as e:
             _logger.warning('discovery: patterns stage import failed: %s', e)
-            return
-
-        yf_sym = YF_MAP.get(ticker.upper(), ticker)
-        try:
-            hist = yf.Ticker(yf_sym).history(period='90d', interval='1d', auto_adjust=True)
-            if hist.empty or len(hist) < 10:
-                return
-            candles = [
-                OHLCV(
-                    open=float(row['Open']),  high=float(row['High']),
-                    low=float(row['Low']),    close=float(row['Close']),
-                    volume=float(row.get('Volume', 0) or 0),
-                )
-                for _, row in hist.iterrows()
-            ]
-        except Exception as e:
-            _logger.debug('discovery: patterns candle fetch failed %s: %s', ticker, e)
             return
 
         # Get KB context atoms for the ticker
@@ -372,14 +355,62 @@ class DiscoveryPipeline:
         except Exception:
             kb_rows = {}
 
-        signals = detect_all_patterns(
-            candles, ticker=ticker.upper(), timeframe='1d',
-            kb_conviction=kb_rows.get('conviction_tier', ''),
-            kb_regime=kb_rows.get('price_regime', ''),
-            kb_signal_dir=kb_rows.get('signal_direction', ''),
-        )
+        # Timeframe configs: (timeframe_label, yf_interval, yf_period)
+        tf_configs = [
+            ('15m', '15m', '5d'),
+            ('1h',  '1h',  '30d'),
+            ('4h',  '1h',  '60d'),  # yfinance has no 4h; fetch 1h and resample
+            ('1d',  '1d',  '90d'),
+        ]
 
-        if not signals:
+        yf_sym = YF_MAP.get(ticker.upper(), ticker)
+        all_signals = []
+
+        for tf_label, yf_interval, yf_period in tf_configs:
+            try:
+                hist = yf.Ticker(yf_sym).history(period=yf_period, interval=yf_interval, auto_adjust=True)
+                if hist.empty or len(hist) < 10:
+                    continue
+                candles = [
+                    OHLCV(
+                        timestamp=ts.isoformat(),
+                        open=float(row['Open']),  high=float(row['High']),
+                        low=float(row['Low']),    close=float(row['Close']),
+                        volume=float(row.get('Volume', 0) or 0),
+                    )
+                    for ts, row in hist.iterrows()
+                ]
+
+                # Resample 1h → 4h if needed
+                if tf_label == '4h' and len(candles) >= 4:
+                    resampled = []
+                    for i in range(0, len(candles) - 3, 4):
+                        group = candles[i:i + 4]
+                        resampled.append(OHLCV(
+                            timestamp=group[0].timestamp,
+                            open=group[0].open,
+                            high=max(c.high for c in group),
+                            low=min(c.low for c in group),
+                            close=group[-1].close,
+                            volume=sum(c.volume for c in group),
+                        ))
+                    candles = resampled
+
+                if len(candles) < 3:
+                    continue
+
+                signals = detect_all_patterns(
+                    candles, ticker=ticker.upper(), timeframe=tf_label,
+                    kb_conviction=kb_rows.get('conviction_tier', ''),
+                    kb_regime=kb_rows.get('price_regime', ''),
+                    kb_signal_dir=kb_rows.get('signal_direction', ''),
+                )
+                all_signals.extend(signals)
+            except Exception as e:
+                _logger.debug('discovery: patterns %s/%s fetch failed: %s', ticker, tf_label, e)
+                continue
+
+        if not all_signals:
             return
 
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -407,7 +438,7 @@ class DiscoveryPipeline:
                 )
             """)
             inserted = 0
-            for sig in signals:
+            for sig in all_signals:
                 exists = conn.execute(
                     "SELECT 1 FROM pattern_signals WHERE ticker=? AND pattern_type=? "
                     "AND formed_at=? AND timeframe=?",
