@@ -2525,6 +2525,41 @@ def chat_endpoint():
                     _lines.append(_sent)
 
                 portfolio_context = '\n'.join(_lines)
+
+                # ── Geo-risk context injection ─────────────────────────────
+                # Append geopolitical_risk_exposure and energy_shock_risk atoms
+                # for any holding that has elevated/moderate geo risk in the KB.
+                try:
+                    import sqlite3 as _sq
+                    _gc = _sq.connect(_DB_PATH, timeout=5)
+                    _geo_lines = []
+                    for _ht in _holding_tickers:
+                        _geo_row = _gc.execute(
+                            """SELECT object FROM facts
+                               WHERE subject=? AND predicate='geopolitical_risk_exposure'
+                               ORDER BY confidence DESC LIMIT 1""",
+                            (_ht.lower(),),
+                        ).fetchone()
+                        if _geo_row and _geo_row[0] in ('elevated', 'moderate'):
+                            _geo_lines.append(
+                                f"  {_ht}: geopolitical_risk_exposure={_geo_row[0]}"
+                            )
+                    # Energy shock risk macro atom
+                    _shock_row = _gc.execute(
+                        """SELECT object FROM facts
+                           WHERE subject='macro_regime' AND predicate='energy_shock_risk'
+                           ORDER BY confidence DESC LIMIT 1"""
+                    ).fetchone()
+                    _gc.close()
+                    if _geo_lines or (_shock_row and _shock_row[0] in ('elevated', 'moderate')):
+                        portfolio_context += '\n=== GEOPOLITICAL RISK FLAGS ==='
+                        if _shock_row and _shock_row[0] in ('elevated', 'moderate'):
+                            portfolio_context += f'\n  Energy shock risk: {_shock_row[0]} (WTI/Middle East tension)'
+                        if _geo_lines:
+                            portfolio_context += '\n' + '\n'.join(_geo_lines)
+                except Exception:
+                    pass
+
         except Exception:
             portfolio_context = None
 

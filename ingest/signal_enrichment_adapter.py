@@ -977,6 +977,169 @@ def _compute_news_sentiment(
     return 'neutral'
 
 
+# ── Geopolitical risk enrichment ─────────────────────────────────────────────
+
+def _read_geo_atoms(db_path: str) -> Dict[str, str]:
+    """Read gdelt_tension, ucdp_conflict, acled_unrest, and eia_energy atoms from KB."""
+    geo: Dict[str, str] = {}
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute("""
+            SELECT subject, predicate, object
+            FROM facts
+            WHERE subject IN ('gdelt_tension', 'ucdp_conflict', 'acled_unrest', 'oil_market', 'macro_regime')
+            ORDER BY subject, predicate, confidence DESC
+        """)
+        for row in c.fetchall():
+            key = f"{row['subject']}:{row['predicate']}"
+            if key not in geo:
+                geo[key] = row['object']
+        conn.close()
+    except Exception as exc:
+        _logger.warning('_read_geo_atoms failed: %s', exc)
+    return geo
+
+
+def _compute_geo_risk_atoms(db_path: str, now_iso: str) -> List[RawAtom]:
+    """
+    Derive geopolitical_risk_exposure per ticker and energy_shock_risk macro atom.
+
+    Logic:
+    - For each ticker in TICKER_GEO_EXPOSURE, check all mapped regions
+    - Elevated if any GDELT pair score >= 60 OR any UCDP active_war in region
+    - Moderate if any GDELT pair score >= 35
+    - Low otherwise
+    - energy_shock_risk: EIA wti_crude > 90 AND (Middle East GDELT score >= 55 OR supply_trend tight)
+    """
+    try:
+        from ingest.geo_exposure import (
+            TICKER_GEO_EXPOSURE, REGION_TO_GDELT_PAIRS,
+            GEO_RISK_ELEVATED_THRESHOLD, GEO_RISK_MODERATE_THRESHOLD,
+        )
+    except ImportError:
+        _logger.warning('geo_exposure.py not found — skipping geo-risk pass')
+        return []
+
+    geo = _read_geo_atoms(db_path)
+    atoms: List[RawAtom] = []
+    source = 'derived_signal_geo_risk'
+    meta_base = {'as_of': now_iso}
+
+    # Pre-compute region risk levels from GDELT and UCDP atoms
+    region_risk: Dict[str, str] = {}
+
+    for region, gdelt_pair_keys in REGION_TO_GDELT_PAIRS.items():
+        max_score = 0.0
+        has_active_war = False
+
+        for pair_key in gdelt_pair_keys:
+            val = geo.get(f'gdelt_tension:{pair_key}')
+            if val is not None:
+                try:
+                    max_score = max(max_score, float(val))
+                except ValueError:
+                    pass
+
+        # Check UCDP active wars mapped to this region
+        _REGION_COUNTRIES: Dict[str, List[str]] = {
+            'europe_east': ['ukr', 'rus'],
+            'middle_east': ['syr', 'yem', 'irq', 'pse'],
+            'africa':      ['sdn', 'ssd', 'eth', 'mli', 'ner', 'nga', 'moz', 'som', 'caf', 'cod'],
+            'asia_south':  ['afg', 'pak'],
+            'asia_east':   ['mmr'],
+            'latam':       ['mex', 'col', 'hti'],
+            'global_defence': [],  # no country filter — any war counts
+        }
+        war_countries = _REGION_COUNTRIES.get(region, [])
+        if region == 'global_defence':
+            # Elevated if any country has active_war globally
+            has_active_war = any(
+                v == 'active_war'
+                for k, v in geo.items()
+                if k.startswith('ucdp_conflict:')
+            )
+        else:
+            has_active_war = any(
+                geo.get(f'ucdp_conflict:{iso}') == 'active_war'
+                for iso in war_countries
+            )
+
+        if has_active_war or max_score >= GEO_RISK_ELEVATED_THRESHOLD:
+            region_risk[region] = 'elevated'
+        elif max_score >= GEO_RISK_MODERATE_THRESHOLD:
+            region_risk[region] = 'moderate'
+        else:
+            region_risk[region] = 'low'
+
+    # Emit geopolitical_risk_exposure per ticker
+    for ticker, regions in TICKER_GEO_EXPOSURE.items():
+        # Take the worst risk level across all mapped regions
+        levels = [region_risk.get(r, 'low') for r in regions]
+        if 'elevated' in levels:
+            exposure = 'elevated'
+        elif 'moderate' in levels:
+            exposure = 'moderate'
+        else:
+            exposure = 'low'
+
+        # Only emit non-low — avoids flooding KB with low-value atoms
+        if exposure in ('elevated', 'moderate'):
+            atoms.append(RawAtom(
+                subject    = ticker,
+                predicate  = 'geopolitical_risk_exposure',
+                object     = exposure,
+                confidence = 0.68,
+                source     = source,
+                metadata   = {
+                    **meta_base,
+                    'regions': regions,
+                    'region_risks': {r: region_risk.get(r, 'low') for r in regions},
+                },
+                upsert     = True,
+            ))
+
+    # ── Commodity-macro cross signal: energy_shock_risk ───────────────────────
+    # Elevated when: WTI > 90 AND (Middle East GDELT tension elevated OR supply tight)
+    wti_str     = geo.get('oil_market:wti_crude')
+    supply_str  = geo.get('oil_market:supply_trend')
+    me_risk     = region_risk.get('middle_east', 'low')
+
+    try:
+        wti = float(wti_str) if wti_str else None
+    except ValueError:
+        wti = None
+
+    if wti is not None:
+        if wti > 90 and (me_risk == 'elevated' or supply_str == 'falling'):
+            shock_level = 'elevated'
+        elif wti > 80 and me_risk in ('elevated', 'moderate'):
+            shock_level = 'moderate'
+        else:
+            shock_level = 'low'
+
+        if shock_level in ('elevated', 'moderate'):
+            atoms.append(RawAtom(
+                subject    = 'macro_regime',
+                predicate  = 'energy_shock_risk',
+                object     = shock_level,
+                confidence = 0.72,
+                source     = source,
+                metadata   = {
+                    **meta_base,
+                    'wti_crude': wti,
+                    'supply_trend': supply_str,
+                    'middle_east_tension': me_risk,
+                },
+                upsert     = True,
+            ))
+
+    _logger.info('[signal_enrichment] geo-risk pass: %d atoms (%d tickers checked)',
+                 len(atoms), len(TICKER_GEO_EXPOSURE))
+    return atoms
+
+
 class SignalEnrichmentAdapter(BaseIngestAdapter):
     """
     Second-order signal enrichment. Reads current KB atoms and emits
@@ -1213,6 +1376,16 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
             },
             upsert     = True,
         ))
+
+        # ── Geopolitical risk exposure pass ───────────────────────────────
+        # Reads gdelt_tension and ucdp_conflict atoms from KB and emits
+        # geopolitical_risk_exposure per ticker using geo_exposure.py config.
+        # Also emits energy_shock_risk macro cross signal (EIA + GDELT).
+        try:
+            geo_atoms = _compute_geo_risk_atoms(self._db_path, now_iso)
+            atoms.extend(geo_atoms)
+        except Exception as _ge:
+            _logger.warning('[signal_enrichment] geo-risk pass failed: %s', _ge)
 
         _logger.info(
             '[signal_enrichment] enriched %d tickers (%d atoms), skipped %d subjects',
