@@ -6,11 +6,8 @@
 # To test with an IP only (no domain), replace the domain block with:
 #   :80 { reverse_proxy trading-galaxy:5050 }
 
-api.tradinggalaxy.dev {
+api.trading-galaxy.uk {
     # Automatic HTTPS — Caddy handles ACME challenge and renewal
-    tls {
-        protocols tls1.2 tls1.3
-    }
 
     # Security headers
     header {
@@ -21,23 +18,8 @@ api.tradinggalaxy.dev {
         -Server
     }
 
-    # Rate-limit aggressive scrapers at the edge (belt-and-suspenders with
-    # flask-limiter inside the app)
-    rate_limit {
-        zone dynamic {
-            key    {remote_host}
-            events 300
-            window 1m
-        }
-    }
-
-    # Proxy to gunicorn
-    reverse_proxy trading-galaxy:5050 {
-        health_uri     /health
-        health_interval 15s
-        health_timeout  5s
-
-        # Pass real IP to Flask (used by flask-limiter)
+    # Proxy to Flask on localhost
+    reverse_proxy localhost:5050 {
         header_up X-Forwarded-For {remote_host}
         header_up X-Real-IP       {remote_host}
         header_up Host            {host}
@@ -52,10 +34,4 @@ api.tradinggalaxy.dev {
         }
         format json
     }
-}
-
-# Redirect bare HTTP → HTTPS (Caddy handles this automatically, but
-# explicit is clearer for ops review)
-http://api.tradinggalaxy.dev {
-    redir https://api.tradinggalaxy.dev{uri} permanent
 }

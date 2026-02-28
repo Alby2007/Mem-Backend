@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org https://fonts.googleapis.com; frame-src https://oauth.telegram.org https://s.tradingview.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.tradinggalaxy.dev;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org https://fonts.googleapis.com; frame-src https://oauth.telegram.org https://s.tradingview.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.trading-galaxy.uk;">
 <title>Trading Galaxy — Internal Tool</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -756,7 +756,7 @@ const state = {
 // ── API base ─────────────────────────────────────────────────────────────────
 const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? ''
-    : 'https://api.tradinggalaxy.dev';
+    : 'https://api.trading-galaxy.uk';
 
 // ── apiFetch ─────────────────────────────────────────────────────────────────
 async function apiFetch(path, opts = {}) {

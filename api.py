@@ -283,8 +283,9 @@ try:
     from flask_cors import CORS as _CORS
     _CORS(app, resources={r"/*": {
         "origins": [
-            "https://tradinggalaxy.dev",
-            "https://app.tradinggalaxy.dev",
+            "https://trading-galaxy.uk",
+            "https://www.trading-galaxy.uk",
+            "https://app.trading-galaxy.uk",
             "https://*.netlify.app",
             "http://localhost:3000",
             "http://localhost:5050",
