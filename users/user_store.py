@@ -1108,6 +1108,129 @@ def get_user_watchlist_tickers(db_path: str, user_id: str) -> List[str]:
     return list({h['ticker'].upper() for h in holdings if h.get('ticker')})
 
 
+# ── tip_followups table ────────────────────────────────────────────────────────
+
+_DDL_TIP_FOLLOWUPS = """
+CREATE TABLE IF NOT EXISTS tip_followups (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id        TEXT    NOT NULL,
+    ticker         TEXT    NOT NULL,
+    direction      TEXT    NOT NULL DEFAULT 'bullish',
+    entry_price    REAL,
+    stop_loss      REAL,
+    target_1       REAL,
+    target_2       REAL,
+    target_3       REAL,
+    tracking_target TEXT   DEFAULT 'T1',
+    status         TEXT    NOT NULL DEFAULT 'watching',
+    alert_level    TEXT,
+    last_alert_at  TEXT,
+    tip_id         TEXT,
+    opened_at      TEXT    NOT NULL,
+    closed_at      TEXT
+)
+"""
+
+_DDL_TIP_FOLLOWUPS_IDX = """
+CREATE INDEX IF NOT EXISTS idx_tip_followups_watching
+ON tip_followups(status, user_id)
+"""
+
+
+def _ensure_tip_followups_table(conn: sqlite3.Connection) -> None:
+    conn.execute(_DDL_TIP_FOLLOWUPS)
+    conn.execute(_DDL_TIP_FOLLOWUPS_IDX)
+    conn.commit()
+
+
+def get_watching_followups(db_path: str) -> List[dict]:
+    """Return all tip followups with status='watching' across all users."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_tip_followups_table(conn)
+        rows = conn.execute(
+            """SELECT id, user_id, ticker, direction, entry_price,
+                      stop_loss, target_1, target_2, target_3,
+                      tracking_target, status, alert_level, last_alert_at,
+                      tip_id, opened_at
+               FROM tip_followups
+               WHERE status = 'watching'
+               ORDER BY opened_at DESC"""
+        ).fetchall()
+        cols = ['id', 'user_id', 'ticker', 'direction', 'entry_price',
+                'stop_loss', 'target_1', 'target_2', 'target_3',
+                'tracking_target', 'status', 'alert_level', 'last_alert_at',
+                'tip_id', 'opened_at']
+        return [dict(zip(cols, r)) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_followup_status(
+    db_path: str,
+    followup_id: int,
+    status: Optional[str] = None,
+    alert_level: Optional[str] = None,
+    last_alert_at: Optional[str] = None,
+    closed_at: Optional[str] = None,
+) -> None:
+    """Update status, alert_level, last_alert_at, or closed_at for a followup."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_tip_followups_table(conn)
+        updates = []
+        params: list = []
+        if status is not None:
+            updates.append('status = ?'); params.append(status)
+        if alert_level is not None:
+            updates.append('alert_level = ?'); params.append(alert_level)
+        if last_alert_at is not None:
+            updates.append('last_alert_at = ?'); params.append(last_alert_at)
+        if closed_at is not None:
+            updates.append('closed_at = ?'); params.append(closed_at)
+        if not updates:
+            return
+        params.append(followup_id)
+        conn.execute(
+            f"UPDATE tip_followups SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def upsert_tip_followup(
+    db_path: str,
+    user_id: str,
+    ticker: str,
+    direction: str = 'bullish',
+    entry_price: Optional[float] = None,
+    stop_loss: Optional[float] = None,
+    target_1: Optional[float] = None,
+    target_2: Optional[float] = None,
+    target_3: Optional[float] = None,
+    tip_id: Optional[str] = None,
+) -> int:
+    """Insert a new tip followup record. Returns the new row id."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_tip_followups_table(conn)
+        now = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            """INSERT INTO tip_followups
+               (user_id, ticker, direction, entry_price, stop_loss,
+                target_1, target_2, target_3, tip_id, opened_at, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'watching')""",
+            (user_id, ticker.upper(), direction, entry_price, stop_loss,
+             target_1, target_2, target_3, tip_id, now),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
 def update_tip_config(
     db_path: str,
     user_id: str,
