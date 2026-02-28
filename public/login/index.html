@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org https://fonts.googleapis.com; frame-src https://oauth.telegram.org https://s.tradingview.com https://api.trading-galaxy.uk; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.trading-galaxy.uk;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org https://fonts.googleapis.com; frame-src https://oauth.telegram.org https://s.tradingview.com https://api.trading-galaxy.uk https://telegram.org; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.trading-galaxy.uk;">
 <title>Trading Galaxy — Sign In</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -828,6 +828,15 @@ select option { background: var(--surface); }
     </div>
     <button class="btn btn-primary profile-save-btn" id="profile-pw-btn">Update Password</button>
     <div class="profile-msg" id="profile-pw-msg"></div>
+  </div>
+
+  <!-- Telegram -->
+  <div class="profile-section">
+    <div class="profile-section-title">Telegram</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Link your Telegram account to receive daily tips and alerts.</div>
+    <div id="profile-tg-status" style="font-size:12px;margin-bottom:14px;color:var(--muted);">Checking…</div>
+    <div id="profile-tg-widget"></div>
+    <div class="profile-msg" id="profile-tg-msg"></div>
   </div>
 
   <!-- Sign Out -->
@@ -2344,7 +2353,65 @@ async function loadProfile() {
     document.getElementById('profile-last').value     = d.last_name  || '';
     document.getElementById('profile-phone').value    = d.phone      || '';
   } catch(e) { /* silent */ }
+
+  // Telegram link status + widget
+  try {
+    const u = await apiFetch(`/users/${state.userId}/onboarding`);
+    const chatId = u?.telegram_chat_id || u?.chat_id || null;
+    const tgStatus = document.getElementById('profile-tg-status');
+    const tgWidget = document.getElementById('profile-tg-widget');
+    if (chatId) {
+      tgStatus.innerHTML = `<span style="color:var(--green);">✓ Linked</span> — Telegram chat ID: <span style="font-family:var(--mono);color:var(--accent);">${escHtml(String(chatId))}</span>`;
+      tgWidget.innerHTML = `<button class="btn btn-ghost btn-sm" id="profile-tg-relink-btn">Re-link Telegram account</button>`;
+      document.getElementById('profile-tg-relink-btn').addEventListener('click', () => {
+        tgWidget.innerHTML = '';
+        _injectProfileTgWidget();
+      });
+    } else {
+      tgStatus.innerHTML = `<span style="color:var(--muted);">Not linked</span>`;
+      _injectProfileTgWidget();
+    }
+  } catch(e) { /* silent */ }
 }
+
+let _profileTgWidgetInjected = false;
+function _injectProfileTgWidget() {
+  _profileTgWidgetInjected = false;
+  const container = document.getElementById('profile-tg-widget');
+  if (!container) return;
+  container.innerHTML = '';
+  const s = document.createElement('script');
+  s.src = 'https://telegram.org/js/telegram-widget.js?22';
+  s.setAttribute('data-telegram-login', 'TheTelescopeBot');
+  s.setAttribute('data-size', 'medium');
+  s.setAttribute('data-radius', '5');
+  s.setAttribute('data-onauth', 'onProfileTelegramLink(user)');
+  s.setAttribute('data-request-access', 'write');
+  container.appendChild(s);
+}
+
+window.onProfileTelegramLink = async function(tgData) {
+  const msg = document.getElementById('profile-tg-msg');
+  msg.innerHTML = '<span class="spinner"></span>';
+  try {
+    await apiFetch(`/users/${state.userId}/onboarding`, {
+      method: 'POST',
+      body: JSON.stringify({ telegram_chat_id: String(tgData.id) })
+    });
+    const name = tgData.username ? `@${tgData.username}` : (tgData.first_name || String(tgData.id));
+    document.getElementById('profile-tg-status').innerHTML =
+      `<span style="color:var(--green);">✓ Linked</span> — ${escHtml(name)} (ID: <span style="font-family:var(--mono);color:var(--accent);">${escHtml(String(tgData.id))}</span>)`;
+    document.getElementById('profile-tg-widget').innerHTML =
+      `<button class="btn btn-ghost btn-sm" id="profile-tg-relink-btn">Re-link Telegram account</button>`;
+    document.getElementById('profile-tg-relink-btn').addEventListener('click', () => {
+      document.getElementById('profile-tg-widget').innerHTML = '';
+      _injectProfileTgWidget();
+    });
+    msg.style.color = 'var(--green)'; msg.textContent = '✓ Telegram linked successfully';
+  } catch(e) {
+    msg.style.color = 'var(--red)'; msg.textContent = e.message;
+  }
+};
 
 document.getElementById('profile-save-btn').addEventListener('click', async () => {
   const msg  = document.getElementById('profile-save-msg');
