@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org https://fonts.googleapis.com; frame-src https://oauth.telegram.org; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org https://fonts.googleapis.com; frame-src https://oauth.telegram.org https://s.tradingview.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.tradinggalaxy.dev;">
 <title>Trading Galaxy — Internal Tool</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -754,14 +754,23 @@ const state = {
 };
 
 // ── API base ─────────────────────────────────────────────────────────────────
-const API = '';   // same origin
+const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? ''
+    : 'https://api.tradinggalaxy.dev';
 
 // ── apiFetch ─────────────────────────────────────────────────────────────────
 async function apiFetch(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
-  const res = await fetch(API + path, { ...opts, headers });
+  let res;
+  try {
+    res = await fetch(API + path, { ...opts, headers });
+  } catch (e) {
+    showToast('Connection error — check your internet');
+    return null;
+  }
   if (res.status === 401) { signOut(); showToast('Session expired — please sign in again'); return null; }
+  if (res.status === 429) { showToast('Too many requests — please wait a moment'); return null; }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
@@ -1172,7 +1181,7 @@ function _renderTVChart(sym) {
     const h = Math.max(container.clientHeight, 400);
     container.innerHTML = '';
     const iframe = document.createElement('iframe');
-    iframe.src = `/markets/chart?sym=${encodeURIComponent(tvSym)}`;
+    iframe.src = `${API}/markets/chart?sym=${encodeURIComponent(tvSym)}`;
     iframe.style.cssText = `width:100%;height:${h}px;border:none;display:block;`;
     iframe.setAttribute('frameborder', '0');
     iframe.setAttribute('allowfullscreen', '');
@@ -1205,7 +1214,7 @@ async function _loadKBPanel(kbTicker) {
   const panel = document.getElementById('kb-panel');
   panel.innerHTML = `<div class="kb-title">KB Intelligence — ${kbTicker}</div><div style="color:var(--muted);font-size:11px;">Loading…</div>`;
   try {
-    const res = await fetch(`/tickers/${encodeURIComponent(kbTicker)}/summary`);
+    const res = await fetch(`${API}/tickers/${encodeURIComponent(kbTicker)}/summary`);
     if (!res.ok) throw new Error('no data');
     const data = await res.json();
     _renderKBPanel(panel, data, kbTicker);
