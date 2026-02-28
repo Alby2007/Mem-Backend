@@ -69,6 +69,11 @@ try:
     from ingest.sector_rotation_adapter import SectorRotationAdapter
     from ingest.economic_calendar_adapter import EconomicCalendarAdapter
     from ingest.discovery_pipeline import DiscoveryPipeline
+    from ingest.eia_adapter import EIAAdapter
+    from ingest.gdelt_adapter import GDELTAdapter
+    from ingest.ucdp_adapter import UCDPAdapter
+    from ingest.acled_adapter import ACLEDAdapter
+    from ingest.usgs_adapter import USGSAdapter
     HAS_INGEST = True
 except ImportError:
     HAS_INGEST = False
@@ -478,6 +483,11 @@ if HAS_INGEST:
         _ingest_scheduler.register(ShortInterestAdapter(db_path=_DB_PATH),    interval_sec=86400)  # 24 hours FINRA short interest
         _ingest_scheduler.register(SectorRotationAdapter(db_path=_DB_PATH),   interval_sec=3600)   # 1 hour sector rotation
         _ingest_scheduler.register(EconomicCalendarAdapter(db_path=_DB_PATH), interval_sec=86400)  # 24 hours economic calendar
+        _ingest_scheduler.register(EIAAdapter(),                               interval_sec=86400)  # 24 hours EIA oil/energy
+        _ingest_scheduler.register(GDELTAdapter(),                             interval_sec=3600)   # 1 hour GDELT bilateral tension
+        _ingest_scheduler.register(UCDPAdapter(),                              interval_sec=86400)  # 24 hours UCDP conflict baseline
+        _ingest_scheduler.register(ACLEDAdapter(),                             interval_sec=21600)  # 6 hours ACLED protest/unrest
+        _ingest_scheduler.register(USGSAdapter(),                              interval_sec=3600)   # 1 hour USGS earthquakes
         _ingest_scheduler.start()
     except Exception as _e:
         import logging as _logging

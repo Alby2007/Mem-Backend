@@ -53,6 +53,12 @@ _DEFAULT_FEEDS: Dict[str, str] = {
     'motley_fool':          'https://www.fool.com/feeds/index.aspx',
     # CNBC earnings
     'cnbc_earnings':        'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839135',
+    # Geopolitical & macro — leading indicators for defence/energy/EM tickers
+    'reuters_world':        'https://feeds.reuters.com/reuters/worldNews',
+    'bbc_world':            'http://feeds.bbci.co.uk/news/world/rss.xml',
+    'al_jazeera':           'https://www.aljazeera.com/xml/rss/all.xml',
+    'defense_news':         'https://www.defensenews.com/arc/outboundfeeds/rss/',
+    'energy_monitor':       'https://www.energymonitor.ai/feed/',
 }
 
 # Max parallel workers for feed fetching
