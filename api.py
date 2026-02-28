@@ -1035,6 +1035,32 @@ def stats():
     except Exception:
         extras['kb_insufficient_events_7d'] = 0
 
+    # Current market regime — query facts table directly
+    try:
+        row = c.execute("""
+            SELECT object FROM facts
+            WHERE subject = 'macro_regime' AND predicate = 'regime_label'
+            ORDER BY timestamp DESC LIMIT 1
+        """).fetchone()
+        if not row:
+            row = c.execute("""
+                SELECT object FROM facts
+                WHERE predicate IN ('regime_label', 'market_regime', 'current_regime')
+                ORDER BY timestamp DESC LIMIT 1
+            """).fetchone()
+        extras['market_regime'] = row[0] if row else None
+    except Exception:
+        extras['market_regime'] = None
+
+    # Open patterns count — use min_quality=0.0 to match Patterns screen
+    try:
+        if HAS_PRODUCT_LAYER:
+            from users.user_store import get_open_patterns as _gop
+            pats = _gop(_DB_PATH, min_quality=0.0, limit=500)
+            extras['open_patterns'] = len(pats)
+    except Exception:
+        pass
+
     return jsonify({**base, **extras})
 
 
