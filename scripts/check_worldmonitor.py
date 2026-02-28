@@ -4,51 +4,46 @@ import sqlite3
 DB = '/opt/trading-galaxy/data/trading_knowledge.db'
 conn = sqlite3.connect(DB)
 
-print("=== facts table schema ===")
+print("=== facts table columns ===")
 cols = [d[1] for d in conn.execute('PRAGMA table_info(facts)').fetchall()]
 print(cols)
 
-# Build column references dynamically
-# Standard KB schema: ticker, predicate, object (or atom / content)
-# Try to detect which columns exist
-col_set = set(cols)
-subj_col = 'ticker' if 'ticker' in col_set else cols[0]
-pred_col = 'predicate' if 'predicate' in col_set else cols[1]
-obj_col  = 'object' if 'object' in col_set else ('atom' if 'atom' in col_set else cols[2])
+print("\n=== Sources in facts (top 25) ===")
+for row in conn.execute("SELECT source, COUNT(*) FROM facts GROUP BY source ORDER BY COUNT(*) DESC LIMIT 25").fetchall():
+    print(row)
 
-print(f"Using: subject={subj_col}, predicate={pred_col}, value={obj_col}\n")
-
-print("=== Sources in facts (top 20) ===")
-try:
-    sources = conn.execute("SELECT source, COUNT(*) as cnt FROM facts GROUP BY source ORDER BY cnt DESC LIMIT 20").fetchall()
-    for s in sources:
-        print(s)
-except Exception as e:
-    print(f"No source column: {e}")
-
-print("\n=== Geopolitical/tension atoms ===")
-q = f"""
-    SELECT {subj_col}, {pred_col}, {obj_col} FROM facts
-    WHERE {pred_col} LIKE '%tension%'
-       OR {pred_col} LIKE '%geopolit%'
-       OR {pred_col} LIKE '%gdelt%'
-       OR {pred_col} LIKE '%conflict%'
-       OR {pred_col} LIKE '%bilateral%'
-       OR {subj_col} LIKE '%tension%'
-       OR {subj_col} LIKE '%world%'
+print("\n=== Geo subjects (gdelt/acled/ucdp/seismic) ===")
+for row in conn.execute("""
+    SELECT subject, predicate, object FROM facts
+    WHERE subject IN ('gdelt_tension','acled_unrest','geo_exposure','ucdp_conflict','usgs_seismic')
     LIMIT 30
-"""
-rows = conn.execute(q).fetchall()
-for r in rows:
-    print(r)
-print(f"Total: {len(rows)}")
+""").fetchall():
+    print(row)
 
-print("\n=== GDELT source atoms ===")
+print("\n=== Geo predicate search ===")
+for row in conn.execute("""
+    SELECT subject, predicate, object FROM facts
+    WHERE predicate LIKE '%tension%'
+       OR predicate LIKE '%geopolit%'
+       OR predicate LIKE '%conflict%'
+       OR predicate LIKE '%bilateral%'
+       OR predicate LIKE '%unrest%'
+       OR predicate LIKE '%seismic%'
+    LIMIT 20
+""").fetchall():
+    print(row)
+
+print("\n=== world monitor retrieval test ===")
+import sys, os
+sys.path.insert(0, '/home/ubuntu/trading-galaxy')
+os.chdir('/home/ubuntu/trading-galaxy')
 try:
-    gdelt = conn.execute(f"SELECT {subj_col}, {pred_col}, {obj_col} FROM facts WHERE source LIKE '%gdelt%' LIMIT 15").fetchall()
-    for r in gdelt:
-        print(r)
+    from retrieval import retrieve
+    result = retrieve('geopolitical tensions world monitor', conn, limit=5)
+    atoms = result.get('atom_count', 0) if isinstance(result, dict) else '?'
+    snippet = result.get('snippet', '')[:200] if isinstance(result, dict) else str(result)[:200]
+    print(f"atoms={atoms}  snippet={snippet!r}")
 except Exception as e:
-    print(f"Error: {e}")
+    print(f"retrieval error: {e}")
 
 conn.close()
