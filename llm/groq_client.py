@@ -21,7 +21,7 @@ _logger = logging.getLogger(__name__)
 
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
 GROQ_BASE_URL  = "https://api.groq.com/openai/v1"
-DEFAULT_MODEL  = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
+DEFAULT_MODEL  = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 DEFAULT_TIMEOUT = int(os.environ.get("GROQ_TIMEOUT", "30"))
 
 
@@ -45,7 +45,7 @@ def chat(
         "model": model,
         "messages": messages,
         "temperature": 0.3,
-        "max_tokens": 1024,
+        "max_tokens": 2048,
     }
     try:
         r = _requests.post(
