@@ -87,7 +87,7 @@ unless a KB atom states a specific volatility figure or regime label for that se
 """
 
 _SYSTEM_NO_HALLUCINATION = (
-    "\n9. Do NOT introduce company names, executive names, news headlines, sector names, "
+    "\n10. Do NOT introduce company names, executive names, news headlines, sector names, "
     "industry descriptions, or ANY narrative not present verbatim in the KB atoms. "
     "This includes sector/industry labels like 'insurance', 'banking', 'technology', 'pharma' — "
     "ONLY use the exact 'sector' atom value from the KB if one exists for that ticker. "
@@ -105,13 +105,13 @@ _SYSTEM_NO_HALLUCINATION = (
 )
 
 _SYSTEM_THIN_COVERAGE = (
-    "\n8. IMPORTANT: KB coverage is thin for this topic. "
+    "\n11. IMPORTANT: KB coverage is thin for this topic. "
     "Say so explicitly at the start of your answer and qualify every claim accordingly. "
     "Do not speculate beyond what the context states."
 )
 
 _SYSTEM_DIAGNOSIS_SUFFIX = (
-    "\n9. The knowledge base has a structural gap ({primary_type}) for this topic. "
+    "\n12. The knowledge base has a structural gap ({primary_type}) for this topic. "
     "Acknowledge the gap and indicate what additional data would improve the answer."
 )
 
@@ -156,8 +156,8 @@ _SYSTEM_POSITIONS_RULE = (
     "Use only KB atoms — never invent signal strength or conviction from training data."
 )
 
-_SYSTEM_PORTFOLIO_RULE = (
-    "\n10. You have access to the user's portfolio in the USER PORTFOLIO block below. "
+_SYSTEM_PORTFOLIO_BASE = (
+    "\n13. You have access to the user's portfolio in the USER PORTFOLIO block below. "
     "Use it to personalise every answer. "
     "CRITICAL — PROFILE QUERIES: When the user asks how something relates to 'my profile', "
     "'my new profile', 'my risk tolerance', 'my portfolio', or 'me', "
@@ -168,20 +168,24 @@ _SYSTEM_PORTFOLIO_RULE = (
     "NEVER ask the user to clarify their profile — read it from the block. "
     "If the USER PORTFOLIO block is present, treat it as the ground truth about the user. "
     "Phrases like 'your new profile' mean the currently loaded USER PORTFOLIO block. "
-    "When the user asks about their portfolio or holdings, write a NARRATIVE PARAGRAPH for every single "
-    "ticker listed in Holdings — you MUST cover ALL of them, one paragraph each, no exceptions. "
     "CRITICAL — KB SIGNAL DEFINITION: The structured atoms in KNOWLEDGE CONTEXT ARE the KB signals. "
     "If the KB context contains ANY of these atoms for a ticker — last_price, price_regime, "
     "signal_direction, upside_pct, conviction_tier, return_1m, return_1y, catalyst, risk_factor — "
     "then KB signals ARE available for that ticker. You MUST NOT say 'No KB signals available' "
     "for any ticker that has at least one of these atoms in the context. "
-    "This overrides rule 9 for portfolio queries. "
+    "This overrides rule 10 for portfolio queries. "
     "Only say 'No KB signals available' if ZERO atoms of any kind exist for that ticker in the context. "
-    "Never skip or merge holdings. "
     "CRITICAL — NO PLACEHOLDERS: If an atom is absent from the KB context, OMIT it entirely. "
     "NEVER write '?', 'N/A', 'unknown', or any placeholder for missing data. "
     "Only state facts that are explicitly present in the KB context. "
-    "For each holding write a prose paragraph using only the atoms that exist: "
+    "IMPORTANT: Do NOT introduce sector names, company descriptions, executive names, or "
+    "industry classifications from your training data — only use the 'sector' atom from the KB if present."
+)
+
+_SYSTEM_PORTFOLIO_NARRATIVE = (
+    "\n14. PORTFOLIO NARRATIVE MODE: Write a prose paragraph for every single ticker listed "
+    "in Holdings — cover ALL of them, one paragraph each, no exceptions, never skip or merge holdings. "
+    "For each holding write using only the atoms that exist: "
     "(1) State the current price (last_price) and price_regime in plain English "
     "(near_52w_low = near its lowest price of the past year; near_52w_high = near highest; "
     "mid_range = somewhere in between). "
@@ -194,9 +198,7 @@ _SYSTEM_PORTFOLIO_RULE = (
     "End each holding paragraph with a one-sentence KB summary. "
     "After all holdings, add a concentration risk paragraph. "
     "Do not use bullet points — write in prose. "
-    "Do not reveal exact average costs unless the user explicitly asks. "
-    "IMPORTANT: Do NOT introduce sector names, company descriptions, executive names, or "
-    "industry classifications from your training data — only use the 'sector' atom from the KB if present."
+    "Do not reveal exact average costs unless the user explicitly asks."
 )
 
 _SYSTEM_LIVE_DATA_RULE = (
@@ -375,36 +377,48 @@ def build(
         system_text += _SYSTEM_SEARCH_RULE
 
     if portfolio_context:
-        system_text += _SYSTEM_PORTFOLIO_RULE
+        system_text += _SYSTEM_PORTFOLIO_BASE
         system_text += _SYSTEM_SIZING_RULE
-        # Detect position-opportunity queries and inject the ranking rule
+        # #4 fix: NARRATIVE and POSITIONS are mutually exclusive.
+        # Detect opportunity/position-ranking intent first.
         _msg_lower = user_message.lower()
-        if any(kw in _msg_lower for kw in (
+        _is_opportunity_query = any(kw in _msg_lower for kw in (
             'good position', 'open position', 'best setup', 'best position',
             'what to trade', 'trade now', 'investment opportunit', 'opportunity',
             'what should i', 'where to invest', 'strongest signal', 'top setup',
             'new position', 'enter a position', 'add to',
-        )):
+        ))
+        if _is_opportunity_query:
             system_text += _SYSTEM_POSITIONS_RULE
+        else:
+            system_text += _SYSTEM_PORTFOLIO_NARRATIVE
 
-    if opportunity_scan_context:
+    # #6 fix: only inject generation rule if scan actually returned results
+    if opportunity_scan_context and 'no results' not in opportunity_scan_context.lower():
         system_text += _SYSTEM_GENERATION_RULE
 
-    # Telegram mode: override verbose formatting with concise chat style
+    # Telegram mode: override verbose formatting with concise chat style.
+    # Injected before geo rules so telegram_mode can suppress them (#1 fix).
     if telegram_mode:
         system_text += _SYSTEM_TELEGRAM_FORMAT
 
-    # Geo rules: inject based on whether user has a portfolio or not
+    # #1 + #2 fix: geo rules only fire on hard geo keywords.
+    # Soft/generic words (buy, should i, happening, how does) no longer trigger.
+    # In telegram_mode the format override handles brevity — geo structure rules skipped.
     _msg_lower_geo = user_message.lower()
-    _GEO_IMPACT_KEYWORDS = (
+    _GEO_HARD_KWS = {
         'war', 'conflict', 'attack', 'strike', 'military', 'iran', 'russia',
         'ukraine', 'israel', 'gaza', 'sanction', 'tension', 'geopolit',
+    }
+    _GEO_SOFT_KWS = {
         'affect my', 'impact my', 'affect portfolio', 'impact portfolio',
-        'how does', 'what does', 'what is the war', 'started right now',
-        'going on', 'happening', 'buy', 'invest', 'should i',
+        'what is the war', 'started right now',
+    }
+    _is_geo_msg = (
+        any(kw in _msg_lower_geo for kw in _GEO_HARD_KWS)
+        or any(kw in _msg_lower_geo for kw in _GEO_SOFT_KWS)
     )
-    _is_geo_msg = any(kw in _msg_lower_geo for kw in _GEO_IMPACT_KEYWORDS)
-    if _is_geo_msg:
+    if _is_geo_msg and not telegram_mode:
         if portfolio_context:
             system_text += _SYSTEM_GEO_PORTFOLIO_RULE
         else:
@@ -413,8 +427,23 @@ def build(
     # ── User turn ─────────────────────────────────────────────────────────────
     user_parts: list[str] = []
 
-    # Prior session state (cross-session continuity)
-    if prior_context:
+    # #5 fix: inject concrete tickers + intent mini-summary when history exists
+    if has_history and prior_context:
+        import re as _re_hist
+        _hist_tickers = list(dict.fromkeys(
+            t for t in _re_hist.findall(r'\b([A-Z]{1,5}(?:\.[A-Z]{1,2})?)\b', prior_context)
+            if t not in {
+                'KB', 'THE', 'AND', 'FOR', 'WITH', 'FROM', 'INTO', 'OVER',
+                'NOT', 'ALL', 'ARE', 'HAS', 'ITS', 'USD', 'GBP', 'EUR',
+                'HIGH', 'LOW', 'MID', 'YES', 'NO', 'AI', 'TV', 'US', 'UK',
+            }
+        ))[:5]
+        if _hist_tickers:
+            user_parts.append(
+                f"PRIOR SESSION CONTEXT: tickers discussed = {', '.join(_hist_tickers)}. "
+                f"Connect follow-up questions to these tickers and their signals without repeating the full analysis."
+            )
+    elif prior_context:
         user_parts.append(prior_context)
 
     # KB atom count header — tells LLM explicitly how much context was retrieved
