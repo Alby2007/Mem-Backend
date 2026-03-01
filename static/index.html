@@ -1771,7 +1771,7 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   } catch (e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
 });
 
-function _saveSession(token, userId, tgData) {
+async function _saveSession(token, userId, tgData) {
   state.token  = token;   // keep in memory for legacy references
   state.userId = userId;
   // Tokens are now stored in HttpOnly cookies set by the backend.
@@ -1781,6 +1781,12 @@ function _saveSession(token, userId, tgData) {
     localStorage.setItem('tg_user_id', userId);  // display only — not a secret
   } catch { /* storage blocked in some contexts */ }
   _renderTgChip(tgData || null, userId);
+  // Fetch is_dev so dev gating applies immediately after login
+  try {
+    const me = await apiFetch('/auth/me');
+    state.isDev = !!(me && me.is_dev);
+  } catch { state.isDev = false; }
+  applyDevGating();
 }
 
 function _renderTgChip(tgData, userId) {
