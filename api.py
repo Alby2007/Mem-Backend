@@ -2981,7 +2981,19 @@ def chat_endpoint():
                 for m in _db_history
                 if m.get('id') != _just_id
             ]
-            if _db_hist_msgs and len(messages) >= 2:
+            # Skip history injection if this is a retry of the same question.
+            # A retry must get a fresh response from the current KB context —
+            # splicing in a stale assistant turn would anchor the LLM to the
+            # old (pre-fix) answer regardless of what the new KB snippet contains.
+            _last_user_msg = next(
+                (m['content'] for m in reversed(_db_hist_msgs) if m['role'] == 'user'),
+                None
+            )
+            _is_retry = (
+                _last_user_msg is not None
+                and message.strip().lower() == _last_user_msg.strip().lower()
+            )
+            if _db_hist_msgs and len(messages) >= 2 and not _is_retry:
                 messages = [messages[0]] + _db_hist_msgs + [messages[-1]]
         except Exception:
             pass
