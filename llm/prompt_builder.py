@@ -14,6 +14,11 @@ from __future__ import annotations
 
 from typing import Optional
 
+try:
+    from analytics.opportunity_engine import EMPTY_SCAN_SENTINEL as _EMPTY_SCAN_SENTINEL
+except ImportError:
+    _EMPTY_SCAN_SENTINEL = 'SCAN_EMPTY:'  # fallback prefix if engine unavailable
+
 _STRESS_WARN_THRESHOLD = 0.6
 
 _SYSTEM_PROMPT_BASE = """\
@@ -393,8 +398,9 @@ def build(
         else:
             system_text += _SYSTEM_PORTFOLIO_NARRATIVE
 
-    # #6 fix: only inject generation rule if scan actually returned results
-    if opportunity_scan_context and 'no results' not in opportunity_scan_context.lower():
+    # #6 fix: only inject generation rule if scan actually returned results.
+    # Check for the pinned sentinel constant — never rely on natural-language substrings.
+    if opportunity_scan_context and _EMPTY_SCAN_SENTINEL not in opportunity_scan_context:
         system_text += _SYSTEM_GENERATION_RULE
 
     # Telegram mode: override verbose formatting with concise chat style.
@@ -413,6 +419,7 @@ def build(
     _GEO_SOFT_KWS = {
         'affect my', 'impact my', 'affect portfolio', 'impact portfolio',
         'what is the war', 'started right now',
+        'hurt my', 'damage my', 'risk to my', 'threatens my', 'threaten my',
     }
     _is_geo_msg = (
         any(kw in _msg_lower_geo for kw in _GEO_HARD_KWS)

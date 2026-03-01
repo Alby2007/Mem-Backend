@@ -43,6 +43,11 @@ from typing import Dict, List, Optional, Tuple
 
 _logger = logging.getLogger(__name__)
 
+# Single sentinel string written into scan context when no results are found.
+# prompt_builder imports this constant to check for empty scans — never match
+# on natural-language substrings which may differ across code paths.
+EMPTY_SCAN_SENTINEL = 'SCAN_EMPTY: No setups found with current KB coverage.'
+
 # ── Intent keyword map ────────────────────────────────────────────────────────
 # Maps user query keywords → mode names (first match wins; order matters)
 
@@ -968,7 +973,7 @@ def format_scan_as_context(scan: OpportunityScan) -> str:
         lines.append('')
 
     if not scan.results:
-        lines.append('No setups found matching this mode with current KB coverage.')
+        lines.append(EMPTY_SCAN_SENTINEL)
     else:
         lines.append(f'Found {len(scan.results)} setup(s):')
         lines.append('')
