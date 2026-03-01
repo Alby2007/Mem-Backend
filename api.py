@@ -1053,6 +1053,45 @@ def stats():
     except Exception:
         extras['market_regime'] = None
 
+    # Regime detail fields — volatility, sector lead, KB confidence
+    try:
+        _vrow = c.execute("""
+            SELECT object FROM facts
+            WHERE predicate IN ('volatility_regime','market_volatility','vix_regime')
+            ORDER BY timestamp DESC LIMIT 1
+        """).fetchone()
+        extras['regime_volatility'] = _vrow[0] if _vrow else None
+    except Exception:
+        extras['regime_volatility'] = None
+
+    try:
+        # Leading sector = the sector with the highest count of bullish conviction_tier facts
+        _srow = c.execute("""
+            SELECT subject, COUNT(*) as cnt FROM facts
+            WHERE predicate = 'sector'
+            GROUP BY object
+            ORDER BY cnt DESC LIMIT 1
+        """).fetchone()
+        # Better: look for explicit sector_rotation or leading_sector fact
+        _srrow = c.execute("""
+            SELECT object FROM facts
+            WHERE predicate IN ('leading_sector','sector_rotation','top_sector')
+            ORDER BY timestamp DESC LIMIT 1
+        """).fetchone()
+        extras['regime_sector_lead'] = _srrow[0] if _srrow else None
+    except Exception:
+        extras['regime_sector_lead'] = None
+
+    try:
+        # KB confidence = fraction of facts with confidence > 0.7
+        _total_row = c.execute("SELECT COUNT(*) FROM facts").fetchone()
+        _high_row  = c.execute("SELECT COUNT(*) FROM facts WHERE confidence >= 0.7").fetchone()
+        _total = _total_row[0] if _total_row else 0
+        _high  = _high_row[0]  if _high_row  else 0
+        extras['regime_kb_confidence'] = round(_high / _total * 100, 1) if _total > 0 else None
+    except Exception:
+        extras['regime_kb_confidence'] = None
+
     # Open patterns count — use min_quality=0.0 to match Patterns screen
     try:
         if HAS_PRODUCT_LAYER:
@@ -1063,6 +1102,61 @@ def stats():
         pass
 
     return jsonify({**base, **extras})
+
+
+@app.route('/market/snapshot', methods=['GET'])
+@limiter.exempt
+def market_snapshot():
+    """
+    GET /market/snapshot
+
+    Returns last known price and 1-month return for a fixed set of market
+    benchmark symbols, read directly from KB facts (written by yfinance adapter).
+    No live network call — cached KB data only.
+
+    Response: { "symbols": { "^GSPC": {"price": 5123.4, "return_1m": 2.1}, ... }, "as_of": "..." }
+    """
+    _SNAPSHOT_SYMS = ['^GSPC', '^NDX', '^FTSE', 'GLD', 'DX-Y.NYB']
+    import sqlite3 as _sq
+    result = {}
+    try:
+        conn = _sq.connect(_DB_PATH, timeout=5)
+        for sym in _SNAPSHOT_SYMS:
+            sym_upper = sym.upper()
+            row_price = conn.execute(
+                """SELECT object, timestamp FROM facts
+                   WHERE UPPER(subject) = ? AND predicate IN ('last_price','price','close')
+                   ORDER BY timestamp DESC LIMIT 1""",
+                (sym_upper,)
+            ).fetchone()
+            row_ret = conn.execute(
+                """SELECT object FROM facts
+                   WHERE UPPER(subject) = ? AND predicate IN ('return_1m','change_pct_1m','pct_change_1m')
+                   ORDER BY timestamp DESC LIMIT 1""",
+                (sym_upper,)
+            ).fetchone()
+            entry = {}
+            if row_price:
+                try:
+                    entry['price'] = float(row_price[0])
+                    entry['as_of'] = row_price[1]
+                except (TypeError, ValueError):
+                    pass
+            if row_ret:
+                try:
+                    entry['return_1m'] = float(row_ret[0])
+                except (TypeError, ValueError):
+                    pass
+            result[sym] = entry
+        conn.close()
+    except Exception as e:
+        import logging as _log
+        _log.getLogger(__name__).warning('market/snapshot failed: %s', e)
+
+    return jsonify({
+        'symbols': result,
+        'as_of': datetime.now(timezone.utc).isoformat(),
+    })
 
 
 @app.route('/opportunities', methods=['POST'])

@@ -3005,6 +3005,13 @@ async function refreshDashboard() {
     if (rn) rn.textContent = regimeLabel;
     if (rd) rd.textContent = _REGIME_DESCS[regimeRaw] || '';
     if (rb) { rb.textContent = _REGIME_BIAS[regimeRaw] || '—'; rb.className = 'dsh-regime-ind-val ' + ((_REGIME_BIAS[regimeRaw]||'').toLowerCase() === 'bullish' ? 'amber' : (_REGIME_BIAS[regimeRaw]||'').toLowerCase() === 'bearish' ? 'red' : ''); }
+    // Regime detail — volatility, sector lead, KB confidence from /stats response
+    const rvEl  = document.getElementById('dsh-regime-vol');
+    const rsEl  = document.getElementById('dsh-regime-sector');
+    const rcEl  = document.getElementById('dsh-regime-conf');
+    if (rvEl)  rvEl.textContent  = stats.regime_volatility  ? String(stats.regime_volatility).replace(/_/g,' ') : '—';
+    if (rsEl)  rsEl.textContent  = stats.regime_sector_lead ? String(stats.regime_sector_lead).replace(/_/g,' ') : 'Data pending';
+    if (rcEl) { rcEl.textContent = stats.regime_kb_confidence != null ? stats.regime_kb_confidence + '% high-conf' : '—'; }
 
     document.getElementById('kb-count').textContent = `KB: ${facts.toLocaleString()}`;
   } catch(e) { showToast('Stats load failed: ' + e.message); }
@@ -3050,33 +3057,38 @@ async function refreshDashboard() {
     }
   } catch { document.getElementById('dash-conviction').innerHTML = `<div class="dsh-empty"><span class="dsh-empty-icon">📈</span><div class="dsh-empty-title">Conviction data unavailable</div></div>`; }
 
-  // Next briefing stat tile — load from user prefs
+  // Next briefing stat tile — load from /auth/me (has tier + delivery prefs)
   if (state.userId) {
     try {
-      const prefs = await apiFetch(`/users/${state.userId}/preferences`);
-      if (prefs) {
-        const tier      = (prefs.tier || 'basic').toLowerCase();
-        const delivTime = prefs.tip_delivery_time || prefs.delivery_time || '07:30';
-        const tz        = prefs.tip_delivery_timezone || prefs.timezone || 'Europe/London';
+      const me = await apiFetch('/auth/me');
+      if (me) {
+        const tier      = (me.tier || 'basic').toLowerCase();
+        const delivTime = me.tip_delivery_time || me.delivery_time || '07:30';
+        const tz        = me.tip_delivery_timezone || me.timezone || 'Europe/London';
         const tierCap   = tier.charAt(0).toUpperCase() + tier.slice(1);
-        // Compute next Monday
+        // Compute next Monday (or Wednesday for pro+)
         const now = new Date();
-        const daysUntilMon = (1 + 7 - now.getDay()) % 7 || 7;
-        const nextMon = new Date(now); nextMon.setDate(now.getDate() + daysUntilMon);
-        const diffMs = nextMon - now;
-        const diffH  = Math.floor(diffMs / 3600000);
-        const dDays  = Math.floor(diffH / 24);
-        const dHours = diffH % 24;
+        const todayDay = now.getDay(); // 0=Sun,1=Mon…
+        // Mon=1 delivery for all tiers; Wed=3 also for pro+
+        const daysToMon = (1 + 7 - todayDay) % 7 || 7;
+        const daysToWed = (3 + 7 - todayDay) % 7 || 7;
+        const daysUntil = (tier !== 'basic' && daysToWed < daysToMon) ? daysToWed : daysToMon;
+        const nextDay   = daysUntil === daysToWed ? 'Wednesday' : 'Monday';
+        const nextDate  = new Date(now); nextDate.setDate(now.getDate() + daysUntil);
+        const diffMs    = nextDate - now;
+        const diffH     = Math.floor(diffMs / 3600000);
+        const dDays     = Math.floor(diffH / 24);
+        const dHours    = diffH % 24;
         const countdownStr = dDays > 0 ? `${dDays}d ${dHours}h` : `${dHours}h`;
-        document.getElementById('s-next-day').textContent = 'Monday';
-        document.getElementById('s-next-sub').textContent = `${delivTime} ${tz.split('/')[1]||tz} · ${tierCap}`;
-        // Countdown card
+        const tzCity    = tz.split('/')[1]?.replace(/_/g,' ') || tz;
+        document.getElementById('s-next-day').textContent = nextDay;
+        document.getElementById('s-next-sub').textContent = `${delivTime} ${tzCity} · ${tierCap}`;
         const cdEl = document.getElementById('dsh-countdown');
         const dtEl = document.getElementById('dsh-next-detail');
         if (cdEl) cdEl.textContent = countdownStr;
-        if (dtEl) dtEl.innerHTML = `Monday <span>${delivTime} GMT</span> · ${tierCap} tier`;
+        if (dtEl) dtEl.innerHTML = `${nextDay} <span>${delivTime} ${tzCity}</span> · ${escHtml(tierCap)} tier`;
       }
-    } catch { /* prefs not available */ }
+    } catch { /* auth/me not available */ }
 
     // Checklist — onboarding status
     try {
@@ -3227,7 +3239,7 @@ async function loadDashboardBottomRow() {
     const el = document.getElementById('dsh-recent-patterns');
     if (!el) return;
     if (!patterns.length) {
-      el.innerHTML = `<div class="dsh-empty" style="padding:20px 16px;"><span class="dsh-empty-icon">📡</span><div class="dsh-empty-sub">No patterns yet. Check back after the next KB update.</div></div>`;
+      el.innerHTML = `<div class="dsh-empty" style="padding:20px 16px;"><span class="dsh-empty-icon">📡</span><div class="dsh-empty-title">Market scanning in progress</div><div class="dsh-empty-sub">Pattern signals appear here as the system identifies high-conviction setups from live market data.</div></div>`;
     } else {
       el.innerHTML = patterns.slice(0, 5).map(p => {
         const dir    = (p.signal_direction || '').toLowerCase();
@@ -3254,31 +3266,35 @@ async function loadDashboardBottomRow() {
     if (el) el.innerHTML = `<div class="dsh-empty" style="padding:20px 16px;"><div class="dsh-empty-sub">Patterns unavailable</div></div>`;
   }
 
-  // Market snapshot — fetch from /market/quotes if available
+  // Market snapshot — fetch from /market/snapshot (KB cached facts, no live calls)
   const MKT_SYMBOLS = [
-    { id: 'spx',  sym: '^GSPC',   name: 'S&P 500' },
-    { id: 'ndx',  sym: '^NDX',    name: 'NASDAQ 100' },
-    { id: 'ftse', sym: '^FTSE',   name: 'FTSE 100' },
-    { id: 'gld',  sym: 'GLD',     name: 'Gold' },
+    { id: 'spx',  sym: '^GSPC',    name: 'S&P 500' },
+    { id: 'ndx',  sym: '^NDX',     name: 'NASDAQ 100' },
+    { id: 'ftse', sym: '^FTSE',    name: 'FTSE 100' },
+    { id: 'gld',  sym: 'GLD',      name: 'Gold' },
     { id: 'dxy',  sym: 'DX-Y.NYB', name: 'US Dollar Index' },
   ];
   try {
-    const tickers = MKT_SYMBOLS.map(m => m.sym).join(',');
-    const q = await apiFetch(`/market/quotes?tickers=${encodeURIComponent(tickers)}`);
-    const quotes = q?.quotes || q || {};
+    const snap = await apiFetch('/market/snapshot');
+    const quotes = snap?.symbols || {};
     MKT_SYMBOLS.forEach(m => {
-      const data = quotes[m.sym] || quotes[m.id] || null;
+      const data    = quotes[m.sym] || quotes[m.sym.toUpperCase()] || null;
       const priceEl = document.getElementById(`dsh-${m.id}-price`);
       const chgEl   = document.getElementById(`dsh-${m.id}-chg`);
       if (!priceEl || !chgEl) return;
-      if (!data) { priceEl.textContent = '—'; chgEl.textContent = '—'; chgEl.className = 'dsh-mkt-chg'; return; }
-      const price = data.price ?? data.regularMarketPrice ?? data.last;
-      const chgPct = data.change_pct ?? data.regularMarketChangePercent ?? data.chg_pct;
-      if (price != null) priceEl.textContent = Number(price).toLocaleString('en-GB', {maximumFractionDigits: price > 100 ? 0 : 2});
+      if (!data || data.price == null) {
+        priceEl.textContent = '—'; chgEl.textContent = '—'; chgEl.className = 'dsh-mkt-chg';
+        return;
+      }
+      const price  = data.price;
+      const chgPct = data.return_1m;
+      priceEl.textContent = Number(price).toLocaleString('en-GB', {maximumFractionDigits: price > 100 ? 0 : 2});
       if (chgPct != null) {
         const pos = chgPct >= 0;
         chgEl.textContent = (pos ? '+' : '') + Number(chgPct).toFixed(2) + '%';
         chgEl.className = 'dsh-mkt-chg ' + (pos ? 'pos' : 'neg');
+      } else {
+        chgEl.textContent = '—'; chgEl.className = 'dsh-mkt-chg';
       }
     });
   } catch { /* keep dashes */ }
