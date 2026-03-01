@@ -440,6 +440,7 @@ def retrieve(
         # Detect which specific geo entity the user asked about so we can
         # prioritise atoms for THAT entity rather than dumping all geo atoms.
         # This prevents "tell me about Russia" returning Iran headlines.
+        # object LIKE patterns (searches atom text content)
         _GEO_ENTITY_MAP = {
             'russia':      ['%russia%', '%russian%', '%kremlin%', '%moscow%'],
             'ukraine':     ['%ukraine%', '%ukrainian%', '%kyiv%', '%zelensky%'],
@@ -454,6 +455,38 @@ def retrieve(
             'syria':       ['%syria%', '%syrian%', '%damascus%'],
             'venezuela':   ['%venezuela%', '%venezuelan%', '%caracas%'],
         }
+        # UCDP uses ISO-3 country codes as the subject field.
+        # GDELT uses compound predicates like 'russia_ukraine_score', 'us_iran_trend'.
+        # These are NOT matched by object LIKE — need separate lookups.
+        _GEO_ISO_MAP = {
+            'russia':      ['rus'],
+            'ukraine':     ['ukr'],
+            'iran':        ['irn'],
+            'israel':      ['isr'],
+            'gaza':        ['pse'],
+            'china':       ['chn'],
+            'taiwan':      ['twn'],
+            'north korea': ['prk'],
+            'pakistan':    ['pak'],
+            'afghanistan': ['afg'],
+            'syria':       ['syr'],
+            'venezuela':   ['ven'],
+        }
+        # predicate LIKE patterns (for GDELT compound predicates)
+        _GEO_PRED_MAP = {
+            'russia':      ['%russia%'],
+            'ukraine':     ['%ukraine%'],
+            'iran':        ['%iran%'],
+            'israel':      ['%israel%'],
+            'gaza':        ['%gaza%', '%palestine%'],
+            'china':       ['%china%'],
+            'taiwan':      ['%taiwan%'],
+            'north korea': ['%korea%', '%dprk%'],
+            'pakistan':    ['%pakistan%'],
+            'afghanistan': ['%afghanistan%', '%afghan%'],
+            'syria':       ['%syria%'],
+            'venezuela':   ['%venezuela%'],
+        }
         _asked_entities = [
             entity for entity, _ in _GEO_ENTITY_MAP.items()
             if entity in msg_lower
@@ -463,6 +496,7 @@ def retrieve(
         # with a higher slot budget so they dominate the context block.
         if _asked_entities:
             for _entity in _asked_entities[:2]:  # cap at 2 entities
+                # 1a. Search object text for country name variants
                 _entity_patterns = _GEO_ENTITY_MAP[_entity]
                 for _pat in _entity_patterns[:3]:
                     try:
@@ -478,7 +512,31 @@ def retrieve(
                         _add(c.fetchall())
                     except Exception:
                         pass
-                # Also search subject field for the entity
+                # 1b. UCDP ISO code: subject = 'rus', 'ukr', 'irn' etc.
+                for _iso in _GEO_ISO_MAP.get(_entity, []):
+                    try:
+                        c.execute(
+                            "SELECT subject, predicate, object, source, confidence "
+                            "FROM facts WHERE LOWER(subject) = ? "
+                            "ORDER BY confidence DESC LIMIT 10",
+                            (_iso,)
+                        )
+                        _add(c.fetchall())
+                    except Exception:
+                        pass
+                # 1c. GDELT predicate names: 'russia_ukraine_score', 'us_iran_trend' etc.
+                for _ppat in _GEO_PRED_MAP.get(_entity, []):
+                    try:
+                        c.execute(
+                            "SELECT subject, predicate, object, source, confidence "
+                            "FROM facts WHERE LOWER(predicate) LIKE ? "
+                            "ORDER BY confidence DESC LIMIT 10",
+                            (_ppat,)
+                        )
+                        _add(c.fetchall())
+                    except Exception:
+                        pass
+                # 1d. Subject field name search (catches any subject named after the country)
                 try:
                     c.execute(
                         "SELECT subject, predicate, object, source, confidence "

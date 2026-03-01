@@ -1,5 +1,6 @@
-import sqlite3
-c = sqlite3.connect('/opt/trading-galaxy/data/trading_knowledge.db')
+import sqlite3, os
+_DB = os.environ.get('KB_DB_PATH', '/home/ubuntu/trading-galaxy/trading_kb.db')
+c = sqlite3.connect(_DB)
 for src in ['gdelt_tension','acled_unrest','ucdp_conflict','financial_news','rss_news']:
     n = c.execute("SELECT COUNT(*) FROM facts WHERE source=?", (src,)).fetchone()[0]
     print(f"{src}: {n} atoms")
