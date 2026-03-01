@@ -1744,8 +1744,10 @@ function _saveSession(token, userId, tgData) {
   state.userId = userId;
   // Tokens are now stored in HttpOnly cookies set by the backend.
   // Only non-sensitive display data goes in localStorage.
-  if (tgData) localStorage.setItem('tg_user_data', JSON.stringify(tgData));
-  localStorage.setItem('tg_user_id', userId);  // display only — not a secret
+  try {
+    if (tgData) localStorage.setItem('tg_user_data', JSON.stringify(tgData));
+    localStorage.setItem('tg_user_id', userId);  // display only — not a secret
+  } catch { /* storage blocked in some contexts */ }
   _renderTgChip(tgData || null, userId);
 }
 
@@ -1774,13 +1776,12 @@ function _renderTgChip(tgData, userId) {
 }
 
 async function signOut() {
-  if (state.userId) localStorage.removeItem(`simulated_${state.userId}`);
+  try { if (state.userId) localStorage.removeItem(`simulated_${state.userId}`); } catch { /* storage blocked */ }
   // Ask backend to clear HttpOnly cookies + revoke refresh token
   try { await fetch(API + '/auth/logout', { method: 'POST', credentials: 'include',
     headers: { 'Content-Type': 'application/json' } }); } catch { /* ignore */ }
   state.token = null; state.userId = null; state.holdings = [];
-  localStorage.removeItem('tg_user_id');
-  localStorage.removeItem('tg_user_data');
+  try { localStorage.removeItem('tg_user_id'); localStorage.removeItem('tg_user_data'); } catch { /* storage blocked */ }
   _renderTgChip(null, null);
   window.history.replaceState(null, '', '/login');
   showScreen('auth');
@@ -1916,19 +1917,20 @@ function renderSimBanner(title, description, tipsAlignment, riskTolerance, holdi
       <div class="sim-profile-note"><strong>Tips alignment:</strong> ${escHtml(tipsAlignment)}</div>
     </div>`;
   document.getElementById('sim-clear-btn').addEventListener('click', () => {
-    localStorage.removeItem(_simKey());
+    try { localStorage.removeItem(_simKey()); } catch { /* storage blocked */ }
     banner.style.display = 'none';
   });
 }
 
 function loadSimBannerIfSet() {
   if (!state.userId) return;
-  const stored = localStorage.getItem(_simKey());
+  let stored = null;
+  try { stored = localStorage.getItem(_simKey()); } catch { /* storage blocked */ }
   if (!stored) return;
   try {
     const d = JSON.parse(stored);
     renderSimBanner(d.title, d.description, d.tips_alignment, d.risk_tolerance, d.holding_style, d.sectors);
-  } catch { localStorage.removeItem(_simKey()); }
+  } catch { try { localStorage.removeItem(_simKey()); } catch { /* storage blocked */ } }
 }
 
 document.getElementById('p-gen-sim-btn').addEventListener('click', async () => {
@@ -1945,14 +1947,14 @@ document.getElementById('p-gen-sim-btn').addEventListener('click', async () => {
     // Render model card
     if (d.model) renderModelCard(d.model);
     // Store simulated state per-user in localStorage
-    localStorage.setItem(_simKey(), JSON.stringify({
+    try { localStorage.setItem(_simKey(), JSON.stringify({
       title:          d.title,
       description:    d.description,
       tips_alignment: d.tips_alignment,
       risk_tolerance: d.risk_tolerance,
       holding_style:  d.holding_style,
       sectors:        d.sectors,
-    }));
+    })); } catch { /* storage blocked */ }
     renderSimBanner(d.title, d.description, d.tips_alignment, d.risk_tolerance, d.holding_style, d.sectors);
     showToast(`Test portfolio generated: ${d.title}`, 'ok');
   } catch(e) {
@@ -2064,7 +2066,7 @@ document.getElementById('p-change-profile-select').addEventListener('change', as
     if (!d) return;
     msg.style.color = 'var(--green)';
     msg.textContent = `✓ ${profile.label} loaded — ${d.count} holdings`;
-    localStorage.removeItem(`simulated_${state.userId}`);
+    try { localStorage.removeItem(`simulated_${state.userId}`); } catch { /* storage blocked */ }
     document.getElementById('p-sim-banner').style.display = 'none';
     loadPortfolioModel();
     showToast(`${profile.label} portfolio loaded`, 'ok');
@@ -2427,7 +2429,7 @@ document.getElementById('p-submit-btn').addEventListener('click', async () => {
     msg.style.color = 'var(--green)';
     msg.textContent = `✓ ${d.count} holdings submitted`;
     // Manual submit clears simulated flag
-    if (state.userId) localStorage.removeItem(`simulated_${state.userId}`);
+    try { if (state.userId) localStorage.removeItem(`simulated_${state.userId}`); } catch { /* storage blocked */ }
     document.getElementById('p-sim-banner').style.display = 'none';
     loadPortfolioModel();
   } catch(e) { msg.style.color='var(--red)'; msg.textContent = e.message; }
@@ -2845,7 +2847,7 @@ document.getElementById('profile-delete-btn').addEventListener('click', async ()
     const d = await apiFetch(`/users/${state.userId}`, { method: 'DELETE' });
     if (!d) return;
     state.token = null; state.userId = null; state.holdings = [];
-    localStorage.clear();
+    try { localStorage.clear(); } catch { /* storage blocked */ }
     navigate('auth', { replace: true });
     showToast('Account deleted.', 'ok');
   } catch(e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
@@ -3461,7 +3463,8 @@ document.getElementById('hist-atoms-overlay').addEventListener('click', e => {
     if (me && me.user_id) {
       state.userId = me.user_id;
       state.token  = '__cookie__'; // sentinel — actual token is in HttpOnly cookie
-      const storedTgData = localStorage.getItem('tg_user_data');
+      let storedTgData = null;
+      try { storedTgData = localStorage.getItem('tg_user_data'); } catch { /* storage blocked */ }
       const tgData = storedTgData ? JSON.parse(storedTgData) : null;
       _renderTgChip(tgData, me.user_id);
 
