@@ -457,6 +457,7 @@ def retrieve(
     )
     _is_geo_query = any(kw in msg_lower for kw in _GEO_KEYWORDS)
     _asked_entities: list = []   # populated inside if _is_geo_query block below
+    import sys as _sys; _sys.stderr.write(f"[GEO_DBG] msg_lower={msg_lower[:60]} is_geo={_is_geo_query}\n")
     if _is_geo_query:
         # Detect which specific geo entity the user asked about so we can
         # prioritise atoms for THAT entity rather than dumping all geo atoms.
@@ -512,6 +513,7 @@ def retrieve(
             entity for entity, _ in _GEO_ENTITY_MAP.items()
             if entity in msg_lower
         ]
+        _sys.stderr.write(f"[GEO_DBG] asked_entities={_asked_entities}\n")
 
         # Step 1: if a specific entity was named, fetch entity-specific atoms first
         # with a higher slot budget so they dominate the context block.
