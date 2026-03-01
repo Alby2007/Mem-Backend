@@ -457,7 +457,6 @@ def retrieve(
     )
     _is_geo_query = any(kw in msg_lower for kw in _GEO_KEYWORDS)
     _asked_entities: list = []   # populated inside if _is_geo_query block below
-    import sys as _sys; _sys.stderr.write(f"[GEO_DBG] msg_lower={msg_lower[:60]} is_geo={_is_geo_query}\n")
     if _is_geo_query:
         # Detect which specific geo entity the user asked about so we can
         # prioritise atoms for THAT entity rather than dumping all geo atoms.
@@ -513,7 +512,6 @@ def retrieve(
             entity for entity, _ in _GEO_ENTITY_MAP.items()
             if entity in msg_lower
         ]
-        _sys.stderr.write(f"[GEO_DBG] asked_entities={_asked_entities}\n")
 
         # Step 1: if a specific entity was named, fetch entity-specific atoms first
         # with a higher slot budget so they dominate the context block.
@@ -916,16 +914,13 @@ def retrieve(
     # separate from results so high-confidence ticker atoms (conf=0.95) can't
     # displace lower-confidence geo atoms (conf=0.5-0.7) during sort+truncation.
     if geo_results:
-        # Add any geo atoms not already in results (avoid doubles)
-        for _ga in geo_results:
-            _gkey = (_ga['subject'][:60], _ga['predicate'], _ga['object'][:60])
-            if _gkey not in {(a['subject'][:60], a['predicate'], a['object'][:60]) for a in results}:
-                results.insert(0, _ga)
-        # Limit non-geo atoms so geo atoms are guaranteed slots
-        _non_geo = [a for a in results if a not in geo_results]
-        _geo_in_results = [a for a in results if a in geo_results or
-                          any(a['subject'][:60]==g['subject'][:60] and a['predicate']==g['predicate'] for g in geo_results)]
-        results = _geo_in_results + _non_geo
+        # geo_results atoms are already in results (added by _add_geo).
+        # Reorder results so geo atoms come first, before the confidence sort,
+        # so they can't be truncated away by high-confidence ticker atoms.
+        _geo_keys = {(a['subject'][:60], a['predicate'], a['object'][:60]) for a in geo_results}
+        _geo_first = [a for a in results if (a['subject'][:60], a['predicate'], a['object'][:60]) in _geo_keys]
+        _rest_only  = [a for a in results if (a['subject'][:60], a['predicate'], a['object'][:60]) not in _geo_keys]
+        results = _geo_first + _rest_only
 
     # ── Pin geo entity atoms to front before confidence sort ──────────────────
     # For geo queries, entity-specific atoms (UCDP, GDELT, news about Russia/Ukraine
@@ -968,8 +963,14 @@ def retrieve(
         'price_target', 'signal_confidence',
     })
 
+    # Keys of geo-pinned atoms — these get a large rank boost to survive truncation
+    _geo_rank_keys = {(a['subject'][:60], a['predicate'], a['object'][:60]) for a in geo_results}
+
     def _rank_key(atom: dict) -> float:
         base = _effective_score(atom) if HAS_AUTHORITY else atom.get('confidence', 0.5)
+        # Geo entity atoms must beat all ticker atoms (invalidation_distance tops at ~1.10)
+        if _geo_rank_keys and (atom['subject'][:60], atom['predicate'], atom['object'][:60]) in _geo_rank_keys:
+            return base + 2.0
         if atom.get('predicate') in _INTERPRETIVE_PREDICATES:
             return base + 0.15   # lift interpretive atoms above raw data
         return base
