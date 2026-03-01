@@ -4100,6 +4100,118 @@ def tip_preview(user_id: str):
     return jsonify({'tip': tip_dict, 'tip_source': tip_source})
 
 
+def _build_prefs_confirmation(new: dict, old: dict) -> str:
+    """
+    Build a MarkdownV2 Telegram confirmation message describing what changed
+    in the user's tip preferences.  Returns empty string if nothing notable changed.
+    """
+    from notifications.tip_formatter import _escape_mdv2, _PATTERN_LABELS, _TF_LABELS
+
+    lines = []
+
+    # ── Markets ───────────────────────────────────────────────────────────────
+    new_markets = new.get('tip_markets')   # list or None
+    old_markets = old.get('tip_markets')   # list or None
+    markets_changed = new_markets != old_markets and 'tip_markets' in new
+
+    if markets_changed:
+        if not new_markets:
+            lines.append('🌐 You\'ll now receive tips from *all available markets*\\.')
+        else:
+            tickers_str = ', '.join(_escape_mdv2(t) for t in new_markets[:10])
+            suffix = f' \\+{len(new_markets) - 10} more' if len(new_markets) > 10 else ''
+            if old_markets:
+                added   = [t for t in new_markets if t not in old_markets]
+                removed = [t for t in old_markets if t not in new_markets]
+                if added and removed:
+                    a_str = ', '.join(_escape_mdv2(t) for t in added[:5])
+                    r_str = ', '.join(_escape_mdv2(t) for t in removed[:5])
+                    lines.append(
+                        f'📊 You\'ll now see *more {a_str}* tips and *fewer {r_str}* tips\\.'
+                    )
+                elif added:
+                    a_str = ', '.join(_escape_mdv2(t) for t in added[:5])
+                    lines.append(f'📊 Added to your watchlist: *{a_str}*\\.')
+                elif removed:
+                    r_str = ', '.join(_escape_mdv2(t) for t in removed[:5])
+                    lines.append(f'📊 Removed from your watchlist: *{r_str}*\\.')
+            else:
+                lines.append(
+                    f'🎯 Your tips will now focus on: *{tickers_str}{suffix}*\\.'
+                )
+
+    # ── Pattern types ─────────────────────────────────────────────────────────
+    new_patterns = new.get('tip_pattern_types')
+    old_patterns = old.get('tip_pattern_types')
+    if new_patterns != old_patterns and 'tip_pattern_types' in new:
+        if not new_patterns:
+            lines.append('📐 Pattern filter cleared — you\'ll see *all pattern types*\\.')
+        else:
+            added_p   = [p for p in new_patterns if not old_patterns or p not in old_patterns]
+            removed_p = [p for p in (old_patterns or []) if p not in new_patterns]
+            def _plabel(p):
+                return _escape_mdv2(_PATTERN_LABELS.get(p, p.replace('_', ' ').title()))
+            if added_p and removed_p:
+                lines.append(
+                    f'📐 You\'ll now see more *{", ".join(_plabel(p) for p in added_p)}* '
+                    f'and fewer *{", ".join(_plabel(p) for p in removed_p)}* patterns\\.'
+                )
+            elif added_p:
+                lines.append(
+                    f'📐 Added pattern types: *{", ".join(_plabel(p) for p in added_p)}*\\.'
+                )
+            elif removed_p:
+                lines.append(
+                    f'📐 Removed pattern types: *{", ".join(_plabel(p) for p in removed_p)}*\\.'
+                )
+
+    # ── Timeframes ────────────────────────────────────────────────────────────
+    new_tfs = new.get('tip_timeframes')
+    old_tfs = old.get('tip_timeframes')
+    if new_tfs != old_tfs and 'tip_timeframes' in new:
+        if not new_tfs:
+            lines.append('⏱ Timeframe filter cleared — you\'ll see *all timeframes*\\.')
+        else:
+            def _tflabel(tf):
+                return _escape_mdv2(_TF_LABELS.get(tf, tf.upper()))
+            added_tf   = [tf for tf in new_tfs if not old_tfs or tf not in old_tfs]
+            removed_tf = [tf for tf in (old_tfs or []) if tf not in new_tfs]
+            if added_tf and removed_tf:
+                lines.append(
+                    f'⏱ More *{", ".join(_tflabel(t) for t in added_tf)}* tips, '
+                    f'fewer *{", ".join(_tflabel(t) for t in removed_tf)}* tips\\.'
+                )
+            elif added_tf:
+                lines.append(f'⏱ Added timeframes: *{", ".join(_tflabel(t) for t in added_tf)}*\\.')
+            elif removed_tf:
+                lines.append(f'⏱ Removed timeframes: *{", ".join(_tflabel(t) for t in removed_tf)}*\\.')
+
+    # ── Delivery time / timezone ──────────────────────────────────────────────
+    new_time = new.get('tip_delivery_time')
+    new_tz   = new.get('tip_delivery_timezone')
+    old_time = old.get('tip_delivery_time')
+    old_tz   = old.get('tip_delivery_timezone')
+    time_changed = (new_time and new_time != old_time) or (new_tz and new_tz != old_tz)
+    if time_changed:
+        t = _escape_mdv2(new_time or old_time or '?')
+        tz = _escape_mdv2(new_tz or old_tz or 'UTC')
+        lines.append(f'🕐 Tips will now arrive at *{t}* \\({tz}\\)\\.')
+
+    # ── Tier ─────────────────────────────────────────────────────────────────
+    new_tier = new.get('tier')
+    old_tier = old.get('tier')
+    if new_tier and new_tier != old_tier:
+        tier_label = _escape_mdv2(new_tier.title())
+        lines.append(f'⭐ Tier updated to *{tier_label}*\\.')
+
+    if not lines:
+        return ''
+
+    header = '✅ *Tip preferences updated\\!*\n'
+    footer = '\n_Changes take effect from your next scheduled tip\\._'
+    return header + '\n'.join(lines) + footer
+
+
 @app.route('/users/<user_id>/tip-config', methods=['GET', 'POST'])
 @require_auth
 def tip_config(user_id: str):
@@ -4157,6 +4269,29 @@ def tip_config(user_id: str):
         if not vr.valid:
             return jsonify({'error': 'validation_failed', 'details': vr.errors}), 400
     try:
+        # Snapshot old prefs before update (for diff message)
+        import sqlite3 as _sq2, json as _json2
+        _old_prefs: dict = {}
+        try:
+            _oc = _sq2.connect(_DB_PATH, timeout=5)
+            _or = _oc.execute(
+                """SELECT telegram_chat_id, tip_markets, tip_timeframes, tip_pattern_types,
+                          tip_delivery_time, tip_delivery_timezone, tier
+                   FROM user_preferences WHERE user_id=?""", (user_id,)
+            ).fetchone()
+            _oc.close()
+            if _or:
+                _cols = ['telegram_chat_id', 'tip_markets', 'tip_timeframes',
+                         'tip_pattern_types', 'tip_delivery_time', 'tip_delivery_timezone', 'tier']
+                _old_prefs = dict(zip(_cols, _or))
+                for _jc in ('tip_markets', 'tip_timeframes', 'tip_pattern_types'):
+                    try:
+                        _old_prefs[_jc] = _json2.loads(_old_prefs[_jc]) if _old_prefs[_jc] else None
+                    except Exception:
+                        _old_prefs[_jc] = None
+        except Exception:
+            pass
+
         updated = update_tip_config(
             _DB_PATH,
             user_id,
@@ -4170,6 +4305,18 @@ def tip_config(user_id: str):
             account_currency       = data.get('account_currency'),
             tier                   = data.get('tier'),
         )
+
+        # ── Send preference confirmation via Telegram (non-fatal) ────────────
+        try:
+            _chat_id = (_old_prefs.get('telegram_chat_id') or '').strip()
+            if _chat_id:
+                _msg = _build_prefs_confirmation(data, _old_prefs)
+                if _msg:
+                    from notifications.telegram_notifier import TelegramNotifier as _TGN
+                    _TGN().send(_chat_id, _msg, parse_mode='MarkdownV2')
+        except Exception:
+            pass  # Non-fatal
+
         return jsonify(updated)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
