@@ -50,7 +50,64 @@ print(f"  is_geo_query: {is_geo}, asked_entities: {asked}")
 
 conn_raw.close()
 
-# ── Now call retrieve ───────────────────────────────────────────────────────
+# ── Step-by-step geo retrieval inline ────────────────────────────────────────
+print("\n=== INLINE GEO RETRIEVAL ===")
+conn_step = sqlite3.connect(db)
+
+# 1a: object LIKE russia in key predicates
+rows = conn_step.execute(
+    "SELECT subject,predicate,object,source,confidence FROM facts "
+    "WHERE LOWER(object) LIKE ? "
+    "AND predicate IN ('key_finding','headline','summary','event','catalyst','risk_factor',"
+    "'conflict_status','parties_involved','location','severity','escalation') "
+    "ORDER BY timestamp DESC, confidence DESC LIMIT 15",
+    ('%russia%',)
+).fetchall()
+print(f"  Step 1a (object LIKE %russia%): {len(rows)} rows")
+for r in rows[:5]: print(f"    {r[0]}|{r[1]}|{str(r[2])[:50]}")
+
+# 1b: UCDP ISO predicate
+rows = conn_step.execute(
+    "SELECT subject,predicate,object,source,confidence FROM facts "
+    "WHERE subject='ucdp_conflict' AND LOWER(predicate)=?",
+    ('rus',)
+).fetchall()
+print(f"  Step 1b (ucdp_conflict|rus): {len(rows)} rows")
+for r in rows: print(f"    {r[0]}|{r[1]}|{r[2]}")
+
+# 1c: predicate LIKE russia
+rows = conn_step.execute(
+    "SELECT subject,predicate,object,source,confidence FROM facts "
+    "WHERE LOWER(predicate) LIKE ? ORDER BY confidence DESC LIMIT 10",
+    ('%russia%',)
+).fetchall()
+print(f"  Step 1c (predicate LIKE %russia%): {len(rows)} rows")
+for r in rows[:5]: print(f"    {r[0]}|{r[1]}|{r[2]}")
+
+# 1d: subject LIKE russia
+rows = conn_step.execute(
+    "SELECT subject,predicate,object,source,confidence FROM facts "
+    "WHERE LOWER(subject) LIKE ? ORDER BY confidence DESC LIMIT 10",
+    ('%russia%',)
+).fetchall()
+print(f"  Step 1d (subject LIKE %russia%): {len(rows)} rows")
+for r in rows[:5]: print(f"    {r[0]}|{r[1]}|{str(r[2])[:50]}")
+
+# news_wire filtered
+rows = conn_step.execute(
+    "SELECT subject,predicate,object,source,confidence FROM facts "
+    "WHERE (source LIKE 'news_wire_%' OR source IN ('geopolitical_data_gdelt','geopolitical_data_acled','geopolitical_data_ucdp')) "
+    "AND predicate IN ('key_finding','headline','summary','event','catalyst','risk_factor') "
+    "AND LOWER(object) LIKE ? "
+    "ORDER BY timestamp DESC LIMIT 20",
+    ('%russia%',)
+).fetchall()
+print(f"  Step 3 (news_wire LIKE %russia%): {len(rows)} rows")
+for r in rows[:5]: print(f"    {r[0]}|{r[1]}|{str(r[2])[:50]}")
+
+conn_step.close()
+
+# ── Full retrieve call ────────────────────────────────────────────────────────
 from retrieval import retrieve
 from knowledge import KnowledgeGraph
 
@@ -60,9 +117,15 @@ conn = kg.thread_local_conn()
 snippet, atoms = retrieve('tell me about the war in russia', conn, limit=30)
 
 print(f"\n=== ATOMS RETURNED: {len(atoms)} ===")
-print("Atom subjects/predicates:")
-for a in atoms:
-    print(f"  {a['subject']} | {a['predicate']} | {str(a['object'])[:50]}")
-print()
-print("=== SNIPPET ===")
-print(snippet[:4000])
+geo_atoms = [a for a in atoms if any(x in (a.get('source','') + a.get('subject','') + a.get('object','').lower()) for x in ('russia','ukraine','gdelt','ucdp','news_wire'))]
+print(f"  Geo-related atoms: {len(geo_atoms)}")
+for a in geo_atoms:
+    print(f"  {a['subject']} | {a['predicate']} | {str(a['object'])[:60]}")
+print(f"\n  Non-geo atoms: {len(atoms) - len(geo_atoms)}")
+print("\n=== SNIPPET (geo section only) ===")
+lines = snippet.split('\n')
+in_geo = False
+for line in lines:
+    if '# geopolitical' in line: in_geo = True
+    if in_geo: print(line)
+    if in_geo and line.startswith('#') and '# geopolitical' not in line: break
