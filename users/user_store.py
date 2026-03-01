@@ -119,6 +119,7 @@ _PREFERENCES_MIGRATIONS = [
     "ALTER TABLE user_preferences ADD COLUMN account_size REAL",
     "ALTER TABLE user_preferences ADD COLUMN max_risk_per_trade_pct REAL DEFAULT 1.0",
     "ALTER TABLE user_preferences ADD COLUMN account_currency TEXT DEFAULT 'GBP'",
+    "ALTER TABLE user_preferences ADD COLUMN available_cash REAL DEFAULT NULL",
 ]
 
 _DDL_DELIVERY_LOG = """
@@ -732,6 +733,120 @@ def already_tipped_today(db_path: str, user_id: str, local_date_str: str) -> boo
             (user_id, local_date_str),
         ).fetchone()
         return row is not None
+    finally:
+        conn.close()
+
+
+def get_available_cash(db_path: str, user_id: str) -> Optional[float]:
+    """Return the user's stored available_cash, or None if not set."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_tables(conn)
+        row = conn.execute(
+            "SELECT available_cash FROM user_preferences WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return row[0]  # May be None or a float (including negative)
+    finally:
+        conn.close()
+
+
+def update_available_cash(db_path: str, user_id: str, amount: float) -> dict:
+    """
+    Set the user's available_cash to the given amount.
+    Negative values are stored as-is (overcommitted state).
+    Returns { 'user_id', 'available_cash' }.
+    """
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_tables(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)", (user_id,)
+        )
+        conn.execute(
+            "UPDATE user_preferences SET available_cash = ? WHERE user_id = ?",
+            (amount, user_id),
+        )
+        conn.commit()
+        return {'user_id': user_id, 'available_cash': amount}
+    finally:
+        conn.close()
+
+
+def deduct_from_cash(
+    db_path: str,
+    user_id: str,
+    amount: float,
+    tip_id: Optional[int] = None,
+) -> dict:
+    """
+    Deduct `amount` from the user's available_cash.
+
+    Idempotency: if `tip_id` is provided, checks tip_feedback for an existing
+    'taking_it' row with the same tip_id — if found, skips deduction and
+    returns {'skipped': True}.
+
+    Negative balances are stored as-is (overcommitted state, not masked).
+
+    Returns dict with keys:
+      skipped      bool — True if already deducted for this tip_id
+      new_balance  float | None
+      deducted     float
+      is_negative  bool
+    """
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_tables(conn)
+        ensure_tip_feedback_table(conn)
+
+        # Idempotency check
+        if tip_id is not None:
+            existing = conn.execute(
+                """SELECT 1 FROM tip_feedback
+                   WHERE user_id = ? AND tip_id = ? AND outcome = 'taking_it'
+                   LIMIT 1""",
+                (user_id, tip_id),
+            ).fetchone()
+            if existing:
+                cash_row = conn.execute(
+                    "SELECT available_cash FROM user_preferences WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
+                current = cash_row[0] if cash_row else None
+                return {
+                    'skipped':     True,
+                    'new_balance': current,
+                    'deducted':    0.0,
+                    'is_negative': bool(current is not None and current < 0),
+                }
+
+        # Fetch current balance
+        row = conn.execute(
+            "SELECT available_cash FROM user_preferences WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if row is None or row[0] is None:
+            return {
+                'skipped':     False,
+                'new_balance': None,
+                'deducted':    0.0,
+                'is_negative': False,
+            }
+
+        new_balance = row[0] - amount
+        conn.execute(
+            "UPDATE user_preferences SET available_cash = ? WHERE user_id = ?",
+            (new_balance, user_id),
+        )
+        conn.commit()
+        return {
+            'skipped':     False,
+            'new_balance': new_balance,
+            'deducted':    amount,
+            'is_negative': new_balance < 0,
+        }
     finally:
         conn.close()
 

@@ -4289,7 +4289,8 @@ def tip_config(user_id: str):
             row  = conn.execute(
                 """SELECT user_id, tier, tip_delivery_time, tip_delivery_timezone,
                           tip_markets, tip_timeframes, tip_pattern_types,
-                          account_size, max_risk_per_trade_pct, account_currency
+                          account_size, max_risk_per_trade_pct, account_currency,
+                          available_cash
                    FROM user_preferences WHERE user_id = ?""",
                 (user_id,),
             ).fetchone()
@@ -4300,7 +4301,8 @@ def tip_config(user_id: str):
             return jsonify({'error': 'user not found'}), 404
         cols = ['user_id', 'tier', 'tip_delivery_time', 'tip_delivery_timezone',
                 'tip_markets', 'tip_timeframes', 'tip_pattern_types',
-                'account_size', 'max_risk_per_trade_pct', 'account_currency']
+                'account_size', 'max_risk_per_trade_pct', 'account_currency',
+                'available_cash']
         d = dict(zip(cols, row))
         for jcol in ('tip_markets', 'tip_timeframes', 'tip_pattern_types'):
             try:
@@ -4365,6 +4367,53 @@ def tip_config(user_id: str):
             pass  # Non-fatal
 
         return jsonify(updated)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/cash', methods=['GET', 'POST'])
+@require_auth
+def user_cash(user_id: str):
+    """
+    GET  /users/<user_id>/cash  — Return current available_cash + currency.
+    POST /users/<user_id>/cash  — Set available_cash. Body: { "available_cash": 5000.0 }
+    """
+    err = assert_self(user_id)
+    if err: return err
+
+    if request.method == 'GET':
+        try:
+            from users.user_store import get_available_cash
+            import sqlite3 as _sq3
+            cash = get_available_cash(_DB_PATH, user_id)
+            currency = 'GBP'
+            try:
+                _c3 = _sq3.connect(_DB_PATH, timeout=5)
+                r3 = _c3.execute(
+                    "SELECT account_currency FROM user_preferences WHERE user_id=?",
+                    (user_id,)
+                ).fetchone()
+                _c3.close()
+                if r3 and r3[0]: currency = r3[0]
+            except Exception:
+                pass
+            return jsonify({'available_cash': cash, 'currency': currency})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    # POST
+    data = request.get_json(force=True, silent=True) or {}
+    raw = data.get('available_cash')
+    if raw is None:
+        return jsonify({'error': 'available_cash is required'}), 400
+    try:
+        amount = float(raw)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'available_cash must be a number'}), 400
+    try:
+        from users.user_store import update_available_cash
+        result = update_available_cash(_DB_PATH, user_id, amount)
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -5825,7 +5874,55 @@ def tip_feedback_action(tip_id: int):
                 kb_regime     = pattern_row.get('kb_regime',''),
                 kb_signal_dir = pattern_row.get('kb_signal_dir',''),
             )
+            # Recalculate position using current KB last_price for freshness
+            price_at_feedback = None
+            price_at_generation = (pattern_row['zone_low'] + pattern_row['zone_high']) / 2.0
+            try:
+                import sqlite3 as _sqp
+                _cp = _sqp.connect(_DB_PATH, timeout=5)
+                _pr = _cp.execute(
+                    """SELECT object FROM facts
+                       WHERE LOWER(subject)=? AND predicate='last_price'
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (pattern_row['ticker'].lower(),),
+                ).fetchone()
+                _cp.close()
+                if _pr:
+                    price_at_feedback = float(_pr[0])
+                    # Rebuild sig with live price as zone midpoint for position sizing
+                    _zone_half = (pattern_row['zone_high'] - pattern_row['zone_low']) / 2.0
+                    sig = PatternSignal(
+                        pattern_type  = pattern_row['pattern_type'],
+                        ticker        = pattern_row['ticker'],
+                        direction     = pattern_row['direction'],
+                        zone_high     = price_at_feedback + _zone_half,
+                        zone_low      = price_at_feedback - _zone_half,
+                        zone_size_pct = 0.0,
+                        timeframe     = pattern_row['timeframe'],
+                        formed_at     = '',
+                        quality_score = pattern_row['quality_score'] or 0.0,
+                        status        = pattern_row['status'],
+                        kb_conviction = pattern_row.get('kb_conviction',''),
+                        kb_regime     = pattern_row.get('kb_regime',''),
+                        kb_signal_dir = pattern_row.get('kb_signal_dir',''),
+                    )
+            except Exception:
+                pass
+
             pos = calculate_position(sig, prefs) if prefs else None
+
+            # Cash deduction (non-fatal, idempotent)
+            cash_result = None
+            try:
+                from users.user_store import deduct_from_cash
+                _pos_value = getattr(pos, 'position_value', None) or (
+                    (pos.position_size_units * (price_at_feedback or price_at_generation))
+                    if pos and pos.position_size_units else 0.0
+                )
+                if _pos_value:
+                    cash_result = deduct_from_cash(_DB_PATH, user_id, _pos_value, tip_id=tip_id)
+            except Exception:
+                pass
 
             followup = create_tip_followup(
                 _DB_PATH,
@@ -5862,6 +5959,11 @@ def tip_feedback_action(tip_id: int):
                 'target_1':    pos.target_1 if pos else None,
                 'target_2':    pos.target_2 if pos else None,
                 'position_size': int(pos.position_size_units) if pos else None,
+                'price_at_generation': round(price_at_generation, 4),
+                'price_at_feedback':   round(price_at_feedback, 4) if price_at_feedback else None,
+                'cash_after':      cash_result.get('new_balance') if cash_result else None,
+                'cash_is_negative': cash_result.get('is_negative', False) if cash_result else False,
+                'cash_deduction_skipped': cash_result.get('skipped', False) if cash_result else False,
                 'message': (
                     f"{pattern_row['ticker']} added to monitoring — "
                     f"position monitor activated. "

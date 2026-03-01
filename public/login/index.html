@@ -717,9 +717,16 @@ select option { background: var(--surface); }
       <div class="section-title">Add by Sector</div>
       <div class="sector-btns mb-12" id="p-sector-btns"></div>
 
-      <!-- 3. Manual add with autocomplete -->
-      <div class="section-title">Add Manually</div>
-      <div class="card mb-12">
+      <!-- 3. Manual add with autocomplete / cash toggle -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div class="section-title" style="margin-bottom:0;">Add Manually</div>
+        <div style="display:flex;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+          <button id="p-mode-holdings" class="btn btn-sm" style="border-radius:0;border:none;padding:4px 12px;font-size:11px;font-weight:700;background:var(--accent);color:#000;">Holdings</button>
+          <button id="p-mode-cash" class="btn btn-sm" style="border-radius:0;border:none;padding:4px 12px;font-size:11px;font-weight:700;background:transparent;color:var(--muted);">Cash</button>
+        </div>
+      </div>
+      <!-- Holdings panel -->
+      <div id="p-holdings-panel" class="card mb-12">
         <div style="display:grid;grid-template-columns:1fr 80px 90px;gap:8px;margin-bottom:8px;align-items:start;">
           <div class="autocomplete-wrap">
             <input id="p-ticker" placeholder="Ticker (e.g. BARC.L)" autocomplete="off" />
@@ -729,6 +736,16 @@ select option { background: var(--surface); }
           <input id="p-cost" placeholder="Avg cost" type="number" min="0" step="0.01" />
         </div>
         <button class="btn btn-outline btn-sm" id="p-add-btn">+ Add Holding</button>
+      </div>
+      <!-- Cash panel -->
+      <div id="p-cash-panel" class="card mb-12" style="display:none;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">Set your available uninvested cash so the AI can factor it into position sizing and track when you commit capital to a trade.</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <span id="p-cash-currency-symbol" style="font-size:18px;font-weight:700;color:var(--muted);">£</span>
+          <input id="p-cash-input" type="number" min="0" step="0.01" placeholder="e.g. 5000" style="flex:1;font-size:16px;" />
+        </div>
+        <button class="btn btn-primary btn-sm" id="p-cash-save-btn">Save Cash Balance</button>
+        <div id="p-cash-msg" class="text-sm mt-8 text-muted"></div>
       </div>
       <div id="p-holdings-list" style="margin-bottom:12px;"></div>
       <button class="btn btn-primary" id="p-submit-btn">Submit Portfolio</button>
@@ -835,6 +852,7 @@ select option { background: var(--surface); }
       <div class="section-title">Tip Configuration</div>
       <div class="card">
         <div class="form-row"><label>Account Value</label><div style="display:flex;align-items:center;gap:8px;"><span id="tip-account-display" style="font-size:14px;font-weight:700;color:var(--accent);">—</span><span style="font-size:11px;color:var(--muted);">from portfolio</span></div></div>
+        <div class="form-row"><label>Available Cash</label><div><span id="tip-cash-display" style="font-size:14px;font-weight:700;color:var(--accent);">—</span><span id="tip-cash-nudge" style="font-size:11px;color:var(--muted);margin-left:6px;"></span></div></div>
         <div class="form-row"><label>Max Risk per Trade (%)</label><input id="tip-risk" type="number" placeholder="1.0" step="0.1" /></div>
         <div class="form-row"><label>Delivery Time</label><div><input id="tip-time" type="time" value="07:30" min="06:00" max="09:00" /><div style="font-size:10px;color:var(--muted);margin-top:3px;">Recommended: 07:00–07:30 before market open (Basic &amp; Pro)</div></div></div>
         <div class="form-row"><label>Timezone</label>
@@ -2235,6 +2253,77 @@ async function handleScreenshot(file) {
   _fileInput.value = '';
 }
 
+// ── Portfolio mode toggle (Holdings / Cash) ────────────────────────────────
+(function() {
+  const btnH = document.getElementById('p-mode-holdings');
+  const btnC = document.getElementById('p-mode-cash');
+  const panelH = document.getElementById('p-holdings-panel');
+  const panelC = document.getElementById('p-cash-panel');
+  const submitBtn = document.getElementById('p-submit-btn');
+  const holdingsList = document.getElementById('p-holdings-list');
+
+  function _setMode(mode) {
+    if (mode === 'cash') {
+      panelH.style.display = 'none';
+      panelC.style.display = '';
+      submitBtn.style.display = 'none';
+      holdingsList.style.display = 'none';
+      btnC.style.background = 'var(--accent)'; btnC.style.color = '#000';
+      btnH.style.background = 'transparent'; btnH.style.color = 'var(--muted)';
+      // Pre-fill with current balance and detect currency
+      if (state.userId) {
+        apiFetch('/users/' + state.userId + '/cash').then(r => {
+          if (!r) return;
+          const sym = (r.currency === 'GBP') ? '£' : '$';
+          document.getElementById('p-cash-currency-symbol').textContent = sym;
+          if (r.available_cash != null) {
+            document.getElementById('p-cash-input').value = r.available_cash;
+          }
+        }).catch(() => {});
+      }
+    } else {
+      panelH.style.display = '';
+      panelC.style.display = 'none';
+      submitBtn.style.display = '';
+      holdingsList.style.display = '';
+      btnH.style.background = 'var(--accent)'; btnH.style.color = '#000';
+      btnC.style.background = 'transparent'; btnC.style.color = 'var(--muted)';
+    }
+  }
+
+  btnH.addEventListener('click', () => _setMode('holdings'));
+  btnC.addEventListener('click', () => _setMode('cash'));
+})();
+
+document.getElementById('p-cash-save-btn').addEventListener('click', async () => {
+  if (!state.userId) { showToast('Sign in first'); return; }
+  const msg = document.getElementById('p-cash-msg');
+  const raw = parseFloat(document.getElementById('p-cash-input').value);
+  if (isNaN(raw)) { msg.style.color = 'var(--red)'; msg.textContent = 'Enter a valid amount'; return; }
+  msg.innerHTML = '<span class="spinner"></span>';
+  try {
+    const d = await apiFetch('/users/' + state.userId + '/cash', {
+      method: 'POST',
+      body: JSON.stringify({ available_cash: raw })
+    });
+    if (!d) return;
+    state._availableCash = raw;
+    msg.style.color = 'var(--green)';
+    const sym = (state._accountCurrency === 'GBP') ? '£' : '$';
+    msg.textContent = `✓ Cash balance set to ${sym}${raw.toLocaleString('en-GB', {maximumFractionDigits:0})}`;
+    // Refresh tips cash display if already loaded
+    const cashDisplay = document.getElementById('tip-cash-display');
+    const cashNudge   = document.getElementById('tip-cash-nudge');
+    if (cashDisplay) {
+      const isNeg = raw < 0;
+      cashDisplay.style.color = isNeg ? 'var(--red)' : 'var(--accent)';
+      cashDisplay.textContent = sym + Math.abs(raw).toLocaleString('en-GB', {maximumFractionDigits:0}) + (isNeg ? ' \u26a0 overcommitted' : '');
+      if (cashNudge) cashNudge.textContent = '';
+    }
+    setTimeout(() => { msg.textContent = ''; }, 4000);
+  } catch(e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
+});
+
 document.getElementById('p-submit-btn').addEventListener('click', async () => {
   if (!state.userId) { showToast('Sign in first'); return; }
   const msg = document.getElementById('p-msg');
@@ -2799,6 +2888,22 @@ async function loadTipConfig() {
     } else {
       _mktSetAllMode(true);
     }
+    // Available cash display
+    const cashDisplay = document.getElementById('tip-cash-display');
+    const cashNudge   = document.getElementById('tip-cash-nudge');
+    const currency    = d.account_currency || 'GBP';
+    const sym         = currency === 'GBP' ? '\u00a3' : '$';
+    state._availableCash     = d.available_cash != null ? d.available_cash : null;
+    state._accountCurrency   = currency;
+    if (d.available_cash != null) {
+      const isNeg = d.available_cash < 0;
+      cashDisplay.style.color = isNeg ? 'var(--red)' : 'var(--accent)';
+      cashDisplay.textContent = sym + Math.abs(d.available_cash).toLocaleString('en-GB', {maximumFractionDigits:0}) + (isNeg ? ' \u26a0 overcommitted' : '');
+      if (cashNudge) cashNudge.textContent = '';
+    } else {
+      cashDisplay.textContent = '\u2014';
+      if (cashNudge) cashNudge.innerHTML = '<a href="#" id="cash-set-nudge" style="color:var(--accent);text-decoration:none;font-size:11px;">Set balance \u2192 (Portfolio tab)</a>';
+    }
   } catch(e) { /* silent */ }
 }
 
@@ -2892,6 +2997,24 @@ document.getElementById('tip-preview-btn').addEventListener('click', async () =>
     }
 
     html += sourceHtml;
+
+    // Cash overflow warning
+    if (state._availableCash != null && t.position_value != null) {
+      const posVal = t.position_value;
+      const cash   = state._availableCash;
+      const sym    = (state._accountCurrency === 'GBP') ? '£' : '$';
+      const fmtVal = v => sym + Math.abs(v).toLocaleString('en-GB', {maximumFractionDigits:0});
+      if (posVal > cash) {
+        const wouldBeNeg = cash - posVal < 0;
+        const warnMsg = wouldBeNeg
+          ? `⚠ This trade (${fmtVal(posVal)}) would take your cash balance negative — check your sizing`
+          : `⚠ Position size (${fmtVal(posVal)}) exceeds available cash (${fmtVal(cash)}) — you may need to free up capital first`;
+        html += `<div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);font-size:11px;color:#f59e0b;">${warnMsg}</div>`;
+      }
+    } else if (state._availableCash == null) {
+      html += `<div style="margin-top:8px;font-size:11px;color:var(--muted);">💡 <a href="#" onclick="showScreen('portfolio');return false;" style="color:var(--accent);text-decoration:none;">Set your cash balance</a> to see position sizing warnings</div>`;
+    }
+
     html += `<div class="feedback-row" id="tip-fb-row">
       <span class="fb-label">Outcome</span>
       <button class="fb-btn" data-v="hit_t1" title="Hit Target 1">T1 ✓</button>
