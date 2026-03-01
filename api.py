@@ -6175,8 +6175,10 @@ def _handle_tg_message(msg: dict) -> None:
             user_message=text,
             snippet=snippet,
             portfolio_context=portfolio_context,
+            atom_count=len(atoms),
             live_context='',
             has_history=bool(history_messages),
+            telegram_mode=True,
         )
         # Splice conversation history between system and user turns
         # Strip 'id' and any non-standard fields — Groq rejects them with 400

@@ -278,6 +278,25 @@ _SYSTEM_GEO_NO_PORTFOLIO_RULE = (
     "in the KNOWLEDGE CONTEXT. Those atoms ARE the geopolitical data — read them and answer from them."
 )
 
+_SYSTEM_TELEGRAM_FORMAT = (
+    "\nFORMAT OVERRIDE — TELEGRAM MODE: This response will be sent as a Telegram chat message. "
+    "You MUST follow these rules instead of the standard formatting rules:\n"
+    "1. Be concise. Maximum 4-6 sentences total unless the user explicitly asks for more detail. "
+    "Lead with the single most important fact. Do NOT write comprehensive reports.\n"
+    "2. NO section headers. Do NOT use **Header Name** style headings. "
+    "No 'Geopolitical Data', 'Per-Holding Signal State', 'Market Regime', or any other section label. "
+    "Write in plain flowing prose or a short bullet list (3-5 items max).\n"
+    "3. For portfolio queries: pick the top 2-3 most relevant holdings only. "
+    "Do NOT write a paragraph for every single holding. "
+    "State the most important signal fact for each in one sentence.\n"
+    "4. If the KB has data, lead with it directly. "
+    "NEVER open with 'I don't have current KB data' if the USER PORTFOLIO block or KB atoms are present. "
+    "Only use the no-data message if zero atoms were retrieved.\n"
+    "5. Omit sizing examples, concentration risk paragraphs, and disclaimer boilerplate "
+    "unless the user explicitly asked for them.\n"
+    "6. End with a one-line summary or a prompt for a follow-up if useful."
+)
+
 _SYSTEM_SIZING_RULE = (
     "\n11. EDUCATIONAL POSITION SIZING: When the user asks about a specific pattern or holding, "
     "you MAY include one short educational sizing example using the actual numbers from USER PORTFOLIO. "
@@ -305,6 +324,7 @@ def build(
     web_searched: Optional[str] = None,
     has_history: bool = False,
     opportunity_scan_context: Optional[str] = None,
+    telegram_mode: bool = False,
 ) -> list[dict]:
     """
     Build the [system, user] message list for Ollama.
@@ -369,6 +389,10 @@ def build(
 
     if opportunity_scan_context:
         system_text += _SYSTEM_GENERATION_RULE
+
+    # Telegram mode: override verbose formatting with concise chat style
+    if telegram_mode:
+        system_text += _SYSTEM_TELEGRAM_FORMAT
 
     # Geo rules: inject based on whether user has a portfolio or not
     _msg_lower_geo = user_message.lower()
