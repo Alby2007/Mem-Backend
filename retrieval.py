@@ -865,7 +865,17 @@ def retrieve(
         'return_vs_spy_1m', 'return_vs_spy_3m', 'avg_volume_30d',
         'high_52w', 'low_52w', 'price_6m_ago',
     })
-    signals, invalidation, quality, theses, macro, research, historical, other = [], [], [], [], [], [], [], []
+    _GEO_SOURCES = frozenset({
+        'gdelt_tension', 'acled_unrest', 'ucdp_conflict', 'geo_exposure',
+        'geopolitical_data_gdelt', 'geopolitical_data_acled', 'geopolitical_data_ucdp',
+    })
+    _GEO_PREDICATES = frozenset({
+        'headline', 'summary', 'event', 'conflict_status', 'event_type',
+        'parties_involved', 'location', 'severity', 'escalation', 'phase',
+        'historical_context', 'background', 'cause', 'fatality_estimate',
+        'territorial_control', 'diplomatic_status',
+    })
+    signals, invalidation, quality, theses, macro, research, historical, geo, other = [], [], [], [], [], [], [], [], []
     for r in results:
         pred = r['predicate']
         src = r['source']
@@ -890,6 +900,10 @@ def retrieve(
             research.append(r)
         elif pred in _HIST_PREDICATES:
             historical.append(r)
+        elif (any(src.startswith(gs) for gs in _GEO_SOURCES)
+              or src.startswith('news_wire_')
+              or pred in _GEO_PREDICATES):
+            geo.append(r)
         else:
             other.append(r)
 
@@ -917,6 +931,9 @@ def retrieve(
     if historical:
         lines.append('# historical-performance')
         lines.extend(_fmt(r) for r in historical[:12])
+    if geo:
+        lines.append('# geopolitical-news')
+        lines.extend(_fmt(r) for r in geo[:30])
     if other:
         lines.append('# context')
         lines.extend(_fmt(r) for r in other[:6])
