@@ -1007,16 +1007,32 @@ def retrieve(
         'gdelt_tension', 'acled_unrest', 'ucdp_conflict', 'geo_exposure',
         'geopolitical_data_gdelt', 'geopolitical_data_acled', 'geopolitical_data_ucdp',
     })
+    _GEO_SUBJECTS = frozenset({
+        'gdelt_tension', 'acled_unrest', 'ucdp_conflict', 'usgs_risk', 'usgs_seismic',
+    })
     _GEO_PREDICATES = frozenset({
         'headline', 'summary', 'event', 'conflict_status', 'event_type',
         'parties_involved', 'location', 'severity', 'escalation', 'phase',
         'historical_context', 'background', 'cause', 'fatality_estimate',
         'territorial_control', 'diplomatic_status',
     })
+    # GDELT stores tension scores as compound predicates e.g. russia_ukraine_score,
+    # us_iran_trend, china_taiwan_score. Route these to geo, not other.
+    _GDELT_SCORE_SUFFIXES = ('_score', '_trend', '_risk')
     signals, invalidation, quality, theses, macro, research, historical, geo, other = [], [], [], [], [], [], [], [], []
     for r in results:
         pred = r['predicate']
         src = r['source']
+        subj = r['subject']
+        # Geo routing: check source, subject, predicate, and GDELT compound predicates
+        # BEFORE research bucket so key_finding/catalyst from geo sources go here.
+        _is_geo_src = (
+            any(src.startswith(gs) for gs in _GEO_SOURCES)
+            or src.startswith('news_wire_')
+            or subj in _GEO_SUBJECTS
+            or src.startswith('geopolitical_data_')
+        )
+        _is_gdelt_score = any(pred.endswith(sfx) for sfx in _GDELT_SCORE_SUFFIXES)
         if pred in ('invalidation_price', 'invalidation_distance', 'thesis_risk_level'):
             invalidation.append(r)
         elif pred in ('conviction_tier', 'volatility_scalar', 'position_size_pct'):
@@ -1033,15 +1049,14 @@ def retrieve(
         elif src.startswith('macro_data') or pred in ('regime_label', 'dominant_driver',
                                                        'central_bank_stance', 'risk_on_off'):
             macro.append(r)
+        elif pred in _HIST_PREDICATES:
+            historical.append(r)
+        elif (_is_geo_src or pred in _GEO_PREDICATES or _is_gdelt_score
+              or (pred in ('key_finding', 'catalyst', 'risk_factor') and _is_geo_src)):
+            geo.append(r)
         elif src.startswith('broker_research') or pred in ('rating', 'key_finding',
                                                             'compared_to_consensus'):
             research.append(r)
-        elif pred in _HIST_PREDICATES:
-            historical.append(r)
-        elif (any(src.startswith(gs) for gs in _GEO_SOURCES)
-              or src.startswith('news_wire_')
-              or pred in _GEO_PREDICATES):
-            geo.append(r)
         else:
             other.append(r)
 
