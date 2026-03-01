@@ -442,16 +442,28 @@ def build(
         'war', 'conflict', 'attack', 'strike', 'military', 'iran', 'russia',
         'ukraine', 'israel', 'gaza', 'sanction', 'tension', 'geopolit',
     }
-    # Financial intent keywords — user explicitly wants a market/financial angle.
-    # Geo financial-linking rules ONLY fire when one of these is also present.
-    # Pure "tell me about X" news/info queries skip the rules entirely.
+    # Financial intent keywords — user is explicitly connecting the geo event to
+    # their own financial exposure or asking for a direct market-impact answer.
+    # INTENTIONALLY NARROW: only portfolio-specific phrases and explicit
+    # market-linkage verbs. Generic words like 'market', 'price', 'stock',
+    # 'trade', 'economy' are excluded — they appear in normal non-geo queries
+    # and would over-trigger geo financial rules on e.g. "stock market news".
     _GEO_FINANCE_KWS = {
+        # Explicit personal exposure phrases
         'affect my', 'impact my', 'affect portfolio', 'impact portfolio',
         'hurt my', 'damage my', 'risk to my', 'threatens my', 'threaten my',
-        'market', 'markets', 'portfolio', 'stock', 'stocks', 'shares', 'equity',
-        'invest', 'trade', 'trading', 'price', 'gold', 'oil', 'dollar', 'usd',
-        'sector', 'etf', 'defence', 'defense', 'commodity', 'commodities',
-        'financial', 'economy', 'economic', 'hedge', 'exposure',
+        'effect on my', 'impact on my', 'affect my holdings', 'affect my shares',
+        # Explicit portfolio/holdings terms
+        'portfolio', 'holdings', 'positions', 'my stocks', 'my shares',
+        'my investments', 'my exposure',
+        # Explicit market-linkage question verbs
+        'affect markets', 'impact markets', 'affect the market',
+        'impact the market', 'affect gold', 'affect oil', 'affect equities',
+        'impact gold', 'impact oil', 'impact equities',
+        'what does this mean for', 'what does it mean for',
+        'how does this affect', 'how does it affect',
+        'how will this affect', 'how will it affect',
+        'implications for', 'knock-on effect',
     }
     _is_geo_topic = any(kw in _msg_lower_geo for kw in _GEO_TOPIC_KWS)
     _is_geo_financial = any(kw in _msg_lower_geo for kw in _GEO_FINANCE_KWS)
