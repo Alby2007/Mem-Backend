@@ -2283,10 +2283,22 @@ def chat_endpoint():
     # Trust the authenticated token identity over the request body to prevent spoofing
     chat_user_id    = getattr(g, 'user_id', None) or data.get('user_id') or None
 
+    # ── Portfolio-intent detection ─────────────────────────────────────────
+    # Keywords that signal the user is explicitly asking about their own holdings.
+    # ONLY when these are present should we inject portfolio context or augment
+    # KB retrieval with portfolio tickers.
+    _PORTFOLIO_INTENT_KWS = (
+        'my portfolio', 'my holdings', 'my positions', 'my stocks', 'my shares',
+        'my book', 'my p&l', 'my pnl', 'my exposure', 'my allocation',
+        'discuss my', 'analyse my', 'analyze my', 'review my',
+        'affect my', 'impact my', 'affect portfolio', 'impact portfolio',
+        'portfolio', 'holdings', 'positions',
+    )
+    _msg_lower_port = message.lower()
+    _wants_portfolio = any(kw in _msg_lower_port for kw in _PORTFOLIO_INTENT_KWS)
+
     # Auto-boost limit for portfolio-wide queries so all holdings get KB atoms
-    _PORTFOLIO_KEYWORDS = ('portfolio', 'holdings', 'positions', 'my stocks',
-                           'discuss my', 'analyse my', 'analyze my', 'review my')
-    if chat_user_id and any(kw in message.lower() for kw in _PORTFOLIO_KEYWORDS):
+    if chat_user_id and _wants_portfolio:
         limit = max(limit, 80)
 
     conn = _kg.thread_local_conn()
@@ -2354,12 +2366,14 @@ def chat_endpoint():
     _aug_tickers: list = []
     if not _cur_tickers and session_id in _session_tickers:
         _aug_tickers = list(_session_tickers[session_id])
-    # Always merge portfolio tickers so follow-ups ("how does it tie in to my portfolio")
-    # retrieve KB atoms for ALL holdings, not just the last-mentioned ticker
-    _port_ticks = _session_portfolio_tickers.get(session_id, [])
-    for _pt in _port_ticks:
-        if _pt not in _aug_tickers and _pt not in _cur_tickers:
-            _aug_tickers.append(_pt)
+    # Only merge portfolio tickers when the user is explicitly asking about their portfolio.
+    # Merging unconditionally caused every unrelated query to pull portfolio KB atoms,
+    # which made the LLM anchor every response back to the user's holdings.
+    if _wants_portfolio:
+        _port_ticks = _session_portfolio_tickers.get(session_id, [])
+        for _pt in _port_ticks:
+            if _pt not in _aug_tickers and _pt not in _cur_tickers:
+                _aug_tickers.append(_pt)
     if _aug_tickers:
         _retrieve_message = message + ' ' + ' '.join(_aug_tickers)
 
@@ -2588,8 +2602,10 @@ def chat_endpoint():
         return jsonify(response), 503
 
     # ── Portfolio context (personalisation) ──────────────────────────────
+    # Only inject when the user explicitly asked about their portfolio/holdings/positions.
+    # Injecting unconditionally caused every response to reference the user's book.
     portfolio_context = None
-    if chat_user_id and HAS_PRODUCT_LAYER:
+    if chat_user_id and HAS_PRODUCT_LAYER and _wants_portfolio:
         try:
             _holdings = get_portfolio(_DB_PATH, chat_user_id)
             _model    = get_user_model(_DB_PATH, chat_user_id)
@@ -6038,13 +6054,27 @@ def _handle_tg_message(msg: dict) -> None:
     except Exception:
         _cs = None
 
+    # ── Portfolio-intent detection (Telegram) ───────────────────────
+    # Mirror the same keyword gate used in the /chat endpoint.
+    # Portfolio context must only be injected when the user explicitly asks
+    # about their own holdings — not for every general market question.
+    _TG_PORTFOLIO_INTENT_KWS = (
+        'my portfolio', 'my holdings', 'my positions', 'my stocks', 'my shares',
+        'my book', 'my p&l', 'my pnl', 'my exposure', 'my allocation',
+        'discuss my', 'analyse my', 'analyze my', 'review my',
+        'affect my', 'impact my', 'affect portfolio', 'impact portfolio',
+        'portfolio', 'holdings', 'positions',
+    )
+    _tg_wants_portfolio = any(kw in text.lower() for kw in _TG_PORTFOLIO_INTENT_KWS)
+
     # ── KB retrieval ───────────────────────────────────────────────────────
     conn = _kg.thread_local_conn()
     try:
-        # Augment query with portfolio tickers so follow-up questions
-        # ("are my positions at risk?") still retrieve per-ticker KB atoms.
+        # Only augment query with portfolio tickers when explicitly asked.
+        # Augmenting unconditionally caused every market question to pull
+        # portfolio-specific KB atoms and anchor the LLM to the user's book.
         _retrieve_text = text
-        if HAS_PRODUCT_LAYER:
+        if _tg_wants_portfolio and HAS_PRODUCT_LAYER:
             try:
                 from users.user_store import get_portfolio as _gp
                 from retrieval import _extract_tickers as _et_tg
@@ -6061,81 +6091,82 @@ def _handle_tg_message(msg: dict) -> None:
         app.logger.error('telegram_webhook: retrieve failed: %s', _re)
         snippet, atoms = '', []
 
-    # ── Portfolio context (full per-ticker KB signals, same as /chat) ────────
+    # ── Portfolio context (per-ticker KB signals) ────────────────────
+    # Only built and injected when the user explicitly asked about their portfolio.
     portfolio_context = None
-    try:
-        from users.user_store import get_portfolio, get_user_model
-        _holdings = get_portfolio(_DB_PATH, user_id)
-        _model    = get_user_model(_DB_PATH, user_id)
-        if _holdings:
-            _h_parts = [f"{h['ticker']} ×{int(h['quantity'])}" for h in _holdings[:20]]
-            _pos_values = [
-                h['quantity'] * h['avg_cost']
-                for h in _holdings if h.get('quantity') and h.get('avg_cost')
-            ]
-            _total_cost = sum(_pos_values)
-            _lines = ["=== USER PORTFOLIO ===",
-                      f"Holdings: {', '.join(_h_parts)}"]
-            if _total_cost > 0:
-                _lines.append(f"Total invested (cost basis): £{_total_cost:,.0f}")
-            if _model:
-                _risk    = _model.get('risk_tolerance', '')
-                _style   = _model.get('holding_style', '')
-                _sectors = ', '.join(_model.get('sector_affinity') or [])
-                _profile = ' · '.join(p for p in [_risk, _style, _sectors] if p)
-                if _profile:
-                    _lines.append(f"Risk profile: {_profile}")
-            # Per-ticker KB signals
-            _holding_tickers = [h['ticker'] for h in _holdings]
-            _lines.append("\nPer-holding KB signals:")
-            for _ht in _holding_tickers:
-                try:
-                    _ht_rows = conn.execute(
-                        """SELECT predicate, object FROM facts
-                           WHERE subject=? AND predicate IN
-                           ('last_price','price_regime','signal_direction',
-                            'signal_quality','return_1m','return_1y',
-                            'upside_pct','conviction_tier','macro_confirmation',
-                            'price_target')
-                           ORDER BY predicate""",
-                        (_ht.lower(),)
-                    ).fetchall()
-                    if _ht_rows:
-                        _d = {p: v for p, v in _ht_rows}
-                        _price  = _d.get('last_price', '?')
-                        _regime = _d.get('price_regime', '?').replace('_', ' ')
-                        _dir    = _d.get('signal_direction', '?')
-                        _qual   = _d.get('signal_quality', '?')
-                        _conv   = _d.get('conviction_tier', '?')
-                        _up     = _d.get('upside_pct', '?')
-                        _target = _d.get('price_target', '')
-                        _ret1m  = _d.get('return_1m', '')
-                        _ret1y  = _d.get('return_1y', '')
-                        _implied = ''
-                        try:
-                            if _target and _price and _price != '?' and _target != '?':
-                                _move = float(_target) - float(_price)
-                                _move_dir = 'up to' if _move >= 0 else 'down to'
-                                _implied = (f" Target: {_target} ({_move_dir}, {_up}% upside).")
-                        except Exception:
-                            pass
-                        _sent = (
-                            f"  {_ht}: price {_price} ({_regime}). "
-                            f"Signal: {_dir}.{_implied} "
-                            f"Quality: {_qual}. Conviction: {_conv}."
-                        )
-                        if _ret1m:
-                            _sent += f" 1m return: {_ret1m}%."
-                        if _ret1y:
-                            _sent += f" 1y return: {_ret1y}%."
-                        _lines.append(_sent)
-                    else:
+    if _tg_wants_portfolio:
+        try:
+            from users.user_store import get_portfolio as _gp2, get_user_model as _gum2
+            _holdings = _gp2(_DB_PATH, user_id)
+            _model    = _gum2(_DB_PATH, user_id)
+            if _holdings:
+                _h_parts = [f"{h['ticker']} ×{int(h['quantity'])}" for h in _holdings[:20]]
+                _pos_values = [
+                    h['quantity'] * h['avg_cost']
+                    for h in _holdings if h.get('quantity') and h.get('avg_cost')
+                ]
+                _total_cost = sum(_pos_values)
+                _lines = ["=== USER PORTFOLIO ===",
+                          f"Holdings: {', '.join(_h_parts)}"]
+                if _total_cost > 0:
+                    _lines.append(f"Total invested (cost basis): £{_total_cost:,.0f}")
+                if _model:
+                    _risk    = _model.get('risk_tolerance', '')
+                    _style   = _model.get('holding_style', '')
+                    _sectors = ', '.join(_model.get('sector_affinity') or [])
+                    _profile = ' · '.join(p for p in [_risk, _style, _sectors] if p)
+                    if _profile:
+                        _lines.append(f"Risk profile: {_profile}")
+                _holding_tickers = [h['ticker'] for h in _holdings]
+                _lines.append("\nPer-holding KB signals:")
+                for _ht in _holding_tickers:
+                    try:
+                        _ht_rows = conn.execute(
+                            """SELECT predicate, object FROM facts
+                               WHERE subject=? AND predicate IN
+                               ('last_price','price_regime','signal_direction',
+                                'signal_quality','return_1m','return_1y',
+                                'upside_pct','conviction_tier','macro_confirmation',
+                                'price_target')
+                               ORDER BY predicate""",
+                            (_ht.lower(),)
+                        ).fetchall()
+                        if _ht_rows:
+                            _d = {p: v for p, v in _ht_rows}
+                            _price  = _d.get('last_price', '?')
+                            _regime = _d.get('price_regime', '?').replace('_', ' ')
+                            _dir    = _d.get('signal_direction', '?')
+                            _qual   = _d.get('signal_quality', '?')
+                            _conv   = _d.get('conviction_tier', '?')
+                            _up     = _d.get('upside_pct', '?')
+                            _target = _d.get('price_target', '')
+                            _ret1m  = _d.get('return_1m', '')
+                            _ret1y  = _d.get('return_1y', '')
+                            _implied = ''
+                            try:
+                                if _target and _price and _price != '?' and _target != '?':
+                                    _move = float(_target) - float(_price)
+                                    _move_dir = 'up to' if _move >= 0 else 'down to'
+                                    _implied = f" Target: {_target} ({_move_dir}, {_up}% upside)."
+                            except Exception:
+                                pass
+                            _sent = (
+                                f"  {_ht}: price {_price} ({_regime}). "
+                                f"Signal: {_dir}.{_implied} "
+                                f"Quality: {_qual}. Conviction: {_conv}."
+                            )
+                            if _ret1m:
+                                _sent += f" 1m return: {_ret1m}%."
+                            if _ret1y:
+                                _sent += f" 1y return: {_ret1y}%."
+                            _lines.append(_sent)
+                        else:
+                            _lines.append(f"  {_ht}: No KB signals — answer from general knowledge.")
+                    except Exception:
                         _lines.append(f"  {_ht}: No KB signals — answer from general knowledge.")
-                except Exception:
-                    _lines.append(f"  {_ht}: No KB signals — answer from general knowledge.")
-            portfolio_context = '\n'.join(_lines)
-    except Exception:
-        pass
+                portfolio_context = '\n'.join(_lines)
+        except Exception:
+            pass
 
     # ── Build prompt ───────────────────────────────────────────────────────
     try:
