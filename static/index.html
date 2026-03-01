@@ -308,6 +308,131 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .btn-danger { background: transparent; border: 1px solid var(--red); color: var(--red); padding: 8px 16px; border-radius: 5px; cursor: pointer; font-size: 13px; font-weight: 600; width: 100%; transition: background .15s; }
 .btn-danger:hover { background: rgba(239,68,68,.12); }
 
+/* ── Portfolio overhaul ── */
+.ptf-grid { display: grid; grid-template-columns: 1fr 340px; gap: 16px; align-items: start; }
+.ptf-right-col { display: flex; flex-direction: column; gap: 14px; }
+.ptf-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.ptf-card-header { padding: 11px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.ptf-card-title { font-size: 10px; font-weight: 700; letter-spacing: 2px; color: var(--accent); text-transform: uppercase; }
+.ptf-card-body { padding: 16px; }
+
+.ptf-setup-banner { background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; padding: 13px 16px; display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+.ptf-setup-banner .ptf-sb-icon { font-size: 18px; flex-shrink: 0; }
+.ptf-setup-banner .ptf-sb-text { flex: 1; }
+.ptf-setup-banner .ptf-sb-text strong { color: var(--text); font-size: 12px; display: block; margin-bottom: 2px; }
+.ptf-setup-banner .ptf-sb-text span { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.ptf-setup-banner .ptf-sb-dismiss { color: var(--muted); font-size: 18px; cursor: pointer; padding: 0 4px; line-height: 1; flex-shrink: 0; }
+.ptf-setup-banner .ptf-sb-dismiss:hover { color: var(--text); }
+
+.ptf-input-tabs { display: flex; gap: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 3px; margin-bottom: 14px; }
+.ptf-tab-btn { flex: 1; padding: 6px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; cursor: pointer; border: none; background: transparent; color: var(--muted); transition: all .15s; text-align: center; }
+.ptf-tab-btn.active { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+.ptf-tab-content { display: none; }
+.ptf-tab-content.active { display: block; }
+
+.ptf-holdings-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+.ptf-holdings-table th { padding: 7px 8px; text-align: left; font-size: 9px; font-weight: 700; letter-spacing: 1.5px; color: var(--muted); border-bottom: 1px solid var(--border); background: var(--surface); text-transform: uppercase; }
+.ptf-holdings-table th:last-child { width: 30px; }
+.ptf-holdings-table td { padding: 8px 8px; border-bottom: 1px solid var(--border); font-size: 12px; vertical-align: middle; }
+.ptf-holdings-table tr:last-child td { border-bottom: none; }
+.ptf-holdings-table tr.ptf-empty-row td { color: var(--muted); font-size: 11px; text-align: center; padding: 18px; }
+.ptf-h-ticker { font-family: var(--mono); font-weight: 700; color: var(--text); font-size: 12px; }
+.ptf-h-meta { font-size: 10px; color: var(--muted); margin-top: 1px; }
+.ptf-pnl { font-family: var(--mono); font-size: 12px; }
+.ptf-pnl.pos { color: var(--green); }
+.ptf-pnl.neg { color: var(--red); }
+.ptf-h-cash { color: var(--green); font-family: var(--mono); font-weight: 700; }
+.ptf-del-btn { background: none; border: none; color: var(--border); cursor: pointer; font-size: 14px; padding: 2px 5px; transition: color .15s; }
+.ptf-del-btn:hover { color: var(--red); }
+
+.ptf-add-row { display: grid; grid-template-columns: 1fr 80px 100px auto; gap: 8px; align-items: center; padding: 10px; background: var(--surface); border: 1px dashed var(--border); border-radius: 4px; margin-bottom: 14px; }
+.ptf-add-row input { background: var(--card); border: 1px solid var(--border); border-radius: 3px; padding: 7px 10px; color: var(--text); font-size: 12px; font-family: inherit; outline: none; width: 100%; }
+.ptf-add-row input:focus { border-color: var(--accent2); }
+.ptf-add-holding-btn { background: transparent; border: 1px solid var(--border); border-radius: 3px; color: var(--accent); font-size: 18px; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: background .15s; }
+.ptf-add-holding-btn:hover { background: rgba(245,158,11,.1); }
+
+.ptf-sector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.ptf-sector-btn { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 10px 10px 8px; cursor: pointer; transition: border-color .15s, background .15s; text-align: left; }
+.ptf-sector-btn:hover { border-color: var(--accent2); background: rgba(245,158,11,.06); }
+.ptf-sector-btn.selected { border-color: var(--accent); background: rgba(245,158,11,.08); }
+.ptf-sector-icon { font-size: 16px; margin-bottom: 5px; display: block; }
+.ptf-sector-name { font-size: 11px; font-weight: 600; color: var(--text); display: block; margin-bottom: 2px; }
+.ptf-sector-count { font-size: 10px; color: var(--muted); }
+
+.ptf-cash-section { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 12px; margin: 0 16px 14px; }
+.ptf-cash-label { font-size: 10px; font-weight: 700; letter-spacing: 1.5px; color: var(--muted); margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; text-transform: uppercase; }
+.ptf-cash-label .ptf-cash-tip { font-size: 9px; color: var(--muted); font-weight: 400; letter-spacing: 0; text-transform: none; }
+.ptf-cash-input-row { display: grid; grid-template-columns: 110px 1fr; gap: 8px; }
+.ptf-cash-input-row select, .ptf-cash-input-row input { background: var(--card); border: 1px solid var(--border); border-radius: 3px; padding: 7px 10px; color: var(--text); font-size: 12px; font-family: inherit; outline: none; }
+.ptf-cash-input-row select { cursor: pointer; }
+.ptf-cash-input-row input:focus, .ptf-cash-input-row select:focus { border-color: var(--accent2); }
+.ptf-cash-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+.ptf-submit-bar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: var(--surface); border-top: 1px solid var(--border); }
+.ptf-submit-bar .ptf-submit-hint { font-size: 11px; color: var(--muted); flex: 1; }
+
+.ptf-step-row { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border); }
+.ptf-step-row:last-child { border-bottom: none; }
+.ptf-step-num { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: var(--muted); flex-shrink: 0; transition: all .2s; }
+.ptf-step-num.done { background: var(--green); border-color: var(--green); color: #000; }
+.ptf-step-num.active { border-color: var(--accent); color: var(--accent); }
+.ptf-step-info { flex: 1; }
+.ptf-step-name { font-size: 12px; color: var(--text); }
+.ptf-step-name.done { color: var(--muted); text-decoration: line-through; }
+.ptf-step-desc { font-size: 10px; color: var(--muted); margin-top: 1px; }
+.ptf-step-action { font-size: 10px; color: var(--accent); cursor: pointer; white-space: nowrap; }
+.ptf-step-action:hover { text-decoration: underline; }
+.ptf-step-done-mark { color: var(--green); font-size: 13px; }
+
+.ptf-summary-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); }
+.ptf-stat-cell { background: var(--card); padding: 12px 14px; }
+.ptf-stat-label { font-size: 9px; font-weight: 700; letter-spacing: 1.5px; color: var(--muted); margin-bottom: 5px; text-transform: uppercase; }
+.ptf-stat-value { font-size: 18px; font-weight: 700; color: var(--text); font-family: var(--mono); line-height: 1; }
+.ptf-stat-sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+.ptf-stat-value.pos { color: var(--green); }
+.ptf-stat-value.neg { color: var(--red); }
+.ptf-stat-value.amber { color: var(--accent); font-size: 15px; }
+.ptf-summary-empty { padding: 22px 16px; text-align: center; }
+.ptf-summary-empty .pse-icon { font-size: 24px; margin-bottom: 8px; display: block; }
+.ptf-summary-empty .pse-title { font-size: 12px; color: var(--text); margin-bottom: 5px; font-weight: 600; }
+.ptf-summary-empty .pse-sub { font-size: 11px; color: var(--muted); line-height: 1.5; }
+.ptf-sector-bars { padding: 10px 14px 12px; border-bottom: 1px solid var(--border); }
+.ptf-sector-bars-title { font-size: 9px; font-weight: 700; letter-spacing: 1.5px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; }
+.ptf-sector-bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.ptf-sector-bar-label { font-size: 10px; color: var(--text); width: 70px; flex-shrink: 0; }
+.ptf-sector-bar-track { flex: 1; height: 4px; background: var(--border); border-radius: 2px; }
+.ptf-sector-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+.ptf-sector-bar-pct { font-size: 10px; color: var(--muted); font-family: var(--mono); width: 28px; text-align: right; }
+
+.ptf-model-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px; }
+.ptf-m-label { font-size: 9px; font-weight: 700; letter-spacing: 1.5px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; }
+.ptf-m-value { font-size: 13px; font-weight: 600; color: var(--accent); }
+.ptf-m-value.unknown { color: var(--muted); font-weight: 400; font-style: italic; font-size: 11px; }
+
+.ptf-signal-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background .1s; }
+.ptf-signal-row:hover { background: rgba(255,255,255,.02); }
+.ptf-signal-row:last-child { border-bottom: none; }
+.ptf-sig-ticker { font-family: var(--mono); font-weight: 700; font-size: 12px; color: var(--text); width: 58px; flex-shrink: 0; }
+.ptf-sig-dir { font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 3px; flex-shrink: 0; }
+.ptf-sig-dir.bullish { background: rgba(16,185,129,.1); color: var(--green); border: 1px solid rgba(16,185,129,.2); }
+.ptf-sig-dir.bearish { background: rgba(239,68,68,.1); color: var(--red); border: 1px solid rgba(239,68,68,.2); }
+.ptf-sig-info { flex: 1; }
+.ptf-sig-type { font-size: 10px; color: var(--muted); }
+.ptf-sig-q { font-size: 10px; color: var(--muted); font-family: var(--mono); }
+.ptf-signals-empty { padding: 18px 16px; text-align: center; }
+.ptf-signals-empty .pse-icon { font-size: 20px; margin-bottom: 7px; display: block; }
+.ptf-signals-empty .pse-title { font-size: 12px; color: var(--text); margin-bottom: 4px; font-weight: 600; }
+.ptf-signals-empty .pse-sub { font-size: 10px; color: var(--muted); line-height: 1.5; }
+.ptf-signals-footer { padding: 9px 14px; border-top: 1px solid var(--border); }
+.ptf-signals-footer a { font-size: 11px; color: var(--accent); text-decoration: none; }
+.ptf-signals-footer a:hover { text-decoration: underline; }
+
+@media (max-width: 900px) {
+  .ptf-grid { grid-template-columns: 1fr; }
+  .ptf-add-row { grid-template-columns: 1fr 70px auto; }
+  .ptf-add-row input:nth-child(2) { display: none; }
+}
+
 /* ── Chat screen ── */
 #screen-chat { display: none; flex-direction: column; height: calc(100vh - var(--topbar-h) - 48px); }
 #screen-chat.active { display: flex; }
@@ -875,6 +1000,8 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 
 <!-- PORTFOLIO ─────────────────────────────────────────────────────── -->
 <div class="screen" id="screen-portfolio">
+
+  <!-- Page header -->
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
     <div style="font-size:16px;font-weight:700;">Portfolio</div>
     <div style="display:flex;gap:8px;align-items:center;">
@@ -890,77 +1017,219 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
       </select>
     </div>
   </div>
+
   <div id="p-sim-banner" style="display:none;"></div>
-  <div class="two-col">
-    <div>
-      <!-- 1. Screenshot upload -->
-      <div class="section-title">Drop Broker Screenshot</div>
-      <div class="drop-zone mb-12" id="p-drop-zone">
-        <input type="file" id="p-screenshot-input" accept="image/png,image/jpeg,image/webp" />
-        <div class="drop-zone-icon">📷</div>
-        <div class="drop-zone-label">Drop screenshot or click to upload</div>
-        <div class="drop-zone-sub">Hargreaves Lansdown · Freetrade · Trading 212 · IG · AJ Bell</div>
-      </div>
-      <div id="p-screenshot-msg" class="text-sm mb-12 text-muted"></div>
 
-      <!-- 2. Sector quick-add -->
-      <div class="section-title">Add by Sector</div>
-      <div class="sector-btns mb-12" id="p-sector-btns"></div>
+  <!-- Setup banner — hidden once portfolio has holdings -->
+  <div class="ptf-setup-banner" id="ptf-setup-banner">
+    <div class="ptf-sb-icon">⚡</div>
+    <div class="ptf-sb-text">
+      <strong>Finish setup to start receiving tips</strong>
+      <span>Add your holdings, set a delivery time in Tips, and link Telegram — then your Monday briefing is ready to fire.</span>
+    </div>
+    <div class="ptf-sb-dismiss" onclick="document.getElementById('ptf-setup-banner').style.display='none'">×</div>
+  </div>
 
-      <!-- 3. Manual add with autocomplete / cash toggle -->
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-        <div class="section-title" style="margin-bottom:0;">Add Manually</div>
-        <div style="display:flex;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;">
-          <button id="p-mode-holdings" class="btn btn-sm" style="border-radius:0;border:none;padding:4px 12px;font-size:11px;font-weight:700;background:var(--accent);color:#000;">Holdings</button>
-          <button id="p-mode-cash" class="btn btn-sm" style="border-radius:0;border:none;padding:4px 12px;font-size:11px;font-weight:700;background:transparent;color:var(--muted);">Cash</button>
+  <div class="ptf-grid">
+
+    <!-- LEFT: Holdings builder -->
+    <div class="ptf-card">
+      <div class="ptf-card-header">
+        <div class="ptf-card-title">Holdings</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span id="ptf-holding-count" style="font-size:10px;color:var(--muted);"></span>
+          <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 8px;color:var(--red);border-color:rgba(239,68,68,.3);" onclick="if(confirm('Clear all holdings?')){state.holdings=[];renderHoldings();}">Clear all</button>
         </div>
       </div>
-      <!-- Holdings panel -->
-      <div id="p-holdings-panel" class="card mb-12">
-        <div style="display:grid;grid-template-columns:1fr 80px 90px;gap:8px;margin-bottom:8px;align-items:start;">
-          <div class="autocomplete-wrap">
-            <input id="p-ticker" placeholder="Ticker (e.g. BARC.L)" autocomplete="off" />
+
+      <!-- Input method tabs -->
+      <div style="padding:14px 16px 0;">
+        <div class="ptf-input-tabs">
+          <button class="ptf-tab-btn active" onclick="ptfSwitchTab('manual',this)">✏️ Manual entry</button>
+          <button class="ptf-tab-btn" onclick="ptfSwitchTab('sector',this)">🏷 By sector</button>
+          <button class="ptf-tab-btn" onclick="ptfSwitchTab('screenshot',this)">📷 Broker screenshot</button>
+        </div>
+      </div>
+
+      <!-- TAB: Manual -->
+      <div class="ptf-tab-content active" id="ptf-tab-manual" style="padding:0 16px 14px;">
+        <table class="ptf-holdings-table">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th>Qty</th>
+              <th>Avg Cost</th>
+              <th>P&amp;L</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="p-holdings-list">
+            <tr class="ptf-empty-row"><td colspan="5">No holdings added yet</td></tr>
+          </tbody>
+        </table>
+        <!-- Add row — reuses existing p-ticker, p-qty, p-cost, p-add-btn IDs -->
+        <div class="ptf-add-row">
+          <div class="autocomplete-wrap" style="position:relative;">
+            <input id="p-ticker" placeholder="Ticker — e.g. BARC.L" autocomplete="off" style="width:100%;background:var(--card);border:1px solid var(--border);border-radius:3px;padding:7px 10px;color:var(--text);font-size:12px;font-family:var(--mono);text-transform:uppercase;outline:none;" />
             <div class="autocomplete-dropdown" id="p-ac-dropdown"></div>
           </div>
           <input id="p-qty" placeholder="Qty" type="number" min="0" />
           <input id="p-cost" placeholder="Avg cost" type="number" min="0" step="0.01" />
+          <button class="ptf-add-holding-btn" id="p-add-btn" title="Add holding">+</button>
         </div>
-        <button class="btn btn-outline btn-sm" id="p-add-btn">+ Add Holding</button>
       </div>
-      <!-- Cash panel -->
-      <div id="p-cash-panel" class="card mb-12" style="display:none;">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">Set your available uninvested cash. It appears as a holding in your portfolio and the AI uses it for position sizing — committed capital is deducted automatically when you accept a tip.</div>
-        <div style="display:grid;grid-template-columns:130px 1fr;gap:8px;margin-bottom:10px;align-items:center;">
-          <select id="p-cash-currency" style="font-size:13px;">
-            <option value="GBP">🇬🇧 GBP — £</option>
-            <option value="USD">🇺🇸 USD — $</option>
-            <option value="EUR">🇪🇺 EUR — €</option>
-            <option value="CHF">🇨🇭 CHF — Fr</option>
-            <option value="JPY">🇯🇵 JPY — ¥</option>
-            <option value="CAD">🇨🇦 CAD — $</option>
-            <option value="AUD">🇦🇺 AUD — $</option>
-            <option value="HKD">🇭🇰 HKD — $</option>
-            <option value="SGD">🇸🇬 SGD — $</option>
-          </select>
-          <input id="p-cash-input" type="number" min="0" step="0.01" placeholder="e.g. 5000" style="font-size:16px;" />
+
+      <!-- TAB: Sector -->
+      <div class="ptf-tab-content" id="ptf-tab-sector" style="padding:0 16px 14px;">
+        <p style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5;">Select sectors to add a basket of top holdings. You can remove individual stocks after.</p>
+        <div class="ptf-sector-grid" id="p-sector-btns"></div>
+      </div>
+
+      <!-- TAB: Screenshot -->
+      <div class="ptf-tab-content" id="ptf-tab-screenshot" style="padding:0 16px 14px;">
+        <div class="drop-zone mb-12" id="p-drop-zone" style="border:1.5px dashed var(--border);border-radius:6px;padding:28px 20px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;">
+          <input type="file" id="p-screenshot-input" accept="image/png,image/jpeg,image/webp" style="display:none;" />
+          <div style="font-size:28px;margin-bottom:10px;">📷</div>
+          <div style="font-size:13px;color:var(--text);margin-bottom:4px;">Drop a broker screenshot or click to upload</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.5;">We'll extract your holdings automatically using AI.<br>Works with most UK broker layouts.</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:8px;">Hargreaves Lansdown · Freetrade · Trading 212 · IG · AJ Bell · Interactive Brokers</div>
         </div>
-        <button class="btn btn-primary btn-sm" id="p-cash-save-btn">Save Cash Balance</button>
-        <button class="btn btn-ghost btn-sm" id="p-cash-clear-btn" style="margin-left:6px;">Clear</button>
-        <div id="p-cash-msg" class="text-sm mt-8 text-muted"></div>
+        <div id="p-screenshot-msg" class="text-sm text-muted" style="margin-bottom:10px;"></div>
+        <p style="font-size:11px;color:var(--muted);line-height:1.6;">For best results, screenshot your holdings or portfolio summary page. Include ticker symbols and quantities. Avg cost is optional but improves P&amp;L tracking.</p>
       </div>
-      <div id="p-holdings-list" style="margin-bottom:12px;"></div>
-      <button class="btn btn-primary" id="p-submit-btn">Submit Portfolio</button>
-      <div id="p-msg" class="text-sm mt-8 text-muted"></div>
-    </div>
-    <div>
-      <div class="section-title">User Model</div>
-      <div id="p-model-card" class="card mb-16">
-        <div class="empty text-muted text-sm">Submit portfolio to build model</div>
+
+      <!-- Cash section — always visible below tabs -->
+      <div style="border-top:1px solid var(--border);">
+        <!-- Hidden panels preserved for existing JS — p-holdings-panel / p-cash-panel wiring kept alive -->
+        <div id="p-holdings-panel" style="display:none;"></div>
+        <div class="ptf-cash-section">
+          <div class="ptf-cash-label">
+            Available Cash
+            <span class="ptf-cash-tip">AI uses this for position sizing</span>
+          </div>
+          <div class="ptf-cash-input-row">
+            <select id="p-cash-currency">
+              <option value="GBP">🇬🇧 GBP — £</option>
+              <option value="USD">🇺🇸 USD — $</option>
+              <option value="EUR">🇪🇺 EUR — €</option>
+              <option value="CHF">🇨🇭 CHF — Fr</option>
+              <option value="JPY">🇯🇵 JPY — ¥</option>
+              <option value="CAD">🇨🇦 CAD — $</option>
+              <option value="AUD">🇦🇺 AUD — $</option>
+              <option value="HKD">🇭🇰 HKD — $</option>
+              <option value="SGD">🇸🇬 SGD — $</option>
+            </select>
+            <input id="p-cash-input" type="number" min="0" step="0.01" placeholder="e.g. 5000" />
+          </div>
+          <div class="ptf-cash-actions">
+            <button class="btn btn-primary btn-sm" id="p-cash-save-btn">Save Cash</button>
+            <button class="btn btn-ghost btn-sm" id="p-cash-clear-btn">Clear</button>
+          </div>
+          <div id="p-cash-msg" class="text-sm mt-8 text-muted"></div>
+        </div>
+        <!-- Hidden cash panel for existing JS mode toggle compat -->
+        <div id="p-cash-panel" style="display:none;"></div>
+        <div id="p-mode-holdings" style="display:none;"></div>
+        <div id="p-mode-cash" style="display:none;"></div>
       </div>
-      <div class="section-title">Watchlist Signals</div>
-      <div id="p-signals"><div class="empty text-sm text-muted">Submit portfolio first</div></div>
+
+      <!-- Submit bar -->
+      <div class="ptf-submit-bar">
+        <button class="btn btn-primary" id="p-submit-btn">Submit Portfolio</button>
+        <span class="ptf-submit-hint">Submitting builds your trader profile and enables personalised signals.</span>
+      </div>
+      <div id="p-msg" class="text-sm" style="padding:0 16px 12px;min-height:16px;"></div>
     </div>
-  </div>
+
+    <!-- RIGHT COLUMN -->
+    <div class="ptf-right-col">
+
+      <!-- Setup Progress -->
+      <div class="ptf-card" id="ptf-setup-card">
+        <div class="ptf-card-header">
+          <div class="ptf-card-title">Setup Progress</div>
+          <span id="ptf-setup-count" style="font-size:10px;color:var(--muted);">1 of 4 done</span>
+        </div>
+        <div class="ptf-step-row">
+          <div class="ptf-step-num done">✓</div>
+          <div class="ptf-step-info"><div class="ptf-step-name done">Create account</div></div>
+          <span class="ptf-step-done-mark">✓</span>
+        </div>
+        <div class="ptf-step-row" id="ptf-step2-row">
+          <div class="ptf-step-num active" id="ptf-step2-num">2</div>
+          <div class="ptf-step-info">
+            <div class="ptf-step-name" id="ptf-step2-name">Add portfolio</div>
+            <div class="ptf-step-desc">Submit holdings to build your trader profile</div>
+          </div>
+          <span class="ptf-step-action" id="ptf-step2-action">Current</span>
+        </div>
+        <div class="ptf-step-row">
+          <div class="ptf-step-num" id="ptf-step3-num">3</div>
+          <div class="ptf-step-info">
+            <div class="ptf-step-name">Set delivery time</div>
+            <div class="ptf-step-desc">Configure when briefings arrive</div>
+          </div>
+          <span class="ptf-step-action" onclick="navigate('tips')">→ Tips</span>
+        </div>
+        <div class="ptf-step-row">
+          <div class="ptf-step-num" id="ptf-step4-num">4</div>
+          <div class="ptf-step-info">
+            <div class="ptf-step-name">Link Telegram</div>
+            <div class="ptf-step-desc">Required to receive tips and alerts</div>
+          </div>
+          <span class="ptf-step-action" onclick="navigate('profile')">→ Profile</span>
+        </div>
+      </div>
+
+      <!-- Portfolio Summary -->
+      <div class="ptf-card" id="ptf-summary-card">
+        <div class="ptf-card-header">
+          <div class="ptf-card-title">Portfolio Summary</div>
+        </div>
+        <div id="ptf-summary-body">
+          <div class="ptf-summary-empty">
+            <span class="pse-icon">📊</span>
+            <div class="pse-title">No portfolio yet</div>
+            <div class="pse-sub">Submit your holdings to see total value, P&amp;L, and sector exposure.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Trader Profile (User Model) -->
+      <div class="ptf-card">
+        <div class="ptf-card-header">
+          <div class="ptf-card-title">Trader Profile</div>
+          <span style="font-size:10px;color:var(--muted);">Built from your portfolio</span>
+        </div>
+        <div id="p-model-card">
+          <div class="ptf-model-grid">
+            <div><div class="ptf-m-label">Risk Tolerance</div><div class="ptf-m-value unknown" id="ptf-m-risk">—</div></div>
+            <div><div class="ptf-m-label">Holding Style</div><div class="ptf-m-value unknown" id="ptf-m-style">—</div></div>
+            <div><div class="ptf-m-label">Portfolio Beta</div><div class="ptf-m-value unknown" id="ptf-m-beta">—</div></div>
+            <div><div class="ptf-m-label">Preferred Pattern</div><div class="ptf-m-value unknown" id="ptf-m-pattern">Learning…</div></div>
+            <div><div class="ptf-m-label">Avg Win Rate</div><div class="ptf-m-value unknown" id="ptf-m-winrate">No history yet</div></div>
+            <div><div class="ptf-m-label">Sector Affinity</div><div class="ptf-m-value unknown" id="ptf-m-sector">—</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Watchlist Signals -->
+      <div class="ptf-card">
+        <div class="ptf-card-header">
+          <div class="ptf-card-title">Watchlist Signals</div>
+          <span style="font-size:10px;color:var(--muted);">From your holdings</span>
+        </div>
+        <div id="p-signals">
+          <div class="ptf-signals-empty">
+            <span class="pse-icon">📡</span>
+            <div class="pse-title">No signals yet</div>
+            <div class="pse-sub">Submit your portfolio to generate live signals for your holdings. Signals update as patterns form.</div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /ptf-right-col -->
+  </div><!-- /ptf-grid -->
 </div>
 
 <!-- MARKETS ───────────────────────────────────────────────────────── -->
@@ -2753,13 +3022,24 @@ async function loadTickerList() {
   }
 }
 
+// Sector metadata for ptf-sector-btn cards
+const FTSE_SECTOR_META = {
+  'FTSE Banks':  { icon: '🏦', count: 5 },
+  'FTSE Energy': { icon: '⚡', count: 2 },
+  'FTSE Mining': { icon: '⛏', count: 4 },
+  'FTSE Pharma': { icon: '💊', count: 3 },
+  'FTSE Tech':   { icon: '💻', count: 3 },
+};
+
 // Build sector buttons
 (function buildSectorBtns() {
   const wrap = document.getElementById('p-sector-btns');
+  if (!wrap) return;
   Object.keys(FTSE_SECTORS).forEach(label => {
-    const btn = document.createElement('button');
-    btn.className = 'btn btn-outline btn-sm';
-    btn.textContent = '+ ' + label;
+    const meta = FTSE_SECTOR_META[label] || { icon: '📊', count: FTSE_SECTORS[label].length };
+    const btn = document.createElement('div');
+    btn.className = 'ptf-sector-btn';
+    btn.innerHTML = `<span class="ptf-sector-icon">${meta.icon}</span><span class="ptf-sector-name">${label}</span><span class="ptf-sector-count">${meta.count} stocks</span>`;
     btn.addEventListener('click', () => {
       const tickers = FTSE_SECTORS[label];
       const existing = new Set(state.holdings.map(h => h.ticker));
@@ -2770,8 +3050,11 @@ async function loadTickerList() {
           added++;
         }
       });
+      btn.classList.toggle('selected', true);
       renderHoldings();
+      ptfSwitchTab('manual', document.querySelector('.ptf-tab-btn'));
       if (added === 0) showToast(`All ${label} tickers already added`, 'ok');
+      else showToast(`${added} ${label} holdings added`, 'ok');
     });
     wrap.appendChild(btn);
   });
@@ -2831,32 +3114,101 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.autocomplete-wrap')) _acDrop.classList.remove('open');
 });
 
+// ── Portfolio tab switcher ──────────────────────────────────────────
+function ptfSwitchTab(name, btn) {
+  document.querySelectorAll('.ptf-tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.ptf-tab-content').forEach(c => c.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const el = document.getElementById('ptf-tab-' + name);
+  if (el) el.classList.add('active');
+}
+
+// ── Setup progress helpers ──────────────────────────────────────────
+function ptfMarkStep2Done() {
+  const num = document.getElementById('ptf-step2-num');
+  const name = document.getElementById('ptf-step2-name');
+  const action = document.getElementById('ptf-step2-action');
+  if (num)    { num.classList.remove('active'); num.classList.add('done'); num.textContent = '✓'; }
+  if (name)   { name.classList.add('done'); }
+  if (action) { action.className = 'ptf-step-done-mark'; action.textContent = '✓'; }
+  const countEl = document.getElementById('ptf-setup-count');
+  if (countEl) countEl.textContent = '2 of 4 done';
+  const step3 = document.getElementById('ptf-step3-num');
+  if (step3) step3.classList.add('active');
+  const banner = document.getElementById('ptf-setup-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+function ptfUpdateHoldingCount() {
+  const realHoldings = state.holdings.filter(h => !h.is_cash);
+  const countEl = document.getElementById('ptf-holding-count');
+  if (countEl) countEl.textContent = realHoldings.length ? `${realHoldings.length} holding${realHoldings.length !== 1 ? 's' : ''}` : '';
+}
+
+// ── Portfolio Summary renderer ────────────────────────────────────
+function ptfRenderSummary() {
+  const body = document.getElementById('ptf-summary-body');
+  if (!body) return;
+  const realHoldings = state.holdings.filter(h => !h.is_cash);
+  const cashRow = state.holdings.find(h => h.is_cash);
+  if (!realHoldings.length) {
+    body.innerHTML = `<div class="ptf-summary-empty"><span class="pse-icon">📊</span><div class="pse-title">No portfolio yet</div><div class="pse-sub">Submit your holdings to see total value, P&L, and sector exposure.</div></div>`;
+    return;
+  }
+  const count = realHoldings.length;
+  const cashAmt = cashRow ? Math.abs(cashRow.avg_cost || 0) : 0;
+  const cashCcy = cashRow ? (cashRow.currency || 'GBP') : 'GBP';
+  const cashSym = _cashSym(cashCcy);
+  body.innerHTML = `
+    <div class="ptf-summary-stats">
+      <div class="ptf-stat-cell">
+        <div class="ptf-stat-label">Holdings</div>
+        <div class="ptf-stat-value" style="font-size:22px;">${count}</div>
+        <div class="ptf-stat-sub">positions tracked</div>
+      </div>
+      <div class="ptf-stat-cell">
+        <div class="ptf-stat-label">Cash Available</div>
+        <div class="ptf-stat-value amber">${cashAmt > 0 ? cashSym + cashAmt.toLocaleString('en-GB', {maximumFractionDigits:0}) : '—'}</div>
+        <div class="ptf-stat-sub">${cashAmt > 0 ? cashCcy : 'not set'}</div>
+      </div>
+    </div>`;
+}
+
 // Holdings render
 const _CCY_SYM = { GBP:'£', USD:'$', EUR:'\u20ac', CHF:'Fr', JPY:'\u00a5', CAD:'$', AUD:'$', HKD:'$', SGD:'$' };
 function _cashSym(ccy) { return _CCY_SYM[ccy] || ccy + ' '; }
 
 function renderHoldings() {
-  const el = document.getElementById('p-holdings-list');
+  const tbody = document.getElementById('p-holdings-list');
+  if (!tbody) return;
   const allRows = state.holdings;
-  if (!allRows.length) { el.innerHTML = '<div class="text-sm text-muted mb-8">No holdings added yet</div>'; return; }
-  el.innerHTML = allRows.map((h, i) => {
+  ptfUpdateHoldingCount();
+  ptfRenderSummary();
+  if (!allRows.length) {
+    tbody.innerHTML = '<tr class="ptf-empty-row"><td colspan="5">No holdings added yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = allRows.map((h, i) => {
     if (h.is_cash) {
       const ccy = h.currency || 'GBP';
       const sym = _cashSym(ccy);
       const isNeg = (h.avg_cost || 0) < 0;
       const val = Math.abs(h.avg_cost || 0).toLocaleString('en-GB', {maximumFractionDigits:0});
-      return `<div class="holding-row" style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.18);border-radius:6px;padding:8px 10px;margin-bottom:4px;">
-        <span class="holding-ticker" style="color:var(--green);">💰 ${escHtml(ccy)} Cash</span>
-        <span class="holding-meta" style="color:${isNeg?'var(--red)':'var(--green)'};">` + (isNeg ? '<span title="Overcommitted">⚠ -' : '') + `${sym}${val}` + (isNeg ? '</span>' : '') + ` available</span>
-        <button class="btn btn-ghost btn-sm" onclick="clearCashHolding()">✕</button>
-      </div>`;
+      return `<tr>
+        <td colspan="3"><span class="ptf-h-cash">💰 ${escHtml(ccy)} Cash</span><div class="ptf-h-meta">${isNeg ? '⚠ overcommitted' : 'available'}</div></td>
+        <td class="ptf-pnl ${isNeg ? 'neg' : 'pos'}">${isNeg ? '−' : ''}${sym}${val}</td>
+        <td><button class="ptf-del-btn" onclick="clearCashHolding()" title="Remove cash">×</button></td>
+      </tr>`;
     }
     const sym = _cashSym(h.currency || 'GBP');
-    return `<div class="holding-row">
-      <span class="holding-ticker">${escHtml(h.ticker)}</span>
-      <span class="holding-meta">${h.quantity || '\u2014'} ${h.avg_cost != null ? '@ ' + sym + h.avg_cost : ''}</span>
-      <button class="btn btn-ghost btn-sm" onclick="removeHolding(${i})">\u2715</button>
-    </div>`;
+    const costStr = h.avg_cost != null ? sym + Number(h.avg_cost).toLocaleString('en-GB', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+    return `<tr>
+      <td><div class="ptf-h-ticker">${escHtml(h.ticker)}</div></td>
+      <td style="color:var(--muted);">${h.quantity != null && h.quantity !== 0 ? h.quantity.toLocaleString() : '—'}</td>
+      <td style="color:var(--muted);">${costStr}</td>
+      <td><span class="ptf-pnl" style="color:var(--muted);">—</span></td>
+      <td><button class="ptf-del-btn" onclick="removeHolding(${i})" title="Remove">×</button></td>
+    </tr>`;
   }).join('');
 }
 
@@ -3080,25 +3432,27 @@ document.getElementById('p-submit-btn').addEventListener('click', async () => {
     // Manual submit clears simulated flag
     try { if (state.userId) localStorage.removeItem(`simulated_${state.userId}`); } catch { /* storage blocked */ }
     document.getElementById('p-sim-banner').style.display = 'none';
+    ptfMarkStep2Done();
     loadPortfolioModel();
   } catch(e) { msg.style.color='var(--red)'; msg.textContent = e.message; }
 });
 
 function renderModelCard(m) {
   if (!m) return;
-  document.getElementById('p-model-card').innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
-      ${[
-        ['Risk Tolerance', m.risk_tolerance],
-        ['Holding Style', m.holding_style],
-        ['Portfolio Beta', fmt(m.portfolio_beta)],
-        ['Preferred Pattern', m.preferred_pattern],
-        ['Avg Win Rate', m.avg_win_rate != null ? fmt(m.avg_win_rate*100)+'%' : '—'],
-        ['Sector Affinity', (m.sector_affinity||[]).join(', ') || '—'],
-      ].map(([k,v]) => `
-        <div><div class="text-xs text-muted mb-8">${k}</div><div class="mono-amber">${escHtml(String(v||'—'))}</div></div>
-      `).join('')}
-    </div>`;
+  const _val = (v, fallback) => v != null && v !== '' ? String(v) : fallback;
+  const _cls = (v, fallback) => (v == null || v === '' || v === fallback) ? 'unknown' : '';
+  const fields = [
+    ['risk', 'Risk Tolerance', _val(m.risk_tolerance, '—')],
+    ['style', 'Holding Style', _val(m.holding_style, '—')],
+    ['beta', 'Portfolio Beta', m.portfolio_beta != null ? fmt(m.portfolio_beta) : '—'],
+    ['pattern', 'Preferred Pattern', _val(m.preferred_pattern, 'Learning\u2026')],
+    ['winrate', 'Avg Win Rate', m.avg_win_rate != null ? fmt(m.avg_win_rate*100)+'%' : 'No history yet'],
+    ['sector', 'Sector Affinity', _val((m.sector_affinity||[]).join(', '), '—')],
+  ];
+  document.getElementById('p-model-card').innerHTML =
+    `<div class="ptf-model-grid">${fields.map(([id, label, val]) =>
+      `<div><div class="ptf-m-label">${label}</div><div class="ptf-m-value ${_cls(val, ['—','Learning\u2026','No history yet'].includes(val) ? val : null)}" id="ptf-m-${id}">${escHtml(val)}</div></div>`
+    ).join('')}</div>`;
 }
 
 async function loadPortfolioHoldings() {
@@ -3107,11 +3461,11 @@ async function loadPortfolioHoldings() {
     const d = await apiFetch(`/users/${state.userId}/portfolio`);
     const holdings = d?.holdings || [];
     if (holdings.length) {
-      // Preserve is_cash flag so cash row renders with distinct style
       state.holdings = holdings.map(h => h.is_cash
         ? { ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost, currency: h.currency, is_cash: true, value: h.value }
         : { ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost, currency: h.currency });
       renderHoldings();
+      ptfMarkStep2Done();
     }
   } catch { /* no holdings yet */ }
 }
@@ -3120,26 +3474,35 @@ async function loadPortfolioModel() {
   if (!state.userId) return;
   try {
     const m = await apiFetch(`/users/${state.userId}/preferences/inferred`);
-    if (!m) return;
-    renderModelCard(m);
+    if (m) renderModelCard(m);
   } catch { /* model not ready yet */ }
 
   // watchlist signals
+  const sigEl = document.getElementById('p-signals');
   try {
     const ws = await apiFetch(`/users/${state.userId}/watchlist-signals`);
     const sigs = ws?.signals || [];
-    if (!sigs.length) { document.getElementById('p-signals').innerHTML = '<div class="empty text-sm text-muted">No signals yet</div>'; return; }
-    document.getElementById('p-signals').innerHTML = `
-      <table class="tbl">
-        <thead><tr><th>Ticker</th><th>Tier</th><th>Upside</th><th>Direction</th></tr></thead>
-        <tbody>${sigs.slice(0,20).map(s => `<tr>
-          <td class="mono-amber">${escHtml(s.ticker)}</td>
-          <td>${tierBadge(s.conviction_tier)}</td>
-          <td class="mono-${(s.upside_pct||0)>=0?'green':'red'}">${fmt(s.upside_pct)}%</td>
-          <td>${dirBadge(s.signal_direction)}</td>
-        </tr>`).join('')}</tbody>
-      </table>`;
-  } catch { document.getElementById('p-signals').innerHTML = '<div class="empty text-sm text-muted">Signals unavailable</div>'; }
+    if (!sigs.length) {
+      sigEl.innerHTML = `<div class="ptf-signals-empty"><span class="pse-icon">📡</span><div class="pse-title">No signals yet</div><div class="pse-sub">Signals appear here as patterns form on your holdings. Check back after the next KB update.</div></div>`;
+      return;
+    }
+    const rows = sigs.slice(0, 10).map(s => {
+      const dir = (s.signal_direction || '').toLowerCase();
+      const isBull = dir === 'bullish' || dir === 'long';
+      const dirCls = isBull ? 'bullish' : 'bearish';
+      const dirLabel = isBull ? 'BULL' : 'BEAR';
+      const upside = s.upside_pct != null ? `<div class="ptf-sig-type" style="color:${s.upside_pct>=0?'var(--green)':'var(--red)'}">${s.upside_pct>=0?'+':''}${fmt(s.upside_pct)}%</div>` : '';
+      const qScore = s.signal_quality != null ? `<div class="ptf-sig-q">Q ${fmt(s.signal_quality)}</div>` : '';
+      return `<div class="ptf-signal-row">
+        <div class="ptf-sig-ticker">${escHtml(s.ticker)}</div>
+        <div class="ptf-sig-dir ${dirCls}">${dirLabel}</div>
+        <div class="ptf-sig-info">${upside}${qScore}</div>
+      </div>`;
+    }).join('');
+    sigEl.innerHTML = rows + `<div class="ptf-signals-footer"><a href="#" onclick="navigate('patterns');return false;">View all patterns for your holdings →</a></div>`;
+  } catch {
+    if (sigEl) sigEl.innerHTML = `<div class="ptf-signals-empty"><span class="pse-icon">📡</span><div class="pse-title">Signals unavailable</div><div class="pse-sub">Could not load signal data right now.</div></div>`;
+  }
 }
 
 // ── CHAT ──────────────────────────────────────────────────────────────────────
