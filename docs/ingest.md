@@ -509,6 +509,8 @@ Detects multi-factor chart and signal patterns over rolling windows. Writes `Pat
 | `BoEAdapter` | 24 hours | BoE Statistical API | `boe_base_rate`, UK `regime_label` |
 | `FREDAdapter` | 24 hours | St. Louis Fed FRED | US `regime_label`, `central_bank_stance` |
 | `FCAShortInterestAdapter` | 24 hours | FCA XLSX | `fca_short_interest` |
+| `GDELTAdapter` | 12 hours | GDELT 2.0 GKG Doc API (tonechart) | `gdelt_tension` (country pair tone scores) |
+| `UCDPAdapter` | 12 hours | GDELT artlist proxy (UCDP API requires auth) | `ucdp_conflict` (country conflict intensity) |
 | `HistoricalBackfillAdapter` | On-demand | yfinance 5yr daily | `return_3y/5y`, `max_drawdown_5y`, `volatility_5y` |
 
 `SeedSyncClient` runs hourly (outside the scheduler) to sync the shared KB seed from GitHub Releases.

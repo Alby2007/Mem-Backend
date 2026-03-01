@@ -462,6 +462,23 @@ Universal Discovery Pipeline. Scans FCA short interest, RSS ticker mentions, and
 
 ---
 
+### `ingest/gdelt_adapter.py`
+Fetches geopolitical tension tone scores from the GDELT 2.0 GKG Doc API (tonechart mode). Queries country pairs (e.g. US–Iran, Russia–Ukraine) and computes a count-weighted average tone from `bin` buckets.
+
+**Interval:** 12 hours  
+**Atoms produced:** `gdelt_tension | {country_pair} | tension_score:{score}` (confidence 0.68, source `geopolitical_data_gdelt`, half-life 3d)
+
+---
+
+### `ingest/ucdp_adapter.py`
+Country conflict intensity adapter — uses GDELT Doc API `artlist` mode as a proxy for UCDP data (UCDP REST API now requires auth). Counts conflict/war/military articles per country over 7 days.
+
+**Interval:** 12 hours  
+**Thresholds:** ≥50 articles → `active_war`; 10–49 → `minor_conflict`; <10 → `stable`  
+**Atoms produced:** `ucdp_conflict | {iso3} | {label}` + `ucdp_conflict | global_war_count | {N}` (confidence 0.72, source `geopolitical_data_ucdp`)
+
+---
+
 ### `ingest/seed_sync.py`
 Background hourly client: polls `Alby2007/Mem-Backend` GitHub Releases. If `seed-YYYYMMDD-HHMM` tag is newer than local `kb_meta.seed_tag`, downloads and applies. Hard-coded `_ALLOWED_TABLES` allowlist prevents any `user_*` table from being overwritten.
 
@@ -495,7 +512,19 @@ Builds structured `overlay_cards` from KB atoms for `POST /chat` when `overlay_m
 ---
 
 ### `llm/prompt_builder.py`
-Builds structured prompts from KB atoms for the chat endpoint. Formats atom lists into sections for LLM consumption.
+Builds the `[system, user]` message pair for the LLM. Dynamically assembles the system prompt by injecting context-specific rule blocks based on what is present:
+
+| Rule block | Condition |
+|---|---|
+| `_SYSTEM_PORTFOLIO_RULE` | `portfolio_context` present |
+| `_SYSTEM_SIZING_RULE` | `portfolio_context` present |
+| `_SYSTEM_POSITIONS_RULE` | portfolio + position-opportunity keywords |
+| `_SYSTEM_GEO_PORTFOLIO_RULE` | portfolio + geo/war keywords |
+| `_SYSTEM_GEO_NO_PORTFOLIO_RULE` | **no portfolio** + geo/war keywords — ensures users without a portfolio still get structured geo answers |
+| `_SYSTEM_LIVE_DATA_RULE` | `live_context` present |
+| `_SYSTEM_SEARCH_RULE` | `live_context` + `web_searched` |
+| `_SYSTEM_GENERATION_RULE` | `opportunity_scan_context` present |
+| `_SYSTEM_CONTINUITY_RULE` | `has_history=True` |
 
 ---
 
@@ -521,7 +550,11 @@ Detects conviction, momentum, and composite patterns over KB atoms. Writes `Patt
 ---
 
 ### `analytics/snapshot_curator.py`
-Curates personalised daily snapshot from KB atoms for a user. Selects top signals, macro context, and pattern alerts. Called by `GET /users/<id>/snapshot/preview`.
+Curates personalised daily snapshot from KB atoms for a user. Selects top signals, macro context, and pattern alerts. Called by `GET /users/<id>/snapshot/preview` and `delivery_scheduler.py`.
+
+**Signature:** `curate_snapshot(user_id, db_path, tier='basic') → CuratedSnapshot`
+
+Opportunity count is capped by `TIER_LIMITS[tier]['batch_size']` — not hardcoded.
 
 ---
 
@@ -712,7 +745,15 @@ Living portfolio briefing scheduler. Replaces the single daily tip with a full p
 ---
 
 ### `notifications/tip_formatter.py`
-Formats all tip and briefing messages into Telegram MarkdownV2.
+Formats all tip and briefing messages into Telegram MarkdownV2. Source of truth for tier configuration.
+
+**`TIER_LIMITS` (canonical tier config):**
+
+| Tier | `delivery_days` | `batch_size` | `patterns` | `timeframes` |
+|---|---|---|---|---|
+| `basic` | `['monday','wednesday']` | 2 | FVG, IFVG | 1h, 4h |
+| `pro` | `['monday','wednesday']` | 5 | All 7 patterns | 1h, 4h, 1d |
+| `premium` | `'daily'` | 1 | All 7 patterns | 15m, 1h, 4h, 1d |
 
 | Function | Purpose |
 |---|---|
@@ -736,7 +777,12 @@ Sends formatted messages via Telegram Bot API. Requires `TELEGRAM_BOT_TOKEN` env
 ---
 
 ### `notifications/delivery_scheduler.py`
-Background thread that fires tip delivery at scheduled times. Integrates with `tip_scheduler`.
+Background thread that fires the **daily briefing** (snapshot) at each user's configured delivery time. Enforces tier-based weekday gate before sending:
+- `basic` → Monday + Wednesday
+- `pro` → Monday + Wednesday
+- `premium` → daily
+
+Loads user tier from `user_preferences`, calls `curate_snapshot(user_id, db_path, tier=tier)`, then `format_snapshot()` → `TelegramNotifier.send()`.
 
 ---
 
@@ -769,6 +815,12 @@ Single-page application (SPA) served at `GET /`. Bloomberg-terminal dark aesthet
 | `scripts/push_seed.py` | Export + create GitHub Release tagged `seed-YYYYMMDD-HHMM` with `kb_seed.sql` asset. Prunes releases > 10. |
 | `scripts/load_seed.py` | Load `kb_seed.sql` into local DB via `executescript()` |
 | `scripts/check_module_status_docs.py` | Verifies module status table in `architecture.md` matches live import state |
+| `scripts/cf_purge.py` | Purges Cloudflare zone cache for `api.trading-galaxy.uk` (zone cache only — not CF Pages assets) |
+| `scripts/check_regime_now.py` | Checks market regime atoms in DB and `/stats` API response |
+| `scripts/check_geo_atoms.py` | Checks geo atom counts in DB (gdelt_tension, ucdp_conflict, acled_unrest) |
+| `scripts/check_geo_exposure.py` | Checks geopolitical_risk_exposure atoms per ticker |
+| `scripts/test_gdelt.py` | Tests GDELT API tonechart/artlist/timelinevol modes |
+| `scripts/check_tables.py` | Lists DB table names and row counts |
 
 ---
 
@@ -776,9 +828,10 @@ Single-page application (SPA) served at `GET /`. Bloomberg-terminal dark aesthet
 
 | File | Purpose |
 |---|---|
-| `deploy/hetzner.md` | Full step-by-step guide: CPX22 provisioning, Docker setup, Caddy TLS, systemd, backups, zero-downtime deploys |
-| `deploy/Caddyfile` | Caddy reverse proxy config for `api.tradinggalaxy.dev` — automatic Let's Encrypt TLS, security headers, rate limiting |
-| `deploy/seed-bootstrap.sh` | First-boot script: downloads latest `kb_seed.sql` from GitHub Releases and loads it into the `kb-data` Docker volume |
+| `deploy/oci-update.sh` | OCI deploy script: `git pull` → `pip install` → `systemctl restart trading-galaxy` → CF zone cache purge |
+| `deploy/deploy.ps1` | One-shot PowerShell deploy: pushes to GitHub, deploys backend via SSH, deploys frontend via `wrangler pages deploy` |
+| `deploy/Caddyfile` | Caddy reverse proxy config — automatic Let's Encrypt TLS, security headers, rate limiting |
+| `deploy/seed-bootstrap.sh` | First-boot script: downloads latest `kb_seed.sql` from GitHub Releases and loads it |
 
 ---
 

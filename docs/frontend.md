@@ -1,7 +1,7 @@
 # Frontend — Comprehensive Reference
 
 **File:** `static/index.html`  
-**Served at:** `https://app.trading-galaxy.uk` (Netlify CDN)  
+**Served at:** `https://trading-galaxy.uk` (Cloudflare Pages — project `mem-backend2`)  
 **Architecture:** Single-file SPA — zero build step, zero dependencies, zero bundler.
 
 ---
@@ -46,7 +46,7 @@ Trading Galaxy's frontend is a **Bloomberg-terminal-style SPA** — dark, mono-h
 | Fonts | JetBrains Mono (monospace data), DM Sans (UI text) — Google Fonts, lazy-loaded |
 | Charts | TradingView Advanced Chart widget (iframe embed, free tier) |
 | Auth widget | Telegram Login Widget (`telegram.org/js/telegram-widget.js`) |
-| Hosting | Netlify CDN |
+| Hosting | Cloudflare Pages (`mem-backend2`) |
 | API | `https://api.trading-galaxy.uk` (production) · `http://localhost:5050` (dev) |
 
 ---
@@ -593,7 +593,7 @@ connect-src 'self' https://api.trading-galaxy.uk;
 
 4. **Wire to `showScreen`** — add `if (name === '{name}') load{Name}();` inside `showScreen()`
 
-5. **No build step** — save and redeploy (`netlify deploy --dir static --prod` from repo root)
+5. **No build step** — save and redeploy (`npx wrangler pages deploy static --project-name mem-backend2 --branch master --commit-dirty=true` from repo root)
 
 **Template:**
 

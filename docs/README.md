@@ -27,9 +27,8 @@ Reference documentation for the Trading Galaxy knowledge base.
 
 | Service | URL |
 |---|---|
-| API | `https://api.trading-galaxy.uk` |
-| App | `https://app.trading-galaxy.uk` |
-| Landing | `https://trading-galaxy.uk` |
+| API | `https://api.trading-galaxy.uk` (OCI, `132.145.33.75`) |
+| App | `https://trading-galaxy.uk` (Cloudflare Pages `mem-backend2`) |
 
 ### Start the server locally
 ```powershell
@@ -80,11 +79,13 @@ curl -X POST https://api.trading-galaxy.uk/ingest \
 # Backend (OCI)
 ssh -i <key> ubuntu@132.145.33.75 "bash ~/trading-galaxy/deploy/oci-update.sh"
 
-# App frontend (Netlify)
-netlify deploy --dir static --prod
+# App frontend (Cloudflare Pages)
+npx wrangler pages deploy static --project-name mem-backend2 --branch master --commit-dirty=true
+```
 
-# Landing page (Netlify)
-cd landing && netlify deploy --dir . --prod
+```powershell
+# One-shot (backend + frontend)
+.\deploy\deploy.ps1
 ```
 
 ---
@@ -100,6 +101,7 @@ cd landing && netlify deploy --dir . --prod
 | `JWT_SECRET_KEY` | insecure dev default | **Required in production** — sign JWTs |
 | `TELEGRAM_BOT_TOKEN` | — | Daily briefing delivery + waitlist Telegram pings |
 | `WAITLIST_TELEGRAM_CHAT_ID` | — | Personal chat ID for waitlist signup notifications |
+| `GROQ_API_KEY` | — | Groq LLM API (preferred over Ollama when set; faster, free tier) |
 
 ---
 
@@ -107,10 +109,21 @@ cd landing && netlify deploy --dir . --prod
 
 | Adapter | Interval | Data |
 |---|---|---|
-| `YFinanceAdapter` | 5 min | Prices, fundamentals, analyst targets, ETF data (50 tickers) |
+| `YFinanceAdapter` | 5 min | Prices, fundamentals, analyst targets, ETF data |
+| `OptionsAdapter` | 15 min | Options chains, IV rank, put/call ratio, smart money signals |
 | `RSSAdapter` | 15 min | Financial news headlines (FT, CNBC, BBC, Investing.com, MarketWatch) |
+| `SignalEnrichmentAdapter` | 30 min | Derived signals: conviction tier, momentum, position size |
+| `EDGARRealtimeAdapter` | 30 min | 8-K real-time filings |
+| `PatternAdapter` | 60 min | Chart pattern detection |
+| `LLMExtractionAdapter` | 60 min | LLM-extracted signals from RSS headlines |
+| `LSEFlowAdapter` | 60 min | Institutional order flow for LSE equities |
+| `EarningsCalendarAdapter` | 60 min | Earnings proximity risk, implied move |
+| `GDELTAdapter` | 12 hours | Geopolitical tension tone scores (country pairs) |
+| `UCDPAdapter` | 12 hours | Country conflict intensity (GDELT artlist proxy) |
 | `EDGARAdapter` | 6 hours | SEC filings: 8-K, 10-Q, 10-K, Form 4 insider transactions |
+| `BoEAdapter` | 24 hours | Bank of England macro indicators |
 | `FREDAdapter` | 24 hours | Fed funds rate, CPI, GDP, unemployment, yield curve, HY spread |
+| `FCAShortInterestAdapter` | 24 hours | FCA short position disclosures for UK equities |
 
 ---
 
