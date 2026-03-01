@@ -304,7 +304,7 @@ try:
             "http://localhost:3000",
             "http://localhost:5050",
         ],
-        "methods": ["GET", "POST", "OPTIONS"],
+        "methods": ["GET", "POST", "DELETE", "OPTIONS"],
         "allow_headers": ["Authorization", "Content-Type"],
         "supports_credentials": True,
         "max_age": 3600,
