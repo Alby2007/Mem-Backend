@@ -3528,6 +3528,23 @@ def user_portfolio_get(user_id):
         return jsonify({'error': 'product layer not available'}), 503
     try:
         holdings = get_portfolio(_DB_PATH, user_id)
+        # Append cash as a virtual holding if set
+        try:
+            from users.user_store import get_available_cash as _get_cash
+            _cash_data = _get_cash(_DB_PATH, user_id)
+            if _cash_data['available_cash'] is not None:
+                _ccy = _cash_data['cash_currency'] or 'GBP'
+                holdings = list(holdings) + [{
+                    'ticker':    f'CASH:{_ccy}',
+                    'quantity':  1,
+                    'avg_cost':  _cash_data['available_cash'],
+                    'currency':  _ccy,
+                    'is_cash':   True,
+                    'sector':    'Cash',
+                    'value':     _cash_data['available_cash'],
+                }]
+        except Exception:
+            pass
         return jsonify({'user_id': user_id, 'holdings': holdings, 'count': len(holdings)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4309,6 +4326,13 @@ def tip_config(user_id: str):
                 d[jcol] = _json.loads(d[jcol]) if d[jcol] else None
             except Exception:
                 d[jcol] = None
+        # Fetch cash_currency separately (newer column)
+        try:
+            from users.user_store import get_available_cash as _gc
+            _cd = _gc(_DB_PATH, user_id)
+            d['cash_currency'] = _cd.get('cash_currency', 'GBP')
+        except Exception:
+            d['cash_currency'] = 'GBP'
         return jsonify(d)
 
     # POST
@@ -4384,35 +4408,35 @@ def user_cash(user_id: str):
     if request.method == 'GET':
         try:
             from users.user_store import get_available_cash
-            import sqlite3 as _sq3
-            cash = get_available_cash(_DB_PATH, user_id)
-            currency = 'GBP'
-            try:
-                _c3 = _sq3.connect(_DB_PATH, timeout=5)
-                r3 = _c3.execute(
-                    "SELECT account_currency FROM user_preferences WHERE user_id=?",
-                    (user_id,)
-                ).fetchone()
-                _c3.close()
-                if r3 and r3[0]: currency = r3[0]
-            except Exception:
-                pass
-            return jsonify({'available_cash': cash, 'currency': currency})
+            result = get_available_cash(_DB_PATH, user_id)
+            return jsonify(result)
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
     # POST
     data = request.get_json(force=True, silent=True) or {}
-    raw = data.get('available_cash')
-    if raw is None:
+    if 'available_cash' not in data:
         return jsonify({'error': 'available_cash is required'}), 400
+    raw = data.get('available_cash')
+    cash_currency = str(data.get('cash_currency', 'GBP')).upper().strip() or 'GBP'
+    # Allow null to clear the balance
+    if raw is None:
+        try:
+            import sqlite3 as _sq3c
+            _cc = _sq3c.connect(_DB_PATH, timeout=5)
+            _cc.execute("UPDATE user_preferences SET available_cash = NULL WHERE user_id = ?", (user_id,))
+            _cc.commit()
+            _cc.close()
+            return jsonify({'user_id': user_id, 'available_cash': None, 'cash_currency': cash_currency})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
     try:
         amount = float(raw)
     except (TypeError, ValueError):
         return jsonify({'error': 'available_cash must be a number'}), 400
     try:
         from users.user_store import update_available_cash
-        result = update_available_cash(_DB_PATH, user_id, amount)
+        result = update_available_cash(_DB_PATH, user_id, amount, cash_currency=cash_currency)
         return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500

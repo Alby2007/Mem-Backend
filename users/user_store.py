@@ -120,6 +120,7 @@ _PREFERENCES_MIGRATIONS = [
     "ALTER TABLE user_preferences ADD COLUMN max_risk_per_trade_pct REAL DEFAULT 1.0",
     "ALTER TABLE user_preferences ADD COLUMN account_currency TEXT DEFAULT 'GBP'",
     "ALTER TABLE user_preferences ADD COLUMN available_cash REAL DEFAULT NULL",
+    "ALTER TABLE user_preferences ADD COLUMN cash_currency TEXT DEFAULT 'GBP'",
 ]
 
 _DDL_DELIVERY_LOG = """
@@ -737,27 +738,32 @@ def already_tipped_today(db_path: str, user_id: str, local_date_str: str) -> boo
         conn.close()
 
 
-def get_available_cash(db_path: str, user_id: str) -> Optional[float]:
-    """Return the user's stored available_cash, or None if not set."""
+def get_available_cash(db_path: str, user_id: str) -> dict:
+    """Return the user's stored available_cash and cash_currency. Values may be None."""
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         ensure_user_tables(conn)
         row = conn.execute(
-            "SELECT available_cash FROM user_preferences WHERE user_id = ?",
+            "SELECT available_cash, cash_currency FROM user_preferences WHERE user_id = ?",
             (user_id,),
         ).fetchone()
         if row is None:
-            return None
-        return row[0]  # May be None or a float (including negative)
+            return {'available_cash': None, 'cash_currency': 'GBP'}
+        return {'available_cash': row[0], 'cash_currency': row[1] or 'GBP'}
     finally:
         conn.close()
 
 
-def update_available_cash(db_path: str, user_id: str, amount: float) -> dict:
+def update_available_cash(
+    db_path: str,
+    user_id: str,
+    amount: float,
+    cash_currency: str = 'GBP',
+) -> dict:
     """
-    Set the user's available_cash to the given amount.
+    Set the user's available_cash and cash_currency.
     Negative values are stored as-is (overcommitted state).
-    Returns { 'user_id', 'available_cash' }.
+    Returns { 'user_id', 'available_cash', 'cash_currency' }.
     """
     conn = sqlite3.connect(db_path, timeout=10)
     try:
@@ -766,11 +772,13 @@ def update_available_cash(db_path: str, user_id: str, amount: float) -> dict:
             "INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)", (user_id,)
         )
         conn.execute(
-            "UPDATE user_preferences SET available_cash = ? WHERE user_id = ?",
-            (amount, user_id),
+            """UPDATE user_preferences
+               SET available_cash = ?, cash_currency = ?
+               WHERE user_id = ?""",
+            (amount, cash_currency.upper(), user_id),
         )
         conn.commit()
-        return {'user_id': user_id, 'available_cash': amount}
+        return {'user_id': user_id, 'available_cash': amount, 'cash_currency': cash_currency.upper()}
     finally:
         conn.close()
 

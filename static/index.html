@@ -739,12 +739,23 @@ select option { background: var(--surface); }
       </div>
       <!-- Cash panel -->
       <div id="p-cash-panel" class="card mb-12" style="display:none;">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">Set your available uninvested cash so the AI can factor it into position sizing and track when you commit capital to a trade.</div>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-          <span id="p-cash-currency-symbol" style="font-size:18px;font-weight:700;color:var(--muted);">£</span>
-          <input id="p-cash-input" type="number" min="0" step="0.01" placeholder="e.g. 5000" style="flex:1;font-size:16px;" />
+        <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">Set your available uninvested cash. It appears as a holding in your portfolio and the AI uses it for position sizing — committed capital is deducted automatically when you accept a tip.</div>
+        <div style="display:grid;grid-template-columns:130px 1fr;gap:8px;margin-bottom:10px;align-items:center;">
+          <select id="p-cash-currency" style="font-size:13px;">
+            <option value="GBP">🇬🇧 GBP — £</option>
+            <option value="USD">🇺🇸 USD — $</option>
+            <option value="EUR">🇪🇺 EUR — €</option>
+            <option value="CHF">🇨🇭 CHF — Fr</option>
+            <option value="JPY">🇯🇵 JPY — ¥</option>
+            <option value="CAD">🇨🇦 CAD — $</option>
+            <option value="AUD">🇦🇺 AUD — $</option>
+            <option value="HKD">🇭🇰 HKD — $</option>
+            <option value="SGD">🇸🇬 SGD — $</option>
+          </select>
+          <input id="p-cash-input" type="number" min="0" step="0.01" placeholder="e.g. 5000" style="font-size:16px;" />
         </div>
         <button class="btn btn-primary btn-sm" id="p-cash-save-btn">Save Cash Balance</button>
+        <button class="btn btn-ghost btn-sm" id="p-cash-clear-btn" style="margin-left:6px;">Clear</button>
         <div id="p-cash-msg" class="text-sm mt-8 text-muted"></div>
       </div>
       <div id="p-holdings-list" style="margin-bottom:12px;"></div>
@@ -2161,18 +2172,52 @@ document.addEventListener('click', e => {
 });
 
 // Holdings render
+const _CCY_SYM = { GBP:'£', USD:'$', EUR:'\u20ac', CHF:'Fr', JPY:'\u00a5', CAD:'$', AUD:'$', HKD:'$', SGD:'$' };
+function _cashSym(ccy) { return _CCY_SYM[ccy] || ccy + ' '; }
+
 function renderHoldings() {
   const el = document.getElementById('p-holdings-list');
-  if (!state.holdings.length) { el.innerHTML = '<div class="text-sm text-muted mb-8">No holdings added yet</div>'; return; }
-  el.innerHTML = state.holdings.map((h, i) => `
-    <div class="holding-row">
+  const allRows = state.holdings;
+  if (!allRows.length) { el.innerHTML = '<div class="text-sm text-muted mb-8">No holdings added yet</div>'; return; }
+  el.innerHTML = allRows.map((h, i) => {
+    if (h.is_cash) {
+      const ccy = h.currency || 'GBP';
+      const sym = _cashSym(ccy);
+      const isNeg = (h.avg_cost || 0) < 0;
+      const val = Math.abs(h.avg_cost || 0).toLocaleString('en-GB', {maximumFractionDigits:0});
+      return `<div class="holding-row" style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.18);border-radius:6px;padding:8px 10px;margin-bottom:4px;">
+        <span class="holding-ticker" style="color:var(--green);">💰 ${escHtml(ccy)} Cash</span>
+        <span class="holding-meta" style="color:${isNeg?'var(--red)':'var(--green)'};">` + (isNeg ? '<span title="Overcommitted">⚠ -' : '') + `${sym}${val}` + (isNeg ? '</span>' : '') + ` available</span>
+        <button class="btn btn-ghost btn-sm" onclick="clearCashHolding()">✕</button>
+      </div>`;
+    }
+    const sym = _cashSym(h.currency || 'GBP');
+    return `<div class="holding-row">
       <span class="holding-ticker">${escHtml(h.ticker)}</span>
-      <span class="holding-meta">${h.quantity || '—'} ${h.avg_cost != null ? '@ £' + h.avg_cost : ''}</span>
-      <button class="btn btn-ghost btn-sm" onclick="removeHolding(${i})">✕</button>
-    </div>`).join('');
+      <span class="holding-meta">${h.quantity || '\u2014'} ${h.avg_cost != null ? '@ ' + sym + h.avg_cost : ''}</span>
+      <button class="btn btn-ghost btn-sm" onclick="removeHolding(${i})">\u2715</button>
+    </div>`;
+  }).join('');
 }
 
+window.clearCashHolding = async function() {
+  if (!state.userId) return;
+  try {
+    await apiFetch('/users/' + state.userId + '/cash', {
+      method: 'POST', body: JSON.stringify({ available_cash: null, cash_currency: 'GBP' })
+    });
+  } catch(e) { /* silent */ }
+  state.holdings = state.holdings.filter(h => !h.is_cash);
+  state._availableCash = null;
+  renderHoldings();
+  const cashDisplay = document.getElementById('tip-cash-display');
+  const cashNudge   = document.getElementById('tip-cash-nudge');
+  if (cashDisplay) { cashDisplay.textContent = '\u2014'; cashDisplay.style.color = 'var(--accent)'; }
+  if (cashNudge) cashNudge.innerHTML = '<a href="#" id="cash-set-nudge" style="color:var(--accent);text-decoration:none;font-size:11px;">Set balance \u2192 (Portfolio tab)</a>';
+};
+
 window.removeHolding = function(i) { state.holdings.splice(i, 1); renderHoldings(); };
+window.removeCashHolding = window.clearCashHolding;
 
 document.getElementById('p-add-btn').addEventListener('click', () => {
   const ticker = (_acInput.value || '').trim().toUpperCase();
@@ -2293,6 +2338,26 @@ async function handleScreenshot(file) {
 
   btnH.addEventListener('click', () => _setMode('holdings'));
   btnC.addEventListener('click', () => _setMode('cash'));
+
+  // Pre-fill cash panel on mode switch to 'cash'
+  const origSetMode = _setMode;
+  // Override to also pre-fill currency select
+  btnC.addEventListener('click', () => {
+    if (state.userId) {
+      apiFetch('/users/' + state.userId + '/cash').then(r => {
+        if (!r) return;
+        const sel = document.getElementById('p-cash-currency');
+        if (sel && r.cash_currency) {
+          for (let i = 0; i < sel.options.length; i++) {
+            if (sel.options[i].value === r.cash_currency) { sel.selectedIndex = i; break; }
+          }
+        }
+        if (r.available_cash != null) {
+          document.getElementById('p-cash-input').value = r.available_cash;
+        }
+      }).catch(() => {});
+    }
+  });
 })();
 
 document.getElementById('p-cash-save-btn').addEventListener('click', async () => {
@@ -2300,18 +2365,24 @@ document.getElementById('p-cash-save-btn').addEventListener('click', async () =>
   const msg = document.getElementById('p-cash-msg');
   const raw = parseFloat(document.getElementById('p-cash-input').value);
   if (isNaN(raw)) { msg.style.color = 'var(--red)'; msg.textContent = 'Enter a valid amount'; return; }
+  const ccy = document.getElementById('p-cash-currency').value || 'GBP';
+  const sym = _cashSym(ccy);
   msg.innerHTML = '<span class="spinner"></span>';
   try {
     const d = await apiFetch('/users/' + state.userId + '/cash', {
       method: 'POST',
-      body: JSON.stringify({ available_cash: raw })
+      body: JSON.stringify({ available_cash: raw, cash_currency: ccy })
     });
     if (!d) return;
     state._availableCash = raw;
+    state._accountCurrency = ccy;
     msg.style.color = 'var(--green)';
-    const sym = (state._accountCurrency === 'GBP') ? '£' : '$';
-    msg.textContent = `✓ Cash balance set to ${sym}${raw.toLocaleString('en-GB', {maximumFractionDigits:0})}`;
-    // Refresh tips cash display if already loaded
+    msg.textContent = `\u2713 Cash balance set to ${sym}${raw.toLocaleString('en-GB', {maximumFractionDigits:0})} ${ccy}`;
+    // Update in-memory holdings to reflect cash row
+    state.holdings = state.holdings.filter(h => !h.is_cash);
+    state.holdings.push({ ticker: 'CASH:' + ccy, quantity: 1, avg_cost: raw, currency: ccy, is_cash: true, value: raw });
+    renderHoldings();
+    // Refresh tips cash display
     const cashDisplay = document.getElementById('tip-cash-display');
     const cashNudge   = document.getElementById('tip-cash-nudge');
     if (cashDisplay) {
@@ -2324,14 +2395,24 @@ document.getElementById('p-cash-save-btn').addEventListener('click', async () =>
   } catch(e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
 });
 
+document.getElementById('p-cash-clear-btn').addEventListener('click', async () => {
+  document.getElementById('p-cash-input').value = '';
+  await window.clearCashHolding();
+  const msg = document.getElementById('p-cash-msg');
+  msg.style.color = 'var(--green)'; msg.textContent = '\u2713 Cash balance cleared';
+  setTimeout(() => { msg.textContent = ''; }, 3000);
+});
+
 document.getElementById('p-submit-btn').addEventListener('click', async () => {
   if (!state.userId) { showToast('Sign in first'); return; }
   const msg = document.getElementById('p-msg');
   msg.innerHTML = '<span class="spinner"></span>';
   try {
+    // Exclude cash virtual holdings — cash is managed separately via /cash endpoint
+    const holdingsToSubmit = state.holdings.filter(h => !h.is_cash);
     const d = await apiFetch(`/users/${state.userId}/portfolio`, {
       method: 'POST',
-      body: JSON.stringify({ holdings: state.holdings })
+      body: JSON.stringify({ holdings: holdingsToSubmit })
     });
     if (!d) return;
     msg.style.color = 'var(--green)';
@@ -2366,7 +2447,10 @@ async function loadPortfolioHoldings() {
     const d = await apiFetch(`/users/${state.userId}/portfolio`);
     const holdings = d?.holdings || [];
     if (holdings.length) {
-      state.holdings = holdings.map(h => ({ ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost }));
+      // Preserve is_cash flag so cash row renders with distinct style
+      state.holdings = holdings.map(h => h.is_cash
+        ? { ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost, currency: h.currency, is_cash: true, value: h.value }
+        : { ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost, currency: h.currency });
       renderHoldings();
     }
   } catch { /* no holdings yet */ }
@@ -2765,10 +2849,16 @@ async function loadTipsAccountValue() {
     const d = await apiFetch(`/users/${state.userId}/portfolio`);
     const holdings = d?.holdings || [];
     if (holdings.length) {
-      const total = holdings.reduce((sum, h) => sum + ((h.quantity || 0) * (h.avg_cost || 0)), 0);
+      // Sum all holdings including cash (cash has qty=1, avg_cost=amount)
+      const total = holdings.reduce((sum, h) => {
+        const v = h.is_cash ? (h.avg_cost || 0) : ((h.quantity || 0) * (h.avg_cost || 0));
+        return sum + v;
+      }, 0);
       state._tipAccountSize = total > 0 ? Math.round(total) : null;
-      const currency = holdings[0]?.currency || 'GBP';
-      const sym = currency === 'GBP' ? '£' : '$';
+      // Prefer account_currency from non-cash holdings for display symbol
+      const nonCash = holdings.find(h => !h.is_cash);
+      const currency = nonCash?.currency || holdings[0]?.currency || 'GBP';
+      const sym = _cashSym(currency);
       document.getElementById('tip-account-display').textContent =
         state._tipAccountSize ? `${sym}${state._tipAccountSize.toLocaleString('en-GB')}` : '—';
     } else {
