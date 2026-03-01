@@ -107,6 +107,10 @@ def _derive_regime(stance: str, inflation: str, growth: str) -> str:
     return ', '.join(parts) if parts else 'mixed signals'
 
 
+class _FredAuthError(Exception):
+    """Raised when FRED returns a 400 invalid-key response."""
+
+
 def _get_latest_value(fred: 'Fred', series_id: str) -> Optional[float]:
     """Fetch the most recent non-null value from a FRED series."""
     try:
@@ -115,6 +119,9 @@ def _get_latest_value(fred: 'Fred', series_id: str) -> Optional[float]:
             latest = data.dropna().iloc[-1]
             return float(latest)
     except Exception as e:
+        msg = str(e)
+        if 'not registered' in msg or ('400' in msg and 'api_key' in msg):
+            raise _FredAuthError(msg)
         _logger.warning('Failed to fetch FRED series %s: %s', series_id, e)
     return None
 
@@ -130,6 +137,7 @@ class FREDAdapter(BaseIngestAdapter):
     def __init__(self, api_key: Optional[str] = None):
         super().__init__(name='fred')
         self._api_key = api_key or os.environ.get('FRED_API_KEY')
+        self._api_key_invalid = False  # set True after first 400 to suppress repeat logs
 
     def fetch(self) -> List[RawAtom]:
         if not HAS_FREDAPI:
@@ -145,6 +153,20 @@ class FREDAdapter(BaseIngestAdapter):
             )
             return []
 
+        if self._api_key_invalid:
+            return []
+
+        try:
+            return self._fetch_atoms()
+        except _FredAuthError as e:
+            self._api_key_invalid = True
+            self._logger.error(
+                'FRED API key rejected (400 Bad Request) — disabling FRED adapter. '
+                'Re-register at https://fred.stlouisfed.org/docs/api/api_key.html. Error: %s', e
+            )
+            return []
+
+    def _fetch_atoms(self) -> List[RawAtom]:
         fred = Fred(api_key=self._api_key)
         atoms: List[RawAtom] = []
         now_iso = datetime.now(timezone.utc).isoformat()
