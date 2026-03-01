@@ -409,20 +409,27 @@ def build(
     # Soft/generic words (buy, should i, happening, how does) no longer trigger.
     # In telegram_mode the format override handles brevity — geo structure rules skipped.
     _msg_lower_geo = user_message.lower()
-    _GEO_HARD_KWS = {
+    # Geo topic keywords — user is discussing a geopolitical/political subject.
+    _GEO_TOPIC_KWS = {
         'war', 'conflict', 'attack', 'strike', 'military', 'iran', 'russia',
         'ukraine', 'israel', 'gaza', 'sanction', 'tension', 'geopolit',
     }
-    _GEO_SOFT_KWS = {
+    # Financial intent keywords — user explicitly wants a market/financial angle.
+    # Geo financial-linking rules ONLY fire when one of these is also present.
+    # Pure "tell me about X" news/info queries skip the rules entirely.
+    _GEO_FINANCE_KWS = {
         'affect my', 'impact my', 'affect portfolio', 'impact portfolio',
-        'what is the war', 'started right now',
         'hurt my', 'damage my', 'risk to my', 'threatens my', 'threaten my',
+        'market', 'markets', 'portfolio', 'stock', 'stocks', 'shares', 'equity',
+        'invest', 'trade', 'trading', 'price', 'gold', 'oil', 'dollar', 'usd',
+        'sector', 'etf', 'defence', 'defense', 'commodity', 'commodities',
+        'financial', 'economy', 'economic', 'hedge', 'exposure',
     }
-    _is_geo_msg = (
-        any(kw in _msg_lower_geo for kw in _GEO_HARD_KWS)
-        or any(kw in _msg_lower_geo for kw in _GEO_SOFT_KWS)
-    )
-    if _is_geo_msg and not telegram_mode:
+    _is_geo_topic = any(kw in _msg_lower_geo for kw in _GEO_TOPIC_KWS)
+    _is_geo_financial = any(kw in _msg_lower_geo for kw in _GEO_FINANCE_KWS)
+    # Only inject geo financial-linking rules when the user explicitly asks
+    # for a market/financial angle — not for pure news/info queries.
+    if _is_geo_topic and _is_geo_financial and not telegram_mode:
         if portfolio_context:
             system_text += _SYSTEM_GEO_PORTFOLIO_RULE
         else:
