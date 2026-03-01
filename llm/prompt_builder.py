@@ -265,6 +265,32 @@ _SYSTEM_GENERATION_RULE = (
     "explain which adapters need to run."
 )
 
+_SYSTEM_GEO_NEWS_RULE = (
+    "\n23. GEOPOLITICAL / NEWS QUERY — INFO MODE: The user is asking about a geopolitical event, "
+    "conflict, or political situation as a news/information question — they have NOT asked for "
+    "a financial or market analysis. Answer as a knowledgeable briefing, not a trading report. "
+    "Write in flowing prose, NO bold section headers, NO market jargon unless it arises naturally. "
+    "Your response should be substantive and detailed — aim for 3-5 paragraphs covering:\n"
+    "1. What is actually happening: synthesise ALL relevant KB atoms (key_finding, headline, summary, "
+    "catalyst, conflict_status, event_type, parties_involved, location) into a coherent narrative. "
+    "Quote specific atom values verbatim where they are informative — e.g. exact headlines, "
+    "conflict status labels, event descriptions. Name the sources (gdelt_tension:, ucdp_conflict:, "
+    "news_wire_defense_news:, acled_unrest:, geopolitical_data_* etc.) so the user knows where "
+    "the information comes from.\n"
+    "2. Background and context: if the KB contains historical_context, background, cause, or "
+    "timeline atoms, weave them into a coherent narrative. Do NOT invent background from training data — "
+    "only elaborate on what the atoms state.\n"
+    "3. Current status and trajectory: use any status, severity, phase, or escalation atoms. "
+    "If the KB has confidence scores on geo atoms, mention the confidence level.\n"
+    "4. What the KB does NOT have: if key facts the user would expect (e.g. casualty figures, "
+    "diplomatic outcome, specific dates) are absent from the atoms, say so plainly — "
+    "'The KB does not currently have [X] data for this event.' Do NOT invent these facts.\n"
+    "CRITICAL: The structured atoms in KNOWLEDGE CONTEXT ARE the news data. If ANY of "
+    "gdelt_tension, ucdp_conflict, news_wire_defense_news, acled_unrest, geopolitical_data_* "
+    "atoms are present, you HAVE data — use all of them. NEVER say you lack information when "
+    "these atoms exist. NEVER pad with vague filler like 'this is a complex situation'."
+)
+
 _SYSTEM_GEO_NO_PORTFOLIO_RULE = (
     "\n22. GEOPOLITICAL QUERY — NO PORTFOLIO: The user is asking about a war, conflict, or "
     "geopolitical event. Write a cohesive prose response — NO bold section headers, NO labeled sections. "
@@ -436,6 +462,10 @@ def build(
             system_text += _SYSTEM_GEO_PORTFOLIO_RULE
         else:
             system_text += _SYSTEM_GEO_NO_PORTFOLIO_RULE
+    elif _is_geo_topic and not _is_geo_financial:
+        # Pure news/info geo query — inject detailed briefing rule so LLM
+        # gives a thorough KB-grounded summary, not a 3-sentence stub.
+        system_text += _SYSTEM_GEO_NEWS_RULE
 
     # ── User turn ─────────────────────────────────────────────────────────────
     user_parts: list[str] = []
