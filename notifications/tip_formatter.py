@@ -111,15 +111,15 @@ _ALL_PATTERNS = ['fvg', 'ifvg', 'bpr', 'order_block', 'breaker', 'liquidity_void
 
 TIER_LIMITS = {
     'basic': {
-        'delivery_days': ['monday'],
-        'batch_size':    3,
+        'delivery_days': ['monday', 'wednesday'],
+        'batch_size':    2,
         'patterns':      ['fvg', 'ifvg'],
         'timeframes':    ['1h', '4h'],
         'targets':       2,
     },
     'pro': {
         'delivery_days': ['monday', 'wednesday'],
-        'batch_size':    3,
+        'batch_size':    5,
         'patterns':      _ALL_PATTERNS,
         'timeframes':    ['1h', '4h', '1d'],
         'targets':       2,
