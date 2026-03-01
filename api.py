@@ -43,8 +43,24 @@ try:
 except ImportError:
     HAS_GROQ = False
 
+_llm_logger = __import__('logging').getLogger('llm.token_count')
+
 def _llm_chat(messages, model=None, **kwargs):
     """Unified LLM chat: prefer Groq (fast, free API) over local Ollama."""
+    # Log approximate token count so we can monitor context window usage.
+    # llama-3.3-70b-versatile on Groq has a 128k token context window.
+    # ~4 chars/token is a safe estimate for English+JSON mixed content.
+    try:
+        _total_chars = sum(len(m.get('content', '')) for m in messages)
+        _est_tokens = _total_chars // 4
+        _llm_logger.info(
+            'prompt: %d messages, ~%d chars, ~%d tokens est (128k limit)',
+            len(messages), _total_chars, _est_tokens,
+        )
+        if _est_tokens > 100_000:
+            _llm_logger.warning('CONTEXT NEAR LIMIT: ~%d tokens est', _est_tokens)
+    except Exception:
+        pass
     if HAS_GROQ and groq_available():
         return groq_chat(messages)
     if HAS_LLM:

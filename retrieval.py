@@ -935,6 +935,13 @@ def retrieve(
         lines.append('# geopolitical-news')
         lines.extend(_fmt(r) for r in geo[:30])
     if other:
+        # Log predicate distribution of other[] so we can detect important atom
+        # types that are falling through all bucket filters unexpectedly.
+        if _logger.isEnabledFor(__import__('logging').DEBUG):
+            _other_preds = {}
+            for _o in other:
+                _other_preds[_o['predicate']] = _other_preds.get(_o['predicate'], 0) + 1
+            _logger.debug('retrieval other[] predicates: %s', _other_preds)
         lines.append('# context')
         lines.extend(_fmt(r) for r in other[:6])
 

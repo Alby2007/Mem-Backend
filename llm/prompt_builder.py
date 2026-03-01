@@ -462,9 +462,12 @@ def build(
             system_text += _SYSTEM_GEO_PORTFOLIO_RULE
         else:
             system_text += _SYSTEM_GEO_NO_PORTFOLIO_RULE
-    elif _is_geo_topic and not _is_geo_financial:
-        # Pure news/info geo query — inject detailed briefing rule so LLM
-        # gives a thorough KB-grounded summary, not a 3-sentence stub.
+    elif _is_geo_topic and not _is_geo_financial and not portfolio_context:
+        # Pure news/info geo query with no portfolio present — inject detailed
+        # briefing rule. Gated on not portfolio_context to be mutex with rule 21:
+        # if portfolio is present AND geo topic, rule 21 fires (financial angle
+        # implicitly needed). Rule 23 only fires when there is genuinely no
+        # portfolio and no financial intent.
         system_text += _SYSTEM_GEO_NEWS_RULE
 
     # ── User turn ─────────────────────────────────────────────────────────────
