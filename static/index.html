@@ -560,6 +560,99 @@ select option { background: var(--surface); }
   /* History atom modal: full screen */
   #hist-atoms-modal { width: 100%; left: 0; right: 0; }
 }
+
+/* ── Subscription screen ─────────────────────────────────────────────────── */
+.sub-page-header { margin-bottom: 6px; }
+.sub-page-title { font-size: 20px; font-weight: 700; color: var(--text); }
+.sub-page-subtitle { color: var(--muted); font-size: 12px; margin-bottom: 24px; line-height: 1.5; }
+
+.sub-plan-banner {
+  background: var(--card); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: 6px;
+  padding: 14px 18px; display: flex; align-items: center;
+  justify-content: space-between; margin-bottom: 24px;
+}
+.sub-plan-label { font-size: 10px; font-weight: 700; letter-spacing: 2px; color: var(--accent); margin-bottom: 4px; }
+.sub-plan-name  { font-size: 15px; font-weight: 600; color: var(--text); }
+.sub-plan-renews { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.sub-manage-btn { background: transparent; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 11px; padding: 6px 14px; cursor: pointer; transition: border-color .15s, color .15s; }
+.sub-manage-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.sub-billing-toggle { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+.sub-toggle-label { font-size: 12px; color: var(--muted); }
+.sub-toggle-wrap { display: flex; background: var(--card); border: 1px solid var(--border); border-radius: 4px; padding: 2px; }
+.sub-toggle-opt { padding: 5px 14px; font-size: 11px; border-radius: 3px; cursor: pointer; transition: background .15s, color .15s; color: var(--muted); font-weight: 500; }
+.sub-toggle-opt.active { background: var(--accent); color: #000; font-weight: 700; }
+.sub-save-badge { background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.3); color: var(--green); font-size: 10px; font-weight: 700; letter-spacing: 1px; padding: 3px 8px; border-radius: 3px; }
+
+.sub-tiers { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; margin-bottom: 28px; }
+.sub-tier-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; transition: border-color .2s; }
+.sub-tier-card:hover { border-color: #3a3a3a; }
+.sub-recommended { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(245,158,11,.15), 0 4px 24px rgba(245,158,11,.06); }
+.sub-tier-card.sub-is-current { border-color: var(--accent2); }
+
+.sub-tier-top { padding: 18px 18px 14px; border-bottom: 1px solid var(--border); }
+.sub-tier-badge-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; min-height: 20px; }
+.sub-tier-name { font-size: 10px; font-weight: 700; letter-spacing: 2.5px; color: var(--muted); }
+.sub-tier-name-amber { color: var(--accent); }
+.sub-tier-card.sub-is-current .sub-tier-name { color: var(--accent2); }
+
+.sub-badge { font-size: 9px; font-weight: 700; letter-spacing: 1px; padding: 2px 7px; border-radius: 3px; }
+.sub-badge-popular { background: var(--accent); color: #000; }
+.sub-badge-current { background: transparent; border: 1px solid var(--accent2); color: var(--accent2); }
+
+.sub-tier-price { display: flex; align-items: baseline; gap: 4px; margin-bottom: 4px; }
+.sub-price-amount { font-size: 32px; font-weight: 700; color: var(--text); line-height: 1; font-family: var(--mono); }
+.sub-price-period { font-size: 12px; color: var(--muted); }
+.sub-price-annual { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+.sub-price-annual span { color: var(--green); }
+.sub-tier-tagline { font-size: 11px; color: var(--muted); line-height: 1.4; margin-top: 8px; }
+
+.sub-tier-features { padding: 16px 18px; flex: 1; display: flex; flex-direction: column; }
+.sub-feature-group-label { font-size: 9px; font-weight: 700; letter-spacing: 2px; color: var(--muted); margin: 10px 0 6px; text-transform: uppercase; }
+.sub-feature-group-label:first-child { margin-top: 0; }
+.sub-feature-row { display: flex; align-items: flex-start; gap: 8px; padding: 3px 0; font-size: 11.5px; color: var(--text); line-height: 1.4; }
+.sub-fcheck { color: var(--green); font-size: 11px; flex-shrink: 0; margin-top: 1px; }
+.sub-fdash  { color: var(--border); font-size: 11px; flex-shrink: 0; margin-top: 1px; }
+.sub-dimmed { color: var(--muted); }
+.sub-fhl    { color: var(--accent); font-weight: 600; }
+
+.sub-tier-cta { padding: 14px 18px 18px; }
+.sub-cta-btn { width: 100%; padding: 9px; border-radius: 4px; font-size: 12px; font-weight: 700; letter-spacing: .5px; cursor: pointer; transition: all .15s; border: none; }
+.sub-cta-primary   { background: var(--accent); color: #000; }
+.sub-cta-primary:hover { background: #FBBF24; }
+.sub-cta-secondary { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+.sub-cta-secondary:hover { border-color: var(--accent); color: var(--accent); }
+.sub-cta-current   { background: transparent; border: 1px solid var(--accent2); color: var(--accent2); cursor: default; }
+
+.sub-guarantee { background: rgba(16,185,129,.07); border: 1px solid rgba(16,185,129,.2); border-radius: 6px; padding: 12px 18px; display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+.sub-guarantee-icon { font-size: 18px; flex-shrink: 0; }
+.sub-guarantee-text { font-size: 12px; color: var(--text); line-height: 1.5; }
+.sub-guarantee-text strong { color: var(--green); }
+
+.sub-divider { border: none; border-top: 1px solid var(--border); margin: 28px 0 20px; }
+.sub-section-title { font-size: 12px; font-weight: 700; letter-spacing: 2px; color: var(--muted); margin-bottom: 14px; text-transform: uppercase; }
+
+.sub-compare-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 8px; }
+.sub-compare-table th { padding: 10px 14px; text-align: center; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: var(--muted); border-bottom: 1px solid var(--border); background: var(--surface); }
+.sub-compare-table th.sub-col-hl { color: var(--accent); background: rgba(245,158,11,.06); border-bottom-color: var(--accent2); }
+.sub-compare-table td { padding: 9px 14px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: middle; }
+.sub-compare-table td:not(:first-child) { text-align: center; }
+.sub-compare-table tr:nth-child(even) td { background: rgba(255,255,255,.015); }
+.sub-compare-table td.sub-col-hl { background: rgba(245,158,11,.04); border-left: 1px solid rgba(245,158,11,.15); border-right: 1px solid rgba(245,158,11,.15); }
+.sub-row-group td { background: var(--surface) !important; color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: 2px; padding: 8px 14px 4px; border-bottom: none; }
+.sub-chk { color: var(--green); font-size: 13px; }
+.sub-crs { color: var(--border); font-size: 13px; }
+
+.sub-faq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.sub-faq-item { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 16px; }
+.sub-faq-q { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.sub-faq-a { font-size: 11px; color: var(--muted); line-height: 1.6; }
+
+@media (max-width: 700px) {
+  .sub-tiers { grid-template-columns: 1fr; }
+  .sub-faq-grid { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
@@ -614,6 +707,9 @@ select option { background: var(--surface); }
     <span class="nav-icon">◷</span><span class="nav-label">History</span>
   </div>
   <div class="nav-spacer"></div>
+  <div class="nav-item" data-screen="subscription" id="nav-subscription">
+    <span class="nav-icon">◉</span><span class="nav-label">Subscription</span>
+  </div>
   <div class="nav-item" data-screen="profile" id="nav-profile">
     <span class="nav-icon">⊕</span><span class="nav-label">Profile</span>
   </div>
@@ -1048,6 +1144,204 @@ select option { background: var(--surface); }
   </div>
 </div>
 
+<!-- SUBSCRIPTION ──────────────────────────────────────────────── -->
+<div class="screen" id="screen-subscription">
+  <div class="sub-page-header">
+    <h1 class="sub-page-title">Subscription</h1>
+  </div>
+  <p class="sub-page-subtitle">Manage your plan. All tiers include Monday + Wednesday briefings via Telegram.</p>
+
+  <!-- Current plan banner -->
+  <div class="sub-plan-banner">
+    <div>
+      <div class="sub-plan-label">CURRENT PLAN</div>
+      <div class="sub-plan-name" id="sub-plan-name">—</div>
+      <div class="sub-plan-renews" id="sub-plan-renews">Billed monthly</div>
+    </div>
+    <button class="sub-manage-btn" onclick="showToast('Billing portal coming soon','ok')">Manage Billing →</button>
+  </div>
+
+  <!-- Billing toggle -->
+  <div class="sub-billing-toggle">
+    <span class="sub-toggle-label">Billing cycle</span>
+    <div class="sub-toggle-wrap">
+      <div class="sub-toggle-opt active" id="sub-tog-monthly" onclick="subSetMonthly()">Monthly</div>
+      <div class="sub-toggle-opt" id="sub-tog-annual" onclick="subSetAnnual()">Annual</div>
+    </div>
+    <span class="sub-save-badge">SAVE 20%</span>
+  </div>
+
+  <!-- Tier cards -->
+  <div class="sub-tiers">
+
+    <!-- BASIC -->
+    <div class="sub-tier-card" id="sub-card-basic">
+      <div class="sub-tier-top">
+        <div class="sub-tier-badge-row">
+          <div class="sub-tier-name">BASIC</div>
+          <div class="sub-badge sub-badge-current" id="sub-badge-basic" style="display:none;">CURRENT</div>
+        </div>
+        <div class="sub-tier-price">
+          <span class="sub-price-amount" id="sub-basic-price">£9</span>
+          <span class="sub-price-period">/month</span>
+        </div>
+        <div class="sub-price-annual" id="sub-basic-annual" style="visibility:hidden">£86/yr · <span>save £22</span></div>
+        <div class="sub-tier-tagline">For traders who want weekly context without the noise.</div>
+      </div>
+      <div class="sub-tier-features">
+        <div class="sub-feature-group-label">Briefings</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Monday Week Ahead briefing</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Wednesday compound update</div>
+        <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Daily briefing</div>
+        <div class="sub-feature-group-label">Setups</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">2 setups</span> per Monday</span></div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> FVG + IFVG patterns</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> 1h &amp; 4h timeframes</div>
+        <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> All pattern types</div>
+        <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Daily timeframe</div>
+        <div class="sub-feature-group-label">Alerts</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Zone + thesis alerts</div>
+        <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Profit lock alerts</div>
+        <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Trailing pullback alerts</div>
+      </div>
+      <div class="sub-tier-cta">
+        <button class="sub-cta-btn sub-cta-secondary" id="sub-cta-basic" onclick="showToast('Plan selection coming soon','ok')">Choose Basic</button>
+      </div>
+    </div>
+
+    <!-- PRO -->
+    <div class="sub-tier-card sub-recommended" id="sub-card-pro">
+      <div class="sub-tier-top">
+        <div class="sub-tier-badge-row">
+          <div class="sub-tier-name sub-tier-name-amber">PRO</div>
+          <div class="sub-badge sub-badge-popular" id="sub-badge-pro">MOST POPULAR</div>
+        </div>
+        <div class="sub-tier-price">
+          <span class="sub-price-amount" id="sub-pro-price">£29</span>
+          <span class="sub-price-period">/month</span>
+        </div>
+        <div class="sub-price-annual" id="sub-pro-annual" style="visibility:hidden">£278/yr · <span>save £70</span></div>
+        <div class="sub-tier-tagline">More setups, all patterns, real-time profit intelligence.</div>
+      </div>
+      <div class="sub-tier-features">
+        <div class="sub-feature-group-label">Briefings</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Monday Week Ahead briefing</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Wednesday compound update</div>
+        <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Daily briefing</div>
+        <div class="sub-feature-group-label">Setups</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">5 setups</span> per Monday</span></div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> All pattern types</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> 1h, 4h &amp; daily timeframes</div>
+        <div class="sub-feature-group-label">Alerts</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Zone + thesis alerts</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Profit lock alerts (T1/T2)</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Trailing pullback alerts</div>
+      </div>
+      <div class="sub-tier-cta">
+        <button class="sub-cta-btn sub-cta-primary" id="sub-cta-pro" onclick="showToast('Plan selection coming soon','ok')">Upgrade to Pro →</button>
+      </div>
+    </div>
+
+    <!-- PREMIUM -->
+    <div class="sub-tier-card" id="sub-card-premium">
+      <div class="sub-tier-top">
+        <div class="sub-tier-badge-row">
+          <div class="sub-tier-name">PREMIUM</div>
+          <div class="sub-badge sub-badge-current" id="sub-badge-premium" style="display:none;">CURRENT</div>
+        </div>
+        <div class="sub-tier-price">
+          <span class="sub-price-amount" id="sub-premium-price">£79</span>
+          <span class="sub-price-period">/month</span>
+        </div>
+        <div class="sub-price-annual" id="sub-premium-annual" style="visibility:hidden">£758/yr · <span>save £190</span></div>
+        <div class="sub-tier-tagline">Every signal, every day. For serious active traders.</div>
+      </div>
+      <div class="sub-tier-features">
+        <div class="sub-feature-group-label">Briefings</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Monday Week Ahead briefing</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Wednesday compound update</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">Daily briefing</span> every morning</span></div>
+        <div class="sub-feature-group-label">Setups</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">Unlimited setups</span></span></div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> All pattern types</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> All timeframes (15m–1d)</div>
+        <div class="sub-feature-group-label">Alerts</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Zone + thesis alerts</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Profit lock alerts (T1/T2/T3)</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Trailing pullback alerts</div>
+      </div>
+      <div class="sub-tier-cta">
+        <button class="sub-cta-btn sub-cta-secondary" id="sub-cta-premium" onclick="showToast('Plan selection coming soon','ok')">Upgrade to Premium →</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Guarantee strip -->
+  <div class="sub-guarantee">
+    <div class="sub-guarantee-icon">🛡</div>
+    <div class="sub-guarantee-text"><strong>7-day money-back guarantee.</strong> Not what you expected? Email us within 7 days of upgrading and we'll refund in full — no questions.</div>
+  </div>
+
+  <!-- Comparison table -->
+  <hr class="sub-divider">
+  <div class="sub-section-title">Full comparison</div>
+  <table class="sub-compare-table">
+    <thead>
+      <tr>
+        <th style="width:38%;text-align:left;"></th>
+        <th>BASIC</th>
+        <th class="sub-col-hl">PRO</th>
+        <th>PREMIUM</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="sub-row-group"><td colspan="4">BRIEFINGS</td></tr>
+      <tr><td>Monday Week Ahead</td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Wednesday compound update</td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Daily morning briefing</td><td><span class="sub-crs">–</span></td><td class="sub-col-hl"><span class="sub-crs">–</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr class="sub-row-group"><td colspan="4">SETUPS</td></tr>
+      <tr><td>Monday setups per week</td><td>2</td><td class="sub-col-hl">5</td><td>Unlimited</td></tr>
+      <tr><td>Pattern types</td><td>FVG, IFVG</td><td class="sub-col-hl">All</td><td>All</td></tr>
+      <tr><td>Timeframes</td><td>1h, 4h</td><td class="sub-col-hl">1h, 4h, 1d</td><td>15m–1d</td></tr>
+      <tr><td>Profit targets per setup</td><td>2 (T1/T2)</td><td class="sub-col-hl">2 (T1/T2)</td><td>3 (T1/T2/T3)</td></tr>
+      <tr class="sub-row-group"><td colspan="4">REAL-TIME ALERTS</td></tr>
+      <tr><td>Zone hit alerts<small style="display:block;color:var(--muted);font-size:10px;margin-top:1px;">Price entering your entry zone</small></td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Thesis break alerts<small style="display:block;color:var(--muted);font-size:10px;margin-top:1px;">Structural invalidation before stop hits</small></td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Profit lock alerts<small style="display:block;color:var(--muted);font-size:10px;margin-top:1px;">Exit signal when KB weakens at target</small></td><td><span class="sub-crs">–</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Trailing pullback alerts<small style="display:block;color:var(--muted);font-size:10px;margin-top:1px;">Peak detected, retrace warning fired</small></td><td><span class="sub-crs">–</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr class="sub-row-group"><td colspan="4">INTELLIGENCE</td></tr>
+      <tr><td>KB-backed signal reasons</td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Geopolitical context</td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Position sizing (from cash balance)</td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>AI chat (full KB access)</td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+    </tbody>
+  </table>
+
+  <!-- FAQ -->
+  <hr class="sub-divider">
+  <div class="sub-section-title">Common questions</div>
+  <div class="sub-faq-grid">
+    <div class="sub-faq-item">
+      <div class="sub-faq-q">When does my Monday briefing arrive?</div>
+      <div class="sub-faq-a">At your configured delivery time (default 07:00 GMT). You can change this in Delivery Settings under Tips. We recommend 07:00–07:30 to get it before market open.</div>
+    </div>
+    <div class="sub-faq-item">
+      <div class="sub-faq-q">Can I upgrade or downgrade at any time?</div>
+      <div class="sub-faq-a">Yes. Upgrades take effect immediately and are prorated. Downgrades apply at the end of your current billing period — you keep your current tier until then.</div>
+    </div>
+    <div class="sub-faq-item">
+      <div class="sub-faq-q">What's the difference between a setup and an alert?</div>
+      <div class="sub-faq-a">A setup is a planned trade delivered in your Monday briefing — entry zone, stop, and targets. An alert fires in real time when price hits a key level or your KB confidence shifts on an open position.</div>
+    </div>
+    <div class="sub-faq-item">
+      <div class="sub-faq-q">Do I need Telegram?</div>
+      <div class="sub-faq-a">Yes — briefings and alerts are delivered via Telegram. Link your account in Profile → Telegram. The app gives you the chat interface and pattern browser, but delivery happens in Telegram.</div>
+    </div>
+  </div>
+
+</div>
+
 </main><!-- /main -->
 
 <!-- Toast -->
@@ -1064,6 +1358,7 @@ select option { background: var(--surface); }
     <div class="mnav-item" data-screen="patterns" id="mnav-patterns"><span class="mnav-icon">⟁</span>Patterns</div>
     <div class="mnav-item" data-screen="network" id="mnav-network"><span class="mnav-icon">⬡</span>Network</div>
     <div class="mnav-item" data-screen="history" id="mnav-history"><span class="mnav-icon">◷</span>History</div>
+    <div class="mnav-item" data-screen="subscription" id="mnav-subscription"><span class="mnav-icon">◉</span>Subscription</div>
     <div class="mnav-item" data-screen="profile" id="mnav-profile"><span class="mnav-icon">⊕</span>Profile</div>
   </div>
 </nav>
@@ -1191,8 +1486,9 @@ function showScreen(name) {
   if (name === 'tips')      { loadTipsHistory(); loadTipsAccountValue(); loadTipConfig(); }
   if (name === 'portfolio') { loadPortfolioModel(); loadPortfolioHoldings(); loadTickerList(); loadSimBannerIfSet(); }
   if (name === 'markets')   initMarketsScreen();
-  if (name === 'auth')    _injectAuthTgWidget();
-  if (name === 'profile') loadProfile();
+  if (name === 'auth')         _injectAuthTgWidget();
+  if (name === 'profile')      loadProfile();
+  if (name === 'subscription') loadSubscription();
 }
 
 function navigate(name, { replace = false } = {}) {
@@ -2924,6 +3220,91 @@ document.getElementById('profile-delete-btn').addEventListener('click', async ()
     showToast('Account deleted.', 'ok');
   } catch(e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
 });
+
+// ── SUBSCRIPTION ─────────────────────────────────────────────────────────────
+let _subIsAnnual = false;
+const _subPrices = {
+  basic:   { monthly: '£9',  annual: '£7',  annualTotal: '£86',  saving: '£22' },
+  pro:     { monthly: '£29', annual: '£23', annualTotal: '£278', saving: '£70' },
+  premium: { monthly: '£79', annual: '£63', annualTotal: '£758', saving: '£190' },
+};
+const _subMonthlyLabel = { basic: 'Basic — £9/month', pro: 'Pro — £29/month', premium: 'Premium — £79/month' };
+
+function subSetMonthly() {
+  _subIsAnnual = false;
+  document.getElementById('sub-tog-monthly').classList.add('active');
+  document.getElementById('sub-tog-annual').classList.remove('active');
+  _subUpdatePrices();
+}
+
+function subSetAnnual() {
+  _subIsAnnual = true;
+  document.getElementById('sub-tog-monthly').classList.remove('active');
+  document.getElementById('sub-tog-annual').classList.add('active');
+  _subUpdatePrices();
+}
+
+function _subUpdatePrices() {
+  for (const [tier, p] of Object.entries(_subPrices)) {
+    const priceEl  = document.getElementById(`sub-${tier}-price`);
+    const annualEl = document.getElementById(`sub-${tier}-annual`);
+    if (!priceEl) continue;
+    if (_subIsAnnual) {
+      priceEl.textContent = p.annual;
+      annualEl.innerHTML  = `${p.annualTotal}/yr · <span>save ${p.saving}</span>`;
+      annualEl.style.visibility = 'visible';
+    } else {
+      priceEl.textContent       = p.monthly;
+      annualEl.style.visibility = 'hidden';
+    }
+  }
+}
+
+async function loadSubscription() {
+  if (!state.userId) return;
+  // Reset toggle to monthly each visit
+  _subIsAnnual = false;
+  document.getElementById('sub-tog-monthly').classList.add('active');
+  document.getElementById('sub-tog-annual').classList.remove('active');
+  _subUpdatePrices();
+
+  // Fetch user tier from /auth/me (already cached in state if we want, but re-fetch for freshness)
+  try {
+    const me = await apiFetch('/auth/me');
+    const tier = (me?.tier || 'basic').toLowerCase();
+    // Update current plan banner
+    const planNames = { basic: 'Basic — £9/month', pro: 'Pro — £29/month', premium: 'Premium — £79/month' };
+    document.getElementById('sub-plan-name').textContent   = planNames[tier] || tier;
+    document.getElementById('sub-plan-renews').textContent = 'Billed monthly';
+
+    // Highlight current card and update CTA buttons
+    ['basic', 'pro', 'premium'].forEach(t => {
+      const card   = document.getElementById(`sub-card-${t}`);
+      const badge  = document.getElementById(`sub-badge-${t}`);
+      const cta    = document.getElementById(`sub-cta-${t}`);
+      const isC    = t === tier;
+      if (!card) return;
+      card.classList.toggle('sub-is-current', isC);
+      if (badge) badge.style.display = isC ? '' : 'none';
+      if (cta) {
+        if (isC) {
+          cta.className = 'sub-cta-btn sub-cta-current';
+          cta.textContent = 'Current Plan';
+          cta.onclick = null;
+        } else {
+          const isUp = ['basic','pro','premium'].indexOf(t) > ['basic','pro','premium'].indexOf(tier);
+          cta.className = isUp ? 'sub-cta-btn sub-cta-primary' : 'sub-cta-btn sub-cta-secondary';
+          cta.textContent = isUp ? `Upgrade to ${t.charAt(0).toUpperCase()+t.slice(1)} →` : `Switch to ${t.charAt(0).toUpperCase()+t.slice(1)}`;
+          cta.onclick = () => showToast('Plan selection coming soon', 'ok');
+        }
+      }
+    });
+
+    // Pro badge: show MOST POPULAR only if not on pro
+    const proBadge = document.getElementById('sub-badge-pro');
+    if (proBadge && tier !== 'pro') { proBadge.className = 'sub-badge sub-badge-popular'; proBadge.style.display = ''; proBadge.textContent = 'MOST POPULAR'; }
+  } catch(e) { /* silent — banner stays at defaults */ }
+}
 
 // ── TIPS ──────────────────────────────────────────────────────────────────────
 async function loadTipsAccountValue() {
