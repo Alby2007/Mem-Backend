@@ -366,18 +366,25 @@ def retrieve(
     def _normalise(r) -> dict | None:
         try:
             if hasattr(r, 'keys'):
+                keys = r.keys()
+                ts_raw = str(r['timestamp'] or '') if 'timestamp' in keys else ''
+                # Truncate to date portion only (2026-03-01T23:10:54... → 2026-03-01)
+                ts = ts_raw[:10] if ts_raw else ''
                 return {
                     'subject':    str(r['subject'] or '').strip(),
                     'predicate':  str(r['predicate'] or '').strip(),
                     'object':     str(r['object'] or '')[:300].strip(),
-                    'source':     str(r['source'] if 'source' in r.keys() else '').strip(),
-                    'confidence': float(r['confidence']) if 'confidence' in r.keys() else 0.5,
+                    'source':     str(r['source'] if 'source' in keys else '').strip(),
+                    'confidence': float(r['confidence']) if 'confidence' in keys else 0.5,
+                    'timestamp':  ts,
                 }
+            ts_raw = str(r[6]).strip() if len(r) > 6 else ''
             return {
                 'subject': str(r[0]).strip(), 'predicate': str(r[1]).strip(),
                 'object': str(r[2])[:300].strip(),
                 'source': str(r[3]).strip() if len(r) > 3 else '',
                 'confidence': float(r[4]) if len(r) > 4 else 0.5,
+                'timestamp':  ts_raw[:10] if ts_raw else '',
             }
         except Exception:
             return None
@@ -522,12 +529,12 @@ def retrieve(
                 for _pat in _entity_patterns[:3]:
                     try:
                         c.execute(
-                            "SELECT subject, predicate, object, source, confidence "
+                            "SELECT subject, predicate, object, source, confidence, metadata, timestamp "
                             "FROM facts WHERE LOWER(object) LIKE ? "
                             "AND predicate IN ('key_finding','headline','summary','event',"
                             "'catalyst','risk_factor','conflict_status','parties_involved',"
                             "'location','severity','escalation') "
-                            "ORDER BY timestamp DESC, confidence DESC LIMIT 15",
+                            "ORDER BY timestamp DESC, confidence DESC LIMIT 30",
                             (_pat,)
                         )
                         _add_geo(c.fetchall())
@@ -538,7 +545,7 @@ def retrieve(
                 for _iso in _GEO_ISO_MAP.get(_entity, []):
                     try:
                         c.execute(
-                            "SELECT subject, predicate, object, source, confidence "
+                            "SELECT subject, predicate, object, source, confidence, metadata, timestamp "
                             "FROM facts WHERE subject='ucdp_conflict' AND LOWER(predicate) = ? "
                             "ORDER BY confidence DESC LIMIT 10",
                             (_iso,)
@@ -550,7 +557,7 @@ def retrieve(
                 for _ppat in _GEO_PRED_MAP.get(_entity, []):
                     try:
                         c.execute(
-                            "SELECT subject, predicate, object, source, confidence "
+                            "SELECT subject, predicate, object, source, confidence, metadata, timestamp "
                             "FROM facts WHERE LOWER(predicate) LIKE ? "
                             "ORDER BY confidence DESC LIMIT 10",
                             (_ppat,)
@@ -559,11 +566,15 @@ def retrieve(
                     except Exception:
                         pass
                 # 1d. Subject field name search (catches any subject named after the country)
+                # 1e. World-news sources filtered to entity — bbc_world, al_jazeera, defense_news
                 try:
                     c.execute(
-                        "SELECT subject, predicate, object, source, confidence "
-                        "FROM facts WHERE LOWER(subject) LIKE ? "
-                        "ORDER BY confidence DESC LIMIT 10",
+                        "SELECT subject, predicate, object, source, confidence, metadata, timestamp "
+                        "FROM facts WHERE source IN ("
+                        "'news_wire_bbc_world','news_wire_al_jazeera','news_wire_defense_news',"
+                        "'news_wire_reuters','news_wire_ap','news_wire_ft_home') "
+                        "AND LOWER(object) LIKE ? "
+                        "ORDER BY timestamp DESC, confidence DESC LIMIT 30",
                         (f'%{_entity}%',)
                     )
                     _add_geo(c.fetchall())
@@ -579,18 +590,18 @@ def retrieve(
                 # Try entity-filtered fetch first
                 for _entity in _asked_entities[:2]:
                     c.execute(
-                        f"SELECT subject, predicate, object, source, confidence "
+                        f"SELECT subject, predicate, object, source, confidence, metadata, timestamp "
                         f"FROM facts WHERE subject IN ({_geo_ph}) "
                         f"AND LOWER(object) LIKE ? "
-                        f"ORDER BY confidence DESC LIMIT 20",
+                        f"ORDER BY timestamp DESC, confidence DESC LIMIT 40",
                         (*_GEO_SUBJECTS, f'%{_entity}%')
                     )
                     _add_geo(c.fetchall())
                 # Also fetch unfiltered geo subject atoms to fill any gaps
                 c.execute(
-                    f"SELECT subject, predicate, object, source, confidence "
+                    f"SELECT subject, predicate, object, source, confidence, metadata, timestamp "
                     f"FROM facts WHERE subject IN ({_geo_ph}) "
-                    f"ORDER BY confidence DESC LIMIT 20",
+                    f"ORDER BY timestamp DESC, confidence DESC LIMIT 40",
                     _GEO_SUBJECTS,
                 )
                 _add_geo(c.fetchall())
@@ -610,7 +621,7 @@ def retrieve(
             if _asked_entities:
                 for _entity in _asked_entities[:2]:
                     c.execute("""
-                        SELECT subject, predicate, object, source, confidence
+                        SELECT subject, predicate, object, source, confidence, metadata, timestamp
                         FROM facts
                         WHERE (
                             source LIKE 'news_wire_%'
@@ -622,12 +633,12 @@ def retrieve(
                         AND predicate IN ('key_finding','headline','summary','event','catalyst','risk_factor')
                         AND LOWER(object) LIKE ?
                         ORDER BY timestamp DESC, confidence DESC
-                        LIMIT 20
+                        LIMIT 40
                     """, (f'%{_entity}%',))
                     _add_geo(c.fetchall())
             # Always fetch recent headlines as a fallback (fills remaining slots)
             c.execute("""
-                SELECT subject, predicate, object, source, confidence
+                SELECT subject, predicate, object, source, confidence, metadata, timestamp
                 FROM facts
                 WHERE (
                     source LIKE 'news_wire_%'
@@ -983,7 +994,10 @@ def retrieve(
     else:
         results.sort(key=lambda a: a.get('confidence', 0.5), reverse=True)
 
-    results = results[:limit]
+    # Geo entity queries get a larger atom budget so geo atoms don't compete
+    # for the same 30 slots as ticker/macro atoms.
+    _effective_limit = 60 if (_is_geo_query and _asked_entities) else limit
+    results = results[:_effective_limit]
 
     # ── Apply adaptation nudges ────────────────────────────────────────────────
     if nudges is not None:
@@ -1136,6 +1150,11 @@ def retrieve(
     def _fmt(r):
         return f"  {r['subject']} | {r['predicate']} | {r['object']}"
 
+    def _fmt_geo(r):
+        ts = r.get('timestamp', '')
+        date_tag = f" [{ts}]" if ts else ''
+        return f"  {r['subject']} | {r['predicate']} | {r['object']}{date_tag}"
+
     if invalidation:
         lines.append('# conviction-sizing-invalidation')
         lines.extend(_fmt(r) for r in invalidation[:20])
@@ -1159,7 +1178,7 @@ def retrieve(
         lines.extend(_fmt(r) for r in historical[:12])
     if geo:
         lines.append('# geopolitical-news')
-        lines.extend(_fmt(r) for r in geo[:30])
+        lines.extend(_fmt_geo(r) for r in geo[:50])
     if other:
         # Log predicate distribution of other[] so we can detect important atom
         # types that are falling through all bucket filters unexpectedly.
