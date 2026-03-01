@@ -4043,7 +4043,7 @@ def tip_preview(user_id: str):
         import sqlite3 as _sqlite3
         conn = _sqlite3.connect(_DB_PATH, timeout=10)
         row = conn.execute(
-            """SELECT tier, tip_timeframes, tip_pattern_types,
+            """SELECT tier, tip_timeframes, tip_pattern_types, tip_markets,
                       account_size, max_risk_per_trade_pct, account_currency
                FROM user_preferences WHERE user_id = ?""",
             (user_id,),
@@ -4056,12 +4056,12 @@ def tip_preview(user_id: str):
         return jsonify({'error': 'user not found'}), 404
 
     import json as _json
-    cols     = ['tier', 'tip_timeframes', 'tip_pattern_types',
+    cols     = ['tier', 'tip_timeframes', 'tip_pattern_types', 'tip_markets',
                 'account_size', 'max_risk_per_trade_pct', 'account_currency']
     prefs    = dict(zip(cols, row))
     tier     = prefs.get('tier') or 'basic'
 
-    for jcol in ('tip_timeframes', 'tip_pattern_types'):
+    for jcol in ('tip_timeframes', 'tip_pattern_types', 'tip_markets'):
         try:
             prefs[jcol] = _json.loads(prefs[jcol]) if prefs[jcol] else None
         except Exception:
@@ -4071,9 +4071,10 @@ def tip_preview(user_id: str):
     limits          = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
     tip_timeframes  = prefs.get('tip_timeframes') or limits['timeframes']
     tip_pattern_tys = prefs.get('tip_pattern_types')
+    tip_markets     = prefs.get('tip_markets')  # None = all tickers
 
     from notifications.tip_scheduler import _pick_best_pattern
-    pattern_row = _pick_best_pattern(_DB_PATH, user_id, tier, tip_timeframes, tip_pattern_tys)
+    pattern_row = _pick_best_pattern(_DB_PATH, user_id, tier, tip_timeframes, tip_pattern_tys, tip_markets)
     if pattern_row is None:
         return jsonify({'tip': None, 'reason': 'no eligible patterns'}), 200
 
@@ -4943,6 +4944,52 @@ def health_detailed():
     result['position_monitor']   = 'running' if (_position_monitor and getattr(_position_monitor, '_thread', None) and _position_monitor._thread.is_alive()) else 'stopped'
 
     return jsonify(result)
+
+
+@app.route('/markets/tickers', methods=['GET'])
+def markets_tickers():
+    """
+    GET /markets/tickers
+
+    Returns the full available ticker universe grouped by sector,
+    for use in the Tips interested-markets picker.
+    """
+    _SECTORS = [
+        {'group': 'Mega-cap Tech',   'tickers': ['AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','AVGO']},
+        {'group': 'Financials',      'tickers': ['JPM','V','MA','BAC','GS','MS','BRK-B','AXP','BLK','SCHW']},
+        {'group': 'Healthcare',      'tickers': ['UNH','JNJ','LLY','ABBV','PFE','CVS','MRK','BMY','GILD']},
+        {'group': 'Energy',          'tickers': ['XOM','CVX','COP']},
+        {'group': 'Consumer',        'tickers': ['WMT','PG','KO','MCD','COST']},
+        {'group': 'Industrials',     'tickers': ['CAT','HON','RTX']},
+        {'group': 'Comms / Media',   'tickers': ['DIS','NFLX','CMCSA']},
+        {'group': 'Semis / Software','tickers': ['AMD','INTC','QCOM','MU','CRM','ADBE','NOW','SNOW']},
+        {'group': 'Fintech',         'tickers': ['PYPL','COIN']},
+        {'group': 'REITs',           'tickers': ['AMT','PLD','EQIX']},
+        {'group': 'Utilities',       'tickers': ['NEE','DUK','SO']},
+        {'group': 'ETFs — Broad',    'tickers': ['SPY','QQQ','IWM','DIA','VTI']},
+        {'group': 'ETFs — Sector',   'tickers': ['XLF','XLE','XLK','XLV','XLI','XLC','XLY','XLP']},
+        {'group': 'ETFs — Macro',    'tickers': ['GLD','SLV','TLT','HYG','LQD','UUP']},
+    ]
+    all_default = [t for s in _SECTORS for t in s['tickers']]
+    extra = []
+    try:
+        import sqlite3 as _sq
+        _c = _sq.connect(_DB_PATH, timeout=5)
+        try:
+            rows = _c.execute(
+                "SELECT ticker FROM universe_tickers WHERE added_to_ingest=1"
+            ).fetchall()
+            for (t,) in rows:
+                if t.upper() not in (x.upper() for x in all_default):
+                    extra.append(t.upper())
+        finally:
+            _c.close()
+    except Exception:
+        pass
+    result = list(_SECTORS)
+    if extra:
+        result.append({'group': 'User-added', 'tickers': extra})
+    return jsonify({'sectors': result})
 
 
 @app.route('/markets/overview', methods=['GET'])

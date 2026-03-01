@@ -72,11 +72,13 @@ def _pick_best_pattern(
     tier:          str,
     tip_timeframes: List[str],
     tip_pattern_types: Optional[List[str]],
+    tip_markets: Optional[List[str]] = None,
 ) -> Optional[dict]:
     """
     Select the highest quality open pattern that:
       - timeframe is in user's allowed timeframes (tier-gated)
       - pattern_type is in user's allowed types (tier-gated, optionally filtered)
+      - ticker is in user's interested markets (when tip_markets is set)
       - user_id not already in alerted_users
       - passes calibration filter (if both personal hit_rate < 0.40 AND
         collective hit_rate_t2 < 0.45, skip it)
@@ -103,8 +105,12 @@ def _pick_best_pattern(
     except Exception:
         pass
 
+    allowed_tickers = [t.upper() for t in tip_markets] if tip_markets else None
+
     candidates = get_open_patterns(db_path, min_quality=0.0, limit=200)
     for row in candidates:
+        if allowed_tickers and row['ticker'].upper() not in allowed_tickers:
+            continue
         if row['pattern_type'] not in allowed_patterns:
             continue
         if row['timeframe'] not in allowed_timeframes:
@@ -160,8 +166,9 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict) -> None:
     tier              = user_prefs.get('tier', 'basic')
     tip_timeframes    = user_prefs.get('tip_timeframes') or ['1h']
     tip_pattern_types = user_prefs.get('tip_pattern_types')  # None = all allowed for tier
+    tip_markets       = user_prefs.get('tip_markets')         # None = all tickers
 
-    pattern_row = _pick_best_pattern(db_path, user_id, tier, tip_timeframes, tip_pattern_types)
+    pattern_row = _pick_best_pattern(db_path, user_id, tier, tip_timeframes, tip_pattern_types, tip_markets)
     if pattern_row is None:
         _log.info('TipScheduler: no eligible patterns for user %s', user_id)
         return
@@ -284,7 +291,7 @@ def _run_tip_cycle(db_path: str) -> None:
         rows = conn.execute(
             """SELECT user_id, telegram_chat_id, tier,
                       tip_delivery_time, tip_delivery_timezone,
-                      tip_timeframes, tip_pattern_types,
+                      tip_timeframes, tip_pattern_types, tip_markets,
                       account_size, max_risk_per_trade_pct, account_currency
                FROM user_preferences
                WHERE onboarding_complete = 1""",
@@ -298,7 +305,7 @@ def _run_tip_cycle(db_path: str) -> None:
     import json
     cols = ['user_id', 'telegram_chat_id', 'tier',
             'tip_delivery_time', 'tip_delivery_timezone',
-            'tip_timeframes', 'tip_pattern_types',
+            'tip_timeframes', 'tip_pattern_types', 'tip_markets',
             'account_size', 'max_risk_per_trade_pct', 'account_currency']
 
     for row in rows:
@@ -307,7 +314,7 @@ def _run_tip_cycle(db_path: str) -> None:
         delivery_time = prefs.get('tip_delivery_time') or '08:00'
         timezone_str  = prefs.get('tip_delivery_timezone') or 'UTC'
 
-        for json_col in ('tip_timeframes', 'tip_pattern_types'):
+        for json_col in ('tip_timeframes', 'tip_pattern_types', 'tip_markets'):
             try:
                 prefs[json_col] = json.loads(prefs[json_col]) if prefs[json_col] else None
             except (json.JSONDecodeError, TypeError):

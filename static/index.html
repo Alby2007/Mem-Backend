@@ -298,6 +298,32 @@ select option { background: var(--surface); }
 .fb-btn.fb-stop.fb-selected { border-color: var(--red); background: rgba(239,68,68,.15); }
 .fb-done { font-size: 11px; color: var(--green); font-family: var(--mono); }
 
+/* ── Interested Markets Picker ── */
+.mkt-toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.mkt-toggle-label { font-size: 12px; color: var(--muted); flex: 1; }
+.toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; cursor: pointer; inset: 0; background: var(--border); border-radius: 20px; transition: background .2s; }
+.toggle-slider:before { content: ''; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: transform .2s; }
+.toggle-switch input:checked + .toggle-slider { background: var(--accent); }
+.toggle-switch input:checked + .toggle-slider:before { transform: translateX(16px); }
+.mkt-search { width: 100%; box-sizing: border-box; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 12px; margin-bottom: 8px; }
+.mkt-search:focus { outline: none; border-color: var(--accent); }
+.mkt-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; min-height: 24px; }
+.mkt-chip { display: inline-flex; align-items: center; gap: 4px; background: rgba(245,158,11,.15); border: 1px solid var(--accent); border-radius: 4px; padding: 2px 8px; font-size: 11px; font-family: var(--mono); font-weight: 600; color: var(--accent); cursor: pointer; }
+.mkt-chip:hover { background: rgba(245,158,11,.25); }
+.mkt-chip-x { font-size: 13px; line-height: 1; color: var(--muted); }
+.mkt-groups { max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.mkt-group-header { display: flex; align-items: center; justify-content: space-between; padding: 5px 10px; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); background: var(--bg); border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; }
+.mkt-group-header:hover { color: var(--text); }
+.mkt-group-tickers { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.mkt-group-tickers:last-child { border-bottom: none; }
+.mkt-ticker-btn { border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px; font-size: 11px; font-family: var(--mono); background: none; color: var(--muted); cursor: pointer; transition: border-color .12s, color .12s, background .12s; }
+.mkt-ticker-btn:hover { border-color: var(--accent); color: var(--text); }
+.mkt-ticker-btn.selected { background: rgba(245,158,11,.15); border-color: var(--accent); color: var(--accent); }
+.mkt-picker-disabled { opacity: .4; pointer-events: none; }
+.mkt-count { font-size: 11px; color: var(--muted); margin-left: 4px; }
+
 /* ── Tip card ── */
 .tip-card { background: var(--surface); border: 1px solid var(--accent); border-radius: 8px; padding: 14px; margin-top: 12px; font-size: 13px; }
 .tip-card-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
@@ -826,6 +852,21 @@ select option { background: var(--surface); }
             <option value="premium">Premium</option>
           </select>
         </div>
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+          <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;">Interested Markets</div>
+          <div class="mkt-toggle-row">
+            <label class="toggle-switch">
+              <input type="checkbox" id="mkt-all-toggle" checked>
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="mkt-toggle-label" id="mkt-all-label">All Markets <span class="mkt-count">(default — tips from any ticker)</span></span>
+          </div>
+          <div id="mkt-picker-wrap">
+            <div class="mkt-chips" id="mkt-chips"></div>
+            <input class="mkt-search" id="mkt-search" type="text" placeholder="Search tickers…" autocomplete="off">
+            <div class="mkt-groups" id="mkt-groups"></div>
+          </div>
+        </div>
         <button class="btn btn-primary btn-sm mt-8" id="tip-config-btn">Save Config</button>
         <div id="tip-config-msg" class="text-sm mt-8 text-muted"></div>
       </div>
@@ -1085,7 +1126,7 @@ function showScreen(name) {
   if (name === 'patterns')  loadPatterns();
   if (name === 'network')   loadNetwork();
   if (name === 'history')   loadHistory();
-  if (name === 'tips')      { loadTipsHistory(); loadTipsAccountValue(); }
+  if (name === 'tips')      { loadTipsHistory(); loadTipsAccountValue(); loadTipConfig(); }
   if (name === 'portfolio') { loadPortfolioModel(); loadPortfolioHoldings(); loadTickerList(); loadSimBannerIfSet(); }
   if (name === 'markets')   initMarketsScreen();
   if (name === 'auth')    _injectAuthTgWidget();
@@ -2647,22 +2688,140 @@ async function loadTipsAccountValue() {
   } catch { /* silent */ }
 }
 
+let _mktSectors = [];
+let _mktSelected = new Set();
+let _mktAllMode = true;
+
+function _mktRenderChips() {
+  const wrap = document.getElementById('mkt-chips');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  _mktSelected.forEach(ticker => {
+    const chip = document.createElement('span');
+    chip.className = 'mkt-chip';
+    chip.innerHTML = escHtml(ticker) + ' <span class="mkt-chip-x">\u00d7</span>';
+    chip.addEventListener('click', () => { _mktSelected.delete(ticker); _mktRenderChips(); _mktRenderGroups(); });
+    wrap.appendChild(chip);
+  });
+}
+
+function _mktRenderGroups(filter) {
+  const wrap = document.getElementById('mkt-groups');
+  if (!wrap) return;
+  const q = (filter || '').toUpperCase().trim();
+  wrap.innerHTML = '';
+  _mktSectors.forEach(sec => {
+    const tickers = q ? sec.tickers.filter(t => t.includes(q)) : sec.tickers;
+    if (!tickers.length) return;
+    const header = document.createElement('div');
+    header.className = 'mkt-group-header';
+    const allSel = tickers.every(t => _mktSelected.has(t));
+    header.innerHTML = '<span>' + escHtml(sec.group) + '</span><span style="font-size:10px;color:var(--accent)">' + (allSel ? '\u2212 Deselect all' : '+ Select all') + '</span>';
+    const _filter = filter;
+    header.addEventListener('click', () => {
+      if (allSel) tickers.forEach(t => _mktSelected.delete(t));
+      else tickers.forEach(t => _mktSelected.add(t));
+      _mktRenderChips(); _mktRenderGroups(_filter);
+    });
+    const row = document.createElement('div');
+    row.className = 'mkt-group-tickers';
+    tickers.forEach(t => {
+      const btn = document.createElement('button');
+      btn.className = 'mkt-ticker-btn' + (_mktSelected.has(t) ? ' selected' : '');
+      btn.textContent = t;
+      const _t = t, _f = filter;
+      btn.addEventListener('click', () => {
+        if (_mktSelected.has(_t)) _mktSelected.delete(_t); else _mktSelected.add(_t);
+        _mktRenderChips(); _mktRenderGroups(_f);
+      });
+      row.appendChild(btn);
+    });
+    wrap.appendChild(header);
+    wrap.appendChild(row);
+  });
+}
+
+async function _mktInit() {
+  if (_mktSectors.length) return;
+  try {
+    const d = await apiFetch('/markets/tickers');
+    _mktSectors = d?.sectors || [];
+    _mktRenderGroups();
+  } catch(e) { /* silent */ }
+}
+
+function _mktSetAllMode(on) {
+  _mktAllMode = on;
+  const toggle = document.getElementById('mkt-all-toggle');
+  const label = document.getElementById('mkt-all-label');
+  const pickerWrap = document.getElementById('mkt-picker-wrap');
+  if (toggle) toggle.checked = on;
+  if (label) label.innerHTML = on
+    ? 'All Markets <span class="mkt-count">(default \u2014 tips from any ticker)</span>'
+    : 'Custom selection <span class="mkt-count">(' + _mktSelected.size + ' selected)</span>';
+  if (pickerWrap) pickerWrap.classList.toggle('mkt-picker-disabled', on);
+}
+
+document.getElementById('mkt-all-toggle').addEventListener('change', function() {
+  _mktSetAllMode(this.checked);
+  if (!this.checked) _mktInit();
+});
+
+document.getElementById('mkt-search').addEventListener('input', function() {
+  _mktRenderGroups(this.value);
+});
+
+async function loadTipConfig() {
+  if (!state.userId) return;
+  try {
+    const d = await apiFetch('/users/' + state.userId + '/tip-config');
+    if (!d) return;
+    if (d.tip_delivery_time) document.getElementById('tip-time').value = d.tip_delivery_time;
+    if (d.tip_delivery_timezone) {
+      const sel = document.getElementById('tip-tz');
+      for (let i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === d.tip_delivery_timezone) { sel.selectedIndex = i; break; }
+      }
+    }
+    if (d.tier) {
+      const sel = document.getElementById('tip-tier');
+      for (let i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === d.tier) { sel.selectedIndex = i; break; }
+      }
+    }
+    if (d.tip_markets && d.tip_markets.length > 0) {
+      _mktSelected = new Set(d.tip_markets.map(t => t.toUpperCase()));
+      await _mktInit();
+      _mktSetAllMode(false);
+      _mktRenderChips();
+      _mktRenderGroups();
+    } else {
+      _mktSetAllMode(true);
+    }
+  } catch(e) { /* silent */ }
+}
+
 document.getElementById('tip-config-btn').addEventListener('click', async () => {
   if (!state.userId) { showToast('Sign in first'); return; }
   const msg = document.getElementById('tip-config-msg');
   msg.innerHTML = '<span class="spinner"></span>';
+  const tip_markets = _mktAllMode ? null : (_mktSelected.size > 0 ? Array.from(_mktSelected) : null);
   try {
-    const d = await apiFetch(`/users/${state.userId}/onboarding`, {
+    const d = await apiFetch('/users/' + state.userId + '/tip-config', {
       method: 'POST',
       body: JSON.stringify({
-        account_size:       state._tipAccountSize || null,
-        risk_tolerance:     null,
-        delivery_time:      document.getElementById('tip-time').value,
-        timezone:           document.getElementById('tip-tz').value,
+        tip_delivery_time:     document.getElementById('tip-time').value,
+        tip_delivery_timezone: document.getElementById('tip-tz').value,
+        tip_markets:           tip_markets,
+        account_size:          state._tipAccountSize || null,
+        tier:                  document.getElementById('tip-tier').value,
       })
     });
     if (!d) return;
-    msg.style.color = 'var(--green)'; msg.textContent = '✓ Config saved';
+    const label = document.getElementById('mkt-all-label');
+    if (label && !_mktAllMode) label.innerHTML = 'Custom selection <span class="mkt-count">(' + _mktSelected.size + ' selected)</span>';
+    msg.style.color = 'var(--green)'; msg.textContent = '\u2713 Config saved';
+    setTimeout(() => { msg.textContent = ''; }, 3000);
   } catch(e) { msg.style.color='var(--red)'; msg.textContent = e.message; }
 });
 
