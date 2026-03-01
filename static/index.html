@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- v20260301-1059 -->
+<!-- v20260301-prod1 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -566,7 +566,7 @@ select option { background: var(--surface); }
 
 <!-- ── Top bar ──────────────────────────────────────────────────────── -->
 <div id="topbar">
-  <span class="wordmark">TRADING GALAXY</span>
+  <span class="wordmark" id="wordmark-home" style="cursor:pointer;" title="Go to homepage">TRADING GALAXY</span>
   <div class="spacer"></div>
   <div id="conn-dot"></div>
   <span id="conn-label">CONNECTING</span>
@@ -665,7 +665,7 @@ select option { background: var(--surface); }
     <button class="btn btn-ghost btn-sm" id="dash-refresh-btn">↻ Refresh</button>
   </div>
   <div class="stat-grid" id="dash-stats">
-    <div class="stat-card"><div class="stat-label">Total Facts</div><div class="stat-value" id="s-facts">—</div><div class="stat-sub">KB atoms</div></div>
+    <div class="stat-card"><div class="stat-label">Total Facts</div><div class="stat-value" id="s-facts">—</div><div class="stat-sub dev-only">KB atoms</div></div>
     <div class="stat-card"><div class="stat-label">Market Regime</div><div class="stat-value" id="s-regime" style="font-size:13px;padding-top:4px;">—</div><div class="stat-sub" id="s-regime-sub">from KB</div></div>
     <div class="stat-card" id="s-stress-card" title="Epistemic Activity: the KB actively reconciles competing signals — a higher rate means more live data flowing in, not an error state."><div class="stat-label">Epistemic Activity</div><div class="stat-value" id="s-stress">—</div><div class="stat-sub" id="s-stress-sub">resolutions</div></div>
     <div class="stat-card"><div class="stat-label">Open Patterns</div><div class="stat-value" id="s-patterns">—</div><div class="stat-sub">active signals</div></div>
@@ -677,9 +677,13 @@ select option { background: var(--surface); }
         <div class="empty"><div class="spinner"></div></div>
       </div>
     </div>
-    <div>
+    <div id="dash-adapters-panel">
       <div class="section-title">Ingest Adapters</div>
       <div id="dash-adapters"><div class="empty"><div class="spinner"></div></div></div>
+    </div>
+    <div id="dash-positions-panel" style="display:none;">
+      <div class="section-title">Your Active Positions</div>
+      <div id="dash-positions"><div class="empty text-sm text-muted">Loading…</div></div>
     </div>
   </div>
 </div>
@@ -809,7 +813,7 @@ select option { background: var(--surface); }
   <div style="display:flex;gap:8px;margin-bottom:14px;">
     <input id="hist-search" placeholder="Search conversations…" style="flex:1;max-width:340px;" />
     <button class="btn btn-outline btn-sm" id="hist-search-btn">Search</button>
-    <button class="btn btn-ghost btn-sm" id="hist-atoms-btn" title="View extracted atoms">⚛ Atoms</button>
+    <button class="btn btn-ghost btn-sm" id="hist-atoms-btn" title="View extracted signals">⚛ Signals</button>
   </div>
   <div style="display:grid;grid-template-columns:340px 1fr;gap:14px;height:calc(100vh - var(--topbar-h) - 110px);">
     <!-- Timeline list -->
@@ -825,7 +829,7 @@ select option { background: var(--surface); }
   <div id="hist-atoms-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:200;overflow-y:auto;">
     <div style="max-width:760px;margin:48px auto;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:24px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <div style="font-size:15px;font-weight:700;">Extracted Atoms</div>
+        <div style="font-size:15px;font-weight:700;">Extracted Signals</div>
         <button class="btn btn-ghost btn-sm" id="hist-atoms-close">✕ Close</button>
       </div>
       <div id="hist-atoms-stats" class="text-sm text-muted mb-12"></div>
@@ -861,11 +865,11 @@ select option { background: var(--surface); }
   <div style="font-size:16px;font-weight:700;margin-bottom:20px;">Tips</div>
   <div class="two-col mb-20">
     <div>
-      <div class="section-title">Tip Configuration</div>
+      <div class="section-title">Delivery Settings</div>
       <div class="card">
         <div class="form-row"><label>Account Value</label><div style="display:flex;align-items:center;gap:8px;"><span id="tip-account-display" style="font-size:14px;font-weight:700;color:var(--accent);">—</span><span style="font-size:11px;color:var(--muted);">from portfolio</span></div></div>
         <div class="form-row"><label>Available Cash</label><div><span id="tip-cash-display" style="font-size:14px;font-weight:700;color:var(--accent);">—</span><span id="tip-cash-nudge" style="font-size:11px;color:var(--muted);margin-left:6px;"></span></div></div>
-        <div class="form-row"><label>Max Risk per Trade (%)</label><input id="tip-risk" type="number" placeholder="1.0" step="0.1" /></div>
+        <div class="form-row"><label>How much to risk per setup (%)</label><input id="tip-risk" type="number" placeholder="1.0" step="0.1" /></div>
         <div class="form-row"><label>Delivery Time</label><div><input id="tip-time" type="time" value="07:30" min="06:00" max="09:00" /><div style="font-size:10px;color:var(--muted);margin-top:3px;">Recommended: 07:00–07:30 before market open (Basic &amp; Pro)</div></div></div>
         <div class="form-row"><label>Timezone</label>
           <select id="tip-tz">
@@ -876,7 +880,7 @@ select option { background: var(--surface); }
             <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
           </select>
         </div>
-        <div class="form-row"><label>Tier</label>
+        <div class="form-row" id="tip-tier-row"><label>Tier</label>
           <select id="tip-tier">
             <option value="basic">Basic — Mon + Wed (2 setups/week)</option>
             <option value="pro">Pro — Mon + Wed (5 setups/week)</option>
@@ -1069,8 +1073,35 @@ select option { background: var(--surface); }
 const state = {
   token: null,
   userId: null,
+  isDev: false,
   holdings: [],     // pending holdings before submit
 };
+
+function applyDevGating() {
+  const dev = state.isDev;
+  // Nav: hide Network for non-dev
+  const navNetwork = document.getElementById('nav-network');
+  if (navNetwork) navNetwork.style.display = dev ? '' : 'none';
+  // Topbar KB count
+  const kbCount = document.getElementById('kb-count');
+  if (kbCount) kbCount.style.display = dev ? '' : 'none';
+  // Portfolio: Generate Test Portfolio + Change Portfolio dropdown
+  const genBtn = document.getElementById('p-gen-sim-btn');
+  if (genBtn) genBtn.style.display = dev ? '' : 'none';
+  const profileSel = document.getElementById('p-change-profile-select');
+  if (profileSel) profileSel.style.display = dev ? '' : 'none';
+  // Tips: Tier row
+  const tierRow = document.getElementById('tip-tier-row');
+  if (tierRow) tierRow.style.display = dev ? '' : 'none';
+  // History: Atoms button
+  const atomsBtn = document.getElementById('hist-atoms-btn');
+  if (atomsBtn) atomsBtn.style.display = dev ? '' : 'none';
+  // Dashboard: adapter panel vs active positions
+  const adapterPanel = document.getElementById('dash-adapters-panel');
+  const posPanel     = document.getElementById('dash-positions-panel');
+  if (adapterPanel) adapterPanel.style.display = dev ? '' : 'none';
+  if (posPanel)     posPanel.style.display     = dev ? 'none' : '';
+}
 
 // ── API base ─────────────────────────────────────────────────────────────────
 const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
@@ -1781,7 +1812,7 @@ async function signOut() {
   // Ask backend to clear HttpOnly cookies + revoke refresh token
   try { await fetch(API + '/auth/logout', { method: 'POST', credentials: 'include',
     headers: { 'Content-Type': 'application/json' } }); } catch { /* ignore */ }
-  state.token = null; state.userId = null; state.holdings = [];
+  state.token = null; state.userId = null; state.isDev = false; state.holdings = [];
   try { localStorage.removeItem('tg_user_id'); localStorage.removeItem('tg_user_data'); } catch { /* storage blocked */ }
   _renderTgChip(null, null);
   window.history.replaceState(null, '', '/login');
@@ -1811,6 +1842,7 @@ let dashInterval = null;
 async function loadDashboard() {
   clearInterval(dashInterval);
   await refreshDashboard();
+  if (!state.isDev) loadDashboardPositions();
   dashInterval = setInterval(refreshDashboard, 60000);
 }
 
@@ -1892,6 +1924,40 @@ async function refreshDashboard() {
 }
 
 document.getElementById('dash-refresh-btn').addEventListener('click', refreshDashboard);
+
+// Wordmark click — sign out fully and go to landing page
+document.getElementById('wordmark-home').addEventListener('click', async () => {
+  await signOut();
+  window.location.href = 'https://trading-galaxy.uk';
+});
+
+// ── DASHBOARD POSITIONS (non-dev) ────────────────────────────────────────────
+async function loadDashboardPositions() {
+  if (!state.userId) return;
+  const el = document.getElementById('dash-positions');
+  if (!el) return;
+  try {
+    const d = await apiFetch(`/users/${state.userId}/positions/open`);
+    const positions = d?.positions || d || [];
+    if (!positions.length) {
+      el.innerHTML = '<div class="empty text-sm text-muted">No open positions — add holdings in Portfolio</div>';
+      return;
+    }
+    el.innerHTML = positions.slice(0, 6).map(p => {
+      const dir = p.signal_direction || '';
+      const col = dir === 'bullish' ? 'var(--green)' : dir === 'bearish' ? 'var(--red)' : 'var(--muted)';
+      return `<div class="conviction-card">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="conviction-ticker">${escHtml(p.ticker||'')}</span>
+          <span style="font-size:11px;color:${col};font-weight:700;">${escHtml(dir)}</span>
+        </div>
+        ${p.price_target ? `<div style="font-size:11px;color:var(--muted);margin-top:3px;">Target ${escHtml(String(p.price_target))} · ${escHtml(p.conviction_tier||'')}</div>` : ''}
+      </div>`;
+    }).join('');
+  } catch {
+    el.innerHTML = '<div class="empty text-sm text-muted">Positions unavailable</div>';
+  }
+}
 
 // ── PORTFOLIO ─────────────────────────────────────────────────────────────────
 
@@ -3249,7 +3315,7 @@ window.togglePattern = async function(el, id) {
     const pos = d?.position_recommendation;
     detail.innerHTML = `
       <div style="font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-        <div><span class="text-muted">KB Conviction</span><br><span class="mono-amber">${escHtml(p.kb_conviction||'—')}</span></div>
+        <div><span class="text-muted">Conviction</span><br><span class="mono-amber">${escHtml(p.kb_conviction||'—')}</span></div>
         <div><span class="text-muted">Regime</span><br><span class="mono">${escHtml((p.kb_regime||'—').replace(/_/g,' '))}</span></div>
         <div><span class="text-muted">Signal Dir</span><br>${dirBadge(p.kb_signal_dir)}</div>
         <div><span class="text-muted">Status</span><br><span class="badge badge-open">${escHtml(p.status||'open')}</span></div>
@@ -3462,11 +3528,13 @@ document.getElementById('hist-atoms-overlay').addEventListener('click', e => {
     const me = await apiFetch('/auth/me');
     if (me && me.user_id) {
       state.userId = me.user_id;
+      state.isDev  = !!me.is_dev;
       state.token  = '__cookie__'; // sentinel — actual token is in HttpOnly cookie
       let storedTgData = null;
       try { storedTgData = localStorage.getItem('tg_user_data'); } catch { /* storage blocked */ }
       const tgData = storedTgData ? JSON.parse(storedTgData) : null;
       _renderTgChip(tgData, me.user_id);
+      applyDevGating();
 
       // Route to the screen from the URL if valid, else dashboard
       const fromPath = _screenFromPath(window.location.pathname);

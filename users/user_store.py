@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     tip_pattern_types      TEXT,
     account_size           REAL,
     max_risk_per_trade_pct REAL DEFAULT 1.0,
-    account_currency       TEXT DEFAULT 'GBP'
+    account_currency       TEXT DEFAULT 'GBP',
+    is_dev                 INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -121,6 +122,7 @@ _PREFERENCES_MIGRATIONS = [
     "ALTER TABLE user_preferences ADD COLUMN account_currency TEXT DEFAULT 'GBP'",
     "ALTER TABLE user_preferences ADD COLUMN available_cash REAL DEFAULT NULL",
     "ALTER TABLE user_preferences ADD COLUMN cash_currency TEXT DEFAULT 'GBP'",
+    "ALTER TABLE user_preferences ADD COLUMN is_dev INTEGER NOT NULL DEFAULT 0",
 ]
 
 _DDL_DELIVERY_LOG = """
@@ -204,6 +206,19 @@ def get_user(db_path: str, user_id: str) -> Optional[dict]:
             d['selected_sectors'] = []
         d['telegram_chat_id'] = decrypt_field(d.get('telegram_chat_id'))
         return d
+    finally:
+        conn.close()
+
+
+def set_user_dev(db_path: str, user_id: str, is_dev: bool) -> None:
+    """Set or clear the is_dev flag for a user."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        conn.execute(
+            "UPDATE user_preferences SET is_dev=? WHERE user_id=?",
+            (1 if is_dev else 0, user_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 

@@ -5035,6 +5035,41 @@ def auth_me():
         return jsonify(base)
 
 
+@app.route('/admin/users/<target_user_id>/set-dev', methods=['POST'])
+@require_auth
+def admin_set_dev(target_user_id):
+    """
+    POST /admin/users/<target_user_id>/set-dev
+
+    Toggle the is_dev flag on any user account.
+    Restricted to user IDs listed in the ADMIN_USER_IDS env var
+    (comma-separated). JWT auth is also required.
+
+    Body: { "is_dev": true | false }
+    Returns: { "ok": true, "user_id": "...", "is_dev": true|false }
+    """
+    import os as _os
+    _admin_ids = {
+        uid.strip()
+        for uid in _os.environ.get('ADMIN_USER_IDS', '').split(',')
+        if uid.strip()
+    }
+    if not _admin_ids or g.user_id not in _admin_ids:
+        return jsonify({'error': 'forbidden'}), 403
+
+    data    = request.get_json(force=True, silent=True) or {}
+    is_dev  = bool(data.get('is_dev', False))
+
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+    try:
+        from users.user_store import set_user_dev
+        set_user_dev(_DB_PATH, target_user_id, is_dev)
+        return jsonify({'ok': True, 'user_id': target_user_id, 'is_dev': is_dev})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/users/<user_id>/profile', methods=['PATCH'])
 @require_auth
 def update_user_profile(user_id):
