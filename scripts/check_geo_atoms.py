@@ -1,6 +1,6 @@
 import sqlite3, os, sys
 
-_DB = os.environ.get('KB_DB_PATH', '/home/ubuntu/trading-galaxy/trading_kb.db')
+_DB = os.environ.get('TRADING_KB_DB', '/home/ubuntu/trading-galaxy/trading_knowledge.db')
 conn = sqlite3.connect(_DB)
 
 # Step 1: discover actual table names
