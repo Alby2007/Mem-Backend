@@ -66,50 +66,73 @@ def _should_tip(db_path: str, user_id: str, delivery_time: str, timezone_str: st
     return not already_tipped_today(db_path, user_id, local_date)
 
 
-def _pick_best_pattern(
-    db_path:       str,
-    user_id:       str,
-    tier:          str,
-    tip_timeframes: List[str],
-    tip_pattern_types: Optional[List[str]],
-    tip_markets: Optional[List[str]] = None,
+# ── Sector → connected-ticker map ─────────────────────────────────────────────
+# Maps a sector tag (as stored in user_portfolios.sector, lower-cased) to a
+# list of US-listed proxy tickers that are correlated to that sector.
+_SECTOR_CONNECTED: dict = {
+    'technology':        ['XLK', 'QQQ', 'NVDA', 'AMD', 'MSFT', 'AAPL'],
+    'tech':              ['XLK', 'QQQ', 'NVDA', 'AMD', 'MSFT', 'AAPL'],
+    'financials':        ['XLF', 'JPM', 'GS', 'MS', 'BAC'],
+    'finance':           ['XLF', 'JPM', 'GS', 'MS', 'BAC'],
+    'banking':           ['XLF', 'JPM', 'GS', 'MS', 'BAC'],
+    'energy':            ['XLE', 'XOM', 'CVX', 'COP'],
+    'oil':               ['XLE', 'XOM', 'CVX', 'COP'],
+    'healthcare':        ['XLV', 'UNH', 'JNJ', 'LLY'],
+    'health':            ['XLV', 'UNH', 'JNJ', 'LLY'],
+    'pharma':            ['XLV', 'PFE', 'MRK', 'ABBV'],
+    'consumer':          ['XLY', 'XLP', 'WMT', 'COST', 'MCD'],
+    'consumer staples':  ['XLP', 'WMT', 'PG', 'KO', 'COST'],
+    'consumer discretionary': ['XLY', 'AMZN', 'TSLA', 'MCD'],
+    'industrials':       ['XLI', 'CAT', 'HON', 'RTX'],
+    'materials':         ['XLB', 'GLD', 'SLV'],
+    'real estate':       ['XLRE', 'AMT', 'PLD', 'EQIX'],
+    'reits':             ['XLRE', 'AMT', 'PLD', 'EQIX'],
+    'utilities':         ['XLU', 'NEE', 'DUK', 'SO'],
+    'communications':    ['XLC', 'DIS', 'NFLX', 'CMCSA'],
+    'comms':             ['XLC', 'DIS', 'NFLX', 'CMCSA'],
+    'crypto':            ['COIN', 'MSTR'],
+    'etf':               ['SPY', 'QQQ', 'IWM', 'VTI'],
+}
+
+# Broad fallback universe (same as GET /markets/tickers default list)
+_DEFAULT_UNIVERSE: List[str] = [
+    'AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','AVGO',
+    'JPM','V','MA','BAC','GS','MS','BRK-B','AXP','BLK','SCHW',
+    'UNH','JNJ','LLY','ABBV','PFE','CVS','MRK','BMY','GILD',
+    'XOM','CVX','COP',
+    'WMT','PG','KO','MCD','COST',
+    'CAT','HON','RTX',
+    'DIS','NFLX','CMCSA',
+    'AMD','INTC','QCOM','MU','CRM','ADBE','NOW','SNOW',
+    'PYPL','COIN',
+    'AMT','PLD','EQIX',
+    'NEE','DUK','SO',
+    'SPY','QQQ','IWM','DIA','VTI',
+    'XLF','XLE','XLK','XLV','XLI','XLC','XLY','XLP',
+    'GLD','SLV','TLT','HYG','LQD','UUP',
+]
+
+
+def _scan_candidates(
+    candidates: list,
+    allowed_tickers: Optional[List[str]],
+    allowed_patterns: list,
+    allowed_timeframes: list,
+    tier: str,
+    user_id: str,
+    personal_hit_rates: dict,
+    db_path: str,
 ) -> Optional[dict]:
     """
-    Select the highest quality open pattern that:
-      - timeframe is in user's allowed timeframes (tier-gated)
-      - pattern_type is in user's allowed types (tier-gated, optionally filtered)
-      - ticker is in user's interested markets (when tip_markets is set)
-      - user_id not already in alerted_users
-      - passes calibration filter (if both personal hit_rate < 0.40 AND
-        collective hit_rate_t2 < 0.45, skip it)
+    Inner scan loop: filter candidates by ticker set, tier gates, alerted dedup,
+    and calibration filter. Returns first passing row or None.
     """
-    from notifications.tip_formatter import TIER_LIMITS, pattern_allowed_for_tier, timeframe_allowed_for_tier
-    from users.user_store import get_open_patterns
+    from notifications.tip_formatter import pattern_allowed_for_tier, timeframe_allowed_for_tier
 
-    limits = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
-    allowed_patterns   = tip_pattern_types or limits['patterns']
-    allowed_timeframes = tip_timeframes or limits['timeframes']
+    ticker_set = {t.upper() for t in allowed_tickers} if allowed_tickers is not None else None
 
-    # Load personal pattern hit rates once
-    personal_hit_rates: dict = {}
-    try:
-        from users.personal_kb import read_atoms
-        atoms = read_atoms(user_id, db_path)
-        for a in atoms:
-            if a['predicate'].endswith('_hit_rate'):
-                ptype = a['predicate'][:-len('_hit_rate')]
-                try:
-                    personal_hit_rates[ptype] = float(a['object'])
-                except (ValueError, TypeError):
-                    pass
-    except Exception:
-        pass
-
-    allowed_tickers = [t.upper() for t in tip_markets] if tip_markets else None
-
-    candidates = get_open_patterns(db_path, min_quality=0.0, limit=200)
     for row in candidates:
-        if allowed_tickers and row['ticker'].upper() not in allowed_tickers:
+        if ticker_set is not None and row['ticker'].upper() not in ticker_set:
             continue
         if row['pattern_type'] not in allowed_patterns:
             continue
@@ -145,6 +168,121 @@ def _pick_best_pattern(
                 pass
 
         return row
+    return None
+
+
+def _pick_best_pattern(
+    db_path:           str,
+    user_id:           str,
+    tier:              str,
+    tip_timeframes:    List[str],
+    tip_pattern_types: Optional[List[str]],
+    tip_markets:       Optional[List[str]] = None,
+) -> Optional[dict]:
+    """
+    4-level fallback chain:
+
+      1. tip_markets watchlist  → tip_source = 'watchlist'
+      2. portfolio holdings     → tip_source = 'portfolio'
+      3. connected tickers      → tip_source = 'connected'
+         (sector-correlated ETFs / proxies derived from portfolio sectors)
+      4. full _DEFAULT_UNIVERSE → tip_source = 'market-wide'
+
+    Each level is only tried when the previous returned nothing.
+    The returned dict has an injected key ``tip_source`` used by the
+    formatter to label the Telegram message footer.
+
+    When tip_markets is None (All Markets mode), levels 1–3 are skipped
+    and the full universe is scanned immediately (no label appended).
+    """
+    from notifications.tip_formatter import TIER_LIMITS
+    from users.user_store import get_open_patterns
+
+    limits = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
+    allowed_patterns   = tip_pattern_types or limits['patterns']
+    allowed_timeframes = tip_timeframes or limits['timeframes']
+
+    # Load personal pattern hit rates once
+    personal_hit_rates: dict = {}
+    try:
+        from users.personal_kb import read_atoms
+        atoms = read_atoms(user_id, db_path)
+        for a in atoms:
+            if a['predicate'].endswith('_hit_rate'):
+                ptype = a['predicate'][:-len('_hit_rate')]
+                try:
+                    personal_hit_rates[ptype] = float(a['object'])
+                except (ValueError, TypeError):
+                    pass
+    except Exception:
+        pass
+
+    candidates = get_open_patterns(db_path, min_quality=0.0, limit=200)
+    common = dict(
+        allowed_patterns=allowed_patterns,
+        allowed_timeframes=allowed_timeframes,
+        tier=tier,
+        user_id=user_id,
+        personal_hit_rates=personal_hit_rates,
+        db_path=db_path,
+    )
+
+    # ── All Markets mode — no tip_markets set → scan everything, no label ──────
+    if not tip_markets:
+        row = _scan_candidates(candidates, None, **common)
+        if row is not None:
+            row = dict(row)
+            row['tip_source'] = None  # silent — this is default behaviour
+        return row
+
+    # ── Level 1: user's watchlist ─────────────────────────────────────────────
+    row = _scan_candidates(candidates, tip_markets, **common)
+    if row is not None:
+        row = dict(row); row['tip_source'] = 'watchlist'; return row
+    _log.info('TipScheduler: no watchlist pattern for user %s — trying portfolio', user_id)
+
+    # ── Level 2: portfolio holdings ───────────────────────────────────────────
+    portfolio_tickers: List[str] = []
+    portfolio_sectors: List[str] = []
+    try:
+        from users.user_store import get_portfolio
+        holdings = get_portfolio(db_path, user_id)
+        for h in holdings:
+            t = (h.get('ticker') or '').upper().strip()
+            if t:
+                portfolio_tickers.append(t)
+            s = (h.get('sector') or '').lower().strip()
+            if s:
+                portfolio_sectors.append(s)
+    except Exception:
+        pass
+
+    if portfolio_tickers:
+        row = _scan_candidates(candidates, portfolio_tickers, **common)
+        if row is not None:
+            row = dict(row); row['tip_source'] = 'portfolio'; return row
+        _log.info('TipScheduler: no portfolio pattern for user %s — trying connected', user_id)
+
+    # ── Level 3: sector-connected tickers ────────────────────────────────────
+    connected: List[str] = []
+    seen: set = set(portfolio_tickers)
+    for sector in portfolio_sectors:
+        for t in _SECTOR_CONNECTED.get(sector, []):
+            if t not in seen:
+                connected.append(t)
+                seen.add(t)
+
+    if connected:
+        row = _scan_candidates(candidates, connected, **common)
+        if row is not None:
+            row = dict(row); row['tip_source'] = 'connected'; return row
+        _log.info('TipScheduler: no connected pattern for user %s — falling back to universe', user_id)
+
+    # ── Level 4: full default universe ────────────────────────────────────────
+    row = _scan_candidates(candidates, _DEFAULT_UNIVERSE, **common)
+    if row is not None:
+        row = dict(row); row['tip_source'] = 'market-wide'; return row
+
     return None
 
 
@@ -229,7 +367,8 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict) -> None:
             except Exception as _fe:
                 _log.debug('TipScheduler: forecast failed for %s: %s', sig.ticker, _fe)
 
-        message  = format_tip(sig, position, tier=tier, calibration=calibration)
+        tip_source = pattern_row.get('tip_source')
+        message  = format_tip(sig, position, tier=tier, calibration=calibration, tip_source=tip_source)
 
         notifier = TelegramNotifier()
         sent     = notifier.send(chat_id, message)

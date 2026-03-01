@@ -2836,6 +2836,16 @@ document.getElementById('tip-preview-btn').addEventListener('click', async () =>
     if (!t) { wrap.innerHTML = `<div class="text-sm text-muted">${escHtml(d.reason || 'No eligible patterns')}</div>`; return; }
     const skew = t.skew_warning ? `<div class="skew-warning">⚠ ${escHtml(t.skew_warning)}</div>` : '';
     const patternId = t.pattern_id ?? t.id ?? null;
+    const _SRC_LABELS = {
+      'watchlist':   { icon: '🎯', text: 'Signal from your watchlist' },
+      'portfolio':   { icon: '📂', text: 'Your watchlist was quiet — signal from your portfolio' },
+      'connected':   { icon: '🔗', text: 'Your portfolio was quiet — signal from a correlated sector ticker' },
+      'market-wide': { icon: '🌐', text: 'Market-wide signal — your watchlist and portfolio were quiet today' },
+    };
+    const srcInfo = d.tip_source ? _SRC_LABELS[d.tip_source] : null;
+    const sourceHtml = srcInfo
+      ? `<div style="margin-top:10px;padding:7px 10px;border-radius:6px;background:var(--surface);border:1px solid var(--border);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;">${srcInfo.icon} <span>${escHtml(srcInfo.text)}</span></div>`
+      : '';
     wrap.innerHTML = `<div class="tip-card" id="tip-card-main">
       <div class="tip-card-header">
         <div>
@@ -2861,6 +2871,7 @@ document.getElementById('tip-preview-btn').addEventListener('click', async () =>
         ${t.calibration_confidence != null ? `<span><span class="meta-key">Cal. Confidence</span><span class="meta-val">${fmt(t.calibration_confidence*100)}%</span></span>` : ''}
       </div>
       ${skew}
+      ${sourceHtml}
       <div class="feedback-row" id="tip-fb-row">
         <span class="fb-label">Outcome</span>
         <button class="fb-btn" data-v="hit_t1" title="Hit Target 1">T1 ✓</button>

@@ -242,12 +242,21 @@ def _forecast_block(forecast: object, currency: str) -> list:
     return lines
 
 
+_TIP_SOURCE_LABELS = {
+    'watchlist':   ('🎯', 'Signal from your watchlist'),
+    'portfolio':   ('📂', 'Signal from your portfolio — your watchlist had no qualifying patterns today'),
+    'connected':   ('🔗', 'Signal from a sector-correlated ticker — your portfolio was quiet today'),
+    'market-wide': ('🌐', 'Market-wide signal — your watchlist and portfolio were quiet today'),
+}
+
+
 def format_tip(
     pattern:     PatternSignal,
     position:    Optional[PositionRecommendation],
     tier:        str = 'basic',
     skew_filter: Optional[dict] = None,
     calibration: Optional[object] = None,
+    tip_source:  Optional[str] = None,
 ) -> str:
     """
     Render a complete Telegram MarkdownV2 tip message.
@@ -261,6 +270,8 @@ def format_tip(
                  _compute_skew_filter_atoms output.  When active (multiplier
                  < 1.0), appends a warning block showing why position was
                  sized down.  Accepts pipe-encoded KB string or plain dict.
+    tip_source   One of 'watchlist', 'portfolio', 'connected', 'market-wide',
+                 or None (silent — All Markets mode).
 
     Returns
     -------
@@ -365,6 +376,15 @@ def format_tip(
         lines += _forecast_block(position.forecast, currency)
 
     lines += kb_lines
+
+    # ── Fallback source label ─────────────────────────────────────────────────
+    if tip_source and tip_source in _TIP_SOURCE_LABELS:
+        icon, label = _TIP_SOURCE_LABELS[tip_source]
+        lines += [
+            '',
+            f'_{icon} {_escape_mdv2(label)}_',
+        ]
+
     return '\n'.join(lines)
 
 

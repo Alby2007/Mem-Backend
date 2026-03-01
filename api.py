@@ -4096,7 +4096,8 @@ def tip_preview(user_id: str):
     )
     position = calculate_position(sig, prefs)
     tip_dict = tip_to_dict(sig, position, tier=tier)
-    return jsonify({'tip': tip_dict})
+    tip_source = pattern_row.get('tip_source')
+    return jsonify({'tip': tip_dict, 'tip_source': tip_source})
 
 
 @app.route('/users/<user_id>/tip-config', methods=['GET', 'POST'])
