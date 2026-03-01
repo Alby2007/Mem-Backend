@@ -16,9 +16,12 @@ Zero-LLM, pure Python.
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 from typing import List, Tuple, Dict
+
+_logger = logging.getLogger(__name__)
 
 try:
     from knowledge.authority import effective_score as _effective_score
