@@ -1178,7 +1178,18 @@ def retrieve(
         lines.extend(_fmt(r) for r in historical[:12])
     if geo:
         lines.append('# geopolitical-news')
-        lines.extend(_fmt_geo(r) for r in geo[:50])
+        # For entity-specific geo queries, show entity-pinned atoms first,
+        # then remaining geo atoms. This prevents general financial news
+        # (social security, Netflix etc.) that happen to be news_wire_*
+        # from diluting the geo section with irrelevant content.
+        if _geo_rank_keys:
+            _geo_entity = [r for r in geo if (r['subject'][:60], r['predicate'], r['object'][:60]) in _geo_rank_keys]
+            _geo_other  = [r for r in geo if (r['subject'][:60], r['predicate'], r['object'][:60]) not in _geo_rank_keys]
+            lines.extend(_fmt_geo(r) for r in _geo_entity[:50])
+            if _geo_other:
+                lines.extend(_fmt_geo(r) for r in _geo_other[:10])
+        else:
+            lines.extend(_fmt_geo(r) for r in geo[:50])
     if other:
         # Log predicate distribution of other[] so we can detect important atom
         # types that are falling through all bucket filters unexpectedly.
