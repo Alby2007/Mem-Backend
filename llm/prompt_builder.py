@@ -116,7 +116,7 @@ _SYSTEM_DIAGNOSIS_SUFFIX = (
 )
 
 _SYSTEM_GEO_PORTFOLIO_RULE = (
-    "\n17. GEOPOLITICAL + PORTFOLIO QUERY — CRITICAL RULES: "
+    "\n21. GEOPOLITICAL + PORTFOLIO QUERY — CRITICAL RULES: "
     "When the user asks how a geopolitical event (war, conflict, sanctions, military action) "
     "affects their portfolio, you MUST follow this exact 4-part structure:\n"
     "(A) WHAT IS HAPPENING — List 2–4 exact KB headlines verbatim from key_finding or catalyst atoms "
@@ -140,7 +140,7 @@ _SYSTEM_GEO_PORTFOLIO_RULE = (
 )
 
 _SYSTEM_POSITIONS_RULE = (
-    "\n15. POSITION OPPORTUNITY QUERIES: When the user asks about 'good positions', "
+    "\n15. POSITION OPPORTUNITY QUERIES (mutually exclusive with rule 14): When the user asks about 'good positions', "
     "'open positions', 'best setups', 'what to trade', 'investment opportunities', or similar, "
     "do NOT write a generic narrative paragraph for every holding. Instead: "
     "(1) Rank all holdings by signal strength using these KB atoms in order: "
@@ -173,7 +173,7 @@ _SYSTEM_PORTFOLIO_BASE = (
     "signal_direction, upside_pct, conviction_tier, return_1m, return_1y, catalyst, risk_factor — "
     "then KB signals ARE available for that ticker. You MUST NOT say 'No KB signals available' "
     "for any ticker that has at least one of these atoms in the context. "
-    "This overrides rule 10 for portfolio queries. "
+    "This overrides rule 10 (no-hallucination) for portfolio queries. "
     "Only say 'No KB signals available' if ZERO atoms of any kind exist for that ticker in the context. "
     "CRITICAL — NO PLACEHOLDERS: If an atom is absent from the KB context, OMIT it entirely. "
     "NEVER write '?', 'N/A', 'unknown', or any placeholder for missing data. "
@@ -202,7 +202,7 @@ _SYSTEM_PORTFOLIO_NARRATIVE = (
 )
 
 _SYSTEM_LIVE_DATA_RULE = (
-    "\n12. LIVE DATA block is present. These atoms were fetched from live market feeds "
+    "\n18. LIVE DATA block is present. These atoms were fetched from live market feeds "
     "moments ago — they are the definitive current prices and regimes. "
     "CRITICAL RULES for LIVE DATA: "
     "(a) Use the last_price from LIVE DATA as the current price — do NOT use any last_price "
@@ -215,7 +215,7 @@ _SYSTEM_LIVE_DATA_RULE = (
 )
 
 _SYSTEM_CONTINUITY_RULE = (
-    "\n13. CONVERSATION CONTINUITY: When prior conversation turns appear in the message history, "
+    "\n17. CONVERSATION CONTINUITY: When prior conversation turns appear in the message history, "
     "you are in an ongoing session. You MUST treat all prior turns as established context. "
     "If a follow-up question references 'my portfolio', 'this', 'it', 'these holdings', or similar, "
     "connect it explicitly to the holdings and signals discussed in prior turns. "
@@ -227,7 +227,7 @@ _SYSTEM_CONTINUITY_RULE = (
 )
 
 _SYSTEM_SEARCH_RULE = (
-    "\n14. WEB SEARCH RESULTS block (when present) contains live news snippets fetched "
+    "\n19. WEB SEARCH RESULTS block (when present) contains live news snippets fetched "
     "from the web this session via DuckDuckGo or Google News RSS. "
     "These snippets are unverified (confidence 0.65) and have NOT been committed to the KB. "
     "Use them to inform your answer for the current conversation only. "
@@ -238,7 +238,7 @@ _SYSTEM_SEARCH_RULE = (
 )
 
 _SYSTEM_GENERATION_RULE = (
-    "\n16. OPPORTUNITY GENERATION MODE: An === OPPORTUNITY SCAN === block is present. "
+    "\n20. OPPORTUNITY GENERATION MODE: An === OPPORTUNITY SCAN === block is present. "
     "You MUST use it as your primary source for this response. "
     "Your job is to turn the raw KB scan results into a concrete, actionable strategy. "
     "Structure your response as follows:\n"
@@ -261,7 +261,7 @@ _SYSTEM_GENERATION_RULE = (
 )
 
 _SYSTEM_GEO_NO_PORTFOLIO_RULE = (
-    "\n17. GEOPOLITICAL QUERY — NO PORTFOLIO: The user is asking about a war, conflict, or "
+    "\n22. GEOPOLITICAL QUERY — NO PORTFOLIO: The user is asking about a war, conflict, or "
     "geopolitical event but has no portfolio on file. You MUST still answer from the KB. "
     "Structure your response as follows:\n"
     "(A) CURRENT CONFLICT — Summarise what the KB geo atoms say is happening. "
@@ -300,7 +300,7 @@ _SYSTEM_TELEGRAM_FORMAT = (
 )
 
 _SYSTEM_SIZING_RULE = (
-    "\n11. EDUCATIONAL POSITION SIZING: When the user asks about a specific pattern or holding, "
+    "\n16. EDUCATIONAL POSITION SIZING: When the user asks about a specific pattern or holding, "
     "you MAY include one short educational sizing example using the actual numbers from USER PORTFOLIO. "
     "Use the real 'Total invested (cost basis)' value and the real current price from KB/LIVE DATA. "
     "Compute: allocation = X% × total_invested, shares = allocation ÷ current_price, "
