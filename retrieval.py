@@ -446,6 +446,7 @@ def retrieve(
         except Exception:
             pass
         # Pull geo-tagged news: any source with news_wire prefix, or geo data sources
+        # Order by timestamp DESC first so most recent war/conflict headlines appear first
         try:
             c.execute("""
                 SELECT subject, predicate, object, source, confidence
@@ -458,25 +459,26 @@ def retrieve(
                     )
                 )
                 AND predicate IN ('key_finding','headline','summary','event','catalyst','risk_factor')
-                ORDER BY confidence DESC, timestamp DESC
-                LIMIT 25
+                ORDER BY timestamp DESC, confidence DESC
+                LIMIT 40
             """)
             _add(c.fetchall())
         except Exception:
             pass
-        # Also pull financial_news atoms whose text mentions geopolitical terms
+        # Also pull atoms whose text mentions geopolitical terms (war, conflict, sanctions etc)
         try:
             _geo_text_terms = (
                 '%iran%', '%russia%', '%ukraine%', '%china%', '%taiwan%',
                 '%war%', '%sanction%', '%tension%', '%conflict%', '%tariff%',
                 '%military%', '%nato%', '%opec%', '%geopolit%',
+                '%israel%', '%gaza%', '%pakistan%', '%afghanistan%',
             )
-            for _gterm in _geo_text_terms[:6]:
+            for _gterm in _geo_text_terms[:10]:
                 c.execute(
                     "SELECT subject, predicate, object, source, confidence "
                     "FROM facts WHERE LOWER(object) LIKE ? "
                     "AND predicate IN ('key_finding','headline','summary','catalyst','risk_factor') "
-                    "ORDER BY confidence DESC, timestamp DESC LIMIT 5",
+                    "ORDER BY timestamp DESC, confidence DESC LIMIT 8",
                     (_gterm,)
                 )
                 _add(c.fetchall())
