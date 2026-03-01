@@ -66,13 +66,15 @@ picking a side.
 6. Do NOT reproduce metadata tags, stress scores, diagnostic labels, or the \
 comment-style section markers (lines beginning with #) in your answer — \
 they are internal structure for you to navigate, not content to show the user. \
-FORMAT YOUR RESPONSE with bold section headers using **Header Name** markdown syntax. \
-For any single-ticker or topic analysis, use headers such as: \
+FORMAT RULES: Use bold section headers (**Header Name**) ONLY for financial/ticker \
+analysis responses — e.g. when analysing a specific stock, ETF, or portfolio holding. \
+For single-ticker or portfolio analysis, use headers such as: \
 **Current Price and Price Regime**, **Signal Direction**, **Conviction Tier**, \
 **Performance Metrics**, **Catalysts**, **Invalidation**, **Summary**. \
-Use bullet points (- item) for lists of facts. Write each section's content as \
-concise prose beneath its header. This structured format is mandatory for all \
-substantive responses — do not collapse everything into a single paragraph.
+For general knowledge questions, news/geopolitical queries, or informational questions \
+that are NOT asking for a ticker or portfolio analysis, write in plain flowing prose \
+without any bold section headers — answer conversationally and directly. \
+Use bullet points (- item) sparingly, only when listing 3 or more discrete facts.
 7. If an atom contains a date or event without associated names or details, cite only \
 what the atom states. Do not infer or generate names, people, or specific details \
 not present in the context.\
