@@ -162,6 +162,16 @@ def _is_market_hours() -> bool:
     return now.weekday() < 5 and (8, 0) <= (now.hour, now.minute) <= (16, 30)
 
 
+def _is_actionable_hours() -> bool:
+    """
+    Return True if it is a reasonable time to fire ANY alert, including CRITICAL.
+    Window: Mon-Fri 06:30-18:30 UTC (covers pre-market + 2h after close).
+    Outside this window alerts are suppressed entirely — nothing is actionable at 3am.
+    """
+    now = datetime.now(timezone.utc)
+    return now.weekday() < 5 and (6, 30) <= (now.hour, now.minute) <= (18, 30)
+
+
 def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
     """
     Evaluate trigger conditions for a position.
@@ -183,7 +193,11 @@ def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
     alert_level = pos.get('alert_level', '')
     bullish    = direction != 'bearish'
 
-    # ── CRITICAL (fires any time) ─────────────────────────────────────────────
+    # ── CRITICAL (fires during actionable hours: Mon-Fri 06:30-18:30 UTC) ──────
+    if not _is_actionable_hours():
+        return None
+
+    # ── CRITICAL ─────────────────────────────────────────────────────────────
     if stop is not None:
         at_stop = (bullish and price <= stop * 1.005) or (not bullish and price >= stop * 0.995)
         if at_stop and _cooldown_ok(last_alert if alert_level == 'CRITICAL' else None, _CRITICAL_COOLDOWN_H):

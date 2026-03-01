@@ -1492,15 +1492,18 @@ def get_kb_changes_since(
         'regime_label', 'market_regime', 'conviction_tier',
         'macro_signal', 'geopolitical_risk', 'sector_tailwind',
         'pre_earnings_flag', 'signal_direction',
+        # Additional predicates confirmed written in KB
+        'price_regime', 'macro_event_risk', 'smart_money_signal',
+        'flow_conviction', 'uk_market_regime', 'volatility_regime',
     )
     placeholders = ','.join('?' * len(_KB_CHANGE_PREDICATES))
     params: list = list(_KB_CHANGE_PREDICATES) + [since_iso]
 
     base_sql = f"""
-        SELECT subject, predicate, object, MAX(created_at) as changed_at
+        SELECT subject, predicate, object, MAX(timestamp) as changed_at
         FROM facts
         WHERE predicate IN ({placeholders})
-          AND created_at >= ?
+          AND timestamp >= ?
     """
     if tickers:
         lower_tickers = [t.lower() for t in tickers]
@@ -1587,18 +1590,35 @@ def upsert_tip_followup(
         now_iso = now.isoformat()
         expiry_days = _FOLLOWUP_EXPIRY_DAYS.get(timeframe or '', _FOLLOWUP_EXPIRY_DEFAULT)
         expires_at = (now + timedelta(days=expiry_days)).isoformat()
-        cur = conn.execute(
-            """INSERT INTO tip_followups
-               (user_id, ticker, direction, entry_price, stop_loss,
-                target_1, target_2, target_3, tip_id, opened_at, status,
-                pattern_type, timeframe, zone_low, zone_high, expires_at,
-                regime_at_entry, conviction_at_entry)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, ticker.upper(), direction, entry_price, stop_loss,
-             target_1, target_2, target_3, tip_id, now_iso, initial_status,
-             pattern_type, timeframe, zone_low, zone_high, expires_at,
-             regime_at_entry, conviction_at_entry),
-        )
+        # Detect whether the server schema has created_at/updated_at columns
+        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(tip_followups)")}
+        has_timestamps = 'created_at' in existing_cols
+        if has_timestamps:
+            cur = conn.execute(
+                """INSERT INTO tip_followups
+                   (user_id, ticker, direction, entry_price, stop_loss,
+                    target_1, target_2, target_3, tip_id, opened_at, status,
+                    pattern_type, timeframe, zone_low, zone_high, expires_at,
+                    regime_at_entry, conviction_at_entry, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, ticker.upper(), direction, entry_price, stop_loss,
+                 target_1, target_2, target_3, tip_id, now_iso, initial_status,
+                 pattern_type, timeframe, zone_low, zone_high, expires_at,
+                 regime_at_entry, conviction_at_entry, now_iso, now_iso),
+            )
+        else:
+            cur = conn.execute(
+                """INSERT INTO tip_followups
+                   (user_id, ticker, direction, entry_price, stop_loss,
+                    target_1, target_2, target_3, tip_id, opened_at, status,
+                    pattern_type, timeframe, zone_low, zone_high, expires_at,
+                    regime_at_entry, conviction_at_entry)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, ticker.upper(), direction, entry_price, stop_loss,
+                 target_1, target_2, target_3, tip_id, now_iso, initial_status,
+                 pattern_type, timeframe, zone_low, zone_high, expires_at,
+                 regime_at_entry, conviction_at_entry),
+            )
         conn.commit()
         return cur.lastrowid
     finally:
