@@ -393,3 +393,69 @@ These predicates are unique to UK/LSE equities and will not appear on US subject
 | `macro_data_boe` | 0.80 | Bank of England Statistical API |
 | `regulatory_filing_fca` | 0.90 | FCA short position disclosures |
 | `alt_data_lse_flow` | 0.55 | LSE microstructure flow signals |
+
+---
+
+## `tip_followups` Table
+
+Tracks the full lifecycle of every position from tip send through close. One row per tip-per-user; status evolves as the position progresses.
+
+```sql
+CREATE TABLE tip_followups (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id             TEXT NOT NULL,
+    tip_id              INTEGER,           -- FK → tip_delivery_log.id
+    ticker              TEXT NOT NULL,
+    direction           TEXT,              -- 'bullish' | 'bearish'
+    entry_price         REAL,
+    stop_loss           REAL,
+    target_1            REAL,
+    target_2            REAL,
+    target_3            REAL,
+    position_size       REAL,
+    tracking_target     TEXT DEFAULT 'T1',
+    status              TEXT DEFAULT 'watching',
+    alert_level         TEXT,              -- last fired: 'CRITICAL'|'HIGH'|'MEDIUM'|'LOW'
+    last_alert_at       TEXT,
+    regime_at_entry     TEXT,              -- KB regime atom at tip send time
+    conviction_at_entry TEXT,              -- KB conviction tier at tip send time
+    pattern_type        TEXT,              -- 'fvg' | 'order_block' | 'breaker' | etc.
+    timeframe           TEXT,              -- '15m' | '1h' | '4h' | '1d'
+    zone_low            REAL,              -- origin zone lower bound (structural invalidation ref)
+    zone_high           REAL,              -- origin zone upper bound
+    expires_at          TEXT,              -- auto-set from timeframe at row creation
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    opened_at           TEXT NOT NULL DEFAULT '',
+    closed_at           TEXT               -- set when status → closed/expired/stopped
+);
+```
+
+### Status lifecycle
+
+```
+watching  →  active   (user clicks "taking it" — POST /users/{id}/tip/{tip_id}/feedback)
+          →  expired  (expires_at passed; written by PositionMonitor, no Telegram alert)
+          →  closed   (user marks closed via Telegram inline button or feedback endpoint)
+          →  stopped  (stop-loss zone reached; CRITICAL alert fired by PositionMonitor)
+```
+
+### Expiry defaults by timeframe
+
+| Timeframe | Default expiry | Rationale |
+|---|---|---|
+| `15m` | 2 days | Intraday pattern; stale after 2 sessions |
+| `1h` | 5 days | Swing setup; valid ~1 trading week |
+| `4h` | 14 days | Position trade; valid ~2 weeks |
+| `1d` | 28 days | Daily structure; valid ~1 month |
+| (other) | 14 days | Conservative default |
+
+### Status distinction (briefing rendering)
+
+| Status | Briefing label | Icon |
+|---|---|---|
+| `watching` | On radar | 🔓 |
+| `active` | In position | 📍 |
+| `expired` | Expired (no play) | — |
+| `closed` | Closed | ✅ |
+| `stopped` | Stopped out | 🛑 |

@@ -322,6 +322,87 @@ A Telegram notification is sent to the operator on every new signup.
 
 ---
 
+## `GET /users/{id}/positions/open`
+
+All open followups for a user — both auto-created `watching` (tip sent, user has not yet acted) and `active` (user accepted via 'taking it').
+
+Requires `Authorization: Bearer <token>`. Users can only query their own positions.
+
+**Response**
+```json
+{
+  "user_id": "alice",
+  "count": 3,
+  "positions": [
+    {
+      "id": 12,
+      "ticker": "SHEL.L",
+      "direction": "bullish",
+      "status": "active",
+      "pattern_type": "fvg",
+      "timeframe": "4h",
+      "entry_price": 26.80,
+      "stop_loss": 26.10,
+      "target_1": 27.50,
+      "target_2": 28.20,
+      "zone_low": 26.60,
+      "zone_high": 27.00,
+      "expires_at": "2026-03-15T08:00:00+00:00",
+      "conviction_at_entry": "high",
+      "regime_at_entry": "risk_on_expansion",
+      "created_at": "2026-03-01T08:01:00+00:00"
+    }
+  ]
+}
+```
+
+**Status values:**
+
+| Value | Meaning |
+|---|---|
+| `watching` | Auto-created when tip was sent — user has not acted yet |
+| `active` | User clicked 'taking it' — confirmed open position |
+
+---
+
+## `GET /users/{id}/positions/closed`
+
+Recently closed, expired, or stopped-out followups. Defaults to last 30 days.
+
+**Query params:**
+
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `since` | string | 30 days ago | `YYYY-MM-DD` lower bound on `closed_at` |
+
+Requires `Authorization: Bearer <token>`.
+
+**Response**
+```json
+{
+  "user_id": "alice",
+  "count": 2,
+  "since": "2026-02-01",
+  "positions": [
+    {
+      "id": 9,
+      "ticker": "AZN.L",
+      "direction": "bullish",
+      "status": "closed",
+      "entry_price": 118.50,
+      "target_1": 121.00,
+      "stop_loss": 116.00,
+      "closed_at": "2026-02-28T14:32:00+00:00",
+      "conviction_at_entry": "medium"
+    }
+  ]
+}
+```
+
+**Status values in closed set:** `closed` · `expired` · `stopped`
+
+---
+
 ## `GET /waitlist/count`
 
 Public signup counter for landing page social proof. No authentication required.

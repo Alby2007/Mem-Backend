@@ -41,18 +41,24 @@ trading-galaxy/
 │   ├── user_modeller.py         # Portfolio → UserModel (risk, sector affinity, holding style)
 │   ├── snapshot_curator.py      # CuratedSnapshot assembly from KB + user model
 │   ├── pattern_detector.py      # 7 SMC pattern detectors (FVG, IFVG, BPR, OB, Breaker, LV, MB)
-│   └── position_calculator.py   # Account-aware position sizing with R:R targets
+│   ├── position_calculator.py   # Account-aware position sizing with R:R targets
+│   └── position_monitor.py      # Real-time position monitor: structural invalidation, confidence
+│                                #   score, market-hours gate, pattern expiry detection
 ├── notifications/
 │   ├── snapshot_formatter.py    # CuratedSnapshot → Telegram MarkdownV2
 │   ├── telegram_notifier.py     # Telegram Bot API wrapper (graceful degradation)
 │   ├── delivery_scheduler.py    # Daily briefing scheduler (timezone-aware, local-date dedup)
 │   ├── tip_formatter.py         # PatternSignal → Telegram MarkdownV2 tip (tier-gated)
-│   └── tip_scheduler.py         # Daily tip scheduler (per-user time, dedup, tier gating)
+│   │                            #   + format_monday_briefing, format_wednesday_update,
+│   │                            #   format_emergency_alert_with_confidence
+│   └── tip_scheduler.py         # Living portfolio briefing scheduler: Monday comprehensive
+│                                #   briefing, Wednesday compound update, auto-create followups
 ├── llm/
 │   └── overlay_builder.py       # Overlay card assembly + entity extraction
 ├── users/
-│   └── user_store.py            # CRUD for 6 tables: portfolios, models, preferences,
-│                                #   snapshot_delivery_log, pattern_signals, tip_delivery_log
+│   └── user_store.py            # CRUD for all user tables: portfolios, models, preferences,
+│                                #   snapshot_delivery_log, pattern_signals, tip_delivery_log,
+│                                #   tip_followups (open positions + lifecycle tracking)
 ├── CONTRIBUTING.md              # Ingest team guide
 └── requirements.txt
 ```
@@ -827,6 +833,8 @@ target_3  = entry + 3 × (entry − stop_loss)   # 1:3 R (pro tier only)
 | `/users/{id}/tip-config` | `GET` | Get current tip configuration |
 | `/users/{id}/tip-config` | `POST` | Update tip configuration |
 | `/users/{id}/tip/history` | `GET` | Recent tip delivery log |
+| `/users/{id}/positions/open` | `GET` | All open followups (watching + active) |
+| `/users/{id}/positions/closed` | `GET` | Recently closed/expired followups (`?since=YYYY-MM-DD`) |
 
 ##### `GET /patterns/live`
 
@@ -975,6 +983,32 @@ Two new tables in the same SQLite DB:
 | `delivered_at_local_date` | TEXT | `YYYY-MM-DD` in user's local timezone (dedup key) |
 | `success` | INTEGER | 1 = sent, 0 = failed |
 | `message_length` | INTEGER | Characters in rendered message |
+
+**`tip_followups`** — tracks the full lifecycle of every position from tip delivery to close:
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Auto-increment |
+| `user_id` | TEXT | User ID |
+| `ticker` | TEXT | e.g. `NVDA` |
+| `tip_id` | INTEGER | FK → `tip_delivery_log.id` |
+| `direction` | TEXT | `bullish` or `bearish` |
+| `entry_price` | REAL | Suggested entry |
+| `stop_loss` | REAL | Stop-loss level |
+| `target_1/2/3` | REAL | R:R targets |
+| `status` | TEXT | `watching` (auto-created) · `active` (user-accepted) · `expired` · `closed` |
+| `pattern_type` | TEXT | `fvg`, `order_block`, etc. |
+| `timeframe` | TEXT | `15m`, `1h`, `4h`, `1d` |
+| `zone_low/zone_high` | REAL | Origin zone bounds (structural invalidation reference) |
+| `expires_at` | TEXT | ISO timestamp — auto-set from timeframe: 15m=2d, 1h=5d, 4h=14d, 1d=28d |
+| `regime_at_entry` | TEXT | KB regime atom at time of tip send |
+| `conviction_at_entry` | TEXT | KB conviction tier at time of tip send |
+| `alert_level` | TEXT | Last fired alert priority: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` |
+| `last_alert_at` | TEXT | ISO timestamp of last alert (cooldown reference) |
+| `created_at` | TEXT | Row creation timestamp |
+| `closed_at` | TEXT | ISO timestamp of position close (if closed/expired/stopped) |
+
+**Status lifecycle:** `watching` → `active` (on user 'taking it') → `closed`/`expired`/`stopped`
 
 **New columns on `user_preferences`:**
 

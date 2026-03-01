@@ -96,6 +96,17 @@ The system runs fully locally — KB, LLM inference (Ollama), and the frontend a
                     │ validators   │  └────────────┘  │ snapshot_curator│
                     │ audit        │                   │ telegram_notif. │
                     └──────────────┘                   └─────────────────┘
+                                                                │
+                                                                ▼
+                                              ┌─────────────────────────────┐
+                                              │   analytics/position_monitor │
+                                              │  PositionMonitor (bg thread) │
+                                              │  _check_triggers: stop·zone  │
+                                              │  invalidation·regime·T1      │
+                                              │  _compute_confidence (norm.) │
+                                              │  _check_expiry (DB only)     │
+                                              │  _is_actionable_hours gate   │
+                                              └─────────────────────────────┘
 ```
 
 ---
@@ -477,6 +488,52 @@ Status taxonomy:
 - **Live** — imported and executed in startup/request path
 - **Partial** — schema/API wiring is live but downstream decision logic not yet integrated
 - **Dormant** — file exists but is not wired into live runtime
+
+### `analytics/position_monitor.py` (Live)
+
+Background thread (`PositionMonitor`) that polls all open `tip_followups` rows every 5 minutes, evaluates trigger conditions, and fires Telegram alerts.
+
+| Component | Detail |
+|---|---|
+| `_check_triggers(pos, price, db)` | CRITICAL: stop zone, structural zone breach, KB signal contradiction, earnings imminent. HIGH/MEDIUM: T1 approach, conviction drop, regime shift, sector reversal. |
+| `_compute_confidence(db, ticker, direction)` | Normalised score: `confirming_atoms / total_relevant` over 4 predicates (`conviction_tier`, `signal_direction`, `sector_tailwind`, `macro_signal`). Returns `None` if <2 atoms found. |
+| `_is_actionable_hours()` | Mon–Fri 06:30–18:30 UTC gate. All alerts (including CRITICAL) suppressed outside this window. |
+| `_check_expiry(pos, db)` | If `expires_at` is past, marks row `expired`, writes LOW alert to DB. **No Telegram** — surfaced in next Monday/Wednesday briefing. |
+| `_send_telegram_alert_with_confidence` | Formats via `format_emergency_alert_with_confidence`, includes confidence bar if ≥2 atoms found. |
+| Cooldowns | CRITICAL: 6h · HIGH: 4h · MEDIUM: 24h |
+
+### Living Portfolio Briefing
+
+Replaces the one-tip-per-day scheduler with a full position lifecycle system. Delivered via Telegram.
+
+```
+Monday cycle:
+  expire_stale_followups()              → marks past-expiry rows in DB
+  get_user_open_positions()             → all watching + active followups
+  get_recently_closed_positions(7 days) → closed/expired/stopped last week
+  _pick_batch(N patterns)               → new setups eligible for user
+  format_monday_briefing()              → 📍 OPEN POSITIONS + NEW THIS WEEK + CLOSED
+  upsert_tip_followup(status='watching')→ auto-create followup for each sent setup
+  TelegramNotifier.send()
+
+Wednesday cycle:
+  expire_stale_followups()
+  get_user_open_positions()
+  get_kb_changes_since(monday_00:00, tickers=open_tickers)
+  format_wednesday_update()             → 📍 OPEN POSITIONS + KB CHANGES + EXPIRED
+  TelegramNotifier.send()
+
+Emergency alerts (every 5 min, PositionMonitor):
+  _check_triggers() → _send_telegram_alert_with_confidence()
+```
+
+**KB change predicates (Wednesday filter):** `signal_direction` · `conviction_tier` · `sector_tailwind` · `regime_label` · `market_regime` · `price_regime` · `macro_event_risk` · `smart_money_signal` · `flow_conviction` · `uk_market_regime` · `volatility_regime` (and 3 lower-signal predicates).
+
+**Position status distinction:**
+- `watching` — auto-created when a tip fires; user has not acted. Shown as "On radar 🔓"
+- `active` — user clicked "taking it". Shown as "In position 📍"
+
+---
 
 ### Dormant
 

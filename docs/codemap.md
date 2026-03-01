@@ -7,7 +7,7 @@ Complete file-by-file reference for the Trading Galaxy codebase.
 ## Root
 
 ### `api.py`
-Flask REST API — the main entry point. 3,758 lines.
+Flask REST API — the main entry point. ~7,200 lines.
 
 - Initialises `KnowledgeGraph`, `decay_worker`, `IngestScheduler`, and `SeedSyncClient`
 - Registers all adapters with their intervals
@@ -28,6 +28,7 @@ Flask REST API — the main entry point. 3,758 lines.
 | User / product | `GET/POST /users/<id>/portfolio` · `GET /users/<id>/model` · `POST /users/<id>/onboarding` · `GET /users/<id>/snapshot/preview` · `POST /users/<id>/snapshot/send-now` |
 | Screenshot | `POST /users/<id>/history/screenshot` — vision model extraction |
 | Tips | `GET /users/<id>/tip/preview` · `GET/POST /users/<id>/tip/config` · `GET /users/<id>/delivery-history` |
+| Positions | `GET /users/<id>/positions/open` · `GET /users/<id>/positions/closed` |
 | Alerts | `GET /users/<id>/alerts` · `GET /users/<id>/alerts/unread-count` |
 | Universe | `POST /users/<id>/expand-universe` · `GET /universe/coverage` · `GET /universe/trending` · `GET /universe/staging/global` |
 | Network | `GET /network/health` · `GET /network/calibration/<ticker>` · `GET /network/cohort/<ticker>` |
@@ -581,6 +582,30 @@ Computes position size, risk/reward, and stop-loss levels from account size + KB
 
 ---
 
+### `analytics/position_monitor.py`
+Background thread (`PositionMonitor`) — polls all open `tip_followups` rows every 5 minutes and fires alerts.
+
+**Key functions:**
+
+| Function | Purpose |
+|---|---|
+| `_check_triggers(pos, price, db)` | Evaluates CRITICAL/HIGH/MEDIUM trigger conditions (stop zone, structural invalidation, regime shift, T1 approach, etc.) |
+| `_compute_confidence(db, ticker, direction)` | Normalised confidence: `confirming_atoms / total_relevant` over 4 predicates. Returns `None` if <2 atoms. |
+| `_is_actionable_hours()` | Mon–Fri 06:30–18:30 UTC gate — all alerts suppressed outside this window |
+| `_is_market_hours()` | Mon–Fri 08:00–16:30 UTC — HIGH/MEDIUM-only gate |
+| `_check_expiry(pos, db)` | Marks expired rows in DB only; no Telegram (batched to next briefing) |
+| `_send_telegram_alert_with_confidence(...)` | Formats via `format_emergency_alert_with_confidence` and sends via `TelegramNotifier` |
+
+**Alert priorities and cooldowns:**
+
+| Priority | Triggers | Cooldown | Hours gate |
+|---|---|---|---|
+| CRITICAL | Stop zone, zone origin breach, KB signal contradiction, earnings imminent | 6h | Actionable (06:30–18:30 UTC) |
+| HIGH | T1 approach, conviction tier drop, regime shift | 4h | Market hours only |
+| MEDIUM | T2 approach, sector tailwind reversal, short squeeze building | 24h | Market hours only |
+
+---
+
 ### `analytics/counterfactual.py`
 Builds "what if" counterfactual scenarios from KB atoms. Called by `POST /analytics/counterfactual`.
 
@@ -637,11 +662,24 @@ Field-level encryption helpers for sensitive user data at rest.
 ## `users/`
 
 ### `users/user_store.py`
-All user-facing DB operations: create/get/update user preferences, portfolio CRUD, tip config, delivery history, onboarding, feedback, engagement.
+All user-facing DB operations: portfolios, models, preferences, delivery logs, tip followups.
 
 **Defaults (UK):** `delivery_time=07:30` · `timezone=Europe/London` · `account_currency=GBP`
 
-**Key functions:** `create_user` · `get_portfolio` · `save_portfolio` · `get_tip_config` · `set_tip_config` · `log_delivery` · `get_delivery_history` · `log_feedback`
+**Key functions (core):** `create_user` · `get_portfolio` · `save_portfolio` · `get_tip_config` · `set_tip_config` · `log_delivery` · `get_delivery_history` · `log_feedback`
+
+**Key functions (position lifecycle):**
+
+| Function | Purpose |
+|---|---|
+| `upsert_tip_followup(...)` | Insert a new followup row; auto-computes `expires_at` from timeframe; schema-aware (detects server column layout via `PRAGMA table_info`) |
+| `create_tip_followup(...)` | Wrapper that sets `status='active'` — called from `taking_it` path in `api.py` |
+| `get_user_open_positions(db, user_id)` | Returns `watching` + `active` followups for a user |
+| `get_recently_closed_positions(db, user_id, since_date)` | Returns `closed`/`expired`/`stopped` followups since a date |
+| `expire_stale_followups(db)` | Bulk-closes past-expiry rows; returns them for inclusion in Monday/Wednesday briefings. No Telegram. |
+| `get_kb_changes_since(db, since_iso, tickers=None)` | Queries `facts` table for significant predicate changes since a timestamp. Scoped to 14 high-signal predicates confirmed written by KB adapters. Uses `timestamp` column (not `created_at`). |
+| `get_watching_followups(db)` | Returns all `watching`+`active` rows across all users — used by `PositionMonitor`. |
+| `update_followup_status(db, id, status, ...)` | Updates `status`, `alert_level`, `closed_at` for a followup row. |
 
 ---
 
@@ -653,12 +691,37 @@ Per-user KB layer on top of the shared KB. Manages `user_universes`, `user_watch
 ## `notifications/`
 
 ### `notifications/tip_scheduler.py`
-Schedules and dispatches daily tip delivery per user at their configured `delivery_time`/`timezone`. Calls `snapshot_curator` → `tip_formatter` → notifier.
+Living portfolio briefing scheduler. Replaces the single daily tip with a full position lifecycle delivery system.
+
+**Monday cycle** (fires at `tip_delivery_time` on Mondays):
+1. `expire_stale_followups()` — DB-only, no Telegram
+2. `get_user_open_positions()` + `get_recently_closed_positions(7 days)`
+3. `_pick_batch(N)` — new pattern setups eligible for user's tier/timeframes
+4. `format_monday_briefing()` — open positions + new setups + closed last week
+5. Auto-create `status='watching'` followup for every new setup sent
+6. Skip send if all three sections empty
+
+**Wednesday cycle** (fires at `tip_delivery_time` on Wednesdays):
+1. `expire_stale_followups()`
+2. `get_user_open_positions()` + `get_kb_changes_since(monday_00:00, tickers=open_tickers)`
+3. `format_wednesday_update()` — open positions + KB changes + expired this cycle
+4. Skip send if nothing to report
+
+**Other days:** standard single-tip delivery (unchanged for non-briefing days).
 
 ---
 
 ### `notifications/tip_formatter.py`
-Formats curated snapshot into a structured tip message. Applies position sizing via `position_calculator`. Renders Telegram-ready and plain-text variants.
+Formats all tip and briefing messages into Telegram MarkdownV2.
+
+| Function | Purpose |
+|---|---|
+| `format_tip(pattern, position, tier)` | Single pattern tip — entry zone, stop, targets, tier-gated T3 |
+| `format_monday_briefing(open, new_setups, closed, tier, get_price_fn)` | Full week-ahead briefing: 📍 In Position / 🔓 On Radar · new setups · closed last week |
+| `format_wednesday_update(open, kb_changes, expired, tier, get_price_fn)` | Compound update: all open positions + significant KB atom changes since Monday |
+| `format_emergency_alert_with_confidence(alert_type, pos, price, confidence)` | Real-time alert with optional `█████░░░░░ 50%` confidence bar (shown only if ≥2 KB atoms found) |
+
+**Helper functions:** `_format_open_position_line(pos, price)` — renders zone status (in-zone ✅ / approaching / away); `_format_closed_position_line(pos)` — renders outcome with P&L.
 
 ---
 
