@@ -71,17 +71,28 @@ def _gdelt_tone_query(query: str, timespan: str = '1d') -> Optional[float]:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = _json.loads(resp.read().decode('utf-8', errors='replace'))
 
-        # GDELT tonechart returns {'tonechart': [{'date':..., 'avg':..., 'topcountries':...}, ...]}
+        # GDELT tonechart returns {'tonechart': [{'bin': <tone>, 'count': N, 'toparts': [...]}, ...]}
+        # Each entry is a tone bucket: 'bin' is the tone midpoint (-100..+100), 'count' is article count.
         chart = data.get('tonechart', [])
         if not chart:
             return None
 
-        # Average across all time buckets in the span
-        tones = [float(b['avg']) for b in chart if 'avg' in b]
-        if not tones:
+        # Count-weighted average of bin values
+        total_weight = 0.0
+        weighted_sum = 0.0
+        for b in chart:
+            tone_val = b.get('bin') if b.get('bin') is not None else b.get('avg')
+            count = b.get('count', 1)
+            if tone_val is not None:
+                try:
+                    weighted_sum += float(tone_val) * float(count)
+                    total_weight += float(count)
+                except (TypeError, ValueError):
+                    pass
+        if total_weight == 0:
             return None
 
-        avg_tone = sum(tones) / len(tones)
+        avg_tone = weighted_sum / total_weight
         # Invert (-100..+100) → tension score (0..100)
         # avg_tone = -100 (max hostility) → score = 100
         # avg_tone = +100 (max positive)  → score = 0
