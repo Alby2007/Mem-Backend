@@ -2482,6 +2482,7 @@ document.getElementById('chat-input').addEventListener('input', function() {
 // ── PROFILE ───────────────────────────────────────────────────────────────────
 async function loadProfile() {
   if (!state.userId) return;
+  _profileTgWidgetInjected = false;
   try {
     const d = await apiFetch('/auth/me');
     if (!d) return;
