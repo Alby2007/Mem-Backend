@@ -208,6 +208,32 @@ def get_user(db_path: str, user_id: str) -> Optional[dict]:
         conn.close()
 
 
+def get_user_by_chat_id(db_path: str, chat_id: str) -> Optional[str]:
+    """
+    Return the user_id whose decrypted telegram_chat_id matches chat_id.
+    Returns None if no match found (unlinked / unknown sender).
+    """
+    if not chat_id:
+        return None
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        rows = conn.execute(
+            "SELECT user_id, telegram_chat_id FROM user_preferences "
+            "WHERE telegram_chat_id IS NOT NULL"
+        ).fetchall()
+        chat_id_str = str(chat_id)
+        for row in rows:
+            try:
+                decrypted = decrypt_field(row[1])
+                if decrypted and str(decrypted) == chat_id_str:
+                    return row[0]
+            except Exception:
+                continue
+        return None
+    finally:
+        conn.close()
+
+
 def update_preferences(
     db_path: str,
     user_id: str,

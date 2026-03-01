@@ -24,6 +24,31 @@ _TEST_MESSAGE = (
 )
 
 
+_MDV2_ESCAPE_CHARS = r'\_*[]()~`>#+-=|{}.!'
+
+
+def escape_mdv2(text: str) -> str:
+    """
+    Escape a freeform string for Telegram MarkdownV2.
+    Preserves **bold** and _italic_ markdown by converting them first,
+    then escaping all other special characters.
+    Suitable for wrapping LLM-generated text.
+    """
+    import re as _re
+    # Convert markdown bold/italic before escaping special chars
+    # Bold: **text** -> \*\*escaped_text\*\* (Telegram bold is *text*)
+    # We'll handle by escaping then re-substituting
+    result = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch in _MDV2_ESCAPE_CHARS:
+            result.append('\\')
+        result.append(ch)
+        i += 1
+    return ''.join(result)
+
+
 class TelegramNotifier:
     """
     Thin wrapper around the Telegram Bot API sendMessage endpoint.

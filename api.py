@@ -5671,6 +5671,301 @@ def user_telegram_delink(user_id: str):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/telegram/webhook', methods=['POST'])
+def telegram_webhook():
+    """
+    POST /telegram/webhook
+
+    Receives Telegram update payloads pushed by Telegram servers.
+    Handles two update types:
+      - message       → KB-grounded chat reply to the sending user
+      - callback_query → inline keyboard action (position close/hold/more)
+
+    Security: validates X-Telegram-Bot-Api-Secret-Token header against
+    TELEGRAM_WEBHOOK_SECRET env var (skipped if env var not set — dev mode).
+
+    Returns HTTP 200 always (Telegram retries on non-200).
+    """
+    import os as _os
+
+    # ── Signature check ────────────────────────────────────────────────────
+    _webhook_secret = _os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')
+    if _webhook_secret:
+        _sent_token = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
+        if _sent_token != _webhook_secret:
+            app.logger.warning('telegram_webhook: invalid secret token from %s', request.remote_addr)
+            return jsonify({'ok': False}), 403
+
+    update = request.get_json(force=True, silent=True) or {}
+
+    # ── Dispatch ───────────────────────────────────────────────────────────
+    if 'callback_query' in update:
+        _handle_tg_callback(update['callback_query'])
+    elif 'message' in update:
+        _handle_tg_message(update['message'])
+
+    return jsonify({'ok': True})
+
+
+def _tg_api(method: str, payload: dict) -> bool:
+    """Call a Telegram Bot API method. Returns True on HTTP 200."""
+    import os as _os, requests as _rq
+    token = _os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    if not token:
+        return False
+    try:
+        r = _rq.post(
+            f'https://api.telegram.org/bot{token}/{method}',
+            json=payload, timeout=10,
+        )
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _handle_tg_message(msg: dict) -> None:
+    """
+    Process an inbound Telegram text message:
+    1. Identify user by chat_id → user_id lookup
+    2. Load conversation history from ConversationStore
+    3. Run KB retrieve + prompt build + LLM
+    4. Reply with MarkdownV2-escaped answer
+    5. Persist both turns to ConversationStore
+    """
+    chat_id  = str(msg.get('chat', {}).get('id', ''))
+    text     = (msg.get('text') or '').strip()
+    if not chat_id or not text:
+        return
+
+    # Ignore bot commands like /start for now
+    if text.startswith('/'):
+        if text == '/start':
+            _tg_api('sendMessage', {
+                'chat_id':    chat_id,
+                'text':       '👋 *Trading Galaxy Bot*\n\nYour account is linked\\. Ask me anything about your portfolio, market signals, or geopolitical risks\\.',
+                'parse_mode': 'MarkdownV2',
+            })
+        return
+
+    # ── User lookup ────────────────────────────────────────────────────────
+    if not HAS_PRODUCT_LAYER:
+        return
+    try:
+        from users.user_store import get_user_by_chat_id
+        user_id = get_user_by_chat_id(_DB_PATH, chat_id)
+    except Exception as _e:
+        app.logger.error('telegram_webhook: user lookup failed: %s', _e)
+        return
+
+    if not user_id:
+        _tg_api('sendMessage', {
+            'chat_id':    chat_id,
+            'text':       '⚠️ Your Telegram account is not linked\\. Visit [trading\\-galaxy\\.uk](https://trading-galaxy.uk) to connect your account\\.',
+            'parse_mode': 'MarkdownV2',
+        })
+        return
+
+    # ── Conversation history ───────────────────────────────────────────────
+    session_id = f'TG_{chat_id}'
+    history_messages = []
+    try:
+        from knowledge.conversation_store import ConversationStore
+        _cs = ConversationStore(_DB_PATH)
+        history_messages = _cs.get_recent_messages_for_context(session_id, n_turns=6)
+    except Exception:
+        _cs = None
+
+    # ── KB retrieval ───────────────────────────────────────────────────────
+    conn = _kg.thread_local_conn()
+    try:
+        snippet, atoms = retrieve(text, conn, limit=30)
+    except Exception as _re:
+        app.logger.error('telegram_webhook: retrieve failed: %s', _re)
+        snippet, atoms = '', []
+
+    # ── Portfolio context ──────────────────────────────────────────────────
+    portfolio_context = None
+    try:
+        from users.user_store import get_portfolio, get_user_model
+        _holdings = get_portfolio(_DB_PATH, user_id)
+        _model    = get_user_model(_DB_PATH, user_id)
+        if _holdings:
+            _h_parts = [f"{h['ticker']} ×{int(h['quantity'])}" for h in _holdings[:20]]
+            portfolio_context = f"=== USER PORTFOLIO ===\nHoldings: {', '.join(_h_parts)}"
+    except Exception:
+        pass
+
+    # ── Build prompt ───────────────────────────────────────────────────────
+    try:
+        from llm.prompt_builder import build as _build_prompt
+        messages = _build_prompt(
+            user_message=text,
+            snippet=snippet,
+            portfolio_context=portfolio_context,
+            live_context='',
+            has_history=bool(history_messages),
+        )
+        # Splice conversation history between system and user turns
+        if history_messages and len(messages) >= 2:
+            messages = [messages[0]] + history_messages + [messages[-1]]
+    except Exception as _pe:
+        app.logger.error('telegram_webhook: prompt build failed: %s', _pe)
+        return
+
+    # ── LLM call ──────────────────────────────────────────────────────────
+    try:
+        answer = _llm_chat(messages)
+    except Exception as _le:
+        app.logger.error('telegram_webhook: LLM call failed: %s', _le)
+        answer = None
+
+    if not answer:
+        _tg_api('sendMessage', {
+            'chat_id': chat_id,
+            'text':    '⚠️ The AI is temporarily unavailable. Please try again in a moment.',
+        })
+        return
+
+    # ── Send reply (MarkdownV2-escaped) ────────────────────────────────────
+    from notifications.telegram_notifier import escape_mdv2
+    _tg_api('sendMessage', {
+        'chat_id':    chat_id,
+        'text':       escape_mdv2(answer),
+        'parse_mode': 'MarkdownV2',
+    })
+
+    # ── Persist both turns ────────────────────────────────────────────────
+    if _cs is not None:
+        try:
+            _cs.add_message(session_id, 'user',      text,   user_id=user_id)
+            _cs.add_message(session_id, 'assistant', answer, user_id=user_id)
+        except Exception:
+            pass
+
+
+def _handle_tg_callback(cb: dict) -> None:
+    """
+    Handle a Telegram inline keyboard callback_query.
+
+    Callback data format: pos:{followup_id}:{action}
+    Actions: closed | stopped | partial | hold_t2 | override | more
+
+    Always calls answerCallbackQuery to dismiss the Telegram spinner.
+    """
+    callback_id = cb.get('id', '')
+    chat_id     = str(cb.get('from', {}).get('id', ''))
+    data        = (cb.get('data') or '').strip()
+
+    # Acknowledge immediately so Telegram spinner dismisses
+    _tg_api('answerCallbackQuery', {'callback_query_id': callback_id})
+
+    if not data.startswith('pos:'):
+        return
+
+    parts = data.split(':')
+    if len(parts) < 3:
+        return
+
+    try:
+        followup_id = int(parts[1])
+    except ValueError:
+        return
+    action = parts[2]
+
+    if not HAS_PRODUCT_LAYER:
+        return
+
+    try:
+        from users.user_store import update_followup_status, get_user_by_chat_id
+        from datetime import datetime as _dt, timezone as _tz
+
+        user_id = get_user_by_chat_id(_DB_PATH, chat_id)
+        if not user_id:
+            return
+
+        now_iso = _dt.now(_tz.utc).isoformat()
+
+        if action in ('closed', 'stopped', 'partial'):
+            status = 'closed' if action != 'stopped' else 'stopped'
+            update_followup_status(_DB_PATH, followup_id, status=status, closed_at=now_iso)
+            _reply = '✅ Position marked as closed\\.' if action != 'stopped' else '🛑 Position marked as stopped out\\.'
+            _tg_api('sendMessage', {'chat_id': chat_id, 'text': _reply, 'parse_mode': 'MarkdownV2'})
+
+        elif action in ('hold_t2', 'override'):
+            _tg_api('sendMessage', {
+                'chat_id': chat_id,
+                'text':    '👍 Noted — still watching this position\\.',
+                'parse_mode': 'MarkdownV2',
+            })
+
+        elif action == 'more':
+            # Fetch ticker from DB and run a quick KB signal summary
+            import sqlite3 as _sq3
+            _c3 = _sq3.connect(_DB_PATH, timeout=5)
+            _row = _c3.execute(
+                "SELECT ticker FROM tip_followups WHERE id=?", (followup_id,)
+            ).fetchone()
+            _c3.close()
+            if _row:
+                _ticker = _row[0]
+                _conn = _kg.thread_local_conn()
+                _snip, _atoms = retrieve(f'{_ticker} signal conviction outlook', _conn, limit=20)
+                if _snip:
+                    from notifications.telegram_notifier import escape_mdv2
+                    _tg_api('sendMessage', {
+                        'chat_id':    chat_id,
+                        'text':       escape_mdv2(f'📊 KB signals for {_ticker}:\n\n{_snip[:800]}'),
+                        'parse_mode': 'MarkdownV2',
+                    })
+
+    except Exception as _ce:
+        app.logger.error('telegram_webhook: callback handling failed: %s', _ce)
+
+
+@app.route('/telegram/webhook/register', methods=['POST'])
+def telegram_webhook_register():
+    """
+    POST /telegram/webhook/register
+
+    Convenience endpoint — calls Telegram's setWebhook API to point
+    Telegram at this server's /telegram/webhook URL.
+
+    Body (optional): { "base_url": "https://api.trading-galaxy.uk" }
+    If base_url is omitted, uses the request's Host header.
+
+    Requires TELEGRAM_BOT_TOKEN env var.
+    Returns: { "ok": true/false, "telegram_response": {...} }
+    """
+    import os as _os, requests as _rq
+    token = _os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    if not token:
+        return jsonify({'error': 'TELEGRAM_BOT_TOKEN not configured'}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    base_url = (data.get('base_url') or '').rstrip('/')
+    if not base_url:
+        scheme   = 'https' if request.is_secure else 'http'
+        base_url = f"{scheme}://{request.host}"
+
+    webhook_url = f'{base_url}/telegram/webhook'
+    secret      = _os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')
+
+    payload: dict = {'url': webhook_url, 'allowed_updates': ['message', 'callback_query']}
+    if secret:
+        payload['secret_token'] = secret
+
+    try:
+        resp = _rq.post(
+            f'https://api.telegram.org/bot{token}/setWebhook',
+            json=payload, timeout=10,
+        )
+        tg_data = resp.json()
+        return jsonify({'ok': resp.status_code == 200, 'telegram_response': tg_data,
+                        'webhook_url': webhook_url})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/patterns/<int:pattern_id>', methods=['GET'])
 def pattern_detail(pattern_id: int):
     """
