@@ -1036,16 +1036,17 @@ def stats():
         extras['kb_insufficient_events_7d'] = 0
 
     # Current market regime — query facts table directly
+    # signal_enrichment_adapter writes: subject='market', predicate='market_regime'
     try:
         row = c.execute("""
             SELECT object FROM facts
-            WHERE subject = 'macro_regime' AND predicate = 'regime_label'
+            WHERE subject = 'market' AND predicate = 'market_regime'
             ORDER BY timestamp DESC LIMIT 1
         """).fetchone()
         if not row:
             row = c.execute("""
                 SELECT object FROM facts
-                WHERE predicate IN ('regime_label', 'market_regime', 'current_regime')
+                WHERE predicate IN ('market_regime', 'regime_label', 'current_regime')
                 ORDER BY timestamp DESC LIMIT 1
             """).fetchone()
         extras['market_regime'] = row[0] if row else None
@@ -3878,15 +3879,21 @@ def user_onboarding(user_id):
                 _notifier = _TGN()
                 _welcome = (
                     "👋 *Welcome to Trading Galaxy\\!*\n\n"
-                    "You're now connected to our signal delivery service\\. Here's what to expect:\n\n"
-                    "📊 *Daily Tips* — Pattern\\-based trade setups delivered at your chosen time, "
-                    "sized to your account and risk tolerance\\.\n\n"
-                    "🔔 *Position Alerts* — When a trade you've taken hits a target or stop zone, "
-                    "we'll ping you here immediately\\.\n\n"
-                    "🧠 *AI Chat* — Ask anything about your portfolio, signals, or market conditions "
+                    "You're now connected\\. Here's what happens from here:\n\n"
+                    "📅 *Monday briefing* — Your week ahead: open positions, new pattern setups sized to your account, "
+                    "and anything that closed or expired last week\\.\n\n"
+                    "📍 *Wednesday update* — A compound update on all your open positions: "
+                    "what's changed in the knowledge base since Monday, any KB signal shifts, regime changes\\.\n\n"
+                    "⚡ *Real\\-time alerts* — If a position you're tracking hits its target zone, "
+                    "stop zone, or the KB confidence deteriorates, you'll get an immediate alert here "
+                    "with a recommended action\\.\n\n"
+                    "💰 *Profit alerts* — When you're sitting on a gain and KB signals are weakening, "
+                    "we'll flag it before the move reverses\\. T1 hit with strong KB \\= hold\\. "
+                    "T1 hit with deteriorating KB \\= exit signal\\.\n\n"
+                    "🧠 *AI Chat* — Ask anything about your positions, signals, or market conditions "
                     "at [app\\.trading\\-galaxy\\.uk](https://app.trading-galaxy.uk)\\.\n\n"
-                    "Your tips will arrive at your configured delivery time\\. "
-                    "You can update your preferences any time in the Profile section\\.\n\n"
+                    "Use the *Tips* tab to configure your delivery time, timeframes, and pattern types\\. "
+                    "Hit *Taking it* on any setup to activate full position tracking\\.\n\n"
                     "_Trading Galaxy — epistemic signals, not noise\\._"
                 )
                 _notifier.send(new_chat_id, _welcome, parse_mode='MarkdownV2')

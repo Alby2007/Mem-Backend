@@ -1819,10 +1819,18 @@ async function refreshDashboard() {
     document.getElementById('s-facts').textContent    = (stats.total_facts || 0).toLocaleString();
     document.getElementById('s-patterns').textContent = stats.open_patterns || 0;
 
-    // regime
-    const atoms = stats.top_retrieved_atoms || [];
-    const regime = atoms.length ? (atoms[0].regime || atoms[0].market_regime || '—') : (stats.market_regime || '—');
-    document.getElementById('s-regime').textContent = regime.replace(/_/g,' ');
+    // regime — always from stats.market_regime (written by signal_enrichment_adapter)
+    const _REGIME_LABELS = {
+      'risk_on_expansion':    'Risk-On Expansion',
+      'risk_off_contraction': 'Risk-Off Contraction',
+      'stagflation':          'Stagflation',
+      'recovery':             'Recovery',
+      'no_data':              'No Data',
+    };
+    const regimeRaw = stats.market_regime || '';
+    document.getElementById('s-regime').textContent = regimeRaw
+      ? (_REGIME_LABELS[regimeRaw] || regimeRaw.replace(/_/g,' '))
+      : '—';
 
     // stress ratio
     const ratio = stats.total_facts ? (stats.total_conflicts_detected / stats.total_facts) : 0;
