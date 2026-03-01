@@ -115,6 +115,28 @@ _SYSTEM_DIAGNOSIS_SUFFIX = (
     "Acknowledge the gap and indicate what additional data would improve the answer."
 )
 
+_SYSTEM_GEO_PORTFOLIO_RULE = (
+    "\n17. GEOPOLITICAL + PORTFOLIO QUERY — CRITICAL RULES: "
+    "When the user asks how a geopolitical event (war, conflict, sanctions, military action) "
+    "affects their portfolio, you MUST follow this exact structure:\n"
+    "(A) WHAT HAPPENED — Quote the exact KB headlines verbatim (from key_finding or catalyst atoms). "
+    "Do NOT paraphrase or summarise — copy the headline text directly.\n"
+    "(B) PER-HOLDING KB IMPACT — For each holding, check ONLY these two sources of impact data: "
+    "(1) a 'geopolitical_risk_exposure' atom for that ticker in the KB context, OR "
+    "(2) a 'catalyst' or 'risk_factor' atom for that ticker that explicitly mentions the event. "
+    "If NEITHER exists for a holding, you MUST write exactly: "
+    "'[TICKER]: The KB does not contain a specific geopolitical impact atom for this holding. "
+    "Current KB signal: [signal_direction] with [conviction_tier] conviction.' "
+    "NEVER write 'may lead to increased volatility', 'could affect performance', "
+    "'can impact the sector', or ANY other invented impact language. "
+    "These phrases are ABSOLUTELY FORBIDDEN in geo+portfolio responses.\n"
+    "(C) MARKET REGIME CONTEXT — If a market_regime atom exists in the KB, cite it. "
+    "If not, say 'The KB does not have a current market regime classification for this event impact.'\n"
+    "CRITICAL: The only acceptable responses for per-holding impact are: "
+    "(1) a verbatim KB atom value, or (2) the exact phrase above stating no KB data exists. "
+    "No middle ground. No inferred sector effects. No training-data market knowledge."
+)
+
 _SYSTEM_POSITIONS_RULE = (
     "\n15. POSITION OPPORTUNITY QUERIES: When the user asks about 'good positions', "
     "'open positions', 'best setups', 'what to trade', 'investment opportunities', or similar, "
@@ -325,6 +347,18 @@ def build(
 
     if opportunity_scan_context:
         system_text += _SYSTEM_GENERATION_RULE
+
+    # Geo + portfolio: inject strict impact rule when user asks about events affecting portfolio
+    if portfolio_context:
+        _msg_lower_geo = user_message.lower()
+        _GEO_IMPACT_KEYWORDS = (
+            'war', 'conflict', 'attack', 'strike', 'military', 'iran', 'russia',
+            'ukraine', 'israel', 'gaza', 'sanction', 'tension', 'geopolit',
+            'affect my', 'impact my', 'affect portfolio', 'impact portfolio',
+            'how does', 'what does', 'what is the war', 'started right now',
+        )
+        if any(kw in _msg_lower_geo for kw in _GEO_IMPACT_KEYWORDS):
+            system_text += _SYSTEM_GEO_PORTFOLIO_RULE
 
     # ── User turn ─────────────────────────────────────────────────────────────
     user_parts: list[str] = []
