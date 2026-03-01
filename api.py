@@ -5783,7 +5783,7 @@ def _handle_tg_message(msg: dict) -> None:
         app.logger.error('telegram_webhook: retrieve failed: %s', _re)
         snippet, atoms = '', []
 
-    # ── Portfolio context ──────────────────────────────────────────────────
+    # ── Portfolio context (full per-ticker KB signals, same as /chat) ────────
     portfolio_context = None
     try:
         from users.user_store import get_portfolio, get_user_model
@@ -5791,7 +5791,71 @@ def _handle_tg_message(msg: dict) -> None:
         _model    = get_user_model(_DB_PATH, user_id)
         if _holdings:
             _h_parts = [f"{h['ticker']} ×{int(h['quantity'])}" for h in _holdings[:20]]
-            portfolio_context = f"=== USER PORTFOLIO ===\nHoldings: {', '.join(_h_parts)}"
+            _pos_values = [
+                h['quantity'] * h['avg_cost']
+                for h in _holdings if h.get('quantity') and h.get('avg_cost')
+            ]
+            _total_cost = sum(_pos_values)
+            _lines = ["=== USER PORTFOLIO ===",
+                      f"Holdings: {', '.join(_h_parts)}"]
+            if _total_cost > 0:
+                _lines.append(f"Total invested (cost basis): £{_total_cost:,.0f}")
+            if _model:
+                _risk    = _model.get('risk_tolerance', '')
+                _style   = _model.get('holding_style', '')
+                _sectors = ', '.join(_model.get('sector_affinity') or [])
+                _profile = ' · '.join(p for p in [_risk, _style, _sectors] if p)
+                if _profile:
+                    _lines.append(f"Risk profile: {_profile}")
+            # Per-ticker KB signals
+            _holding_tickers = [h['ticker'] for h in _holdings]
+            _lines.append("\nPer-holding KB signals:")
+            for _ht in _holding_tickers:
+                try:
+                    _ht_rows = conn.execute(
+                        """SELECT predicate, object FROM facts
+                           WHERE subject=? AND predicate IN
+                           ('last_price','price_regime','signal_direction',
+                            'signal_quality','return_1m','return_1y',
+                            'upside_pct','conviction_tier','macro_confirmation',
+                            'price_target')
+                           ORDER BY predicate""",
+                        (_ht.lower(),)
+                    ).fetchall()
+                    if _ht_rows:
+                        _d = {p: v for p, v in _ht_rows}
+                        _price  = _d.get('last_price', '?')
+                        _regime = _d.get('price_regime', '?').replace('_', ' ')
+                        _dir    = _d.get('signal_direction', '?')
+                        _qual   = _d.get('signal_quality', '?')
+                        _conv   = _d.get('conviction_tier', '?')
+                        _up     = _d.get('upside_pct', '?')
+                        _target = _d.get('price_target', '')
+                        _ret1m  = _d.get('return_1m', '')
+                        _ret1y  = _d.get('return_1y', '')
+                        _implied = ''
+                        try:
+                            if _target and _price and _price != '?' and _target != '?':
+                                _move = float(_target) - float(_price)
+                                _move_dir = 'up to' if _move >= 0 else 'down to'
+                                _implied = (f" Target: {_target} ({_move_dir}, {_up}% upside).")
+                        except Exception:
+                            pass
+                        _sent = (
+                            f"  {_ht}: price {_price} ({_regime}). "
+                            f"Signal: {_dir}.{_implied} "
+                            f"Quality: {_qual}. Conviction: {_conv}."
+                        )
+                        if _ret1m:
+                            _sent += f" 1m return: {_ret1m}%."
+                        if _ret1y:
+                            _sent += f" 1y return: {_ret1y}%."
+                        _lines.append(_sent)
+                    else:
+                        _lines.append(f"  {_ht}: No KB signals — answer from general knowledge.")
+                except Exception:
+                    _lines.append(f"  {_ht}: No KB signals — answer from general knowledge.")
+            portfolio_context = '\n'.join(_lines)
     except Exception:
         pass
 
