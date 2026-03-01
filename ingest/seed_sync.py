@@ -178,6 +178,12 @@ class SeedSyncClient:
 
         conn = sqlite3.connect(self.db_path, timeout=15)
         try:
+            # Ensure all target tables exist before executing seed statements
+            try:
+                from knowledge.kb_validation import _ensure_governance_metrics_table
+                _ensure_governance_metrics_table(conn)
+            except Exception:
+                pass
             conn.executescript('\n'.join(allowed_statements))
             after_count = conn.execute('SELECT COUNT(*) FROM facts').fetchone()[0]
         except sqlite3.Error as exc:
