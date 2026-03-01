@@ -836,7 +836,7 @@ select option { background: var(--surface); }
       <div class="card">
         <div class="form-row"><label>Account Value</label><div style="display:flex;align-items:center;gap:8px;"><span id="tip-account-display" style="font-size:14px;font-weight:700;color:var(--accent);">—</span><span style="font-size:11px;color:var(--muted);">from portfolio</span></div></div>
         <div class="form-row"><label>Max Risk per Trade (%)</label><input id="tip-risk" type="number" placeholder="1.0" step="0.1" /></div>
-        <div class="form-row"><label>Delivery Time</label><input id="tip-time" type="time" value="07:30" /></div>
+        <div class="form-row"><label>Delivery Time</label><div><input id="tip-time" type="time" value="07:30" min="06:00" max="09:00" /><div style="font-size:10px;color:var(--muted);margin-top:3px;">Recommended: 07:00–07:30 before market open (Basic &amp; Pro)</div></div></div>
         <div class="form-row"><label>Timezone</label>
           <select id="tip-tz">
             <option value="Europe/London" selected>Europe/London (GMT/BST)</option>
@@ -848,8 +848,9 @@ select option { background: var(--surface); }
         </div>
         <div class="form-row"><label>Tier</label>
           <select id="tip-tier">
-            <option value="basic">Basic</option>
-            <option value="premium">Premium</option>
+            <option value="basic">Basic — Monday batch (3 setups/week)</option>
+            <option value="pro">Pro — Mon + Wed batch (4–5 setups/week)</option>
+            <option value="premium">Premium — Daily tips</option>
           </select>
         </div>
         <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
@@ -2834,8 +2835,6 @@ document.getElementById('tip-preview-btn').addEventListener('click', async () =>
     if (!d) { wrap.innerHTML = '<div class="text-sm text-muted">No tip available</div>'; return; }
     const t = d.tip;
     if (!t) { wrap.innerHTML = `<div class="text-sm text-muted">${escHtml(d.reason || 'No eligible patterns')}</div>`; return; }
-    const skew = t.skew_warning ? `<div class="skew-warning">⚠ ${escHtml(t.skew_warning)}</div>` : '';
-    const patternId = t.pattern_id ?? t.id ?? null;
     const _SRC_LABELS = {
       'watchlist':   { icon: '🎯', text: 'Signal from your watchlist' },
       'portfolio':   { icon: '📂', text: 'Your watchlist was quiet — signal from your portfolio' },
@@ -2846,41 +2845,64 @@ document.getElementById('tip-preview-btn').addEventListener('click', async () =>
     const sourceHtml = srcInfo
       ? `<div style="margin-top:10px;padding:7px 10px;border-radius:6px;background:var(--surface);border:1px solid var(--border);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;">${srcInfo.icon} <span>${escHtml(srcInfo.text)}</span></div>`
       : '';
-    wrap.innerHTML = `<div class="tip-card" id="tip-card-main">
-      <div class="tip-card-header">
-        <div>
-          <div class="tip-card-ticker">${escHtml(t.ticker)}</div>
-          <div class="tip-card-type">${escHtml(t.pattern_type||'')} · ${escHtml(t.timeframe||'')} · ${dirBadge(t.direction)}</div>
+
+    function _renderSetupCard(t, idx, total, isBatch) {
+      const skew = t.skew_warning ? `<div class="skew-warning">⚠ ${escHtml(t.skew_warning)}</div>` : '';
+      const patternId = t.pattern_id ?? t.id ?? null;
+      const batchHeader = isBatch ? `<div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;">Setup ${idx} of ${total}</div>` : '';
+      return `<div class="tip-card" style="${isBatch && idx < total ? 'margin-bottom:10px;' : ''}">
+        ${batchHeader}
+        <div class="tip-card-header">
+          <div>
+            <div class="tip-card-ticker">${escHtml(t.ticker)}</div>
+            <div class="tip-card-type">${escHtml(t.pattern_type||'')} · ${escHtml(t.timeframe||'')} · ${dirBadge(t.direction)}</div>
+          </div>
+          ${t.quality_score != null ? `<span class="badge badge-open">Q: ${fmt(t.quality_score)}</span>` : ''}
         </div>
-        ${t.quality_score != null ? `<span class="badge badge-open">Q: ${fmt(t.quality_score)}</span>` : ''}
-      </div>
-      <div class="tip-card-zone">
-        <div class="tip-card-zone-label">Entry Zone</div>
-        <div class="mono-amber">${fmt(t.zone_low)} – ${fmt(t.zone_high)}</div>
-      </div>
-      <div class="tip-card-levels">
-        <div class="tip-level"><div class="tip-level-label">Entry</div><div class="tip-level-value entry">${fmt(t.entry_price || t.zone_high)}</div></div>
-        <div class="tip-level"><div class="tip-level-label">Stop</div><div class="tip-level-value stop">${fmt(t.stop_loss)}</div></div>
-        <div class="tip-level"><div class="tip-level-label">Target 1</div><div class="tip-level-value target">${fmt(t.target_1)}</div></div>
-      </div>
-      <div class="tip-card-meta">
-        ${t.position_units != null ? `<span><span class="meta-key">Units</span><span class="meta-val">${t.position_units}</span></span>` : ''}
-        ${t.rr_ratio != null ? `<span><span class="meta-key">R/R</span><span class="meta-val">${fmt(t.rr_ratio)}</span></span>` : ''}
-        ${t.kb_conviction ? `<span><span class="meta-key">KB Conviction</span><span class="meta-val">${escHtml(t.kb_conviction)}</span></span>` : ''}
-        ${t.kb_regime ? `<span><span class="meta-key">Regime</span><span class="meta-val">${escHtml(t.kb_regime).replace(/_/g,' ')}</span></span>` : ''}
-        ${t.calibration_confidence != null ? `<span><span class="meta-key">Cal. Confidence</span><span class="meta-val">${fmt(t.calibration_confidence*100)}%</span></span>` : ''}
-      </div>
-      ${skew}
-      ${sourceHtml}
-      <div class="feedback-row" id="tip-fb-row">
-        <span class="fb-label">Outcome</span>
-        <button class="fb-btn" data-v="hit_t1" title="Hit Target 1">T1 ✓</button>
-        <button class="fb-btn" data-v="hit_t2" title="Hit Target 2">T2 ✓</button>
-        <button class="fb-btn fb-stop" data-v="stopped_out" title="Stopped out">Stop ✗</button>
-        <button class="fb-btn" data-v="pending" title="Still open">Open</button>
-        <button class="fb-btn" data-v="skipped" title="Skipped">Skip</button>
-      </div>
+        <div class="tip-card-zone">
+          <div class="tip-card-zone-label">Entry Zone</div>
+          <div class="mono-amber">${fmt(t.zone_low)} – ${fmt(t.zone_high)}</div>
+        </div>
+        <div class="tip-card-levels">
+          <div class="tip-level"><div class="tip-level-label">Entry</div><div class="tip-level-value entry">${fmt(t.entry_price || t.zone_high)}</div></div>
+          <div class="tip-level"><div class="tip-level-label">Stop</div><div class="tip-level-value stop">${fmt(t.stop_loss)}</div></div>
+          <div class="tip-level"><div class="tip-level-label">T1</div><div class="tip-level-value target">${fmt(t.target_1)}</div></div>
+        </div>
+        <div class="tip-card-meta">
+          ${t.position_units != null ? `<span><span class="meta-key">Units</span><span class="meta-val">${t.position_units}</span></span>` : ''}
+          ${t.rr_ratio != null ? `<span><span class="meta-key">R/R</span><span class="meta-val">${fmt(t.rr_ratio)}</span></span>` : ''}
+          ${t.kb_conviction ? `<span><span class="meta-key">Conviction</span><span class="meta-val">${escHtml(t.kb_conviction)}</span></span>` : ''}
+        </div>
+        ${skew}
+      </div>`;
+    }
+
+    const tips = d.tips && d.tips.length > 0 ? d.tips : [t];
+    const isBatch = tips.length > 1;
+    const cadence = d.cadence || 'daily';
+
+    let html = '';
+    if (isBatch) {
+      const cadenceLabel = cadence === 'weekly'
+        ? `<div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:10px;">📅 Weekly Batch Preview — ${tips.length} setups</div>`
+        : '';
+      html = cadenceLabel + tips.map((tip, i) => _renderSetupCard(tip, i+1, tips.length, true)).join('');
+    } else {
+      html = _renderSetupCard(t, 1, 1, false);
+    }
+
+    html += sourceHtml;
+    html += `<div class="feedback-row" id="tip-fb-row">
+      <span class="fb-label">Outcome</span>
+      <button class="fb-btn" data-v="hit_t1" title="Hit Target 1">T1 ✓</button>
+      <button class="fb-btn" data-v="hit_t2" title="Hit Target 2">T2 ✓</button>
+      <button class="fb-btn fb-stop" data-v="stopped_out" title="Stopped out">Stop ✗</button>
+      <button class="fb-btn" data-v="pending" title="Still open">Open</button>
+      <button class="fb-btn" data-v="skipped" title="Skipped">Skip</button>
     </div>`;
+
+    wrap.innerHTML = `<div id="tip-card-main">${html}</div>`;
+    const patternId = t.pattern_id ?? t.id ?? null;
     wrap.querySelectorAll('#tip-fb-row .fb-btn').forEach(btn => {
       btn.addEventListener('click', async function() {
         const row = document.getElementById('tip-fb-row');

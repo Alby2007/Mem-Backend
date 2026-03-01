@@ -49,21 +49,59 @@ def _get_local_now(timezone_str: str) -> datetime:
         return datetime.now(timezone.utc)
 
 
-def _should_tip(db_path: str, user_id: str, delivery_time: str, timezone_str: str) -> bool:
+def _week_monday(local_date) -> str:
+    """Return the ISO date string of Monday of the week containing local_date."""
+    from datetime import timedelta
+    return (local_date - timedelta(days=local_date.weekday())).strftime('%Y-%m-%d')
+
+
+def _should_send_batch(
+    db_path: str,
+    user_id: str,
+    tier: str,
+    delivery_time: str,
+    timezone_str: str,
+) -> tuple:
     """
-    Return True if:
-      - current local HH:MM matches tip_delivery_time
-      - no successful tip delivered today (local date)
+    Return (should_send: bool, weekday: str) where weekday is 'monday'/'wednesday'/'daily'.
+
+    Premium tier: existing daily logic — HH:MM match + not tipped today.
+    Basic/Pro tier: weekly cadence — HH:MM match + correct weekday for tier
+                    + not already sent this ISO week on this weekday slot.
     """
+    from datetime import date
+    from notifications.tip_formatter import TIER_LIMITS
+
     local_now  = _get_local_now(timezone_str)
     local_time = local_now.strftime('%H:%M')
-    local_date = local_now.strftime('%Y-%m-%d')
+    local_date_obj = local_now.date()
+    local_date_str = local_date_obj.strftime('%Y-%m-%d')
 
     if local_time != delivery_time:
-        return False
+        return False, ''
 
-    from users.user_store import already_tipped_today
-    return not already_tipped_today(db_path, user_id, local_date)
+    limits = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
+    delivery_days = limits.get('delivery_days', 'daily')
+
+    # Premium = daily
+    if delivery_days == 'daily':
+        from users.user_store import already_tipped_today
+        if already_tipped_today(db_path, user_id, local_date_str):
+            return False, ''
+        return True, 'daily'
+
+    # Weekly cadence
+    _WEEKDAY_NAMES = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
+    today_name = _WEEKDAY_NAMES[local_date_obj.weekday()]
+    if today_name not in delivery_days:
+        return False, ''
+
+    monday_str = _week_monday(local_date_obj)
+    from users.user_store import already_sent_this_week_slot
+    if already_sent_this_week_slot(db_path, user_id, today_name, monday_str):
+        return False, ''
+
+    return True, today_name
 
 
 # ── Sector → connected-ticker map ─────────────────────────────────────────────
@@ -286,15 +324,163 @@ def _pick_best_pattern(
     return None
 
 
-def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict) -> None:
+def _pick_batch(
+    db_path: str,
+    user_id: str,
+    tier: str,
+    tip_timeframes: List[str],
+    tip_pattern_types: Optional[List[str]],
+    tip_markets: Optional[List[str]],
+    batch_size: int,
+) -> tuple:
+    """
+    Pick up to batch_size non-overlapping patterns using the fallback chain.
+    Returns (list[pattern_row], tip_source_str).
+    """
+    from notifications.tip_formatter import TIER_LIMITS
+    from users.user_store import get_open_patterns
+
+    limits = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
+    allowed_patterns   = tip_pattern_types or limits['patterns']
+    allowed_timeframes = tip_timeframes or limits['timeframes']
+
+    personal_hit_rates: dict = {}
+    try:
+        from users.personal_kb import read_atoms
+        atoms = read_atoms(user_id, db_path)
+        for a in atoms:
+            if a['predicate'].endswith('_hit_rate'):
+                ptype = a['predicate'][:-len('_hit_rate')]
+                try:
+                    personal_hit_rates[ptype] = float(a['object'])
+                except (ValueError, TypeError):
+                    pass
+    except Exception:
+        pass
+
+    candidates = get_open_patterns(db_path, min_quality=0.0, limit=300)
+    common = dict(
+        allowed_patterns=allowed_patterns,
+        allowed_timeframes=allowed_timeframes,
+        tier=tier,
+        user_id=user_id,
+        personal_hit_rates=personal_hit_rates,
+        db_path=db_path,
+    )
+
+    batch: List[dict] = []
+    used_tickers: set = set()
+    final_source = None
+
+    # Run the fallback levels; pick greedily until batch_size reached
+    if not tip_markets:
+        levels = [(None, None)]
+    else:
+        portfolio_tickers: List[str] = []
+        portfolio_sectors: List[str] = []
+        try:
+            from users.user_store import get_portfolio
+            for h in get_portfolio(db_path, user_id):
+                t = (h.get('ticker') or '').upper().strip()
+                if t: portfolio_tickers.append(t)
+                s = (h.get('sector') or '').lower().strip()
+                if s: portfolio_sectors.append(s)
+        except Exception:
+            pass
+        connected: List[str] = []
+        seen_c: set = set(portfolio_tickers)
+        for sector in portfolio_sectors:
+            for t in _SECTOR_CONNECTED.get(sector, []):
+                if t not in seen_c:
+                    connected.append(t); seen_c.add(t)
+        levels = [
+            (tip_markets, 'watchlist'),
+            (portfolio_tickers or None, 'portfolio'),
+            (connected or None, 'connected'),
+            (_DEFAULT_UNIVERSE, 'market-wide'),
+        ]
+
+    for (ticker_set, source_label) in levels:
+        if ticker_set is None and source_label is not None:
+            continue  # empty portfolio/connected — skip level
+        remaining = [r for r in candidates if r['ticker'].upper() not in used_tickers]
+        while len(batch) < batch_size:
+            row = _scan_candidates(remaining, ticker_set, **common)
+            if row is None:
+                break
+            batch.append(dict(row))
+            used_tickers.add(row['ticker'].upper())
+            remaining = [r for r in remaining if r['ticker'].upper() not in used_tickers]
+        if batch:
+            final_source = source_label
+            if len(batch) >= batch_size:
+                break
+        if not tip_markets:
+            break  # All Markets — only one level
+
+    for row in batch:
+        row['tip_source'] = final_source
+    return batch, final_source
+
+
+def _check_monday_status(db_path: str, monday_meta: list) -> list:
+    """
+    For each pattern in monday_meta, check current last_price KB atom vs zone.
+    Returns list of status dicts for format_weekly_batch.
+    """
+    results = []
+    for entry in monday_meta:
+        ticker    = entry.get('ticker', '')
+        zone_low  = entry.get('zone_low', 0.0)
+        zone_high = entry.get('zone_high', 0.0)
+        stop_loss = entry.get('stop_loss')
+        last_price = None
+        try:
+            import sqlite3 as _sq
+            _c = _sq.connect(db_path, timeout=5)
+            row = _c.execute(
+                """SELECT object FROM facts
+                   WHERE LOWER(subject)=? AND predicate='last_price'
+                   ORDER BY created_at DESC LIMIT 1""",
+                (ticker.lower(),),
+            ).fetchone()
+            _c.close()
+            if row:
+                last_price = float(row[0])
+        except Exception:
+            pass
+
+        if last_price is None:
+            status = 'not_triggered'
+        elif zone_low <= last_price <= zone_high:
+            status = 'in_zone'
+        elif (entry.get('direction') == 'bullish' and last_price < zone_low * 0.995) or \
+             (entry.get('direction') == 'bearish' and last_price > zone_high * 1.005):
+            status = 'zone_broken'
+        else:
+            status = 'not_triggered'
+
+        results.append({
+            'ticker':     ticker,
+            'status':     status,
+            'last_price': last_price,
+            'stop_loss':  stop_loss,
+            'zone_low':   zone_low,
+            'zone_high':  zone_high,
+        })
+    return results
+
+
+def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: str = 'daily') -> None:
     """Run the full tip delivery pipeline for one user."""
     from analytics.pattern_detector import PatternSignal
     from analytics.position_calculator import calculate_position
-    from notifications.tip_formatter import format_tip, pattern_allowed_for_tier, timeframe_allowed_for_tier
-    from notifications.telegram_notifier import TelegramNotifier
-    from users.user_store import (
-        get_user, log_tip_delivery, mark_pattern_alerted,
+    from notifications.tip_formatter import (
+        TIER_LIMITS, format_tip, format_weekly_batch,
+        pattern_allowed_for_tier, timeframe_allowed_for_tier,
     )
+    from notifications.telegram_notifier import TelegramNotifier
+    from users.user_store import log_tip_delivery, mark_pattern_alerted
 
     chat_id = user_prefs.get('telegram_chat_id')
     if not chat_id:
@@ -303,16 +489,105 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict) -> None:
 
     tier              = user_prefs.get('tier', 'basic')
     tip_timeframes    = user_prefs.get('tip_timeframes') or ['1h']
-    tip_pattern_types = user_prefs.get('tip_pattern_types')  # None = all allowed for tier
-    tip_markets       = user_prefs.get('tip_markets')         # None = all tickers
+    tip_pattern_types = user_prefs.get('tip_pattern_types')
+    tip_markets       = user_prefs.get('tip_markets')
 
+    limits     = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
+    batch_size = limits.get('batch_size', 1) if weekday != 'daily' else 1
+    is_weekly  = weekday in ('monday', 'wednesday')
+
+    local_now  = _get_local_now(user_prefs.get('tip_delivery_timezone', 'UTC'))
+    local_date = local_now.strftime('%Y-%m-%d')
+
+    if is_weekly:
+        batch, tip_source = _pick_batch(
+            db_path, user_id, tier, tip_timeframes, tip_pattern_types, tip_markets, batch_size,
+        )
+        if not batch:
+            _log.info('TipScheduler: no eligible patterns for user %s', user_id)
+            return
+
+        # Build (pattern_row, position) pairs
+        pairs = []
+        pattern_meta = []
+        for row in batch:
+            try:
+                sig = PatternSignal(
+                    pattern_type  = row['pattern_type'],
+                    ticker        = row['ticker'],
+                    direction     = row['direction'],
+                    zone_high     = row['zone_high'],
+                    zone_low      = row['zone_low'],
+                    zone_size_pct = row['zone_size_pct'],
+                    timeframe     = row['timeframe'],
+                    formed_at     = row['formed_at'],
+                    quality_score = row['quality_score'] or 0.0,
+                    status        = row['status'],
+                    kb_conviction = row.get('kb_conviction', ''),
+                    kb_regime     = row.get('kb_regime', ''),
+                    kb_signal_dir = row.get('kb_signal_dir', ''),
+                )
+                pos = calculate_position(sig, user_prefs)
+                pairs.append((row, pos))
+                pattern_meta.append({
+                    'ticker':       row['ticker'],
+                    'zone_low':     row['zone_low'],
+                    'zone_high':    row['zone_high'],
+                    'direction':    row['direction'],
+                    'stop_loss':    pos.stop_loss if pos else None,
+                    'pattern_type': row['pattern_type'],
+                })
+            except Exception as _pe:
+                _log.debug('TipScheduler: error building pair for %s: %s', row.get('ticker'), _pe)
+
+        if not pairs:
+            return
+
+        # Wednesday: prepend Monday status check
+        monday_status = None
+        if weekday == 'wednesday':
+            try:
+                monday_str = _week_monday(local_now.date())
+                from users.user_store import get_monday_pattern_meta
+                mon_meta = get_monday_pattern_meta(db_path, user_id, monday_str)
+                if mon_meta:
+                    monday_status = _check_monday_status(db_path, mon_meta)
+            except Exception as _me:
+                _log.debug('TipScheduler: Monday status check failed: %s', _me)
+
+        message = format_weekly_batch(
+            batch=pairs,
+            tier=tier,
+            weekday=weekday,
+            monday_status=monday_status,
+            tip_source=tip_source,
+        )
+
+        notifier = TelegramNotifier()
+        sent = notifier.send(chat_id, message)
+
+        for row in batch:
+            mark_pattern_alerted(db_path, row['id'], user_id)
+        log_tip_delivery(
+            db_path, user_id,
+            success=sent,
+            pattern_signal_id=batch[0]['id'],
+            message_length=len(message),
+            local_date=local_date,
+            pattern_meta=pattern_meta,
+        )
+        if sent:
+            _log.info('TipScheduler: delivered %s %s batch (%d setups) to user %s',
+                      weekday, tier, len(pairs), user_id)
+        else:
+            _log.warning('TipScheduler: Telegram send failed for user %s', user_id)
+        return
+
+    # ── Premium / daily path (single tip, existing logic) ────────────────────
     pattern_row = _pick_best_pattern(db_path, user_id, tier, tip_timeframes, tip_pattern_types, tip_markets)
     if pattern_row is None:
         _log.info('TipScheduler: no eligible patterns for user %s', user_id)
         return
-
-    local_now  = _get_local_now(user_prefs.get('tip_delivery_timezone', 'UTC'))
-    local_date = local_now.strftime('%Y-%m-%d')
 
     try:
         # Reconstruct PatternSignal from DB row
@@ -419,10 +694,54 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict) -> None:
             pass
 
 
+def _migrate_pro_to_premium(db_path: str) -> None:
+    """
+    One-time migration: upgrade existing 'pro' tier users to 'premium'.
+    Pro was the old daily tier; premium is the new name for daily delivery.
+    Sends each migrated user a Telegram upgrade notification.
+    Idempotent — safe to call on every startup.
+    """
+    import sqlite3 as _sq3
+    try:
+        conn = _sq3.connect(db_path, timeout=10)
+        rows = conn.execute(
+            "SELECT user_id, telegram_chat_id FROM user_preferences WHERE tier = 'pro'"
+        ).fetchall()
+        if not rows:
+            conn.close()
+            return
+        conn.execute("UPDATE user_preferences SET tier = 'premium' WHERE tier = 'pro'")
+        conn.commit()
+        conn.close()
+        _log.info('TipScheduler: migrated %d pro→premium users', len(rows))
+        try:
+            from notifications.telegram_notifier import TelegramNotifier as _TGN
+            _notifier = _TGN()
+            _upgrade_msg = (
+                "\u2b50 *You've been upgraded to Premium\\!*\n\n"
+                "We've restructured our tip tiers\\. Your account has been automatically "
+                "upgraded to *Premium* \u2014 daily tips continue exactly as before\\.\n\n"
+                "_No action needed\\. Enjoy the signals\\._"
+            )
+            for (uid, chat_id) in rows:
+                if chat_id:
+                    try:
+                        _notifier.send(chat_id, _upgrade_msg, parse_mode='MarkdownV2')
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    except Exception as exc:
+        _log.warning('TipScheduler: pro→premium migration failed: %s', exc)
+
+
 def _run_tip_cycle(db_path: str) -> None:
     """Check all users and dispatch tips where delivery time has arrived."""
     from users.user_store import ensure_user_tables
     import sqlite3
+
+    # Run one-time tier migration on each cycle (idempotent, fast when no rows match)
+    _migrate_pro_to_premium(db_path)
 
     conn = sqlite3.connect(db_path, timeout=10)
     try:
@@ -452,6 +771,7 @@ def _run_tip_cycle(db_path: str) -> None:
         user_id       = prefs['user_id']
         delivery_time = prefs.get('tip_delivery_time') or '08:00'
         timezone_str  = prefs.get('tip_delivery_timezone') or 'UTC'
+        tier          = prefs.get('tier') or 'basic'
 
         for json_col in ('tip_timeframes', 'tip_pattern_types', 'tip_markets'):
             try:
@@ -460,8 +780,9 @@ def _run_tip_cycle(db_path: str) -> None:
                 prefs[json_col] = None
 
         try:
-            if _should_tip(db_path, user_id, delivery_time, timezone_str):
-                _deliver_tip_to_user(db_path, user_id, prefs)
+            should_send, weekday = _should_send_batch(db_path, user_id, tier, delivery_time, timezone_str)
+            if should_send:
+                _deliver_tip_to_user(db_path, user_id, prefs, weekday=weekday)
         except Exception as exc:
             _log.error('TipScheduler: unhandled error for user %s: %s', user_id, exc)
 

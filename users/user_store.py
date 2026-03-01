@@ -103,7 +103,8 @@ CREATE TABLE IF NOT EXISTS tip_delivery_log (
     delivered_at            TEXT NOT NULL,
     delivered_at_local_date TEXT,
     success                 INTEGER NOT NULL DEFAULT 0,
-    message_length          INTEGER
+    message_length          INTEGER,
+    pattern_meta            TEXT
 )
 """
 
@@ -678,21 +679,30 @@ def log_tip_delivery(
     pattern_signal_id: Optional[int] = None,
     message_length: Optional[int] = None,
     local_date: Optional[str] = None,
+    pattern_meta: Optional[list] = None,
 ) -> dict:
     """Insert a tip_delivery_log row. Returns the inserted row."""
+    import json as _json
     now_iso = datetime.now(timezone.utc).isoformat()
     if local_date is None:
         local_date = now_iso[:10]
+    meta_json = _json.dumps(pattern_meta) if pattern_meta else None
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         ensure_user_tables(conn)
+        # Ensure pattern_meta column exists (idempotent)
+        try:
+            conn.execute('ALTER TABLE tip_delivery_log ADD COLUMN pattern_meta TEXT')
+            conn.commit()
+        except Exception:
+            pass
         cur = conn.execute(
             """INSERT INTO tip_delivery_log
                (user_id, pattern_signal_id, delivered_at, delivered_at_local_date,
-                success, message_length)
-               VALUES (?,?,?,?,?,?)""",
+                success, message_length, pattern_meta)
+               VALUES (?,?,?,?,?,?,?)""",
             (user_id, pattern_signal_id, now_iso, local_date,
-             int(success), message_length),
+             int(success), message_length, meta_json),
         )
         conn.commit()
         return {
@@ -703,6 +713,7 @@ def log_tip_delivery(
             'delivered_at_local_date': local_date,
             'success':                success,
             'message_length':         message_length,
+            'pattern_meta':           pattern_meta,
         }
     finally:
         conn.close()
@@ -721,6 +732,78 @@ def already_tipped_today(db_path: str, user_id: str, local_date_str: str) -> boo
             (user_id, local_date_str),
         ).fetchone()
         return row is not None
+    finally:
+        conn.close()
+
+
+def already_sent_this_week_slot(
+    db_path: str,
+    user_id: str,
+    weekday_name: str,
+    week_monday_date_str: str,
+) -> bool:
+    """
+    Return True if a successful tip batch was already delivered this ISO week
+    on the given weekday slot (e.g. 'monday' or 'wednesday').
+
+    week_monday_date_str: ISO date string of Monday of the current week (YYYY-MM-DD).
+    Queries tip_delivery_log for all success=1 rows in [monday, monday+6] and
+    checks whether any fall on the requested weekday.
+    """
+    from datetime import date as _date, timedelta as _td
+    monday = _date.fromisoformat(week_monday_date_str)
+    sunday = monday + _td(days=6)
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_tables(conn)
+        rows = conn.execute(
+            """SELECT delivered_at_local_date FROM tip_delivery_log
+               WHERE user_id = ? AND success = 1
+                 AND delivered_at_local_date >= ? AND delivered_at_local_date <= ?""",
+            (user_id, week_monday_date_str, sunday.isoformat()),
+        ).fetchall()
+        target_weekday = weekday_name.lower()
+        _WEEKDAY_NAMES = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
+        for (d_str,) in rows:
+            try:
+                d = _date.fromisoformat(d_str)
+                if _WEEKDAY_NAMES[d.weekday()] == target_weekday:
+                    return True
+            except Exception:
+                pass
+        return False
+    finally:
+        conn.close()
+
+
+def get_monday_pattern_meta(
+    db_path: str,
+    user_id: str,
+    week_monday_date_str: str,
+) -> list:
+    """
+    Return the pattern_meta list stored in Monday's tip delivery log for this
+    ISO week, or [] if none found.
+    """
+    import json as _json
+    from datetime import date as _date
+    monday = _date.fromisoformat(week_monday_date_str)
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_tables(conn)
+        row = conn.execute(
+            """SELECT pattern_meta FROM tip_delivery_log
+               WHERE user_id = ? AND success = 1
+                 AND delivered_at_local_date = ?
+               ORDER BY id DESC LIMIT 1""",
+            (user_id, monday.isoformat()),
+        ).fetchone()
+        if row and row[0]:
+            try:
+                return _json.loads(row[0]) or []
+            except Exception:
+                pass
+        return []
     finally:
         conn.close()
 

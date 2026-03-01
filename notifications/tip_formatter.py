@@ -107,19 +107,29 @@ def _signal_dir_line(pattern: PatternSignal) -> str:
 
 # ── TIER_LIMITS ────────────────────────────────────────────────────────────────
 
+_ALL_PATTERNS = ['fvg', 'ifvg', 'bpr', 'order_block', 'breaker', 'liquidity_void', 'mitigation']
+
 TIER_LIMITS = {
     'basic': {
-        'tips_per_day': 1,
-        'patterns':     ['fvg', 'ifvg'],
-        'timeframes':   ['1h'],
-        'targets':      2,
+        'delivery_days': ['monday'],
+        'batch_size':    3,
+        'patterns':      ['fvg', 'ifvg'],
+        'timeframes':    ['1h', '4h'],
+        'targets':       2,
     },
     'pro': {
-        'tips_per_day': None,
-        'patterns':     ['fvg', 'ifvg', 'bpr', 'order_block',
-                         'breaker', 'liquidity_void', 'mitigation'],
-        'timeframes':   ['15m', '1h', '4h', '1d'],
-        'targets':      3,
+        'delivery_days': ['monday', 'wednesday'],
+        'batch_size':    3,
+        'patterns':      _ALL_PATTERNS,
+        'timeframes':    ['1h', '4h', '1d'],
+        'targets':       2,
+    },
+    'premium': {
+        'delivery_days': 'daily',
+        'batch_size':    1,
+        'patterns':      _ALL_PATTERNS,
+        'timeframes':    ['15m', '1h', '4h', '1d'],
+        'targets':       3,
     },
 }
 
@@ -384,6 +394,121 @@ def format_tip(
             '',
             f'_{icon} {_escape_mdv2(label)}_',
         ]
+
+    return '\n'.join(lines)
+
+
+def _format_single_setup(
+    pattern_row: dict,
+    position,
+    tier: str,
+    idx: int,
+    tip_source: Optional[str] = None,
+) -> list:
+    """
+    Render one setup block for a weekly batch message.
+    Returns a list of MarkdownV2 lines (no trailing newline).
+    """
+    limits    = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
+    show_t3   = limits['targets'] >= 3
+    tf_label  = _TF_LABELS.get(pattern_row['timeframe'], pattern_row['timeframe'].upper())
+    pat_label = _PATTERN_LABELS.get(
+        pattern_row['pattern_type'],
+        pattern_row['pattern_type'].replace('_', ' ').title()
+    )
+    dir_emoji = _DIRECTION_EMOJI.get(pattern_row['direction'], '')
+    ticker    = pattern_row['ticker']
+    zone_low  = pattern_row['zone_low']
+    zone_high = pattern_row['zone_high']
+    quality   = pattern_row.get('quality_score') or 0.0
+
+    lines = [
+        f'*Setup {idx} — {_escape_mdv2(ticker)}*',
+        f'{dir_emoji} {_escape_mdv2(pat_label)} \\| {_escape_mdv2(tf_label)} \\| Q: {_escape_mdv2(f"{quality:.2f}")}',
+        f'Zone: {_escape_mdv2(_fmt_price(zone_low))} — {_escape_mdv2(_fmt_price(zone_high))}',
+    ]
+
+    if position:
+        currency = position.account_currency
+        lines += [
+            f'Entry: {_escape_mdv2(_fmt_price(position.suggested_entry))} \\| '
+            f'Stop: {_escape_mdv2(_fmt_price(position.stop_loss))}',
+            f'T1: {_escape_mdv2(_fmt_price(position.target_1))} \\| '
+            f'T2: {_escape_mdv2(_fmt_price(position.target_2))}',
+        ]
+        if show_t3:
+            lines.append(f'T3: {_escape_mdv2(_fmt_price(position.target_3))}')
+        lines.append(
+            f'Size: {_escape_mdv2(str(int(position.position_size_units)))} units \\| '
+            f'Risk: {_escape_mdv2(_fmt_currency(position.risk_amount, currency))}'
+        )
+    else:
+        lines.append(f'_Set account size in tips config for position sizing_')
+
+    return lines
+
+
+def format_weekly_batch(
+    batch: list,
+    tier: str,
+    weekday: str,
+    monday_status: Optional[list] = None,
+    tip_source: Optional[str] = None,
+) -> str:
+    """
+    Render a weekly batch Telegram MarkdownV2 message.
+
+    Parameters
+    ----------
+    batch         List of (pattern_row, position) tuples.
+    tier          'basic' or 'pro'.
+    weekday       'monday' or 'wednesday'.
+    monday_status List of dicts from _check_monday_status(), Wednesday only.
+    tip_source    Fallback source label (same as format_tip).
+    """
+    from datetime import datetime, timezone as _tz
+    now   = datetime.now(_tz.utc)
+    date_str = _escape_mdv2(now.strftime('%a %d %b'))
+
+    if weekday == 'monday':
+        header = f'📅 *YOUR WEEK AHEAD — {date_str}*'
+        footer_count = len(batch)
+        footer = f'_{_escape_mdv2(str(footer_count))} setup{"s" if footer_count != 1 else ""} for the week — act when price reaches the zone\\._'
+    else:
+        header = f'📊 *MIDWEEK UPDATE — {date_str}*'
+        footer_count = len(batch)
+        footer = f'_{_escape_mdv2(str(footer_count))} fresh setup{"s" if footer_count != 1 else ""} — plus Monday status below\\._'
+
+    lines = [header, '']
+
+    # ── Monday status block (Wednesday only) ─────────────────────────────────
+    if monday_status:
+        lines += ['━━━━━━━━━━━━━━━', '🔄 *MONDAY SETUPS — STATUS*', '━━━━━━━━━━━━━━━']
+        for entry in monday_status:
+            tkr    = _escape_mdv2(entry['ticker'])
+            status = entry['status']   # 'in_zone', 'not_triggered', 'zone_broken'
+            price  = entry.get('last_price')
+            if status == 'in_zone':
+                price_str = f' \\({_escape_mdv2(_fmt_price(price))}\\)' if price else ''
+                stop_str  = f' — tighten stop to {_escape_mdv2(_fmt_price(entry["stop_loss"]))}' if entry.get('stop_loss') else ''
+                lines.append(f'  {tkr}: ✅ Price in zone{price_str}{stop_str}')
+            elif status == 'not_triggered':
+                lines.append(f'  {tkr}: ⏳ Not yet triggered \\(price away from zone\\)')
+            else:
+                lines.append(f'  {tkr}: ❌ Zone broken — setup invalidated')
+        lines.append('')
+
+    # ── Setup blocks ─────────────────────────────────────────────────────────
+    for i, (pattern_row, position) in enumerate(batch, start=1):
+        lines.append('━━━━━━━━━━━━━━━')
+        lines += _format_single_setup(pattern_row, position, tier, i)
+
+    lines += ['━━━━━━━━━━━━━━━', '', footer]
+
+    # ── Fallback source label ─────────────────────────────────────────────────
+    if tip_source and tip_source in _TIP_SOURCE_LABELS:
+        icon, label = _TIP_SOURCE_LABELS[tip_source]
+        lines += ['', f'_{icon} {_escape_mdv2(label)}_']
 
     return '\n'.join(lines)
 

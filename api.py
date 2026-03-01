@@ -4072,13 +4072,55 @@ def tip_preview(user_id: str):
     tip_timeframes  = prefs.get('tip_timeframes') or limits['timeframes']
     tip_pattern_tys = prefs.get('tip_pattern_types')
     tip_markets     = prefs.get('tip_markets')  # None = all tickers
+    delivery_days   = limits.get('delivery_days', 'daily')
+    is_weekly       = delivery_days != 'daily'
 
+    from analytics.pattern_detector import PatternSignal
+
+    if is_weekly:
+        from notifications.tip_scheduler import _pick_batch
+        batch_size = limits.get('batch_size', 3)
+        batch, tip_source = _pick_batch(
+            _DB_PATH, user_id, tier, tip_timeframes, tip_pattern_tys, tip_markets, batch_size
+        )
+        if not batch:
+            return jsonify({'tip': None, 'tips': [], 'reason': 'no eligible patterns',
+                            'cadence': 'weekly', 'tip_source': None}), 200
+
+        tips = []
+        for row in batch:
+            sig = PatternSignal(
+                pattern_type  = row['pattern_type'],
+                ticker        = row['ticker'],
+                direction     = row['direction'],
+                zone_high     = row['zone_high'],
+                zone_low      = row['zone_low'],
+                zone_size_pct = row['zone_size_pct'],
+                timeframe     = row['timeframe'],
+                formed_at     = row['formed_at'],
+                quality_score = row['quality_score'] or 0.0,
+                status        = row['status'],
+                kb_conviction = row.get('kb_conviction', ''),
+                kb_regime     = row.get('kb_regime', ''),
+                kb_signal_dir = row.get('kb_signal_dir', ''),
+            )
+            pos = calculate_position(sig, prefs)
+            tips.append(tip_to_dict(sig, pos, tier=tier))
+        return jsonify({
+            'tip':        tips[0] if tips else None,
+            'tips':       tips,
+            'tip_source': tip_source,
+            'cadence':    'weekly',
+            'delivery_days': delivery_days,
+        })
+
+    # Premium — single daily tip
     from notifications.tip_scheduler import _pick_best_pattern
     pattern_row = _pick_best_pattern(_DB_PATH, user_id, tier, tip_timeframes, tip_pattern_tys, tip_markets)
     if pattern_row is None:
-        return jsonify({'tip': None, 'reason': 'no eligible patterns'}), 200
+        return jsonify({'tip': None, 'tips': [], 'reason': 'no eligible patterns',
+                        'cadence': 'daily', 'tip_source': None}), 200
 
-    from analytics.pattern_detector import PatternSignal
     sig = PatternSignal(
         pattern_type  = pattern_row['pattern_type'],
         ticker        = pattern_row['ticker'],
@@ -4097,7 +4139,7 @@ def tip_preview(user_id: str):
     position = calculate_position(sig, prefs)
     tip_dict = tip_to_dict(sig, position, tier=tier)
     tip_source = pattern_row.get('tip_source')
-    return jsonify({'tip': tip_dict, 'tip_source': tip_source})
+    return jsonify({'tip': tip_dict, 'tips': [tip_dict], 'tip_source': tip_source, 'cadence': 'daily'})
 
 
 def _build_prefs_confirmation(new: dict, old: dict) -> str:
@@ -4201,7 +4243,12 @@ def _build_prefs_confirmation(new: dict, old: dict) -> str:
     new_tier = new.get('tier')
     old_tier = old.get('tier')
     if new_tier and new_tier != old_tier:
-        tier_label = _escape_mdv2(new_tier.title())
+        _TIER_DISPLAY = {
+            'basic':   'Basic \\(Mon weekly batch\\)',
+            'pro':     'Pro \\(Mon \\+ Wed batch\\)',
+            'premium': 'Premium \\(daily tips\\)',
+        }
+        tier_label = _TIER_DISPLAY.get(new_tier, _escape_mdv2(new_tier.title()))
         lines.append(f'⭐ Tier updated to *{tier_label}*\\.')
 
     if not lines:
