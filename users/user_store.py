@@ -191,20 +191,25 @@ def get_user(db_path: str, user_id: str) -> Optional[dict]:
         ensure_user_tables(conn)
         row = conn.execute(
             """SELECT user_id, onboarding_complete, selected_sectors,
-                      selected_risk, telegram_chat_id, delivery_time, timezone
+                      selected_risk, telegram_chat_id, delivery_time, timezone,
+                      tier, max_risk_per_trade_pct, is_dev,
+                      tip_delivery_time, tip_delivery_timezone
                FROM user_preferences WHERE user_id = ?""",
             (user_id,),
         ).fetchone()
         if row is None:
             return None
         cols = ['user_id', 'onboarding_complete', 'selected_sectors',
-                'selected_risk', 'telegram_chat_id', 'delivery_time', 'timezone']
+                'selected_risk', 'telegram_chat_id', 'delivery_time', 'timezone',
+                'tier', 'max_risk_per_trade_pct', 'is_dev',
+                'tip_delivery_time', 'tip_delivery_timezone']
         d = dict(zip(cols, row))
         try:
             d['selected_sectors'] = json.loads(d['selected_sectors'] or '[]')
         except (json.JSONDecodeError, TypeError):
             d['selected_sectors'] = []
         d['telegram_chat_id'] = decrypt_field(d.get('telegram_chat_id'))
+        d['tier'] = d.get('tier') or 'basic'
         return d
     finally:
         conn.close()

@@ -5150,6 +5150,140 @@ def change_password():
     return jsonify({'ok': True})
 
 
+@app.route('/users/<user_id>/notification-prefs', methods=['PATCH'])
+@require_auth
+def update_notification_prefs(user_id):
+    """
+    PATCH /users/<user_id>/notification-prefs
+
+    Save notification toggle states. Pro+ features are rejected if the user's
+    tier is 'basic'.
+    Body: { "monday_briefing": true, "wednesday_update": true,
+            "zone_alerts": true, "thesis_alerts": true,
+            "profit_lock_alerts": false, "trailing_alerts": false }
+    Returns: { "ok": true, "prefs": {...} }
+    """
+    if g.user_id != user_id:
+        return jsonify({'error': 'forbidden'}), 403
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+    data = request.get_json(force=True, silent=True) or {}
+
+    # Determine tier
+    try:
+        user = get_user(_DB_PATH, user_id)
+        tier = (user.get('tier') or 'basic').lower() if user else 'basic'
+    except Exception:
+        tier = 'basic'
+
+    PRO_ONLY = {'profit_lock_alerts', 'trailing_alerts'}
+    ALLOWED = {'monday_briefing', 'wednesday_update', 'zone_alerts',
+                'thesis_alerts', 'profit_lock_alerts', 'trailing_alerts'}
+
+    prefs = {}
+    for key in ALLOWED:
+        if key not in data:
+            continue
+        if key in PRO_ONLY and tier == 'basic':
+            return jsonify({'error': f'{key} requires Pro or Premium tier'}), 403
+        prefs[key] = bool(data[key])
+
+    try:
+        import sqlite3 as _sq, json as _json
+        conn = _sq.connect(_DB_PATH, timeout=10)
+        try:
+            conn.execute(
+                "ALTER TABLE user_preferences ADD COLUMN notification_prefs TEXT DEFAULT '{}'"
+            )
+        except Exception:
+            pass
+        row = conn.execute(
+            "SELECT notification_prefs FROM user_preferences WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        existing = {}
+        if row and row[0]:
+            try:
+                existing = _json.loads(row[0])
+            except Exception:
+                pass
+        existing.update(prefs)
+        conn.execute(
+            "UPDATE user_preferences SET notification_prefs=? WHERE user_id=?",
+            (_json.dumps(existing), user_id)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    return jsonify({'ok': True, 'prefs': existing})
+
+
+@app.route('/users/<user_id>/trading-prefs', methods=['PATCH'])
+@require_auth
+def update_trading_prefs(user_id):
+    """
+    PATCH /users/<user_id>/trading-prefs
+
+    Save trading preference fields: max_risk_per_trade_pct, preferred_broker,
+    experience_level, trading_bio.
+    Returns: { "ok": true }
+    """
+    if g.user_id != user_id:
+        return jsonify({'error': 'forbidden'}), 403
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+    data = request.get_json(force=True, silent=True) or {}
+
+    risk_pct  = data.get('max_risk_per_trade_pct')
+    broker    = str(data.get('preferred_broker',  '') or '')[:100]
+    exp_level = str(data.get('experience_level',  '') or '')[:100]
+    bio       = str(data.get('trading_bio',       '') or '')[:1000]
+
+    if risk_pct is not None:
+        try:
+            risk_pct = float(risk_pct)
+            if not (0 < risk_pct <= 100):
+                return jsonify({'error': 'max_risk_per_trade_pct must be between 0 and 100'}), 400
+        except (TypeError, ValueError):
+            return jsonify({'error': 'max_risk_per_trade_pct must be a number'}), 400
+
+    try:
+        import sqlite3 as _sq
+        conn = _sq.connect(_DB_PATH, timeout=10)
+        for col, default in [
+            ('preferred_broker',  "TEXT DEFAULT ''"),
+            ('experience_level',  "TEXT DEFAULT ''"),
+            ('trading_bio',       "TEXT DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE user_preferences ADD COLUMN {col} {default}")
+            except Exception:
+                pass
+        updates, params = [], []
+        if risk_pct is not None:
+            updates.append('max_risk_per_trade_pct=?'); params.append(risk_pct)
+        if broker:
+            updates.append('preferred_broker=?'); params.append(broker)
+        if exp_level:
+            updates.append('experience_level=?'); params.append(exp_level)
+        if bio is not None:
+            updates.append('trading_bio=?'); params.append(bio)
+        if updates:
+            params.append(user_id)
+            conn.execute(
+                f"UPDATE user_preferences SET {', '.join(updates)} WHERE user_id=?",
+                params
+            )
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    return jsonify({'ok': True})
+
+
 @app.route('/users/<user_id>', methods=['DELETE'])
 @require_auth
 def delete_account(user_id):

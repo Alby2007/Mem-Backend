@@ -286,6 +286,17 @@ select option { background: var(--surface); }
 .prf-danger-text { font-size: 11px; color: var(--muted); line-height: 1.6; margin-bottom: 14px; }
 .btn-danger { background: transparent; border: 1px solid rgba(239,68,68,.4); color: var(--red); border-radius: 4px; padding: 9px 16px; font-size: 12px; font-weight: 700; cursor: pointer; transition: background .15s; }
 .btn-danger:hover { background: rgba(239,68,68,.08); }
+
+.prf-risk-display { display: flex; align-items: baseline; gap: 6px; margin-bottom: 6px; }
+.prf-risk-value { font-size: 28px; font-weight: 700; color: var(--accent); font-family: var(--mono); line-height: 1; }
+.prf-risk-unit { font-size: 12px; color: var(--muted); }
+input[type="range"].prf-range { -webkit-appearance: none; appearance: none; width: 100%; height: 3px; background: var(--border); border-radius: 3px; outline: none; margin-bottom: 6px; padding: 0; border: none; }
+input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); cursor: pointer; border: 2px solid var(--bg); }
+.prf-range-labels { display: flex; justify-content: space-between; font-size: 9px; color: var(--muted); margin-bottom: 14px; }
+#screen-profile textarea { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; color: var(--text); font-size: 12px; font-family: inherit; outline: none; resize: vertical; min-height: 64px; line-height: 1.5; transition: border-color .15s; box-sizing: border-box; }
+#screen-profile textarea:focus { border-color: var(--accent2); }
+.prf-notif-saved { font-size: 10px; color: var(--green); opacity: 0; transition: opacity .3s; }
+.prf-notif-saved.show { opacity: 1; }
 .profile-field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
 .profile-field input { width: 100%; box-sizing: border-box; }
 .profile-field input[readonly] { opacity: 0.55; cursor: default; }
@@ -1219,6 +1230,52 @@ select option { background: var(--surface); }
         </div>
       </div>
 
+      <!-- Trading Preferences -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">TRADING PREFERENCES</div></div>
+        <div class="prf-card-body">
+          <div class="prf-field">
+            <label>Default Risk per Trade</label>
+            <div class="prf-risk-display">
+              <span class="prf-risk-value" id="prf-risk-val">1.0</span>
+              <span class="prf-risk-unit">% of portfolio</span>
+            </div>
+            <input type="range" id="prf-risk-slider" class="prf-range" min="0.5" max="5" step="0.5" value="1.0"
+              oninput="document.getElementById('prf-risk-val').textContent = parseFloat(this.value).toFixed(1)" />
+            <div class="prf-range-labels"><span>0.5% (conservative)</span><span>5% (aggressive)</span></div>
+          </div>
+          <div class="prf-field">
+            <label>Preferred Broker</label>
+            <select id="prf-broker">
+              <option value="">— Select —</option>
+              <option>Hargreaves Lansdown</option>
+              <option>Freetrade</option>
+              <option>Trading 212</option>
+              <option>IG</option>
+              <option>AJ Bell</option>
+              <option>Interactive Brokers</option>
+              <option>Other</option>
+            </select>
+            <div class="prf-hint">Helps format position sizes for your broker's conventions.</div>
+          </div>
+          <div class="prf-field">
+            <label>Experience Level</label>
+            <select id="prf-experience">
+              <option value="beginner">Beginner (under 1 year)</option>
+              <option value="intermediate" selected>Intermediate (1–3 years)</option>
+              <option value="advanced">Advanced (3+ years)</option>
+              <option value="professional">Professional</option>
+            </select>
+          </div>
+          <div class="prf-field">
+            <label>Trading Bio <span style="color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none;font-size:10px;">— optional</span></label>
+            <textarea id="prf-bio" rows="3" placeholder="What markets do you focus on? Any context helps the AI understand your style…"></textarea>
+          </div>
+          <button class="btn btn-primary prf-btn-full" id="prf-trading-save-btn">Save Preferences</button>
+          <div class="profile-msg" id="prf-trading-msg"></div>
+        </div>
+      </div>
+
     </div><!-- /left -->
 
     <!-- RIGHT COLUMN -->
@@ -1286,49 +1343,52 @@ select option { background: var(--surface); }
 
       <!-- Notification prefs -->
       <div class="prf-card">
-        <div class="prf-card-header"><div class="prf-card-title">NOTIFICATION PREFERENCES</div></div>
+        <div class="prf-card-header">
+          <div class="prf-card-title">NOTIFICATION PREFERENCES</div>
+          <span class="prf-notif-saved" id="prf-notif-saved"></span>
+        </div>
         <div class="prf-card-body prf-card-body-tight">
           <div class="prf-toggle-row">
             <div class="prf-toggle-info">
               <div class="prf-toggle-label">Monday briefing</div>
               <div class="prf-toggle-desc">Weekly setup batch at your configured delivery time</div>
             </div>
-            <label class="prf-toggle-switch"><input type="checkbox" checked><span class="prf-slider"></span></label>
+            <label class="prf-toggle-switch"><input type="checkbox" data-pref="monday_briefing" checked><span class="prf-slider"></span></label>
           </div>
           <div class="prf-toggle-row">
             <div class="prf-toggle-info">
               <div class="prf-toggle-label">Wednesday update</div>
               <div class="prf-toggle-desc">Open position status + KB signal changes</div>
             </div>
-            <label class="prf-toggle-switch"><input type="checkbox" checked><span class="prf-slider"></span></label>
+            <label class="prf-toggle-switch"><input type="checkbox" data-pref="wednesday_update" checked><span class="prf-slider"></span></label>
           </div>
           <div class="prf-toggle-row">
             <div class="prf-toggle-info">
               <div class="prf-toggle-label">Zone hit alerts</div>
               <div class="prf-toggle-desc">Fire when price enters your entry zone</div>
             </div>
-            <label class="prf-toggle-switch"><input type="checkbox" checked><span class="prf-slider"></span></label>
+            <label class="prf-toggle-switch"><input type="checkbox" data-pref="zone_alerts" checked><span class="prf-slider"></span></label>
           </div>
           <div class="prf-toggle-row">
             <div class="prf-toggle-info">
               <div class="prf-toggle-label">Thesis break alerts</div>
               <div class="prf-toggle-desc">Structural invalidation before your stop is hit</div>
             </div>
-            <label class="prf-toggle-switch"><input type="checkbox" checked><span class="prf-slider"></span></label>
+            <label class="prf-toggle-switch"><input type="checkbox" data-pref="thesis_alerts" checked><span class="prf-slider"></span></label>
           </div>
           <div class="prf-toggle-row">
             <div class="prf-toggle-info">
               <div class="prf-toggle-label">Profit lock alerts <span class="prf-pro-tag">PRO+</span></div>
               <div class="prf-toggle-desc">Exit signal when KB weakens at T1/T2</div>
             </div>
-            <label class="prf-toggle-switch"><input type="checkbox" disabled><span class="prf-slider"></span></label>
+            <label class="prf-toggle-switch"><input type="checkbox" data-pref="profit_lock_alerts" disabled><span class="prf-slider"></span></label>
           </div>
           <div class="prf-toggle-row">
             <div class="prf-toggle-info">
               <div class="prf-toggle-label">Trailing pullback alerts <span class="prf-pro-tag">PRO+</span></div>
               <div class="prf-toggle-desc">Peak detected + retrace warning</div>
             </div>
-            <label class="prf-toggle-switch"><input type="checkbox" disabled><span class="prf-slider"></span></label>
+            <label class="prf-toggle-switch"><input type="checkbox" data-pref="trailing_alerts" disabled><span class="prf-slider"></span></label>
           </div>
         </div>
       </div>
@@ -3391,7 +3451,95 @@ async function loadProfile() {
         upgradeEl.textContent = '';
       }
     }
+    // Trading preferences
+    const riskSlider = document.getElementById('prf-risk-slider');
+    const riskVal    = document.getElementById('prf-risk-val');
+    if (riskSlider && d.max_risk_per_trade_pct != null) {
+      riskSlider.value = d.max_risk_per_trade_pct;
+      if (riskVal) riskVal.textContent = parseFloat(d.max_risk_per_trade_pct).toFixed(1);
+    }
+    const brokerSel = document.getElementById('prf-broker');
+    if (brokerSel && d.preferred_broker) {
+      const opt = Array.from(brokerSel.options).find(o => o.value === d.preferred_broker || o.text === d.preferred_broker);
+      if (opt) opt.selected = true;
+    }
+    const expSel = document.getElementById('prf-experience');
+    if (expSel && d.experience_level) {
+      const opt = Array.from(expSel.options).find(o => o.value === d.experience_level || o.text === d.experience_level);
+      if (opt) opt.selected = true;
+    }
+    const bioEl = document.getElementById('prf-bio');
+    if (bioEl && d.trading_bio) bioEl.value = d.trading_bio;
+
+    // Notification prefs — restore saved state
+    if (d.notification_prefs) {
+      let prefs = d.notification_prefs;
+      if (typeof prefs === 'string') { try { prefs = JSON.parse(prefs); } catch { prefs = {}; } }
+      document.querySelectorAll('#screen-profile input[data-pref]').forEach(inp => {
+        const key = inp.dataset.pref;
+        if (key in prefs) inp.checked = prefs[key];
+      });
+    }
+
+    // Pro+ toggle gating — disable if basic tier
+    if (tier === 'basic') {
+      ['profit_lock_alerts', 'trailing_alerts'].forEach(key => {
+        const inp = document.querySelector(`#screen-profile input[data-pref="${key}"]`);
+        if (inp) inp.disabled = true;
+      });
+    } else {
+      ['profit_lock_alerts', 'trailing_alerts'].forEach(key => {
+        const inp = document.querySelector(`#screen-profile input[data-pref="${key}"]`);
+        if (inp) inp.disabled = false;
+      });
+    }
   } catch(e) { /* silent */ }
+
+  // Notification toggle auto-save
+  document.querySelectorAll('#screen-profile input[data-pref]').forEach(inp => {
+    inp.addEventListener('change', async function() {
+      if (this.disabled) return;
+      const key = this.dataset.pref;
+      const savedEl = document.getElementById('prf-notif-saved');
+      try {
+        await apiFetch(`/users/${state.userId}/notification-prefs`, {
+          method: 'PATCH',
+          body: JSON.stringify({ [key]: this.checked })
+        });
+        if (savedEl) {
+          savedEl.textContent = '✓ Saved';
+          savedEl.classList.add('show');
+          clearTimeout(savedEl._t);
+          savedEl._t = setTimeout(() => savedEl.classList.remove('show'), 2000);
+        }
+      } catch(e) {
+        this.checked = !this.checked; // revert on error
+        showToast('Failed to save notification preference');
+      }
+    });
+  });
+
+  // Trading prefs save button
+  const tradingSaveBtn = document.getElementById('prf-trading-save-btn');
+  if (tradingSaveBtn && !tradingSaveBtn._wired) {
+    tradingSaveBtn._wired = true;
+    tradingSaveBtn.addEventListener('click', async function() {
+      const msgEl = document.getElementById('prf-trading-msg');
+      const risk  = parseFloat(document.getElementById('prf-risk-slider')?.value);
+      const broker = document.getElementById('prf-broker')?.value || '';
+      const exp    = document.getElementById('prf-experience')?.value || '';
+      const bio    = document.getElementById('prf-bio')?.value || '';
+      try {
+        await apiFetch(`/users/${state.userId}/trading-prefs`, {
+          method: 'PATCH',
+          body: JSON.stringify({ max_risk_per_trade_pct: risk, preferred_broker: broker, experience_level: exp, trading_bio: bio })
+        });
+        if (msgEl) { msgEl.textContent = '✓ Preferences saved'; msgEl.style.color = 'var(--green)'; setTimeout(() => { if (msgEl) msgEl.textContent = ''; }, 3000); }
+      } catch(e) {
+        if (msgEl) { msgEl.textContent = 'Error saving preferences'; msgEl.style.color = 'var(--red)'; }
+      }
+    });
+  }
 
   // Telegram link status + widget
   try {
