@@ -5870,8 +5870,14 @@ def _handle_tg_message(msg: dict) -> None:
             has_history=bool(history_messages),
         )
         # Splice conversation history between system and user turns
+        # Strip 'id' and any non-standard fields — Groq rejects them with 400
         if history_messages and len(messages) >= 2:
-            messages = [messages[0]] + history_messages + [messages[-1]]
+            _clean_history = [
+                {'role': m['role'], 'content': m['content']}
+                for m in history_messages
+                if m.get('role') in ('user', 'assistant') and m.get('content')
+            ]
+            messages = [messages[0]] + _clean_history + [messages[-1]]
     except Exception as _pe:
         app.logger.error('telegram_webhook: prompt build failed: %s', _pe)
         return
