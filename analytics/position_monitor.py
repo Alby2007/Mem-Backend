@@ -272,6 +272,84 @@ def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
     return None
 
 
+def _check_profit_triggers(pos: dict, price: float, db_path: str,
+                           confidence: Optional[float]) -> Optional[tuple]:
+    """
+    Evaluate profit-target and trailing-pullback conditions.
+    Runs after _check_triggers() and only during market hours.
+    Returns (alert_type, priority) or None.
+
+    Profit lock alerts (HIGH, 4h cooldown):
+      t1_profit_lock — price >= T1 AND KB confidence deteriorating (< 0.40)
+      t2_profit_lock — price >= T2 AND KB confidence deteriorating (< 0.40)
+
+    Trailing pullback alert (HIGH, 4h cooldown, once per peak):
+      trailing_pullback — peak was set in last 60 min above T1, price has
+                          since pulled back >1.5%, and this peak hasn't been
+                          alerted yet (alerted_peak_price != peak_price).
+    """
+    direction  = pos.get('direction', 'bullish')
+    bullish    = direction != 'bearish'
+    entry      = pos.get('entry_price') or 0.0
+    t1         = pos.get('target_1')
+    t2         = pos.get('target_2')
+    last_alert = pos.get('last_alert_at')
+    alert_level = pos.get('alert_level', '')
+
+    if not _cooldown_ok(last_alert if alert_level == 'HIGH' else None, _HIGH_COOLDOWN_H):
+        return None
+
+    # ── Profit lock at T1 ────────────────────────────────────────────────────
+    if t1 is not None:
+        past_t1 = (bullish and price >= t1 * 0.995) or (not bullish and price <= t1 * 1.005)
+        if past_t1 and confidence is not None and confidence < 0.40:
+            return ('t1_profit_lock', 'HIGH')
+
+    # ── Profit lock at T2 ────────────────────────────────────────────────────
+    if t2 is not None:
+        past_t2 = (bullish and price >= t2 * 0.995) or (not bullish and price <= t2 * 1.005)
+        if past_t2 and confidence is not None and confidence < 0.40:
+            return ('t2_profit_lock', 'HIGH')
+
+    # ── Trailing pullback ─────────────────────────────────────────────────────
+    if t1 is None:
+        return None
+
+    peak_price        = pos.get('peak_price')
+    peak_updated_at   = pos.get('peak_price_updated_at')
+    alerted_peak      = pos.get('alerted_peak_price')
+
+    if peak_price is None or peak_updated_at is None:
+        return None
+
+    # Peak must be above T1 to be a meaningful profit situation
+    peak_above_t1 = (bullish and peak_price >= t1) or (not bullish and peak_price <= t1)
+    if not peak_above_t1:
+        return None
+
+    # Recency check: peak must have been updated within the last 60 minutes
+    try:
+        peak_dt = datetime.fromisoformat(peak_updated_at.replace('Z', '+00:00'))
+        peak_age_min = (datetime.now(timezone.utc) - peak_dt).total_seconds() / 60
+        if peak_age_min > 60:
+            return None
+    except Exception:
+        return None
+
+    # Pullback check: price has retreated >1.5% from the peak
+    pullback_pct = (peak_price - price) / peak_price * 100
+    if not bullish:
+        pullback_pct = (price - peak_price) / peak_price * 100
+    if pullback_pct <= 1.5:
+        return None
+
+    # Per-peak dedup: only fire once per distinct peak price
+    if alerted_peak is not None and abs(alerted_peak - peak_price) < 0.001:
+        return None
+
+    return ('trailing_pullback', 'HIGH')
+
+
 def _write_alert(
     db_path: str,
     pos: dict,
@@ -338,6 +416,18 @@ def _position_keyboard(followup_id: int, alert_type: str) -> dict:
         buttons = [
             [{'text': '✅ Closed position', 'callback_data': f'{base}:closed'},
              {'text': '📈 Holding for T2', 'callback_data': f'{base}:hold_t2'}],
+            [{'text': '⚡ Partial exit',    'callback_data': f'{base}:partial'}],
+        ]
+    elif alert_type in ('t1_profit_lock', 't2_profit_lock'):
+        buttons = [
+            [{'text': '💰 Take profit',     'callback_data': f'{base}:closed'},
+             {'text': '📈 Still holding',   'callback_data': f'{base}:hold_t2'}],
+            [{'text': '⚡ Partial exit',    'callback_data': f'{base}:partial'}],
+        ]
+    elif alert_type == 'trailing_pullback':
+        buttons = [
+            [{'text': '💰 Take profit',     'callback_data': f'{base}:closed'},
+             {'text': '📈 Still holding',   'callback_data': f'{base}:hold_t2'}],
             [{'text': '⚡ Partial exit',    'callback_data': f'{base}:partial'}],
         ]
     elif 'stop' in alert_type:
@@ -424,7 +514,10 @@ def _send_telegram_alert_with_confidence(
 
 def _run_monitor_cycle(db_path: str) -> None:
     """One cycle: load all watching positions, check triggers, fire alerts."""
-    from users.user_store import get_watching_followups, update_followup_status
+    from users.user_store import (
+        get_watching_followups, update_followup_status,
+        update_peak_price, update_alerted_peak_price,
+    )
 
     try:
         positions = get_watching_followups(db_path)
@@ -443,7 +536,38 @@ def _run_monitor_cycle(db_path: str) -> None:
             if price is None:
                 continue
 
+            direction = pos.get('direction', 'bullish')
+            bullish   = direction != 'bearish'
+
+            # Update peak price watermark every cycle (silent, no alert)
+            peak_price = pos.get('peak_price')
+            is_new_peak = (
+                (bullish  and (peak_price is None or price > peak_price)) or
+                (not bullish and (peak_price is None or price < peak_price))
+            )
+            if is_new_peak:
+                try:
+                    update_peak_price(db_path, pos['id'], price)
+                    pos = dict(pos)  # detach so we can mutate for this cycle
+                    pos['peak_price'] = price
+                    pos['peak_price_updated_at'] = datetime.now(timezone.utc).isoformat()
+                except Exception:
+                    pass
+
+            # Compute normalised confidence score (needed for both trigger paths)
+            confidence = None
+            try:
+                confidence = _compute_confidence(db_path, ticker, direction)
+            except Exception:
+                pass
+
+            # Standard trigger checks (structural invalidation, stop, regime, T1/T2)
             result = _check_triggers(pos, price, db_path)
+
+            # Profit trigger checks (profit lock, trailing pullback) — market hours only
+            if result is None and _is_market_hours():
+                result = _check_profit_triggers(pos, price, db_path, confidence)
+
             if result is None:
                 continue
 
@@ -459,12 +583,12 @@ def _run_monitor_cycle(db_path: str) -> None:
                 alert_level=priority,
             )
 
-            # Compute normalised confidence score for Telegram alert
-            confidence = None
-            try:
-                confidence = _compute_confidence(db_path, ticker, pos.get('direction', 'bullish'))
-            except Exception:
-                pass
+            # For trailing_pullback: record which peak triggered the alert
+            if alert_type == 'trailing_pullback':
+                try:
+                    update_alerted_peak_price(db_path, pos['id'], pos['peak_price'])
+                except Exception:
+                    pass
 
             _send_telegram_alert_with_confidence(
                 db_path, pos['user_id'], alert_id, pos, alert_type, price, confidence

@@ -1372,6 +1372,13 @@ def _ensure_tip_followups_table(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tip_followups ADD COLUMN regime_at_entry TEXT")
     if 'conviction_at_entry' not in cols:
         conn.execute("ALTER TABLE tip_followups ADD COLUMN conviction_at_entry TEXT")
+    # Profit target tracking columns
+    if 'peak_price' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN peak_price REAL")
+    if 'peak_price_updated_at' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN peak_price_updated_at TEXT")
+    if 'alerted_peak_price' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN alerted_peak_price REAL")
     # 'active' = user consciously accepted; 'watching' = auto-created at tip send
     # status column already exists in DDL with DEFAULT 'watching'
     conn.commit()
@@ -1384,6 +1391,7 @@ _FOLLOWUP_COLS = [
     'tip_id', 'opened_at', 'closed_at',
     'pattern_type', 'timeframe', 'zone_low', 'zone_high',
     'expires_at', 'regime_at_entry', 'conviction_at_entry',
+    'peak_price', 'peak_price_updated_at', 'alerted_peak_price',
 ]
 _FOLLOWUP_SELECT = """
     SELECT id, user_id, ticker, direction, entry_price,
@@ -1391,7 +1399,8 @@ _FOLLOWUP_SELECT = """
            tracking_target, status, alert_level, last_alert_at,
            tip_id, opened_at, closed_at,
            pattern_type, timeframe, zone_low, zone_high,
-           expires_at, regime_at_entry, conviction_at_entry
+           expires_at, regime_at_entry, conviction_at_entry,
+           peak_price, peak_price_updated_at, alerted_peak_price
     FROM tip_followups
 """
 
@@ -1621,6 +1630,33 @@ def upsert_tip_followup(
             )
         conn.commit()
         return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def update_peak_price(db_path: str, followup_id: int, price: float) -> None:
+    """Update peak_price and peak_price_updated_at for a followup (high watermark)."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        conn.execute(
+            "UPDATE tip_followups SET peak_price = ?, peak_price_updated_at = ? WHERE id = ?",
+            (price, now_iso, followup_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_alerted_peak_price(db_path: str, followup_id: int, peak_price: float) -> None:
+    """Record that a trailing pullback alert was fired for this peak price."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        conn.execute(
+            "UPDATE tip_followups SET alerted_peak_price = ? WHERE id = ?",
+            (peak_price, followup_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 

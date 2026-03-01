@@ -543,15 +543,18 @@ def format_position_update(alert_type: str, pos: dict, current_price: float) -> 
     _ep = lambda p: _e(_fmt_price(p)) if p else 'N/A'
 
     _ALERT_HEADERS = {
-        't1_zone_reached':          ('⚡', 'POSITION UPDATE', 'T1 zone reached ✅'),
-        't2_zone_reached':          ('🎯', 'POSITION UPDATE', 'T2 zone reached ✅'),
-        'stop_loss_zone_reached':   ('🛑', 'POSITION ALERT',  'Approaching stop zone ⚠️'),
-        'pattern_invalidated':      ('❌', 'POSITION ALERT',  'Pattern invalidated'),
-        'conviction_tier_dropped':  ('⚠️', 'POSITION UPDATE', 'Conviction tier dropped'),
-        'regime_shift_detected':    ('🔄', 'POSITION UPDATE', 'Regime shift detected'),
-        'earnings_within_2_days':   ('📋', 'POSITION ALERT',  'Earnings within 2 days'),
-        'sector_tailwind_reversed': ('↩️', 'POSITION UPDATE', 'Sector tailwind reversed'),
-        'short_squeeze_developing': ('🔥', 'POSITION UPDATE', 'Short squeeze developing'),
+        't1_zone_reached':          ('\u26a1', 'POSITION UPDATE', 'T1 zone reached \u2705'),
+        't2_zone_reached':          ('\U0001f3af', 'POSITION UPDATE', 'T2 zone reached \u2705'),
+        'stop_loss_zone_reached':   ('\U0001f6d1', 'POSITION ALERT',  'Approaching stop zone \u26a0\ufe0f'),
+        'pattern_invalidated':      ('\u274c', 'POSITION ALERT',  'Pattern invalidated'),
+        'conviction_tier_dropped':  ('\u26a0\ufe0f', 'POSITION UPDATE', 'Conviction tier dropped'),
+        'regime_shift_detected':    ('\U0001f504', 'POSITION UPDATE', 'Regime shift detected'),
+        'earnings_within_2_days':   ('\U0001f4cb', 'POSITION ALERT',  'Earnings within 2 days'),
+        'sector_tailwind_reversed': ('\u21a9\ufe0f', 'POSITION UPDATE', 'Sector tailwind reversed'),
+        'short_squeeze_developing': ('\U0001f525', 'POSITION UPDATE', 'Short squeeze developing'),
+        't1_profit_lock':           ('\U0001f4b0', 'PROFIT ALERT',   'T1 reached \u2014 KB signals weakening'),
+        't2_profit_lock':           ('\U0001f4b0', 'PROFIT ALERT',   'T2 reached \u2014 KB signals weakening'),
+        'trailing_pullback':        ('\u26a1', 'PROFIT ALERT',   'Pulled back from session high'),
     }
 
     icon, header, subtitle = _ALERT_HEADERS.get(
@@ -569,15 +572,32 @@ def format_position_update(alert_type: str, pos: dict, current_price: float) -> 
     if alert_type == 't1_zone_reached' and t2:
         lines += [
             '',
-            '💡 *Recommended action:*',
+            '\U0001f4a1 *Recommended action:*',
             f'Take 50% at current price \\({_ep(current_price)}\\)',
             f'Move stop on remainder to breakeven \\({_ep(entry)}\\)',
             f'Next target: T2 at {_ep(t2)}',
         ]
+    elif alert_type == 't1_profit_lock':
+        conf_str = f'{int(confidence * 100)}%' if confidence is not None else 'low'
+        lines += [
+            '',
+            f'KB confidence: {_e(conf_str)} and deteriorating',
+            '',
+            '\U0001f4a1 *Recommended action:*',
+            f'T1 is on the table \\({_ep(current_price)} \\+{_e(pnl_str)}\\)',
+            'KB signals weakening \\— consider full exit rather than holding for T2',
+            f'Stop at {_ep(pos.get("stop_loss"))} if holding',
+        ] if t2 else [
+            '',
+            f'KB confidence: {_e(conf_str)} and deteriorating',
+            '',
+            '\U0001f4a1 *Recommended action:*',
+            f'Take profit here \\({_ep(current_price)}\\) \\— KB signals weakening',
+        ]
     elif alert_type == 't2_zone_reached':
         lines += [
             '',
-            '💡 *Recommended action:*',
+            '\U0001f4a1 *Recommended action:*',
             'Consider closing position or trailing stop',
             f'T2 target at {_ep(t2)} has been reached',
         ]
@@ -586,13 +606,13 @@ def format_position_update(alert_type: str, pos: dict, current_price: float) -> 
         lines += [
             f'Stop loss: {_ep(stop)} \\({_e(f"{dist:.1f}%")} away\\)',
             '',
-            '💡 *Recommended action:*',
+            '\U0001f4a1 *Recommended action:*',
             'Close position — approaching your defined risk level',
         ]
     elif alert_type == 'pattern_invalidated':
         lines += [
             '',
-            '💡 *Recommended action:*',
+            '\U0001f4a1 *Recommended action:*',
             'Setup invalidated — KB signal has reversed',
             'Consider closing to preserve capital',
         ]
@@ -602,14 +622,47 @@ def format_position_update(alert_type: str, pos: dict, current_price: float) -> 
             f'Conviction at entry: {_e(entry_conv.title())}',
             'Current conviction has decreased',
             '',
-            '💡 *Recommended action:*',
+            '\U0001f4a1 *Recommended action:*',
             'Consider reducing position size or tightening stop',
         ]
     elif alert_type == 'regime_shift_detected':
         entry_regime = pos.get('regime_at_entry', 'unknown')
         lines += [
             f'Regime at entry: {_e(entry_regime.replace("_", " ").title())}',
-            'Market regime has changed — reassess setup validity',
+            'Market regime has changed \\— reassess setup validity',
+        ]
+    elif alert_type == 't2_profit_lock':
+        conf_str = f'{int(confidence * 100)}%' if confidence is not None else 'low'
+        lines += [
+            '',
+            f'KB confidence: {_e(conf_str)} and deteriorating',
+            '',
+            '\U0001f4a1 *Recommended action:*',
+            f'T2 is on the table \\({_ep(current_price)}\\) \\+{_e(pnl_str)}\\)',
+            "Don't give this back \\— KB showing weakness",
+            'Consider closing or moving stop to T1',
+        ]
+    elif alert_type == 'trailing_pullback':
+        peak = pos.get('peak_price')
+        pullback_pct = 0.0
+        if peak and peak > 0:
+            pullback_pct = abs(peak - current_price) / peak * 100
+        peak_pnl_str = ''
+        if peak and entry:
+            peak_pnl = (peak - entry) / entry * 100
+            if pos.get('direction') == 'bearish':
+                peak_pnl = -peak_pnl
+            sign = '\\+' if peak_pnl >= 0 else ''
+            peak_pnl_str = f' \\({_e(sign)}{_e(f"{peak_pnl:.1f}%")} at peak\\)'
+        lines += [
+            '',
+            f'Session high: {_ep(peak)}{peak_pnl_str}',
+            f'Pullback: {_e(f"{pullback_pct:.1f}%")} from that level',
+            '',
+            '\U0001f4a1 *Decision point:*',
+            'Partial exit locks in profit \\— position may continue or reverse',
+            f'Full exit at {_ep(current_price)} secures {_e(pnl_str)}',
+            f'Stop at {_ep(pos.get("stop_loss"))} if holding for T2',
         ]
 
     return '\n'.join(lines)
