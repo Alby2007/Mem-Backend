@@ -5778,7 +5778,22 @@ def _handle_tg_message(msg: dict) -> None:
     # ── KB retrieval ───────────────────────────────────────────────────────
     conn = _kg.thread_local_conn()
     try:
-        snippet, atoms = retrieve(text, conn, limit=30)
+        # Augment query with portfolio tickers so follow-up questions
+        # ("are my positions at risk?") still retrieve per-ticker KB atoms.
+        _retrieve_text = text
+        if HAS_PRODUCT_LAYER:
+            try:
+                from users.user_store import get_portfolio as _gp
+                from retrieval import _extract_tickers as _et_tg
+                _tg_cur_tickers = _et_tg(text)
+                if not _tg_cur_tickers:
+                    _tg_holdings = _gp(_DB_PATH, user_id)
+                    _tg_port_tickers = [h['ticker'] for h in (_tg_holdings or []) if h.get('ticker')]
+                    if _tg_port_tickers:
+                        _retrieve_text = text + ' ' + ' '.join(_tg_port_tickers)
+            except Exception:
+                pass
+        snippet, atoms = retrieve(_retrieve_text, conn, limit=30)
     except Exception as _re:
         app.logger.error('telegram_webhook: retrieve failed: %s', _re)
         snippet, atoms = '', []
