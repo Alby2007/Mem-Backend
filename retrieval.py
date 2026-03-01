@@ -512,12 +512,13 @@ def retrieve(
                         _add(c.fetchall())
                     except Exception:
                         pass
-                # 1b. UCDP ISO code: subject = 'rus', 'ukr', 'irn' etc.
+                # 1b. UCDP ISO code: stored as predicate on ucdp_conflict subject
+                # Schema: subject='ucdp_conflict', predicate='ukr', object='active_war'
                 for _iso in _GEO_ISO_MAP.get(_entity, []):
                     try:
                         c.execute(
                             "SELECT subject, predicate, object, source, confidence "
-                            "FROM facts WHERE LOWER(subject) = ? "
+                            "FROM facts WHERE subject='ucdp_conflict' AND LOWER(predicate) = ? "
                             "ORDER BY confidence DESC LIMIT 10",
                             (_iso,)
                         )
