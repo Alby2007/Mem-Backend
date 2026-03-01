@@ -7,7 +7,7 @@ sys.path.insert(0, '/home/ubuntu/trading-galaxy')
 os.environ.setdefault('TRADING_KB_DB', '/opt/trading-galaxy/data/trading_knowledge.db')
 
 from retrieval import retrieve
-from knowledge.knowledge_graph import KnowledgeGraph
+from knowledge import KnowledgeGraph
 
 db = os.environ['TRADING_KB_DB']
 kg = KnowledgeGraph(db_path=db)
