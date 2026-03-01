@@ -1828,6 +1828,7 @@ async function refreshDashboard() {
       'no_data':              'No Data',
     };
     const regimeRaw = stats.market_regime || '';
+    console.log('[regime] raw:', stats.market_regime, 'regimeRaw:', regimeRaw);
     document.getElementById('s-regime').textContent = regimeRaw
       ? (_REGIME_LABELS[regimeRaw] || regimeRaw.replace(/_/g,' '))
       : '—';
