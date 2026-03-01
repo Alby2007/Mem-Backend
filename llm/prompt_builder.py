@@ -258,6 +258,26 @@ _SYSTEM_GENERATION_RULE = (
     "explain which adapters need to run."
 )
 
+_SYSTEM_GEO_NO_PORTFOLIO_RULE = (
+    "\n17. GEOPOLITICAL QUERY — NO PORTFOLIO: The user is asking about a war, conflict, or "
+    "geopolitical event but has no portfolio on file. You MUST still answer from the KB. "
+    "Structure your response as follows:\n"
+    "(A) CURRENT CONFLICT — Summarise what the KB geo atoms say is happening. "
+    "Quote 2–4 key_finding, headline, or summary atoms verbatim. "
+    "State the source (e.g. 'gdelt_tension:', 'ucdp_conflict:', 'news_wire_defense_news:').\n"
+    "(B) MARKET CONTEXT — State the current market_regime atom value. "
+    "State any macro atoms present (central_bank_stance, yield_curve_spread).\n"
+    "(C) KB DATA AVAILABLE — List what asset classes or tickers the KB has data on "
+    "that are relevant to the conflict (e.g. gold, oil, defence ETFs if present in atoms). "
+    "State their conviction_tier and signal_direction if atoms exist.\n"
+    "(D) HONEST GAP STATEMENT — If the KB has no quantified geo-impact atoms for specific "
+    "tickers, say: 'The KB does not currently have a geopolitical_risk_exposure atom "
+    "linking this conflict to specific tickers. A portfolio is needed for per-holding analysis.'\n"
+    "ABSOLUTE PROHIBITION: NEVER say 'there is no information about a war' if geo atoms "
+    "(gdelt_tension, ucdp_conflict, news_wire_defense_news, geopolitical_data_*) are present "
+    "in the KNOWLEDGE CONTEXT. Those atoms ARE the geopolitical data — read them and answer from them."
+)
+
 _SYSTEM_SIZING_RULE = (
     "\n11. EDUCATIONAL POSITION SIZING: When the user asks about a specific pattern or holding, "
     "you MAY include one short educational sizing example using the actual numbers from USER PORTFOLIO. "
@@ -350,17 +370,21 @@ def build(
     if opportunity_scan_context:
         system_text += _SYSTEM_GENERATION_RULE
 
-    # Geo + portfolio: inject strict impact rule when user asks about events affecting portfolio
-    if portfolio_context:
-        _msg_lower_geo = user_message.lower()
-        _GEO_IMPACT_KEYWORDS = (
-            'war', 'conflict', 'attack', 'strike', 'military', 'iran', 'russia',
-            'ukraine', 'israel', 'gaza', 'sanction', 'tension', 'geopolit',
-            'affect my', 'impact my', 'affect portfolio', 'impact portfolio',
-            'how does', 'what does', 'what is the war', 'started right now',
-        )
-        if any(kw in _msg_lower_geo for kw in _GEO_IMPACT_KEYWORDS):
+    # Geo rules: inject based on whether user has a portfolio or not
+    _msg_lower_geo = user_message.lower()
+    _GEO_IMPACT_KEYWORDS = (
+        'war', 'conflict', 'attack', 'strike', 'military', 'iran', 'russia',
+        'ukraine', 'israel', 'gaza', 'sanction', 'tension', 'geopolit',
+        'affect my', 'impact my', 'affect portfolio', 'impact portfolio',
+        'how does', 'what does', 'what is the war', 'started right now',
+        'going on', 'happening', 'buy', 'invest', 'should i',
+    )
+    _is_geo_msg = any(kw in _msg_lower_geo for kw in _GEO_IMPACT_KEYWORDS)
+    if _is_geo_msg:
+        if portfolio_context:
             system_text += _SYSTEM_GEO_PORTFOLIO_RULE
+        else:
+            system_text += _SYSTEM_GEO_NO_PORTFOLIO_RULE
 
     # ── User turn ─────────────────────────────────────────────────────────────
     user_parts: list[str] = []
