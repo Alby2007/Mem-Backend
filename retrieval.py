@@ -626,9 +626,13 @@ def retrieve(
     # ── 0. Graph-relational context (PageRank + clustering + BFS paths) ───────
     # Fires on relational/explanatory queries and when no explicit tickers present.
     # Fetches a broad atom set for the topic then runs graph analysis over it.
+    # SUPPRESSED for specific geo entity queries: the graph fetches broad atoms
+    # by term and Iran-heavy atoms dominate PageRank, crowding out entity-specific
+    # geo atoms retrieved in step -1. Geo queries get their own dedicated snippet.
     graph_snippet: str = ''
     is_graph_query = any(kw in msg_lower for kw in _GRAPH_TRAVERSAL_KW)
-    if HAS_GRAPH_RETRIEVAL and (is_graph_query or (not tickers and terms)):
+    _suppress_graph = _is_geo_query and bool(_asked_entities)
+    if HAS_GRAPH_RETRIEVAL and (is_graph_query or (not tickers and terms)) and not _suppress_graph:
         try:
             # Broad fetch: all atoms for the first two key terms, up to 200
             graph_atoms: list = []
