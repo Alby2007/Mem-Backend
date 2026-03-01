@@ -2501,8 +2501,14 @@ async function loadProfile() {
       tgStatus.innerHTML = `<span style="color:var(--green);">✓ Linked</span>`;
       if (tgWidget) tgWidget.innerHTML = '';
       if (tgRelink) tgRelink.style.display = 'block';
-      document.getElementById('profile-tg-relink-btn')?.addEventListener('click', () => {
+      document.getElementById('profile-tg-relink-btn')?.addEventListener('click', async () => {
         if (tgRelink) tgRelink.style.display = 'none';
+        tgStatus.innerHTML = `<span style="color:var(--muted);">Unlinking…</span>`;
+        try {
+          await apiFetch(`/users/${state.userId}/telegram`, { method: 'DELETE' });
+        } catch(e) { /* non-fatal */ }
+        tgStatus.innerHTML = `<span style="color:var(--muted);">Not linked</span>`;
+        _profileTgWidgetInjected = false;
         _injectProfileTgWidget();
       });
     } else {

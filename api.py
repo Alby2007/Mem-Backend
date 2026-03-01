@@ -3825,11 +3825,26 @@ def user_onboarding(user_id):
         if not vr.valid:
             return jsonify({'error': 'validation_failed', 'details': vr.errors}), 400
     try:
+        # Check if this is a first-time Telegram link (no existing chat_id)
+        new_chat_id = data.get('telegram_chat_id')
+        existing_chat_id = None
+        if new_chat_id:
+            import sqlite3 as _sq
+            _c = _sq.connect(_DB_PATH, timeout=5)
+            try:
+                _row = _c.execute(
+                    "SELECT telegram_chat_id FROM user_preferences WHERE user_id=?",
+                    (user_id,)
+                ).fetchone()
+                existing_chat_id = (_row[0] or '').strip() if _row else ''
+            finally:
+                _c.close()
+
         prefs = update_preferences(
             _DB_PATH, user_id,
             selected_sectors=data.get('selected_sectors'),
             selected_risk=data.get('risk_tolerance'),
-            telegram_chat_id=data.get('telegram_chat_id'),
+            telegram_chat_id=new_chat_id,
             delivery_time=data.get('delivery_time'),
             timezone_str=data.get('timezone'),
             onboarding_complete=1,
@@ -3838,6 +3853,29 @@ def user_onboarding(user_id):
                         ip_address=request.remote_addr,
                         user_agent=request.user_agent.string,
                         outcome='success')
+
+        # Send welcome message on first-time Telegram link
+        if new_chat_id and not existing_chat_id:
+            try:
+                from notifications.telegram_notifier import TelegramNotifier as _TGN
+                _notifier = _TGN()
+                _welcome = (
+                    "👋 *Welcome to Trading Galaxy\\!*\n\n"
+                    "You're now connected to our signal delivery service\\. Here's what to expect:\n\n"
+                    "📊 *Daily Tips* — Pattern\\-based trade setups delivered at your chosen time, "
+                    "sized to your account and risk tolerance\\.\n\n"
+                    "🔔 *Position Alerts* — When a trade you've taken hits a target or stop zone, "
+                    "we'll ping you here immediately\\.\n\n"
+                    "🧠 *AI Chat* — Ask anything about your portfolio, signals, or market conditions "
+                    "at [app\\.trading\\-galaxy\\.uk](https://app.trading-galaxy.uk)\\.\n\n"
+                    "Your tips will arrive at your configured delivery time\\. "
+                    "You can update your preferences any time in the Profile section\\.\n\n"
+                    "_Trading Galaxy — epistemic signals, not noise\\._"
+                )
+                _notifier.send(new_chat_id, _welcome, parse_mode='MarkdownV2')
+            except Exception:
+                pass  # Non-fatal — don't fail the onboarding if welcome message fails
+
         return jsonify(prefs)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -5244,6 +5282,37 @@ def user_telegram_verify(user_id: str):
         notifier = TelegramNotifier()
         sent = notifier.send_test(chat_id)
         return jsonify({'sent': sent})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/telegram', methods=['DELETE'])
+@require_auth
+def user_telegram_delink(user_id: str):
+    """
+    DELETE /users/<user_id>/telegram
+
+    Clears the stored telegram_chat_id, effectively de-linking the account.
+    Returns {"delinked": true}.
+    """
+    err = assert_self(user_id)
+    if err: return err
+    import sqlite3 as _sq
+    try:
+        _c = _sq.connect(_DB_PATH, timeout=10)
+        try:
+            _c.execute(
+                "UPDATE user_preferences SET telegram_chat_id = NULL WHERE user_id = ?",
+                (user_id,)
+            )
+            _c.commit()
+        finally:
+            _c.close()
+        log_audit_event(_DB_PATH, action='telegram_delink', user_id=user_id,
+                        ip_address=request.remote_addr,
+                        user_agent=request.user_agent.string,
+                        outcome='success')
+        return jsonify({'delinked': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
