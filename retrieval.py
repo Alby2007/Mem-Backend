@@ -436,6 +436,7 @@ def retrieve(
         'us_macro', 'fed', 'ecb',
     )
     _is_geo_query = any(kw in msg_lower for kw in _GEO_KEYWORDS)
+    _asked_entities: list = []   # populated inside if _is_geo_query block below
     if _is_geo_query:
         # Detect which specific geo entity the user asked about so we can
         # prioritise atoms for THAT entity rather than dumping all geo atoms.
