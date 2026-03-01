@@ -437,20 +437,115 @@ def retrieve(
     )
     _is_geo_query = any(kw in msg_lower for kw in _GEO_KEYWORDS)
     if _is_geo_query:
+        # Detect which specific geo entity the user asked about so we can
+        # prioritise atoms for THAT entity rather than dumping all geo atoms.
+        # This prevents "tell me about Russia" returning Iran headlines.
+        _GEO_ENTITY_MAP = {
+            'russia':      ['%russia%', '%russian%', '%kremlin%', '%moscow%'],
+            'ukraine':     ['%ukraine%', '%ukrainian%', '%kyiv%', '%zelensky%'],
+            'iran':        ['%iran%', '%iranian%', '%tehran%', '%irgc%'],
+            'israel':      ['%israel%', '%israeli%', '%idf%', '%jerusalem%'],
+            'gaza':        ['%gaza%', '%hamas%', '%palestine%', '%palestinian%'],
+            'china':       ['%china%', '%chinese%', '%beijing%', '%pla%'],
+            'taiwan':      ['%taiwan%', '%taiwanese%', '%taipei%'],
+            'north korea': ['%north korea%', '%dprk%', '%kim jong%'],
+            'pakistan':    ['%pakistan%', '%pakistani%', '%islamabad%'],
+            'afghanistan': ['%afghanistan%', '%taliban%', '%kabul%'],
+            'syria':       ['%syria%', '%syrian%', '%damascus%'],
+            'venezuela':   ['%venezuela%', '%venezuelan%', '%caracas%'],
+        }
+        _asked_entities = [
+            entity for entity, _ in _GEO_ENTITY_MAP.items()
+            if entity in msg_lower
+        ]
+
+        # Step 1: if a specific entity was named, fetch entity-specific atoms first
+        # with a higher slot budget so they dominate the context block.
+        if _asked_entities:
+            for _entity in _asked_entities[:2]:  # cap at 2 entities
+                _entity_patterns = _GEO_ENTITY_MAP[_entity]
+                for _pat in _entity_patterns[:3]:
+                    try:
+                        c.execute(
+                            "SELECT subject, predicate, object, source, confidence "
+                            "FROM facts WHERE LOWER(object) LIKE ? "
+                            "AND predicate IN ('key_finding','headline','summary','event',"
+                            "'catalyst','risk_factor','conflict_status','parties_involved',"
+                            "'location','severity','escalation') "
+                            "ORDER BY timestamp DESC, confidence DESC LIMIT 15",
+                            (_pat,)
+                        )
+                        _add(c.fetchall())
+                    except Exception:
+                        pass
+                # Also search subject field for the entity
+                try:
+                    c.execute(
+                        "SELECT subject, predicate, object, source, confidence "
+                        "FROM facts WHERE LOWER(subject) LIKE ? "
+                        "ORDER BY confidence DESC LIMIT 10",
+                        (f'%{_entity}%',)
+                    )
+                    _add(c.fetchall())
+                except Exception:
+                    pass
+
+        # Step 2: geo subject atoms (gdelt_tension, acled_unrest etc.)
+        # If a specific entity was named, filter to atoms mentioning that entity.
+        # Otherwise fetch all geo subject atoms as before.
         try:
             _geo_ph = ','.join('?' * len(_GEO_SUBJECTS))
-            c.execute(
-                f"SELECT subject, predicate, object, source, confidence "
-                f"FROM facts WHERE subject IN ({_geo_ph}) "
-                f"ORDER BY confidence DESC LIMIT 40",
-                _GEO_SUBJECTS,
-            )
-            _add(c.fetchall())
+            if _asked_entities:
+                # Try entity-filtered fetch first
+                for _entity in _asked_entities[:2]:
+                    c.execute(
+                        f"SELECT subject, predicate, object, source, confidence "
+                        f"FROM facts WHERE subject IN ({_geo_ph}) "
+                        f"AND LOWER(object) LIKE ? "
+                        f"ORDER BY confidence DESC LIMIT 20",
+                        (*_GEO_SUBJECTS, f'%{_entity}%')
+                    )
+                    _add(c.fetchall())
+                # Also fetch unfiltered geo subject atoms to fill any gaps
+                c.execute(
+                    f"SELECT subject, predicate, object, source, confidence "
+                    f"FROM facts WHERE subject IN ({_geo_ph}) "
+                    f"ORDER BY confidence DESC LIMIT 20",
+                    _GEO_SUBJECTS,
+                )
+                _add(c.fetchall())
+            else:
+                c.execute(
+                    f"SELECT subject, predicate, object, source, confidence "
+                    f"FROM facts WHERE subject IN ({_geo_ph}) "
+                    f"ORDER BY confidence DESC LIMIT 40",
+                    _GEO_SUBJECTS,
+                )
+                _add(c.fetchall())
         except Exception:
             pass
-        # Pull geo-tagged news: any source with news_wire prefix, or geo data sources
-        # Order by timestamp DESC first so most recent war/conflict headlines appear first
+
+        # Step 3: recent news_wire headlines — filtered to asked entity if present
         try:
+            if _asked_entities:
+                for _entity in _asked_entities[:2]:
+                    c.execute("""
+                        SELECT subject, predicate, object, source, confidence
+                        FROM facts
+                        WHERE (
+                            source LIKE 'news_wire_%'
+                            OR source IN (
+                                'geopolitical_data_gdelt','geopolitical_data_acled',
+                                'geopolitical_data_ucdp'
+                            )
+                        )
+                        AND predicate IN ('key_finding','headline','summary','event','catalyst','risk_factor')
+                        AND LOWER(object) LIKE ?
+                        ORDER BY timestamp DESC, confidence DESC
+                        LIMIT 20
+                    """, (f'%{_entity}%',))
+                    _add(c.fetchall())
+            # Always fetch recent headlines as a fallback (fills remaining slots)
             c.execute("""
                 SELECT subject, predicate, object, source, confidence
                 FROM facts
@@ -463,28 +558,9 @@ def retrieve(
                 )
                 AND predicate IN ('key_finding','headline','summary','event','catalyst','risk_factor')
                 ORDER BY timestamp DESC, confidence DESC
-                LIMIT 40
+                LIMIT 20
             """)
             _add(c.fetchall())
-        except Exception:
-            pass
-        # Also pull atoms whose text mentions geopolitical terms (war, conflict, sanctions etc)
-        try:
-            _geo_text_terms = (
-                '%iran%', '%russia%', '%ukraine%', '%china%', '%taiwan%',
-                '%war%', '%sanction%', '%tension%', '%conflict%', '%tariff%',
-                '%military%', '%nato%', '%opec%', '%geopolit%',
-                '%israel%', '%gaza%', '%pakistan%', '%afghanistan%',
-            )
-            for _gterm in _geo_text_terms[:10]:
-                c.execute(
-                    "SELECT subject, predicate, object, source, confidence "
-                    "FROM facts WHERE LOWER(object) LIKE ? "
-                    "AND predicate IN ('key_finding','headline','summary','catalyst','risk_factor') "
-                    "ORDER BY timestamp DESC, confidence DESC LIMIT 8",
-                    (_gterm,)
-                )
-                _add(c.fetchall())
         except Exception:
             pass
 

@@ -289,7 +289,16 @@ _SYSTEM_GEO_NEWS_RULE = (
     "CRITICAL: The structured atoms in KNOWLEDGE CONTEXT ARE the news data. If ANY of "
     "gdelt_tension, ucdp_conflict, news_wire_defense_news, acled_unrest, geopolitical_data_* "
     "atoms are present, you HAVE data — use all of them. NEVER say you lack information when "
-    "these atoms exist. NEVER pad with vague filler like 'this is a complex situation'."
+    "these atoms exist. NEVER pad with vague filler like 'this is a complex situation'.\n"
+    "ENTITY SPECIFICITY — CRITICAL: If the user asked about a SPECIFIC country or conflict "
+    "(e.g. 'the war in Russia', 'the Iran conflict', 'what's happening in Ukraine'), "
+    "you MUST answer about THAT specific entity. "
+    "If the KB has no atoms mentioning that specific country/conflict, say clearly: "
+    "'The KB does not currently have specific data on [country/conflict]. "
+    "The most recent geo data in the KB covers [mention what IS in the KB]. "
+    "Check back after the next GDELT/UCDP ingest cycle.' "
+    "NEVER substitute a different conflict or country — do NOT say 'the KB has data on Iran' "
+    "when the user asked about Russia. Substitution is FORBIDDEN."
 )
 
 _SYSTEM_GEO_NO_PORTFOLIO_RULE = (
@@ -308,7 +317,10 @@ _SYSTEM_GEO_NO_PORTFOLIO_RULE = (
     "atom linking this conflict to specific tickers — a loaded portfolio is needed for per-holding analysis.'\n"
     "ABSOLUTE PROHIBITION: NEVER say 'there is no information about a war' if geo atoms "
     "(gdelt_tension, ucdp_conflict, news_wire_defense_news, geopolitical_data_*) are present "
-    "in the KNOWLEDGE CONTEXT. Those atoms ARE the geopolitical data — read them and answer from them."
+    "in the KNOWLEDGE CONTEXT. Those atoms ARE the geopolitical data — read them and answer from them.\n"
+    "ENTITY SPECIFICITY: If the user asked about a specific country or conflict, answer about "
+    "THAT entity only. If the KB has no atoms for that specific entity, say so plainly and state "
+    "what geo data the KB DOES have. NEVER substitute a different country's data."
 )
 
 _SYSTEM_TELEGRAM_FORMAT = (
