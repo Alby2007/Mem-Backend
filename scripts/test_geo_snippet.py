@@ -64,7 +64,7 @@ rows = conn_step.execute(
     ('%russia%',)
 ).fetchall()
 print(f"  Step 1a (object LIKE %russia%): {len(rows)} rows")
-for r in rows[:5]: print(f"    {r[0]}|{r[1]}|{str(r[2])[:50]}")
+for r in rows[:5]: print(f"    subj={r[0]} pred={r[1]} src={r[3]} conf={r[4]} obj={str(r[2])[:40]}")
 
 # 1b: UCDP ISO predicate
 rows = conn_step.execute(

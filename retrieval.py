@@ -358,6 +358,10 @@ def retrieve(
     """
     seen: set = set()
     results: List[dict] = []
+    # Dedicated geo bucket: atoms added here are guaranteed to survive
+    # the confidence sort+truncation even when high-conf ticker atoms fill results.
+    geo_results: List[dict] = []
+    _geo_seen: set = set()
 
     def _normalise(r) -> dict | None:
         try:
@@ -388,6 +392,22 @@ def retrieve(
                     and atom['subject'] and atom['object']:
                 seen.add(key)
                 results.append(atom)
+
+    def _add_geo(rows):
+        """Like _add but also registers atoms in geo_results so they survive truncation."""
+        for r in rows:
+            atom = _normalise(r)
+            if not atom:
+                continue
+            key = (atom['subject'][:60], atom['predicate'], atom['object'][:60])
+            if atom['predicate'] not in _NOISE_PREDICATES \
+                    and atom['subject'] and atom['object']:
+                if key not in seen:
+                    seen.add(key)
+                    results.append(atom)
+                if key not in _geo_seen:
+                    _geo_seen.add(key)
+                    geo_results.append(atom)
 
     c = conn.cursor()
     msg_lower = message.lower()
@@ -510,7 +530,7 @@ def retrieve(
                             "ORDER BY timestamp DESC, confidence DESC LIMIT 15",
                             (_pat,)
                         )
-                        _add(c.fetchall())
+                        _add_geo(c.fetchall())
                     except Exception:
                         pass
                 # 1b. UCDP ISO code: stored as predicate on ucdp_conflict subject
@@ -523,7 +543,7 @@ def retrieve(
                             "ORDER BY confidence DESC LIMIT 10",
                             (_iso,)
                         )
-                        _add(c.fetchall())
+                        _add_geo(c.fetchall())
                     except Exception:
                         pass
                 # 1c. GDELT predicate names: 'russia_ukraine_score', 'us_iran_trend' etc.
@@ -535,7 +555,7 @@ def retrieve(
                             "ORDER BY confidence DESC LIMIT 10",
                             (_ppat,)
                         )
-                        _add(c.fetchall())
+                        _add_geo(c.fetchall())
                     except Exception:
                         pass
                 # 1d. Subject field name search (catches any subject named after the country)
@@ -546,7 +566,7 @@ def retrieve(
                         "ORDER BY confidence DESC LIMIT 10",
                         (f'%{_entity}%',)
                     )
-                    _add(c.fetchall())
+                    _add_geo(c.fetchall())
                 except Exception:
                     pass
 
@@ -565,7 +585,7 @@ def retrieve(
                         f"ORDER BY confidence DESC LIMIT 20",
                         (*_GEO_SUBJECTS, f'%{_entity}%')
                     )
-                    _add(c.fetchall())
+                    _add_geo(c.fetchall())
                 # Also fetch unfiltered geo subject atoms to fill any gaps
                 c.execute(
                     f"SELECT subject, predicate, object, source, confidence "
@@ -573,7 +593,7 @@ def retrieve(
                     f"ORDER BY confidence DESC LIMIT 20",
                     _GEO_SUBJECTS,
                 )
-                _add(c.fetchall())
+                _add_geo(c.fetchall())
             else:
                 c.execute(
                     f"SELECT subject, predicate, object, source, confidence "
@@ -604,7 +624,7 @@ def retrieve(
                         ORDER BY timestamp DESC, confidence DESC
                         LIMIT 20
                     """, (f'%{_entity}%',))
-                    _add(c.fetchall())
+                    _add_geo(c.fetchall())
             # Always fetch recent headlines as a fallback (fills remaining slots)
             c.execute("""
                 SELECT subject, predicate, object, source, confidence
@@ -886,8 +906,24 @@ def retrieve(
         except Exception:
             pass
 
-    if not results:
+    if not results and not geo_results:
         return '', []
+
+    # ── Merge geo_results at the front before confidence sort ─────────────────
+    # geo_results is populated by the entity-specific geo steps and is kept
+    # separate from results so high-confidence ticker atoms (conf=0.95) can't
+    # displace lower-confidence geo atoms (conf=0.5-0.7) during sort+truncation.
+    if geo_results:
+        # Add any geo atoms not already in results (avoid doubles)
+        for _ga in geo_results:
+            _gkey = (_ga['subject'][:60], _ga['predicate'], _ga['object'][:60])
+            if _gkey not in {(a['subject'][:60], a['predicate'], a['object'][:60]) for a in results}:
+                results.insert(0, _ga)
+        # Limit non-geo atoms so geo atoms are guaranteed slots
+        _non_geo = [a for a in results if a not in geo_results]
+        _geo_in_results = [a for a in results if a in geo_results or
+                          any(a['subject'][:60]==g['subject'][:60] and a['predicate']==g['predicate'] for g in geo_results)]
+        results = _geo_in_results + _non_geo
 
     # ── Pin geo entity atoms to front before confidence sort ──────────────────
     # For geo queries, entity-specific atoms (UCDP, GDELT, news about Russia/Ukraine
