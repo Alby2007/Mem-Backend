@@ -206,10 +206,86 @@ select option { background: var(--surface); }
 .auth-divider { text-align: center; color: var(--muted); font-size: 11px; margin: 8px 0; }
 
 /* ── Profile screen ── */
-#screen-profile { max-width: 520px; margin: 40px auto; }
-.profile-section { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+#screen-profile { max-width: 1020px; }
+.prf-page-title { font-size: 20px; font-weight: 700; color: var(--text); margin-bottom: 24px; }
+.prf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.prf-col { display: flex; flex-direction: column; gap: 16px; }
+
+.prf-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.prf-card-header { padding: 12px 18px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.prf-card-title { font-size: 10px; font-weight: 700; letter-spacing: 2.5px; color: var(--accent); }
+.prf-card-link { font-size: 11px; color: var(--accent); cursor: pointer; text-decoration: none; }
+.prf-card-link:hover { text-decoration: underline; }
+.prf-card-body { padding: 18px; }
+.prf-card-body-tight { padding-top: 4px; padding-bottom: 4px; }
+
+.prf-identity { display: flex; align-items: center; gap: 16px; padding: 18px; }
+.prf-avatar { width: 56px; height: 56px; border-radius: 50%; background: linear-gradient(135deg, var(--accent2), #7c3a00); display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 700; color: #fff; flex-shrink: 0; border: 2px solid var(--accent2); font-family: var(--mono); }
+.prf-identity-info { flex: 1; min-width: 0; }
+.prf-display-name { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prf-username { font-size: 11px; color: var(--accent); font-family: var(--mono); margin-bottom: 3px; }
+.prf-meta { font-size: 11px; color: var(--muted); }
+.prf-member-badge { background: rgba(245,158,11,.08); border: 1px solid var(--accent2); border-radius: 3px; padding: 2px 8px; font-size: 9px; font-weight: 700; letter-spacing: 1.5px; color: var(--accent); flex-shrink: 0; }
+
+.prf-field { margin-bottom: 14px; }
+.prf-field:last-of-type { margin-bottom: 0; }
+.prf-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.prf-hint { font-size: 10px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+.prf-btn-full { width: 100%; margin-top: 14px; }
+.profile-msg { font-size: 11px; margin-top: 8px; min-height: 16px; }
 .profile-section-title { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 14px; }
 .profile-field { margin-bottom: 12px; }
+
+.prf-sub-tier-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.prf-sub-tier-name { font-size: 18px; font-weight: 700; color: var(--text); }
+.prf-sub-tier-price { font-size: 13px; color: var(--accent); font-family: var(--mono); font-weight: 600; }
+.prf-sub-meta-row { display: flex; gap: 20px; margin-bottom: 14px; }
+.prf-sub-meta-item { flex: 1; }
+.prf-sub-meta-label { font-size: 9px; font-weight: 700; letter-spacing: 2px; color: var(--muted); margin-bottom: 3px; text-transform: uppercase; }
+.prf-sub-meta-value { font-size: 12px; color: var(--text); }
+.prf-sub-features { display: flex; flex-direction: column; gap: 5px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 12px; font-size: 11px; color: var(--muted); }
+.prf-sub-upgrade-hint { font-size: 11px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
+.prf-sub-upgrade-hint span { color: var(--accent); cursor: pointer; }
+
+.prf-tg-status-row { display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 14px; }
+.prf-tg-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.prf-tg-dot.linked { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.prf-tg-info { flex: 1; }
+.prf-tg-label { font-size: 11px; color: var(--text); margin-bottom: 2px; }
+.prf-tg-sub { font-size: 10px; color: var(--muted); }
+.prf-tg-steps { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.prf-tg-step { display: flex; gap: 10px; align-items: flex-start; }
+.prf-tg-step-num { width: 18px; height: 18px; border-radius: 50%; background: var(--surface); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: var(--accent); flex-shrink: 0; margin-top: 1px; }
+.prf-tg-step-text { font-size: 11px; color: var(--muted); line-height: 1.5; }
+.prf-tg-step-text a { color: var(--accent); text-decoration: none; }
+.prf-tg-step-text a:hover { text-decoration: underline; }
+.prf-tg-step-text code { background: var(--surface); padding: 1px 5px; border-radius: 3px; font-size: 10px; }
+
+.prf-toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 18px; border-bottom: 1px solid var(--border); }
+.prf-toggle-row:last-child { border-bottom: none; }
+.prf-toggle-info { flex: 1; padding-right: 16px; }
+.prf-toggle-label { font-size: 12px; color: var(--text); margin-bottom: 2px; }
+.prf-toggle-desc { font-size: 10px; color: var(--muted); line-height: 1.4; }
+.prf-pro-tag { font-size: 9px; font-weight: 700; letter-spacing: 1px; color: var(--accent2); vertical-align: middle; }
+.prf-toggle-switch { position: relative; width: 32px; height: 18px; flex-shrink: 0; cursor: pointer; }
+.prf-toggle-switch input { opacity: 0; width: 0; height: 0; }
+.prf-slider { position: absolute; inset: 0; background: var(--border); border-radius: 18px; cursor: pointer; transition: background .2s; }
+.prf-slider::before { content: ''; position: absolute; width: 12px; height: 12px; left: 3px; top: 3px; background: var(--muted); border-radius: 50%; transition: transform .2s, background .2s; }
+.prf-toggle-switch input:checked + .prf-slider { background: rgba(245,158,11,.12); border: 1px solid var(--accent2); }
+.prf-toggle-switch input:checked + .prf-slider::before { transform: translateX(14px); background: var(--accent); }
+.prf-toggle-switch input:disabled + .prf-slider { opacity: 0.4; cursor: default; }
+
+.prf-session-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 18px; }
+.prf-session-device { font-size: 12px; color: var(--text); }
+.prf-session-meta { font-size: 10px; color: var(--muted); margin-top: 2px; }
+.prf-session-current { font-size: 9px; font-weight: 700; letter-spacing: 1px; color: var(--green); }
+
+.prf-danger-card { border-color: rgba(239,68,68,.2); }
+.prf-danger-header { border-bottom-color: rgba(239,68,68,.15); }
+.prf-danger-title { color: var(--red) !important; }
+.prf-danger-text { font-size: 11px; color: var(--muted); line-height: 1.6; margin-bottom: 14px; }
+.btn-danger { background: transparent; border: 1px solid rgba(239,68,68,.4); color: var(--red); border-radius: 4px; padding: 9px 16px; font-size: 12px; font-weight: 700; cursor: pointer; transition: background .15s; }
+.btn-danger:hover { background: rgba(239,68,68,.08); }
 .profile-field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
 .profile-field input { width: 100%; box-sizing: border-box; }
 .profile-field input[readonly] { opacity: 0.55; cursor: default; }
@@ -504,6 +580,8 @@ select option { background: var(--surface); }
 
   /* Profile row: single column */
   .profile-row { grid-template-columns: 1fr; }
+  .prf-grid { grid-template-columns: 1fr; }
+  .prf-field-row { grid-template-columns: 1fr; }
 
   /* Profile screen: no fixed max-width, full bleed */
   #screen-profile { max-width: 100%; margin: 0; }
@@ -1071,77 +1149,220 @@ select option { background: var(--surface); }
 
 <!-- PROFILE ───────────────────────────────────────────────────── -->
 <div class="screen" id="screen-profile">
-  <div style="font-size:20px;font-weight:700;margin-bottom:20px;">Account Profile</div>
+  <h1 class="prf-page-title">Profile</h1>
 
-  <!-- Account Info -->
-  <div class="profile-section">
-    <div class="profile-section-title">Account Info</div>
-    <div class="profile-field">
-      <label>Email Address</label>
-      <input id="profile-email" type="email" readonly />
-    </div>
-    <div class="profile-row">
-      <div class="profile-field">
-        <label>First Name</label>
-        <input id="profile-first" type="text" placeholder="First name" />
+  <div class="prf-grid">
+
+    <!-- LEFT COLUMN -->
+    <div class="prf-col">
+
+      <!-- Identity -->
+      <div class="prf-card">
+        <div class="prf-identity">
+          <div class="prf-avatar" id="profile-avatar">?</div>
+          <div class="prf-identity-info">
+            <div class="prf-display-name" id="profile-display-name">—</div>
+            <div class="prf-username" id="profile-username-display"></div>
+            <div class="prf-meta" id="profile-member-since"></div>
+          </div>
+          <div class="prf-member-badge">BETA</div>
+        </div>
       </div>
-      <div class="profile-field">
-        <label>Last Name</label>
-        <input id="profile-last" type="text" placeholder="Last name" />
+
+      <!-- Account Info -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">ACCOUNT INFO</div></div>
+        <div class="prf-card-body">
+          <div class="prf-field-row">
+            <div class="prf-field">
+              <label>First Name</label>
+              <input id="profile-first" type="text" placeholder="First name" oninput="_prfUpdateDisplay()" />
+            </div>
+            <div class="prf-field">
+              <label>Last Name</label>
+              <input id="profile-last" type="text" placeholder="Last name" oninput="_prfUpdateDisplay()" />
+            </div>
+          </div>
+          <div class="prf-field">
+            <label>Email Address</label>
+            <input id="profile-email" type="email" readonly />
+            <div class="prf-hint">Email cannot be changed. Contact support if needed.</div>
+          </div>
+          <div class="prf-field">
+            <label>Phone Number</label>
+            <input id="profile-phone" type="tel" placeholder="+44 7700 000000" />
+            <div class="prf-hint">Used for account recovery only. Never shared.</div>
+          </div>
+          <button class="btn btn-primary prf-btn-full" id="profile-save-btn">Save Changes</button>
+          <div class="profile-msg" id="profile-save-msg"></div>
+        </div>
       </div>
-    </div>
-    <div class="profile-field">
-      <label>Phone Number</label>
-      <input id="profile-phone" type="tel" placeholder="+44 7700 000000" />
-    </div>
-    <button class="btn btn-primary profile-save-btn" id="profile-save-btn">Save Changes</button>
-    <div class="profile-msg" id="profile-save-msg"></div>
-  </div>
 
-  <!-- Change Password -->
-  <div class="profile-section">
-    <div class="profile-section-title">Change Password</div>
-    <div class="profile-field">
-      <label>Current Password</label>
-      <input id="profile-pw-current" type="password" placeholder="Current password" autocomplete="current-password" />
-    </div>
-    <div class="profile-field">
-      <label>New Password</label>
-      <input id="profile-pw-new" type="password" placeholder="Min 8 characters" autocomplete="new-password" />
-    </div>
-    <div class="profile-field">
-      <label>Confirm New Password</label>
-      <input id="profile-pw-confirm" type="password" placeholder="Repeat new password" autocomplete="new-password" />
-    </div>
-    <button class="btn btn-primary profile-save-btn" id="profile-pw-btn">Update Password</button>
-    <div class="profile-msg" id="profile-pw-msg"></div>
-  </div>
+      <!-- Change Password -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">CHANGE PASSWORD</div></div>
+        <div class="prf-card-body">
+          <div class="prf-field">
+            <label>Current Password</label>
+            <input id="profile-pw-current" type="password" placeholder="Enter current password" autocomplete="current-password" />
+          </div>
+          <div class="prf-field">
+            <label>New Password</label>
+            <input id="profile-pw-new" type="password" placeholder="Min 8 characters" autocomplete="new-password" />
+          </div>
+          <div class="prf-field">
+            <label>Confirm New Password</label>
+            <input id="profile-pw-confirm" type="password" placeholder="Repeat new password" autocomplete="new-password" />
+          </div>
+          <button class="btn btn-primary prf-btn-full" id="profile-pw-btn">Update Password</button>
+          <div class="profile-msg" id="profile-pw-msg"></div>
+        </div>
+      </div>
 
-  <!-- Telegram -->
-  <div class="profile-section">
-    <div class="profile-section-title">Telegram</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Link your Telegram account to receive daily tips and alerts.</div>
-    <div id="profile-tg-status" style="font-size:12px;margin-bottom:14px;color:var(--muted);">Checking…</div>
-    <div id="profile-tg-widget"></div>
-    <div id="profile-tg-relink" style="display:none;">
-      <button class="btn btn-ghost btn-sm" id="profile-tg-relink-btn">Re-link Telegram account</button>
-    </div>
-    <div class="profile-msg" id="profile-tg-msg"></div>
-  </div>
+    </div><!-- /left -->
 
-  <!-- Sign Out -->
-  <div class="profile-section">
-    <div class="profile-section-title">Session</div>
-    <button class="btn btn-ghost profile-save-btn" id="profile-signout-btn">Sign Out</button>
-  </div>
+    <!-- RIGHT COLUMN -->
+    <div class="prf-col">
 
-  <!-- Danger Zone -->
-  <div class="profile-section profile-danger">
-    <div class="profile-section-title">Danger Zone</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Permanently deletes your account and all associated data. This cannot be undone.</div>
-    <button class="btn-danger" id="profile-delete-btn">Delete My Account</button>
-    <div class="profile-msg" id="profile-delete-msg"></div>
-  </div>
+      <!-- Subscription summary -->
+      <div class="prf-card">
+        <div class="prf-card-header">
+          <div class="prf-card-title">SUBSCRIPTION</div>
+          <span class="prf-card-link" onclick="navigate('subscription')">Manage plan →</span>
+        </div>
+        <div class="prf-card-body">
+          <div class="prf-sub-tier-row">
+            <div class="prf-sub-tier-name" id="profile-sub-tier">—</div>
+            <div class="prf-sub-tier-price" id="profile-sub-price"></div>
+          </div>
+          <div class="prf-sub-meta-row">
+            <div class="prf-sub-meta-item">
+              <div class="prf-sub-meta-label">Status</div>
+              <div class="prf-sub-meta-value" style="color:var(--green);">● Active</div>
+            </div>
+            <div class="prf-sub-meta-item">
+              <div class="prf-sub-meta-label">Cycle</div>
+              <div class="prf-sub-meta-value">Monthly</div>
+            </div>
+          </div>
+          <div class="prf-sub-features" id="profile-sub-features"></div>
+          <div class="prf-sub-upgrade-hint" id="profile-sub-upgrade-hint"></div>
+          <button class="btn btn-primary prf-btn-full" onclick="navigate('subscription')">Manage Subscription →</button>
+        </div>
+      </div>
+
+      <!-- Telegram -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">TELEGRAM</div></div>
+        <div class="prf-card-body">
+          <div class="prf-tg-status-row" id="prf-tg-status-row">
+            <div class="prf-tg-dot" id="prf-tg-dot"></div>
+            <div class="prf-tg-info">
+              <div class="prf-tg-label" id="profile-tg-status">Checking…</div>
+              <div class="prf-tg-sub" id="prf-tg-sub">Briefings and alerts won't fire until Telegram is connected.</div>
+            </div>
+          </div>
+          <div class="prf-tg-steps" id="prf-tg-steps">
+            <div class="prf-tg-step">
+              <div class="prf-tg-step-num">1</div>
+              <div class="prf-tg-step-text">Open <a href="https://t.me/TradingGalaxyBot" target="_blank">@TradingGalaxyBot</a> on Telegram and send <code>/start</code></div>
+            </div>
+            <div class="prf-tg-step">
+              <div class="prf-tg-step-num">2</div>
+              <div class="prf-tg-step-text">Click the button below to authorise your account.</div>
+            </div>
+            <div class="prf-tg-step">
+              <div class="prf-tg-step-num">3</div>
+              <div class="prf-tg-step-text">Your account links instantly. Monday briefings start next cycle.</div>
+            </div>
+          </div>
+          <div id="profile-tg-widget"></div>
+          <div id="profile-tg-relink" style="display:none;">
+            <button class="btn btn-ghost btn-sm" id="profile-tg-relink-btn">Re-link Telegram account</button>
+          </div>
+          <div class="profile-msg" id="profile-tg-msg"></div>
+        </div>
+      </div>
+
+      <!-- Notification prefs -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">NOTIFICATION PREFERENCES</div></div>
+        <div class="prf-card-body prf-card-body-tight">
+          <div class="prf-toggle-row">
+            <div class="prf-toggle-info">
+              <div class="prf-toggle-label">Monday briefing</div>
+              <div class="prf-toggle-desc">Weekly setup batch at your configured delivery time</div>
+            </div>
+            <label class="prf-toggle-switch"><input type="checkbox" checked><span class="prf-slider"></span></label>
+          </div>
+          <div class="prf-toggle-row">
+            <div class="prf-toggle-info">
+              <div class="prf-toggle-label">Wednesday update</div>
+              <div class="prf-toggle-desc">Open position status + KB signal changes</div>
+            </div>
+            <label class="prf-toggle-switch"><input type="checkbox" checked><span class="prf-slider"></span></label>
+          </div>
+          <div class="prf-toggle-row">
+            <div class="prf-toggle-info">
+              <div class="prf-toggle-label">Zone hit alerts</div>
+              <div class="prf-toggle-desc">Fire when price enters your entry zone</div>
+            </div>
+            <label class="prf-toggle-switch"><input type="checkbox" checked><span class="prf-slider"></span></label>
+          </div>
+          <div class="prf-toggle-row">
+            <div class="prf-toggle-info">
+              <div class="prf-toggle-label">Thesis break alerts</div>
+              <div class="prf-toggle-desc">Structural invalidation before your stop is hit</div>
+            </div>
+            <label class="prf-toggle-switch"><input type="checkbox" checked><span class="prf-slider"></span></label>
+          </div>
+          <div class="prf-toggle-row">
+            <div class="prf-toggle-info">
+              <div class="prf-toggle-label">Profit lock alerts <span class="prf-pro-tag">PRO+</span></div>
+              <div class="prf-toggle-desc">Exit signal when KB weakens at T1/T2</div>
+            </div>
+            <label class="prf-toggle-switch"><input type="checkbox" disabled><span class="prf-slider"></span></label>
+          </div>
+          <div class="prf-toggle-row">
+            <div class="prf-toggle-info">
+              <div class="prf-toggle-label">Trailing pullback alerts <span class="prf-pro-tag">PRO+</span></div>
+              <div class="prf-toggle-desc">Peak detected + retrace warning</div>
+            </div>
+            <label class="prf-toggle-switch"><input type="checkbox" disabled><span class="prf-slider"></span></label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Session + sign out -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">SESSION</div></div>
+        <div class="prf-card-body prf-card-body-tight">
+          <div class="prf-session-row">
+            <div>
+              <div class="prf-session-device">This browser</div>
+              <div class="prf-session-meta" id="profile-session-meta">Active now</div>
+            </div>
+            <div class="prf-session-current">CURRENT</div>
+          </div>
+        </div>
+        <div style="padding:0 18px 16px;">
+          <button class="btn btn-ghost prf-btn-full" id="profile-signout-btn">Sign Out</button>
+        </div>
+      </div>
+
+      <!-- Danger Zone -->
+      <div class="prf-card prf-danger-card">
+        <div class="prf-card-header prf-danger-header"><div class="prf-card-title prf-danger-title">DANGER ZONE</div></div>
+        <div class="prf-card-body">
+          <div class="prf-danger-text">Permanently deletes your account, portfolio, conversation history, and all associated data. This cannot be undone.</div>
+          <button class="btn-danger prf-btn-full" id="profile-delete-btn">Delete My Account</button>
+          <div class="profile-msg" id="profile-delete-msg"></div>
+        </div>
+      </div>
+
+    </div><!-- /right -->
+
+  </div><!-- /prf-grid -->
 </div>
 
 <!-- SUBSCRIPTION ──────────────────────────────────────────────── -->
@@ -3074,16 +3295,102 @@ document.getElementById('chat-input').addEventListener('input', function() {
 });
 
 // ── PROFILE ───────────────────────────────────────────────────────────────────
+function _prfUpdateDisplay() {
+  const first = (document.getElementById('profile-first')?.value || '').trim();
+  const last  = (document.getElementById('profile-last')?.value  || '').trim();
+  const full  = [first, last].filter(Boolean).join(' ') || '—';
+  const initials = [(first[0]||''), (last[0]||'')].join('').toUpperCase() || '?';
+  const dn = document.getElementById('profile-display-name');
+  const av = document.getElementById('profile-avatar');
+  if (dn) dn.textContent = full;
+  if (av) av.textContent = initials;
+}
+
 async function loadProfile() {
   if (!state.userId) return;
   _profileTgWidgetInjected = false;
+
+  // Populate form + identity block
   try {
     const d = await apiFetch('/auth/me');
     if (!d) return;
-    document.getElementById('profile-email').value    = d.email || '';
-    document.getElementById('profile-first').value    = d.first_name || '';
-    document.getElementById('profile-last').value     = d.last_name  || '';
-    document.getElementById('profile-phone').value    = d.phone      || '';
+    document.getElementById('profile-email').value = d.email || '';
+    document.getElementById('profile-first').value = d.first_name || '';
+    document.getElementById('profile-last').value  = d.last_name  || '';
+    document.getElementById('profile-phone').value = d.phone      || '';
+    _prfUpdateDisplay();
+
+    // Username display
+    const unEl = document.getElementById('profile-username-display');
+    if (unEl) unEl.textContent = state.userId || '';
+
+    // Member since — use created_at if available, else today
+    const sinceEl = document.getElementById('profile-member-since');
+    if (sinceEl) {
+      const raw = d.created_at;
+      if (raw) {
+        const dt = new Date(raw);
+        sinceEl.textContent = 'Member since ' + dt.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+      } else {
+        sinceEl.textContent = '';
+      }
+    }
+
+    // Subscription card
+    const tier = (d.tier || 'basic').toLowerCase();
+    const tierPrices = { basic: '£9 / month', pro: '£29 / month', premium: '£79 / month' };
+    const tierNames  = { basic: 'Basic', pro: 'Pro', premium: 'Premium' };
+    const subTierEl  = document.getElementById('profile-sub-tier');
+    const subPriceEl = document.getElementById('profile-sub-price');
+    if (subTierEl)  subTierEl.textContent  = tierNames[tier]  || tier;
+    if (subPriceEl) subPriceEl.textContent = tierPrices[tier] || '';
+
+    const subFeatureSets = {
+      basic: [
+        { on: true,  text: 'Mon + Wed briefings' },
+        { on: true,  text: '2 Monday setups / week' },
+        { on: true,  text: 'FVG + IFVG patterns · 1h & 4h' },
+        { on: true,  text: 'Zone + thesis alerts' },
+        { on: false, text: 'Profit lock + trailing alerts' },
+        { on: false, text: 'All patterns · daily TF · 5 setups' },
+      ],
+      pro: [
+        { on: true,  text: 'Mon + Wed briefings' },
+        { on: true,  text: '5 Monday setups / week' },
+        { on: true,  text: 'All pattern types · 1h, 4h & 1d' },
+        { on: true,  text: 'Zone, thesis, profit lock alerts' },
+        { on: true,  text: 'Trailing pullback alerts' },
+        { on: false, text: 'Daily briefing · unlimited setups' },
+      ],
+      premium: [
+        { on: true, text: 'Daily briefing every morning' },
+        { on: true, text: 'Unlimited setups · all TFs (15m–1d)' },
+        { on: true, text: 'All pattern types' },
+        { on: true, text: 'Zone, thesis, profit lock alerts' },
+        { on: true, text: 'Trailing pullback alerts (T1/T2/T3)' },
+      ],
+    };
+    const featuresEl = document.getElementById('profile-sub-features');
+    if (featuresEl) {
+      const feats = subFeatureSets[tier] || subFeatureSets.basic;
+      featuresEl.innerHTML = feats.map(f =>
+        `<div style="display:flex;gap:8px;align-items:center;">
+          <span style="color:${f.on ? 'var(--green)' : 'var(--border)'};font-size:10px;">${f.on ? '✓' : '–'}</span>
+          <span style="${f.on ? '' : 'color:var(--muted);'}">${escHtml(f.text)}</span>
+        </div>`
+      ).join('');
+    }
+
+    const upgradeEl = document.getElementById('profile-sub-upgrade-hint');
+    if (upgradeEl) {
+      if (tier === 'basic') {
+        upgradeEl.innerHTML = 'Upgrade to <span onclick="navigate(\'subscription\')">Pro (£29/mo)</span> to unlock profit lock alerts, all pattern types, and 5 Monday setups.';
+      } else if (tier === 'pro') {
+        upgradeEl.innerHTML = 'Upgrade to <span onclick="navigate(\'subscription\')">Premium (£79/mo)</span> for daily briefings, unlimited setups and all timeframes.';
+      } else {
+        upgradeEl.textContent = '';
+      }
+    }
   } catch(e) { /* silent */ }
 
   // Telegram link status + widget
@@ -3092,27 +3399,36 @@ async function loadProfile() {
     const tgStatus = document.getElementById('profile-tg-status');
     const tgWidget = document.getElementById('profile-tg-widget');
     const tgRelink = document.getElementById('profile-tg-relink');
+    const tgDot    = document.getElementById('prf-tg-dot');
+    const tgSub    = document.getElementById('prf-tg-sub');
+    const tgSteps  = document.getElementById('prf-tg-steps');
     if (u?.telegram_connected) {
-      tgStatus.innerHTML = `<span style="color:var(--green);">✓ Linked</span>`;
+      if (tgDot)   { tgDot.classList.add('linked'); }
+      if (tgStatus) tgStatus.textContent = '✓ Linked';
+      if (tgSub)   tgSub.textContent = 'Your account is linked. Briefings and alerts are active.';
+      if (tgSteps) tgSteps.style.display = 'none';
       if (tgWidget) tgWidget.innerHTML = '';
       if (tgRelink) tgRelink.style.display = 'block';
       document.getElementById('profile-tg-relink-btn')?.addEventListener('click', async () => {
         if (tgRelink) tgRelink.style.display = 'none';
-        tgStatus.innerHTML = `<span style="color:var(--muted);">Unlinking…</span>`;
+        if (tgStatus) tgStatus.textContent = 'Unlinking…';
         try {
           await apiFetch(`/users/${state.userId}/telegram`, { method: 'DELETE' });
         } catch(e) { /* non-fatal */ }
-        tgStatus.innerHTML = `<span style="color:var(--muted);">Not linked</span>`;
+        if (tgDot)   tgDot.classList.remove('linked');
+        if (tgStatus) tgStatus.textContent = 'Not linked';
+        if (tgSub)   tgSub.textContent = "Briefings and alerts won't fire until Telegram is connected.";
+        if (tgSteps) tgSteps.style.display = '';
         _profileTgWidgetInjected = false;
         _injectProfileTgWidget();
       });
     } else {
-      tgStatus.innerHTML = `<span style="color:var(--muted);">Not linked</span>`;
+      if (tgStatus) tgStatus.textContent = 'Not linked';
       _injectProfileTgWidget();
     }
   } catch(e) {
     const tgStatus = document.getElementById('profile-tg-status');
-    if (tgStatus) tgStatus.innerHTML = `<span style="color:var(--muted);">Not linked</span>`;
+    if (tgStatus) tgStatus.textContent = 'Not linked';
     _injectProfileTgWidget();
   }
 }
