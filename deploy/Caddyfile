@@ -6,6 +6,38 @@
 # To test with an IP only (no domain), replace the domain block with:
 #   :80 { reverse_proxy trading-galaxy:5050 }
 
+app.trading-galaxy.uk {
+    # Automatic HTTPS — Caddy handles ACME challenge and renewal
+
+    # Security headers — Cache-Control: no-store prevents Cloudflare caching HTML
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options    "nosniff"
+        X-Frame-Options           "SAMEORIGIN"
+        Referrer-Policy           "strict-origin-when-cross-origin"
+        Cache-Control             "no-store, no-cache, must-revalidate"
+        Pragma                    "no-cache"
+        -Server
+    }
+
+    # Proxy to Flask on localhost
+    reverse_proxy localhost:5050 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Real-IP       {remote_host}
+        header_up Host            {host}
+    }
+
+    # Access log
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size     50mb
+            roll_keep     5
+            roll_keep_for 720h
+        }
+        format json
+    }
+}
+
 api.trading-galaxy.uk {
     # Automatic HTTPS — Caddy handles ACME challenge and renewal
 
