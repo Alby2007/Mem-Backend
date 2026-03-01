@@ -950,14 +950,7 @@ select option { background: var(--surface); }
     <div class="profile-section-title">Telegram</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Link your Telegram account to receive daily tips and alerts.</div>
     <div id="profile-tg-status" style="font-size:12px;margin-bottom:14px;color:var(--muted);">Checking…</div>
-    <div id="profile-tg-widget">
-      <script src="https://telegram.org/js/telegram-widget.js?22"
-        data-telegram-login="TheTelescopeBot"
-        data-size="medium"
-        data-radius="5"
-        data-onauth="onProfileTelegramLink(user)"
-        data-request-access="write"></script>
-    </div>
+    <div id="profile-tg-widget"></div>
     <div id="profile-tg-relink" style="display:none;">
       <button class="btn btn-ghost btn-sm" id="profile-tg-relink-btn">Re-link Telegram account</button>
     </div>
@@ -2506,21 +2499,45 @@ async function loadProfile() {
     const tgRelink = document.getElementById('profile-tg-relink');
     if (u?.telegram_connected) {
       tgStatus.innerHTML = `<span style="color:var(--green);">✓ Linked</span>`;
-      if (tgWidget) tgWidget.style.display = 'none';
+      if (tgWidget) tgWidget.innerHTML = '';
       if (tgRelink) tgRelink.style.display = 'block';
       document.getElementById('profile-tg-relink-btn')?.addEventListener('click', () => {
-        if (tgWidget) tgWidget.style.display = 'block';
         if (tgRelink) tgRelink.style.display = 'none';
+        _injectProfileTgWidget();
       });
     } else {
       tgStatus.innerHTML = `<span style="color:var(--muted);">Not linked</span>`;
-      if (tgWidget) tgWidget.style.display = 'block';
-      if (tgRelink) tgRelink.style.display = 'none';
+      _injectProfileTgWidget();
     }
   } catch(e) {
     const tgStatus = document.getElementById('profile-tg-status');
     if (tgStatus) tgStatus.innerHTML = `<span style="color:var(--muted);">Not linked</span>`;
+    _injectProfileTgWidget();
   }
+}
+
+function _injectProfileTgWidget() {
+  const container = document.getElementById('profile-tg-widget');
+  if (!container) return;
+  container.innerHTML = '';
+  // Telegram widget JS is already loaded (topbar widget). Use Telegram.Login.auth() API.
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-ghost btn-sm';
+  btn.style.cssText = 'border:1px solid #229ED9;color:#229ED9;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;background:none;';
+  btn.innerHTML = '&#9992; Link Telegram Account';
+  btn.addEventListener('click', function() {
+    if (window.Telegram && window.Telegram.Login) {
+      window.Telegram.Login.auth(
+        { bot_id: '8516826412', request_access: true },
+        function(tgData) { if (tgData) onProfileTelegramLink(tgData); }
+      );
+    } else {
+      // Fallback: open oauth page
+      const url = 'https://oauth.telegram.org/auth?bot_id=8516826412&origin=' + encodeURIComponent(location.origin) + '&return_to=' + encodeURIComponent(location.href);
+      window.open(url, '_blank', 'width=550,height=470');
+    }
+  });
+  container.appendChild(btn);
 }
 
 
