@@ -62,7 +62,7 @@ If the user asks for a recommendation, redirect by explaining what the KB data s
 and frame any position discussion as an educational sizing example (see rule 11).
 4. When the context contains conflicting signals, surface the conflict rather than \
 picking a side.
-5. Match response depth to the question. For single-ticker questions, be concise and lead with the most actionable insight. For portfolio-wide questions (when USER PORTFOLIO block is present and the user asks about their portfolio, holdings, or multiple tickers), provide a comprehensive per-holding analysis — cover every holding that has KB data, including price regime, signal direction, returns, and sizing context.
+5. Match response depth to the question. For single-ticker questions, be concise and lead with the most actionable insight. For portfolio-wide questions, depth and coverage are governed by rule 14 (narrative mode) or rule 15 (opportunity mode) — follow whichever applies. For general or conversational questions, keep the answer focused and proportionate to what was asked.
 6. Do NOT reproduce metadata tags, stress scores, diagnostic labels, or the \
 comment-style section markers (lines beginning with #) in your answer — \
 they are internal structure for you to navigate, not content to show the user. \
@@ -246,19 +246,20 @@ _SYSTEM_GENERATION_RULE = (
     "\n20. OPPORTUNITY GENERATION MODE: An === OPPORTUNITY SCAN === block is present. "
     "You MUST use it as your primary source for this response. "
     "Your job is to turn the raw KB scan results into a concrete, actionable strategy. "
-    "Structure your response as follows:\n"
-    "  (A) MARKET CONTEXT — 1-2 sentences on the current regime and macro state from the scan.\n"
-    "  (B) TOP SETUPS — For each result in the scan (numbered), write 2-3 sentences: "
-    "what the setup is, WHY it qualifies (using the exact atom values: conviction_tier, "
-    "signal_direction, signal_quality, squeeze potential, sector tailwind etc.), "
-    "and the key risk/invalidation. Refer to tickers by symbol only. "
-    "If a pattern is detected, describe the structural entry (zone_high/zone_low if present). "
-    "If position_size_pct is present, mention it as an educational sizing reference.\n"
-    "  (C) STRATEGY RULES — 3-5 concrete rules for THIS scan mode (e.g. for intraday: "
+    "Write in flowing prose with minimal headers — NO bold labeled sections like 'A) MARKET CONTEXT'. "
+    "Cover these points in natural order:\n"
+    "Open with 1-2 sentences on the current market regime and macro state from the scan. "
+    "Then present the top setups: for each result in the scan (numbered list is fine), write "
+    "2-3 sentences stating what the setup is, WHY it qualifies using the exact atom values "
+    "(conviction_tier, signal_direction, signal_quality, squeeze potential, sector tailwind), "
+    "and the key risk or invalidation level. Refer to tickers by symbol only. "
+    "If a pattern is detected, mention the structural entry zone (zone_high/zone_low if present). "
+    "If position_size_pct is present, cite it as an educational sizing reference.\n"
+    "Then state 3-5 concrete rules for this scan mode (e.g. for intraday: "
     "time windows, stop placement, target, risk-per-trade). "
-    "Derive rules from the KB atoms — do NOT invent rules from training data.\n"
-    "  (D) WATCH LIST — Tickers from the scan that need more KB data before acting "
-    "(thin atoms, no pattern, weak quality). List them briefly.\n"
+    "Derive these rules from the KB atoms — do NOT invent rules from training data.\n"
+    "Finally, briefly list any tickers from the scan that need more KB data before acting "
+    "(thin atoms, no pattern, weak quality).\n"
     "CRITICAL: All numbers (prices, upside %, position size) must come from the "
     "OPPORTUNITY SCAN block — never from training data. "
     "If the scan is empty or has notes saying data is missing, say so clearly and "
@@ -414,9 +415,9 @@ def build(
         _msg_lower = user_message.lower()
         _is_opportunity_query = any(kw in _msg_lower for kw in (
             'good position', 'open position', 'best setup', 'best position',
-            'what to trade', 'trade now', 'investment opportunit', 'opportunity',
-            'what should i', 'where to invest', 'strongest signal', 'top setup',
-            'new position', 'enter a position', 'add to',
+            'what to trade', 'trade now', 'investment opportunit',
+            'what should i trade', 'where to invest', 'strongest signal', 'top setup',
+            'new position', 'enter a position', 'add to my portfolio',
         ))
         if _is_opportunity_query:
             system_text += _SYSTEM_POSITIONS_RULE
@@ -474,12 +475,10 @@ def build(
             system_text += _SYSTEM_GEO_PORTFOLIO_RULE
         else:
             system_text += _SYSTEM_GEO_NO_PORTFOLIO_RULE
-    elif _is_geo_topic and not _is_geo_financial and not portfolio_context:
+    elif _is_geo_topic and not _is_geo_financial and not portfolio_context and not telegram_mode:
         # Pure news/info geo query with no portfolio present — inject detailed
-        # briefing rule. Gated on not portfolio_context to be mutex with rule 21:
-        # if portfolio is present AND geo topic, rule 21 fires (financial angle
-        # implicitly needed). Rule 23 only fires when there is genuinely no
-        # portfolio and no financial intent.
+        # briefing rule. Gated on not portfolio_context (mutex with rule 21) and
+        # not telegram_mode (Telegram format override handles length/depth instead).
         system_text += _SYSTEM_GEO_NEWS_RULE
 
     # ── User turn ─────────────────────────────────────────────────────────────
