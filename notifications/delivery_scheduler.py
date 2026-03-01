@@ -56,10 +56,12 @@ def _should_deliver(
     user_id: str,
     delivery_time: str,
     timezone_str: str,
+    tier: str = 'basic',
 ) -> bool:
     """
     Return True if delivery should fire now for this user:
       - current local HH:MM matches delivery_time
+      - correct weekday for the user's tier (basic=monday, pro=mon+wed, premium=daily)
       - no successful delivery recorded on today's local date
     """
     local_now  = _get_local_now(timezone_str)
@@ -68,6 +70,16 @@ def _should_deliver(
 
     if local_time != delivery_time:
         return False
+
+    # Tier weekday gate
+    from notifications.tip_formatter import TIER_LIMITS
+    limits        = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
+    delivery_days = limits.get('delivery_days', ['monday'])
+    if delivery_days != 'daily':
+        _WEEKDAY_NAMES = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
+        today_name = _WEEKDAY_NAMES[local_now.date().weekday()]
+        if today_name not in delivery_days:
+            return False
 
     from users.user_store import already_delivered_today
     return not already_delivered_today(db_path, user_id, local_date)
@@ -89,7 +101,8 @@ def _deliver_to_user(db_path: str, user_id: str, user_prefs: dict) -> None:
         return
 
     try:
-        snapshot = curate_snapshot(user_id, db_path)
+        tier     = user_prefs.get('tier', 'basic')
+        snapshot = curate_snapshot(user_id, db_path, tier=tier)
         message  = format_snapshot(snapshot)
 
         notifier = TelegramNotifier()
@@ -198,12 +211,28 @@ class DeliveryScheduler:
 
         for user_id, chat_id, delivery_time, tz_str in rows:
             try:
-                if _should_deliver(self._db_path, user_id, delivery_time, tz_str or 'UTC'):
+                # Load tier for this user (needed for weekday gate)
+                _tier = 'basic'
+                try:
+                    import sqlite3 as _sq
+                    _tc = _sq.connect(self._db_path, timeout=5)
+                    _tr = _tc.execute(
+                        "SELECT tier FROM user_preferences WHERE user_id=? LIMIT 1",
+                        (user_id,)
+                    ).fetchone()
+                    _tc.close()
+                    if _tr and _tr[0]:
+                        _tier = _tr[0]
+                except Exception:
+                    pass
+
+                if _should_deliver(self._db_path, user_id, delivery_time, tz_str or 'UTC', tier=_tier):
                     prefs = {
                         'user_id':          user_id,
                         'telegram_chat_id': chat_id,
                         'delivery_time':    delivery_time,
                         'timezone':         tz_str or 'UTC',
+                        'tier':             _tier,
                     }
                     _deliver_to_user(self._db_path, user_id, prefs)
             except Exception as exc:

@@ -374,7 +374,7 @@ def _portfolio_health_section(
 
 # ── Main curator ──────────────────────────────────────────────────────────────
 
-def curate_snapshot(user_id: str, db_path: str) -> CuratedSnapshot:
+def curate_snapshot(user_id: str, db_path: str, tier: str = 'basic') -> CuratedSnapshot:
     """
     Assemble a personalised CuratedSnapshot for a user.
 
@@ -484,9 +484,14 @@ def curate_snapshot(user_id: str, db_path: str) -> CuratedSnapshot:
             )
             candidates.append((ticker_lower, atoms, score))
 
-        # Sort by score desc, take top 5
+        # Sort by score desc; cap by tier batch_size
+        try:
+            from notifications.tip_formatter import TIER_LIMITS as _TL
+            _max_opps = _TL.get(tier, _TL['basic']).get('batch_size', 3)
+        except Exception:
+            _max_opps = 3
         candidates.sort(key=lambda x: x[2], reverse=True)
-        top_candidates = candidates[:5]
+        top_candidates = candidates[:_max_opps]
 
         top_opportunities = [
             _build_opportunity_card(t, a, sector_affinity, existing_tickers)
