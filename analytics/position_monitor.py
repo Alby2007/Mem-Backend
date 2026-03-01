@@ -116,11 +116,58 @@ def _pnl_pct(current: float, entry: float, direction: str) -> float:
     return raw if direction != 'bearish' else -raw
 
 
+_CONFIDENCE_PREDICATES = ('conviction_tier', 'signal_direction', 'sector_tailwind', 'macro_signal')
+
+
+def _compute_confidence(db_path: str, ticker: str, direction: str) -> Optional[float]:
+    """
+    Normalised confidence score: confirming_atoms / max(total_relevant_atoms, 1).
+    Returns None if fewer than 2 relevant atoms found (avoids false precision on
+    thinly-covered tickers).
+    """
+    bullish = direction != 'bearish'
+    confirming = 0
+    total = 0
+    for pred in _CONFIDENCE_PREDICATES:
+        val = _get_kb_atom(db_path, ticker, pred)
+        if val is None:
+            continue
+        total += 1
+        v = val.lower()
+        if pred == 'conviction_tier' and v in ('high', 'strong', 'confirmed'):
+            confirming += 1
+        elif pred == 'signal_direction':
+            if bullish and v in ('long', 'bullish', 'buy'):
+                confirming += 1
+            elif not bullish and v in ('short', 'bearish', 'sell'):
+                confirming += 1
+        elif pred == 'sector_tailwind':
+            if bullish and v in ('positive', 'bullish', 'tailwind'):
+                confirming += 1
+            elif not bullish and v in ('negative', 'bearish', 'headwind'):
+                confirming += 1
+        elif pred == 'macro_signal':
+            if bullish and v in ('risk_on', 'bullish', 'positive'):
+                confirming += 1
+            elif not bullish and v in ('risk_off', 'bearish', 'negative'):
+                confirming += 1
+    if total < 2:
+        return None
+    return confirming / total
+
+
+def _is_market_hours() -> bool:
+    """Return True if current UTC time is within approximate market hours (08:00-16:30 UTC)."""
+    now = datetime.now(timezone.utc)
+    return now.weekday() < 5 and (8, 0) <= (now.hour, now.minute) <= (16, 30)
+
+
 def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
     """
     Evaluate trigger conditions for a position.
     Returns (alert_type, priority) or None.
     Priority: CRITICAL > HIGH > MEDIUM
+    CRITICAL fires any time; HIGH/MEDIUM suppressed outside market hours.
     """
     ticker     = pos['ticker']
     direction  = pos.get('direction', 'bullish')
@@ -129,18 +176,29 @@ def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
     t1         = pos.get('target_1')
     t2         = pos.get('target_2')
     t3         = pos.get('target_3')
+    zone_low   = pos.get('zone_low')
+    zone_high  = pos.get('zone_high')
     tracking   = pos.get('tracking_target', 'T1')
     last_alert = pos.get('last_alert_at')
     alert_level = pos.get('alert_level', '')
     bullish    = direction != 'bearish'
 
-    # ── CRITICAL ──────────────────────────────────────────────────────────────
+    # ── CRITICAL (fires any time) ─────────────────────────────────────────────
     if stop is not None:
         at_stop = (bullish and price <= stop * 1.005) or (not bullish and price >= stop * 0.995)
         if at_stop and _cooldown_ok(last_alert if alert_level == 'CRITICAL' else None, _CRITICAL_COOLDOWN_H):
             return ('stop_loss_zone_reached', 'CRITICAL')
 
-    # Pattern invalidated: opposing conviction_tier or signal_direction atom
+    # Structural invalidation: price closed back through the FVG/OB origin zone
+    if zone_low is not None and zone_high is not None:
+        origin_breached = (
+            (bullish and price < zone_low * 0.998) or
+            (not bullish and price > zone_high * 1.002)
+        )
+        if origin_breached:
+            return ('pattern_invalidated', 'CRITICAL')
+
+    # Signal direction contradicted by KB atom
     sig_dir = _get_kb_atom(db_path, ticker, 'signal_direction')
     if sig_dir:
         contradicted = (bullish and sig_dir in ('short', 'bearish', 'sell')) or \
@@ -152,6 +210,10 @@ def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
     earnings_flag = _get_kb_atom(db_path, ticker, 'pre_earnings_flag')
     if earnings_flag == 'imminent':
         return ('earnings_within_2_days', 'CRITICAL')
+
+    # ── HIGH/MEDIUM — only during market hours ────────────────────────────────
+    if not _is_market_hours():
+        return None
 
     # ── HIGH ─────────────────────────────────────────────────────────────────
     if _cooldown_ok(last_alert if alert_level == 'HIGH' else None, _HIGH_COOLDOWN_H):
@@ -278,6 +340,74 @@ def _position_keyboard(followup_id: int, alert_type: str) -> dict:
     return {'inline_keyboard': buttons}
 
 
+def _check_expiry(pos: dict, db_path: str) -> bool:
+    """
+    Check if a position has passed its expires_at time.
+    If so, mark it expired in DB (no Telegram — batched to next scheduled delivery).
+    Returns True if expired and handled.
+    """
+    expires_at = pos.get('expires_at')
+    if not expires_at:
+        return False
+    try:
+        exp = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+        if datetime.now(timezone.utc) < exp:
+            return False
+    except Exception:
+        return False
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        from users.user_store import update_followup_status
+        update_followup_status(
+            db_path, pos['id'],
+            status='expired',
+            closed_at=now_iso,
+        )
+        _write_alert(db_path, pos, 'pattern_expired', 'LOW', pos.get('entry_price') or 0.0)
+        _log.info('PositionMonitor: expired followup %d %s', pos['id'], pos['ticker'])
+    except Exception as e:
+        _log.debug('PositionMonitor: expiry update failed for followup %d: %s', pos['id'], e)
+    return True
+
+
+def _send_telegram_alert_with_confidence(
+    db_path: str,
+    user_id: str,
+    alert_id: int,
+    pos: dict,
+    alert_type: str,
+    price: float,
+    confidence: Optional[float],
+) -> None:
+    """Format and send a Telegram position update alert with optional confidence score."""
+    try:
+        import sqlite3 as _sql
+        c = _sql.connect(db_path, timeout=5)
+        row = c.execute(
+            "SELECT telegram_chat_id FROM user_preferences WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        c.close()
+        if not row or not row[0]:
+            return
+        chat_id = row[0]
+
+        from notifications.tip_formatter import format_emergency_alert_with_confidence
+        msg = format_emergency_alert_with_confidence(alert_type, pos, price, confidence)
+
+        from notifications.telegram_notifier import TelegramNotifier
+        sent = TelegramNotifier().send(chat_id, msg,
+                                       reply_markup=_position_keyboard(pos['id'], alert_type))
+        if sent:
+            c2 = _sql.connect(db_path, timeout=5)
+            c2.execute("UPDATE position_alerts SET surfaced_tg=1 WHERE id=?", (alert_id,))
+            c2.commit()
+            c2.close()
+    except Exception as e:
+        _log.debug('PositionMonitor: telegram alert failed for %s: %s', user_id, e)
+
+
 def _run_monitor_cycle(db_path: str) -> None:
     """One cycle: load all watching positions, check triggers, fire alerts."""
     from users.user_store import get_watching_followups, update_followup_status
@@ -291,6 +421,10 @@ def _run_monitor_cycle(db_path: str) -> None:
     for pos in positions:
         ticker = pos['ticker']
         try:
+            # Check expiry first — write to DB only, no Telegram
+            if _check_expiry(pos, db_path):
+                continue
+
             price = _get_latest_price(db_path, ticker)
             if price is None:
                 continue
@@ -311,7 +445,16 @@ def _run_monitor_cycle(db_path: str) -> None:
                 alert_level=priority,
             )
 
-            _send_telegram_alert(db_path, pos['user_id'], alert_id, pos, alert_type, price)
+            # Compute normalised confidence score for Telegram alert
+            confidence = None
+            try:
+                confidence = _compute_confidence(db_path, ticker, pos.get('direction', 'bullish'))
+            except Exception:
+                pass
+
+            _send_telegram_alert_with_confidence(
+                db_path, pos['user_id'], alert_id, pos, alert_type, price, confidence
+            )
 
         except Exception as e:
             _log.error('PositionMonitor: error processing followup %d (%s): %s',

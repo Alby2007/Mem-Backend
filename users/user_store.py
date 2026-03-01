@@ -1343,38 +1343,180 @@ ON tip_followups(status, user_id)
 """
 
 
+_FOLLOWUP_EXPIRY_DAYS = {'15m': 2, '1h': 5, '4h': 14, '1d': 28}
+_FOLLOWUP_EXPIRY_DEFAULT = 14
+
+
 def _ensure_tip_followups_table(conn: sqlite3.Connection) -> None:
     conn.execute(_DDL_TIP_FOLLOWUPS)
     conn.execute(_DDL_TIP_FOLLOWUPS_IDX)
-    # Migrate: add opened_at if table existed with older schema (created_at only)
+    # Idempotent column migrations
     cols = {row[1] for row in conn.execute("PRAGMA table_info(tip_followups)")}
     if 'opened_at' not in cols:
         conn.execute("ALTER TABLE tip_followups ADD COLUMN opened_at TEXT NOT NULL DEFAULT ''")
         conn.execute("UPDATE tip_followups SET opened_at = created_at WHERE opened_at = ''")
     if 'closed_at' not in cols:
         conn.execute("ALTER TABLE tip_followups ADD COLUMN closed_at TEXT")
+    # Living portfolio briefing columns
+    if 'pattern_type' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN pattern_type TEXT")
+    if 'timeframe' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN timeframe TEXT")
+    if 'zone_low' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN zone_low REAL")
+    if 'zone_high' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN zone_high REAL")
+    if 'expires_at' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN expires_at TEXT")
+    if 'regime_at_entry' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN regime_at_entry TEXT")
+    if 'conviction_at_entry' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN conviction_at_entry TEXT")
+    # 'active' = user consciously accepted; 'watching' = auto-created at tip send
+    # status column already exists in DDL with DEFAULT 'watching'
     conn.commit()
 
 
+_FOLLOWUP_COLS = [
+    'id', 'user_id', 'ticker', 'direction', 'entry_price',
+    'stop_loss', 'target_1', 'target_2', 'target_3',
+    'tracking_target', 'status', 'alert_level', 'last_alert_at',
+    'tip_id', 'opened_at', 'closed_at',
+    'pattern_type', 'timeframe', 'zone_low', 'zone_high',
+    'expires_at', 'regime_at_entry', 'conviction_at_entry',
+]
+_FOLLOWUP_SELECT = """
+    SELECT id, user_id, ticker, direction, entry_price,
+           stop_loss, target_1, target_2, target_3,
+           tracking_target, status, alert_level, last_alert_at,
+           tip_id, opened_at, closed_at,
+           pattern_type, timeframe, zone_low, zone_high,
+           expires_at, regime_at_entry, conviction_at_entry
+    FROM tip_followups
+"""
+
+
 def get_watching_followups(db_path: str) -> List[dict]:
-    """Return all tip followups with status='watching' across all users."""
+    """Return all tip followups with status in ('watching','active') across all users."""
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         _ensure_tip_followups_table(conn)
         rows = conn.execute(
-            """SELECT id, user_id, ticker, direction, entry_price,
-                      stop_loss, target_1, target_2, target_3,
-                      tracking_target, status, alert_level, last_alert_at,
-                      tip_id, opened_at
-               FROM tip_followups
-               WHERE status = 'watching'
-               ORDER BY opened_at DESC"""
+            _FOLLOWUP_SELECT +
+            "WHERE status IN ('watching','active') ORDER BY opened_at DESC"
         ).fetchall()
-        cols = ['id', 'user_id', 'ticker', 'direction', 'entry_price',
-                'stop_loss', 'target_1', 'target_2', 'target_3',
-                'tracking_target', 'status', 'alert_level', 'last_alert_at',
-                'tip_id', 'opened_at']
-        return [dict(zip(cols, r)) for r in rows]
+        return [dict(zip(_FOLLOWUP_COLS, r)) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_user_open_positions(db_path: str, user_id: str) -> List[dict]:
+    """Return open (watching + active) followups for a single user, newest first."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_tip_followups_table(conn)
+        rows = conn.execute(
+            _FOLLOWUP_SELECT +
+            "WHERE user_id = ? AND status IN ('watching','active') ORDER BY opened_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [dict(zip(_FOLLOWUP_COLS, r)) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_recently_closed_positions(db_path: str, user_id: str, since_date: str) -> List[dict]:
+    """
+    Return followups closed since `since_date` (ISO date string, e.g. '2026-03-01').
+    Status values included: closed, expired, stopped_out, hit_t1, hit_t2.
+    """
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_tip_followups_table(conn)
+        rows = conn.execute(
+            _FOLLOWUP_SELECT +
+            """WHERE user_id = ?
+               AND status NOT IN ('watching','active')
+               AND closed_at >= ?
+               ORDER BY closed_at DESC""",
+            (user_id, since_date),
+        ).fetchall()
+        return [dict(zip(_FOLLOWUP_COLS, r)) for r in rows]
+    finally:
+        conn.close()
+
+
+def expire_stale_followups(db_path: str) -> List[dict]:
+    """
+    Close any followups whose expires_at has passed and status is still watching/active.
+    Returns list of expired rows (for inclusion in next scheduled delivery message).
+    Does NOT send Telegram — caller is responsible for surfacing in briefing.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_tip_followups_table(conn)
+        rows = conn.execute(
+            _FOLLOWUP_SELECT +
+            """WHERE expires_at IS NOT NULL
+               AND expires_at <= ?
+               AND status IN ('watching','active')""",
+            (now_iso,),
+        ).fetchall()
+        expired = [dict(zip(_FOLLOWUP_COLS, r)) for r in rows]
+        if expired:
+            ids = [e['id'] for e in expired]
+            conn.execute(
+                f"UPDATE tip_followups SET status='expired', closed_at=? WHERE id IN ({','.join('?'*len(ids))})",
+                [now_iso] + ids,
+            )
+            conn.commit()
+        return expired
+    finally:
+        conn.close()
+
+
+def get_kb_changes_since(
+    db_path: str,
+    since_iso: str,
+    tickers: Optional[List[str]] = None,
+) -> List[dict]:
+    """
+    Return significant KB atom changes since `since_iso` (ISO datetime string).
+    Filters to _KB_CHANGE_PREDICATES only. Deduplicates by (subject, predicate),
+    keeping the latest value. Optionally scoped to a list of tickers.
+
+    Returns list of dicts: {ticker, predicate, value, changed_at}.
+    """
+    _KB_CHANGE_PREDICATES = (
+        'regime_label', 'market_regime', 'conviction_tier',
+        'macro_signal', 'geopolitical_risk', 'sector_tailwind',
+        'pre_earnings_flag', 'signal_direction',
+    )
+    placeholders = ','.join('?' * len(_KB_CHANGE_PREDICATES))
+    params: list = list(_KB_CHANGE_PREDICATES) + [since_iso]
+
+    base_sql = f"""
+        SELECT subject, predicate, object, MAX(created_at) as changed_at
+        FROM facts
+        WHERE predicate IN ({placeholders})
+          AND created_at >= ?
+    """
+    if tickers:
+        lower_tickers = [t.lower() for t in tickers]
+        base_sql += f" AND LOWER(subject) IN ({','.join('?'*len(lower_tickers))})"
+        params += lower_tickers
+    base_sql += " GROUP BY subject, predicate ORDER BY changed_at DESC"
+
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        rows = conn.execute(base_sql, params).fetchall()
+        return [
+            {'ticker': r[0].upper(), 'predicate': r[1], 'value': r[2], 'changed_at': r[3]}
+            for r in rows
+        ]
+    except Exception:
+        return []
     finally:
         conn.close()
 
@@ -1424,24 +1566,89 @@ def upsert_tip_followup(
     target_2: Optional[float] = None,
     target_3: Optional[float] = None,
     tip_id: Optional[str] = None,
+    pattern_type: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    zone_low: Optional[float] = None,
+    zone_high: Optional[float] = None,
+    regime_at_entry: Optional[str] = None,
+    conviction_at_entry: Optional[str] = None,
+    initial_status: str = 'watching',
 ) -> int:
-    """Insert a new tip followup record. Returns the new row id."""
+    """
+    Insert a new tip followup record. Returns the new row id.
+    initial_status='watching' for auto-created (tip delivery);
+    initial_status='active' for user-accepted (taking_it).
+    """
+    from datetime import timedelta
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         _ensure_tip_followups_table(conn)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        expiry_days = _FOLLOWUP_EXPIRY_DAYS.get(timeframe or '', _FOLLOWUP_EXPIRY_DEFAULT)
+        expires_at = (now + timedelta(days=expiry_days)).isoformat()
         cur = conn.execute(
             """INSERT INTO tip_followups
                (user_id, ticker, direction, entry_price, stop_loss,
-                target_1, target_2, target_3, tip_id, opened_at, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'watching')""",
+                target_1, target_2, target_3, tip_id, opened_at, status,
+                pattern_type, timeframe, zone_low, zone_high, expires_at,
+                regime_at_entry, conviction_at_entry)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (user_id, ticker.upper(), direction, entry_price, stop_loss,
-             target_1, target_2, target_3, tip_id, now),
+             target_1, target_2, target_3, tip_id, now_iso, initial_status,
+             pattern_type, timeframe, zone_low, zone_high, expires_at,
+             regime_at_entry, conviction_at_entry),
         )
         conn.commit()
         return cur.lastrowid
     finally:
         conn.close()
+
+
+def create_tip_followup(
+    db_path: str,
+    user_id: str,
+    ticker: str,
+    tip_id: Optional[str] = None,
+    pattern_id: Optional[int] = None,
+    direction: str = 'bullish',
+    entry_price: Optional[float] = None,
+    stop_loss: Optional[float] = None,
+    target_1: Optional[float] = None,
+    target_2: Optional[float] = None,
+    target_3: Optional[float] = None,
+    position_size: Optional[float] = None,
+    regime_at_entry: Optional[str] = None,
+    conviction_at_entry: Optional[str] = None,
+    pattern_type: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    zone_low: Optional[float] = None,
+    zone_high: Optional[float] = None,
+) -> int:
+    """
+    Create a tip followup from a user 'taking_it' action.
+    Sets status='active' (user-accepted position, distinct from auto-created 'watching').
+    Returns the new followup row id.
+    """
+    return upsert_tip_followup(
+        db_path,
+        user_id             = user_id,
+        ticker              = ticker,
+        direction           = direction,
+        entry_price         = entry_price,
+        stop_loss           = stop_loss,
+        target_1            = target_1,
+        target_2            = target_2,
+        target_3            = target_3,
+        tip_id              = tip_id,
+        pattern_type        = pattern_type,
+        timeframe           = timeframe,
+        zone_low            = zone_low,
+        zone_high           = zone_high,
+        regime_at_entry     = regime_at_entry,
+        conviction_at_entry = conviction_at_entry,
+        initial_status      = 'active',
+    )
 
 
 def update_tip_config(

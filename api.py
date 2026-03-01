@@ -4442,6 +4442,38 @@ def user_cash(user_id: str):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/users/<user_id>/positions/open', methods=['GET'])
+@require_auth
+def user_positions_open(user_id: str):
+    """GET /users/<user_id>/positions/open — open (watching + active) followups."""
+    err = assert_self(user_id)
+    if err: return err
+    try:
+        from users.user_store import get_user_open_positions
+        positions = get_user_open_positions(_DB_PATH, user_id)
+        return jsonify({'user_id': user_id, 'positions': positions, 'count': len(positions)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/positions/closed', methods=['GET'])
+@require_auth
+def user_positions_closed(user_id: str):
+    """GET /users/<user_id>/positions/closed?since=YYYY-MM-DD — recently closed followups."""
+    err = assert_self(user_id)
+    if err: return err
+    try:
+        from users.user_store import get_recently_closed_positions
+        since = request.args.get('since', '')
+        if not since:
+            from datetime import datetime, timedelta, timezone as _tz
+            since = (datetime.now(_tz.utc) - timedelta(days=30)).strftime('%Y-%m-%d')
+        positions = get_recently_closed_positions(_DB_PATH, user_id, since)
+        return jsonify({'user_id': user_id, 'positions': positions, 'count': len(positions), 'since': since})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/users/<user_id>/tip/history', methods=['GET'])
 @require_auth
 def tip_history(user_id: str):
@@ -5960,9 +5992,13 @@ def tip_feedback_action(tip_id: int):
                 target_1    = pos.target_1 if pos else None,
                 target_2    = pos.target_2 if pos else None,
                 target_3    = pos.target_3 if pos else None,
-                position_size = pos.position_size_units if pos else None,
-                regime_at_entry    = pattern_row.get('kb_regime'),
+                position_size       = pos.position_size_units if pos else None,
+                regime_at_entry     = pattern_row.get('kb_regime'),
                 conviction_at_entry = pattern_row.get('kb_conviction'),
+                pattern_type = pattern_row.get('pattern_type'),
+                timeframe    = pattern_row.get('timeframe'),
+                zone_low     = pattern_row.get('zone_low'),
+                zone_high    = pattern_row.get('zone_high'),
             )
 
             # Commit opening atom to personal KB

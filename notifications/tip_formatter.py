@@ -615,6 +615,244 @@ def format_position_update(alert_type: str, pos: dict, current_price: float) -> 
     return '\n'.join(lines)
 
 
+_PREDICATE_LABELS = {
+    'regime_label':      'Regime',
+    'market_regime':     'Market regime',
+    'conviction_tier':   'Conviction',
+    'macro_signal':      'Macro signal',
+    'geopolitical_risk': 'Geopolitical risk',
+    'sector_tailwind':   'Sector tailwind',
+    'pre_earnings_flag': 'Earnings flag',
+    'signal_direction':  'Signal direction',
+}
+
+
+def _format_open_position_line(pos: dict, current_price: Optional[float] = None) -> str:
+    """
+    Render one open position as a single MarkdownV2 line.
+    watching → 📍 On radar
+    active   → 🔓 In position
+    """
+    _e = _escape_mdv2
+    ticker    = pos.get('ticker', '?')
+    status    = pos.get('status', 'watching')
+    direction = pos.get('direction', 'bullish')
+    bullish   = direction != 'bearish'
+    zone_low  = pos.get('zone_low')
+    zone_high = pos.get('zone_high')
+    entry     = pos.get('entry_price')
+    stop      = pos.get('stop_loss')
+    t1        = pos.get('target_1')
+    t2        = pos.get('target_2')
+
+    icon = '🔓' if status == 'active' else '📍'
+    label = 'In position' if status == 'active' else 'On radar'
+
+    parts = [f'{icon} *{_e(ticker)}* \\— {_e(label)}']
+
+    if current_price is not None and zone_low is not None and zone_high is not None:
+        if zone_low <= current_price <= zone_high:
+            parts.append(f'✅ Price in zone \\({_e(_fmt_price(current_price))}\\)')
+            if stop:
+                parts.append(f'Tighten stop → {_e(_fmt_price(stop))}')
+            if t2:
+                parts.append(f'T2 at {_e(_fmt_price(t2))} still in play')
+        elif (bullish and current_price < zone_low) or (not bullish and current_price > zone_high):
+            dist_pct = abs(current_price - (zone_low if bullish else zone_high)) / current_price * 100
+            parts.append(f'Approaching zone \\({_e(_fmt_price(current_price))}p, zone {_e(_fmt_price(zone_low))}\\–{_e(_fmt_price(zone_high))}\\) — {_e(f"{dist_pct:.1f}%")} away')
+        else:
+            parts.append(f'Price {_e(_fmt_price(current_price))} — zone {_e(_fmt_price(zone_low))}\\–{_e(_fmt_price(zone_high))}')
+    elif entry:
+        parts.append(f'Entry {_e(_fmt_price(entry))}')
+        if stop:
+            parts.append(f'Stop {_e(_fmt_price(stop))}')
+
+    return ' \\| '.join(parts)
+
+
+def _format_closed_position_line(pos: dict) -> str:
+    """Render one recently-closed/expired position as a single MarkdownV2 line."""
+    _e = _escape_mdv2
+    ticker = pos.get('ticker', '?')
+    status = pos.get('status', 'expired')
+    entry  = pos.get('entry_price') or 0.0
+
+    _STATUS_OUTCOME = {
+        'hit_t1':      ('✅', 'T1 hit'),
+        'hit_t2':      ('🎯', 'T2 hit'),
+        'stopped_out': ('🛑', 'Stopped out'),
+        'expired':     ('⏰', 'Expired — price never reached zone'),
+        'closed':      ('📕', 'Closed'),
+    }
+    icon, outcome_label = _STATUS_OUTCOME.get(status, ('📕', status.replace('_', ' ').title()))
+
+    pnl_str = ''
+    if status in ('hit_t1', 'hit_t2') and entry:
+        target = pos.get('target_1') if status == 'hit_t1' else pos.get('target_2')
+        if target:
+            pnl = (target - entry) / entry * 100
+            if pos.get('direction') == 'bearish':
+                pnl = -pnl
+            sign = '\\+' if pnl >= 0 else ''
+            pnl_str = f' \\({_e(sign)}{_e(f"{pnl:.1f}%")}\\)'
+
+    return f'{icon} *{_e(ticker)}* \\— {_e(outcome_label)}{pnl_str}'
+
+
+def format_monday_briefing(
+    open_positions: list,
+    new_setups: list,
+    closed_last_week: list,
+    tier: str,
+    get_price_fn=None,
+) -> str:
+    """
+    Render the Monday "Your Week Ahead" living portfolio briefing.
+
+    Parameters
+    ----------
+    open_positions   List of tip_followups dicts (status watching/active).
+    new_setups       List of (pattern_row, position) tuples for new tips.
+    closed_last_week List of tip_followups dicts closed since last Monday.
+    tier             User's tier string.
+    get_price_fn     Optional callable(ticker) -> float | None for current prices.
+    """
+    from datetime import datetime, timezone as _tz
+    _e = _escape_mdv2
+    now      = datetime.now(_tz.utc)
+    date_str = _e(now.strftime('%a %d %b'))
+    lines    = [f'📅 *YOUR WEEK AHEAD \\— {date_str}*', '']
+
+    # ── Open positions ────────────────────────────────────────────────────────
+    if open_positions:
+        lines += ['━━━━━━━━━━━━━━━', f'🔓 *OPEN POSITIONS \\({_e(str(len(open_positions)))}\\)*', '━━━━━━━━━━━━━━━']
+        for pos in open_positions:
+            price = None
+            if get_price_fn:
+                try:
+                    price = get_price_fn(pos['ticker'])
+                except Exception:
+                    pass
+            lines.append(_format_open_position_line(pos, price))
+        lines.append('')
+
+    # ── New setups this week ──────────────────────────────────────────────────
+    if new_setups:
+        lines += ['━━━━━━━━━━━━━━━', f'🆕 *NEW THIS WEEK \\({_e(str(len(new_setups)))}\\)*', '━━━━━━━━━━━━━━━']
+        for i, (pattern_row, position) in enumerate(new_setups, start=1):
+            lines += _format_single_setup(pattern_row, position, tier, i)
+            lines.append('')
+
+    # ── Closed last week ──────────────────────────────────────────────────────
+    if closed_last_week:
+        lines += ['━━━━━━━━━━━━━━━', f'📕 *CLOSED LAST WEEK \\({_e(str(len(closed_last_week)))}\\)*', '━━━━━━━━━━━━━━━']
+        for pos in closed_last_week:
+            lines.append(_format_closed_position_line(pos))
+        lines.append('')
+
+    if not open_positions and not new_setups and not closed_last_week:
+        lines.append('_No new setups or open positions this week\\._')
+    else:
+        total_new = len(new_setups)
+        footer = f'_{_e(str(total_new))} new setup{"s" if total_new != 1 else ""} this week'
+        if open_positions:
+            footer += f' \\+ {_e(str(len(open_positions)))} open'
+        footer += ' — act when price reaches the zone\\._'
+        lines.append(footer)
+
+    return '\n'.join(lines)
+
+
+def format_wednesday_update(
+    open_positions: list,
+    kb_changes: list,
+    expired_this_cycle: list,
+    tier: str,
+    get_price_fn=None,
+) -> str:
+    """
+    Render the Wednesday compound update — status of all open positions +
+    notable KB changes since Monday. No new setups unless caller passes them.
+
+    Parameters
+    ----------
+    open_positions       List of tip_followups dicts.
+    kb_changes           List of dicts from get_kb_changes_since().
+    expired_this_cycle   Positions just expired (from expire_stale_followups).
+    tier                 User's tier.
+    get_price_fn         Optional callable(ticker) -> float | None.
+    """
+    from datetime import datetime, timezone as _tz
+    _e = _escape_mdv2
+    now      = datetime.now(_tz.utc)
+    date_str = _e(now.strftime('%a %d %b'))
+    lines    = [f'📊 *MIDWEEK UPDATE \\— {date_str}*', '']
+
+    # ── All open positions ────────────────────────────────────────────────────
+    if open_positions:
+        lines += ['━━━━━━━━━━━━━━━', f'🔓 *ALL OPEN POSITIONS \\({_e(str(len(open_positions)))}\\)*', '━━━━━━━━━━━━━━━']
+        for pos in open_positions:
+            price = None
+            if get_price_fn:
+                try:
+                    price = get_price_fn(pos['ticker'])
+                except Exception:
+                    pass
+            lines.append(_format_open_position_line(pos, price))
+        lines.append('')
+
+    # ── Notable KB changes since Monday ──────────────────────────────────────
+    if kb_changes:
+        lines += ['━━━━━━━━━━━━━━━', '📰 *KB CHANGES THIS WEEK*', '━━━━━━━━━━━━━━━']
+        for change in kb_changes[:8]:
+            pred_label = _PREDICATE_LABELS.get(change['predicate'], change['predicate'].replace('_', ' ').title())
+            val = change['value'] or 'updated'
+            lines.append(f'  {_e(change["ticker"])}: {_e(pred_label)} → {_e(str(val))}')
+        lines.append('')
+
+    # ── Expired positions ─────────────────────────────────────────────────────
+    if expired_this_cycle:
+        lines += ['━━━━━━━━━━━━━━━', '⏰ *EXPIRED THIS WEEK*', '━━━━━━━━━━━━━━━']
+        for pos in expired_this_cycle:
+            lines.append(_format_closed_position_line(pos))
+        lines.append('')
+
+    if not open_positions and not kb_changes:
+        lines.append('_No open positions or notable changes this week\\._')
+    else:
+        lines.append('_Wednesday update — focus on open positions above\\._')
+
+    return '\n'.join(lines)
+
+
+def format_emergency_alert_with_confidence(
+    alert_type: str,
+    pos: dict,
+    current_price: float,
+    confidence_score: Optional[float] = None,
+) -> str:
+    """
+    Enhanced emergency alert with normalised confidence score.
+    confidence_score: 0.0–1.0 ratio (confirming / total relevant atoms).
+    Only displayed if >= 0.5 and at least 2 atoms found (caller sets None otherwise).
+    """
+    base_msg = format_position_update(alert_type, pos, current_price)
+    if confidence_score is None:
+        return base_msg
+
+    _e = _escape_mdv2
+    pct = int(confidence_score * 100)
+    bar_filled  = round(confidence_score * 10)
+    bar_empty   = 10 - bar_filled
+    bar         = '█' * bar_filled + '░' * bar_empty
+    conf_line   = f'\n\n📊 KB confidence: {_e(bar)} {_e(str(pct))}%'
+    if confidence_score >= 0.75:
+        conf_line += ' — _High confidence_'
+    elif confidence_score >= 0.5:
+        conf_line += ' — _Moderate confidence_'
+    return base_msg + conf_line
+
+
 def tip_to_dict(
     pattern:  PatternSignal,
     position: Optional[PositionRecommendation],

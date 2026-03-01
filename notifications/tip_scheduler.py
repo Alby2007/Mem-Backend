@@ -471,16 +471,37 @@ def _check_monday_status(db_path: str, monday_meta: list) -> list:
     return results
 
 
+def _get_kb_price(db_path: str, ticker: str) -> Optional[float]:
+    """Fetch the latest KB last_price atom for a ticker. Returns None if unavailable."""
+    try:
+        import sqlite3 as _sq
+        c = _sq.connect(db_path, timeout=5)
+        row = c.execute(
+            """SELECT object FROM facts
+               WHERE LOWER(subject)=? AND predicate='last_price'
+               ORDER BY created_at DESC LIMIT 1""",
+            (ticker.lower(),),
+        ).fetchone()
+        c.close()
+        return float(row[0]) if row else None
+    except Exception:
+        return None
+
+
 def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: str = 'daily') -> None:
     """Run the full tip delivery pipeline for one user."""
     from analytics.pattern_detector import PatternSignal
     from analytics.position_calculator import calculate_position
     from notifications.tip_formatter import (
-        TIER_LIMITS, format_tip, format_weekly_batch,
+        TIER_LIMITS, format_tip, format_monday_briefing, format_wednesday_update,
         pattern_allowed_for_tier, timeframe_allowed_for_tier,
     )
     from notifications.telegram_notifier import TelegramNotifier
-    from users.user_store import log_tip_delivery, mark_pattern_alerted
+    from users.user_store import (
+        log_tip_delivery, mark_pattern_alerted,
+        get_user_open_positions, get_recently_closed_positions,
+        get_kb_changes_since, expire_stale_followups, upsert_tip_followup,
+    )
 
     chat_id = user_prefs.get('telegram_chat_id')
     if not chat_id:
@@ -498,90 +519,183 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
 
     local_now  = _get_local_now(user_prefs.get('tip_delivery_timezone', 'UTC'))
     local_date = local_now.strftime('%Y-%m-%d')
+    monday_str = _week_monday(local_now.date())
 
     if is_weekly:
-        batch, tip_source = _pick_batch(
-            db_path, user_id, tier, tip_timeframes, tip_pattern_types, tip_markets, batch_size,
-        )
-        if not batch:
-            _log.info('TipScheduler: no eligible patterns for user %s', user_id)
-            return
+        # ── Expire stale followups first — results included in message ────────
+        expired_this_cycle: List[dict] = []
+        try:
+            expired_this_cycle = expire_stale_followups(db_path)
+            # Only include this user's expired positions
+            expired_this_cycle = [e for e in expired_this_cycle if e['user_id'] == user_id]
+        except Exception as _ee:
+            _log.debug('TipScheduler: expire_stale_followups failed: %s', _ee)
 
-        # Build (pattern_row, position) pairs
-        pairs = []
-        pattern_meta = []
-        for row in batch:
+        # ── Price lookup helper ───────────────────────────────────────────────
+        def _price_fn(ticker: str) -> Optional[float]:
+            return _get_kb_price(db_path, ticker)
+
+        # ── MONDAY: living briefing ───────────────────────────────────────────
+        if weekday == 'monday':
+            open_positions = []
+            closed_last_week = []
             try:
-                sig = PatternSignal(
-                    pattern_type  = row['pattern_type'],
-                    ticker        = row['ticker'],
-                    direction     = row['direction'],
-                    zone_high     = row['zone_high'],
-                    zone_low      = row['zone_low'],
-                    zone_size_pct = row['zone_size_pct'],
-                    timeframe     = row['timeframe'],
-                    formed_at     = row['formed_at'],
-                    quality_score = row['quality_score'] or 0.0,
-                    status        = row['status'],
-                    kb_conviction = row.get('kb_conviction', ''),
-                    kb_regime     = row.get('kb_regime', ''),
-                    kb_signal_dir = row.get('kb_signal_dir', ''),
-                )
-                pos = calculate_position(sig, user_prefs)
-                pairs.append((row, pos))
-                pattern_meta.append({
-                    'ticker':       row['ticker'],
-                    'zone_low':     row['zone_low'],
-                    'zone_high':    row['zone_high'],
-                    'direction':    row['direction'],
-                    'stop_loss':    pos.stop_loss if pos else None,
-                    'pattern_type': row['pattern_type'],
-                })
-            except Exception as _pe:
-                _log.debug('TipScheduler: error building pair for %s: %s', row.get('ticker'), _pe)
+                open_positions = get_user_open_positions(db_path, user_id)
+            except Exception as _oe:
+                _log.debug('TipScheduler: get_user_open_positions failed: %s', _oe)
+            try:
+                # "Last week" = previous Monday onwards
+                from datetime import timedelta
+                prev_monday = (local_now.date() - timedelta(days=7)).strftime('%Y-%m-%d')
+                closed_last_week = get_recently_closed_positions(db_path, user_id, prev_monday)
+                # Don't double-show in expired_this_cycle + closed
+                expired_ids = {e['id'] for e in expired_this_cycle}
+                closed_last_week = [c for c in closed_last_week if c['id'] not in expired_ids]
+            except Exception as _ce:
+                _log.debug('TipScheduler: get_recently_closed_positions failed: %s', _ce)
 
-        if not pairs:
+            # Pick new setups to fill the batch
+            batch, tip_source = _pick_batch(
+                db_path, user_id, tier, tip_timeframes, tip_pattern_types, tip_markets, batch_size,
+            )
+
+            pairs = []
+            pattern_meta = []
+            for row in batch:
+                try:
+                    sig = PatternSignal(
+                        pattern_type  = row['pattern_type'],
+                        ticker        = row['ticker'],
+                        direction     = row['direction'],
+                        zone_high     = row['zone_high'],
+                        zone_low      = row['zone_low'],
+                        zone_size_pct = row['zone_size_pct'],
+                        timeframe     = row['timeframe'],
+                        formed_at     = row['formed_at'],
+                        quality_score = row['quality_score'] or 0.0,
+                        status        = row['status'],
+                        kb_conviction = row.get('kb_conviction', ''),
+                        kb_regime     = row.get('kb_regime', ''),
+                        kb_signal_dir = row.get('kb_signal_dir', ''),
+                    )
+                    pos = calculate_position(sig, user_prefs)
+                    pairs.append((row, pos))
+                    pattern_meta.append({
+                        'ticker':       row['ticker'],
+                        'zone_low':     row['zone_low'],
+                        'zone_high':    row['zone_high'],
+                        'direction':    row['direction'],
+                        'stop_loss':    pos.stop_loss if pos else None,
+                        'pattern_type': row['pattern_type'],
+                    })
+                except Exception as _pe:
+                    _log.debug('TipScheduler: error building pair for %s: %s', row.get('ticker'), _pe)
+
+            # Require at least something to send
+            if not open_positions and not pairs and not closed_last_week and not expired_this_cycle:
+                _log.info('TipScheduler: nothing to brief user %s on Monday', user_id)
+                return
+
+            message = format_monday_briefing(
+                open_positions   = open_positions,
+                new_setups       = pairs,
+                closed_last_week = closed_last_week + expired_this_cycle,
+                tier             = tier,
+                get_price_fn     = _price_fn,
+            )
+
+            notifier = TelegramNotifier()
+            sent = notifier.send(chat_id, message)
+
+            # Auto-create watching followups for new setups
+            for row, pos in pairs:
+                try:
+                    mark_pattern_alerted(db_path, row['id'], user_id)
+                    upsert_tip_followup(
+                        db_path,
+                        user_id    = user_id,
+                        ticker     = row['ticker'],
+                        direction  = row['direction'],
+                        entry_price   = pos.suggested_entry if pos else None,
+                        stop_loss     = pos.stop_loss if pos else None,
+                        target_1      = pos.target_1 if pos else None,
+                        target_2      = pos.target_2 if pos else None,
+                        target_3      = pos.target_3 if pos else None,
+                        pattern_type  = row['pattern_type'],
+                        timeframe     = row['timeframe'],
+                        zone_low      = row['zone_low'],
+                        zone_high     = row['zone_high'],
+                        regime_at_entry     = row.get('kb_regime'),
+                        conviction_at_entry = row.get('kb_conviction'),
+                        initial_status = 'watching',
+                    )
+                except Exception as _fe:
+                    _log.debug('TipScheduler: followup create failed for %s: %s', row.get('ticker'), _fe)
+
+            log_tip_delivery(
+                db_path, user_id,
+                success=sent,
+                pattern_signal_id=batch[0]['id'] if batch else None,
+                message_length=len(message),
+                local_date=local_date,
+                pattern_meta=pattern_meta if pattern_meta else None,
+            )
+            if sent:
+                _log.info('TipScheduler: Monday briefing delivered to user %s (%d open, %d new, %d closed)',
+                          user_id, len(open_positions), len(pairs), len(closed_last_week))
+            else:
+                _log.warning('TipScheduler: Telegram send failed for user %s', user_id)
             return
 
-        # Wednesday: prepend Monday status check
-        monday_status = None
+        # ── WEDNESDAY: compound update ────────────────────────────────────────
         if weekday == 'wednesday':
+            open_positions = []
+            kb_changes = []
             try:
-                monday_str = _week_monday(local_now.date())
-                from users.user_store import get_monday_pattern_meta
-                mon_meta = get_monday_pattern_meta(db_path, user_id, monday_str)
-                if mon_meta:
-                    monday_status = _check_monday_status(db_path, mon_meta)
-            except Exception as _me:
-                _log.debug('TipScheduler: Monday status check failed: %s', _me)
+                open_positions = get_user_open_positions(db_path, user_id)
+            except Exception as _oe:
+                _log.debug('TipScheduler: get_user_open_positions failed: %s', _oe)
 
-        message = format_weekly_batch(
-            batch=pairs,
-            tier=tier,
-            weekday=weekday,
-            monday_status=monday_status,
-            tip_source=tip_source,
-        )
+            if open_positions:
+                try:
+                    # KB changes since Monday 00:00 UTC
+                    from datetime import timezone as _tz
+                    from datetime import datetime as _dt
+                    monday_dt = _dt.strptime(monday_str, '%Y-%m-%d').replace(tzinfo=_tz.utc)
+                    open_tickers = [p['ticker'] for p in open_positions]
+                    kb_changes = get_kb_changes_since(db_path, monday_dt.isoformat(), tickers=open_tickers)
+                except Exception as _ke:
+                    _log.debug('TipScheduler: get_kb_changes_since failed: %s', _ke)
 
-        notifier = TelegramNotifier()
-        sent = notifier.send(chat_id, message)
+            if not open_positions and not kb_changes and not expired_this_cycle:
+                _log.info('TipScheduler: nothing for Wednesday update for user %s', user_id)
+                return
 
-        for row in batch:
-            mark_pattern_alerted(db_path, row['id'], user_id)
-        log_tip_delivery(
-            db_path, user_id,
-            success=sent,
-            pattern_signal_id=batch[0]['id'],
-            message_length=len(message),
-            local_date=local_date,
-            pattern_meta=pattern_meta,
-        )
-        if sent:
-            _log.info('TipScheduler: delivered %s %s batch (%d setups) to user %s',
-                      weekday, tier, len(pairs), user_id)
-        else:
-            _log.warning('TipScheduler: Telegram send failed for user %s', user_id)
-        return
+            message = format_wednesday_update(
+                open_positions      = open_positions,
+                kb_changes          = kb_changes,
+                expired_this_cycle  = expired_this_cycle,
+                tier                = tier,
+                get_price_fn        = _price_fn,
+            )
+
+            notifier = TelegramNotifier()
+            sent = notifier.send(chat_id, message)
+
+            log_tip_delivery(
+                db_path, user_id,
+                success=sent,
+                pattern_signal_id=None,
+                message_length=len(message),
+                local_date=local_date,
+                pattern_meta=None,
+            )
+            if sent:
+                _log.info('TipScheduler: Wednesday update delivered to user %s (%d open, %d KB changes)',
+                          user_id, len(open_positions), len(kb_changes))
+            else:
+                _log.warning('TipScheduler: Telegram send failed for user %s', user_id)
+            return
 
     # ── Premium / daily path (single tip, existing logic) ────────────────────
     pattern_row = _pick_best_pattern(db_path, user_id, tier, tip_timeframes, tip_pattern_types, tip_markets)
