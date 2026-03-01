@@ -888,6 +888,35 @@ def retrieve(
     if not results:
         return '', []
 
+    # ── Pin geo entity atoms to front before confidence sort ──────────────────
+    # For geo queries, entity-specific atoms (UCDP, GDELT, news about Russia/Ukraine
+    # etc.) have confidence ~0.5-0.7 and get sorted out by high-confidence ticker
+    # atoms (invalidation_distance conf=0.95). Pin them first so they survive truncation.
+    if _is_geo_query and _asked_entities:
+        _GEO_SRC_PREFIXES = (
+            'gdelt_tension', 'acled_unrest', 'ucdp_conflict', 'geo_exposure',
+            'geopolitical_data_', 'news_wire_',
+        )
+        _GEO_SUBJ_SET = frozenset({
+            'gdelt_tension', 'acled_unrest', 'ucdp_conflict', 'usgs_risk',
+        })
+        def _is_entity_geo_atom(a: dict) -> bool:
+            s = a.get('source', '')
+            subj = a.get('subject', '')
+            pred = a.get('predicate', '')
+            obj = a.get('object', '').lower()
+            if any(s.startswith(p) for p in _GEO_SRC_PREFIXES):
+                return True
+            if subj in _GEO_SUBJ_SET:
+                return True
+            for _ent in _asked_entities:
+                if _ent in obj or _ent in subj:
+                    return True
+            return False
+        _pinned_geo = [a for a in results if _is_entity_geo_atom(a)]
+        _rest = [a for a in results if not _is_entity_geo_atom(a)]
+        results = _pinned_geo + _rest
+
     # ── Re-rank by epistemic strength ─────────────────────────────────────────
     # Interpretive derived predicates get a rank boost so they survive the
     # results[:limit] truncation. Without this, high-confidence raw data atoms
