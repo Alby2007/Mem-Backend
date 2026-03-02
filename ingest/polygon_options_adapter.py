@@ -83,11 +83,17 @@ def _nearest_expiry_atm_contracts(
     current_price: float,
 ) -> tuple[list, list]:
     """
-    Filter results to the nearest expiry only, split into calls and puts.
+    Filter results to the nearest expiry only.
     Returns (atm_contracts, all_contracts_this_expiry).
-    ATM = contracts within 5% of current price.
+
+    ATM selection strategy:
+    - If current_price > 0: strike within 5% of current price.
+    - If current_price == 0 (underlying_asset absent from API): fall back to
+      delta-proximity selection — pick calls with delta closest to 0.5 and
+      puts with delta closest to -0.5.  This avoids averaging deep ITM/OTM
+      contracts whose greeks and IV are not representative of ATM conditions.
     """
-    if not results or current_price <= 0:
+    if not results:
         return [], results
 
     # Find nearest expiry date
@@ -103,12 +109,40 @@ def _nearest_expiry_atm_contracts(
     front = [r for r in results
              if r.get('details', {}).get('expiration_date') == nearest]
 
-    lo = current_price * 0.95
-    hi = current_price * 1.05
-    atm = [
+    if current_price > 0:
+        lo  = current_price * 0.95
+        hi  = current_price * 1.05
+        atm = [
+            r for r in front
+            if lo <= (r.get('details', {}).get('strike_price') or 0) <= hi
+        ]
+        return atm, front
+
+    # ── Fallback: delta-proximity ATM when no underlying price ──────────────
+    # Select the single call and single put whose delta is nearest ±0.50.
+    # Only consider contracts that actually have greeks.
+    front_with_greeks = [
         r for r in front
-        if lo <= (r.get('details', {}).get('strike_price') or 0) <= hi
+        if r.get('greeks') and any(r['greeks'].values())
     ]
+    if not front_with_greeks:
+        return [], front
+
+    calls = [r for r in front_with_greeks
+             if r.get('details', {}).get('contract_type') == 'call']
+    puts  = [r for r in front_with_greeks
+             if r.get('details', {}).get('contract_type') == 'put']
+
+    atm = []
+    if calls:
+        atm_call = min(calls,
+                       key=lambda r: abs((r['greeks'].get('delta') or 0) - 0.5))
+        atm.append(atm_call)
+    if puts:
+        atm_put = min(puts,
+                      key=lambda r: abs((r['greeks'].get('delta') or 0) + 0.5))
+        atm.append(atm_put)
+
     return atm, front
 
 
