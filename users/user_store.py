@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     telegram_chat_id       TEXT,
     delivery_time          TEXT DEFAULT '07:30',
     timezone               TEXT DEFAULT 'Europe/London',
-    tier                   TEXT DEFAULT 'basic',
+    tier                   TEXT DEFAULT 'free',
     tip_delivery_time      TEXT DEFAULT '07:30',
     tip_delivery_timezone  TEXT DEFAULT 'Europe/London',
     tip_markets            TEXT DEFAULT '["equities"]',
@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS tip_delivery_log (
 
 # New columns added to user_preferences after initial schema creation
 _PREFERENCES_MIGRATIONS = [
-    "ALTER TABLE user_preferences ADD COLUMN tier TEXT DEFAULT 'basic'",
+    "ALTER TABLE user_preferences ADD COLUMN tier TEXT DEFAULT 'free'",
     "ALTER TABLE user_preferences ADD COLUMN tip_delivery_time TEXT DEFAULT '07:30'",
     "ALTER TABLE user_preferences ADD COLUMN tip_delivery_timezone TEXT DEFAULT 'Europe/London'",
     "ALTER TABLE user_preferences ADD COLUMN tip_markets TEXT DEFAULT '[\"equities\"]'",
@@ -209,7 +209,7 @@ def get_user(db_path: str, user_id: str) -> Optional[dict]:
         except (json.JSONDecodeError, TypeError):
             d['selected_sectors'] = []
         d['telegram_chat_id'] = decrypt_field(d.get('telegram_chat_id'))
-        d['tier'] = d.get('tier') or 'basic'
+        d['tier'] = d.get('tier') or 'free'
         return d
     finally:
         conn.close()
@@ -1000,7 +1000,7 @@ def get_tip_history(db_path: str, user_id: str, limit: int = 30) -> List[dict]:
 # ── Tier + tip config ──────────────────────────────────────────────────────────
 
 def get_user_tier(db_path: str, user_id: str) -> str:
-    """Return the user's tier ('basic' or 'pro'). Defaults to 'basic'."""
+    """Return the user's tier. Defaults to 'free'."""
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         ensure_user_tables(conn)
@@ -1009,9 +1009,36 @@ def get_user_tier(db_path: str, user_id: str) -> str:
         ).fetchone()
         if row and row[0]:
             return row[0]
-        return 'basic'
+        return 'free'
     finally:
         conn.close()
+
+
+def get_today_chat_count(db_path: str, user_id: str) -> int:
+    """
+    Return the number of user chat messages sent today (in UTC).
+    Queries conv_messages for the session belonging to this user
+    where role='user' and timestamp falls on today's UTC date.
+    Returns 0 if conversation_store tables don't exist yet.
+    """
+    session_id = f"TRADING_{user_id}"
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        try:
+            row = conn.execute(
+                """SELECT COUNT(*) FROM conv_messages
+                   WHERE session_id = ?
+                     AND role = 'user'
+                     AND DATE(timestamp) = DATE('now')""",
+                (session_id,),
+            ).fetchone()
+            return row[0] if row else 0
+        except Exception:
+            return 0
+        finally:
+            conn.close()
+    except Exception:
+        return 0
 
 
 # ── Hybrid build tables ────────────────────────────────────────────────────────
