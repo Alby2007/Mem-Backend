@@ -5078,9 +5078,12 @@ def auth_telegram_verify():
 def telegram_bot_webhook():
     """
     POST /telegram/bot  — Telegram bot webhook
-    Handles /start <code> messages to confirm login codes.
+    Handles:
+      - /start <code>  — confirms login codes
+      - /help          — usage info
+      - General text   — routes through KB /chat pipeline, replies with KB-grounded answer
     """
-    import time as _time, json as _json
+    import time as _time, json as _json, sqlite3 as _sq3
     update = request.get_json(force=True, silent=True) or {}
     msg = update.get('message', {})
     text = (msg.get('text') or '').strip()
@@ -5094,16 +5097,20 @@ def telegram_bot_webhook():
         if not bot_token:
             return
         try:
-            import urllib.request as _ur, urllib.parse as _up
+            import urllib.request as _ur
             payload = _json.dumps({'chat_id': cid, 'text': text_msg}).encode()
             req = _ur.Request(
                 f'https://api.telegram.org/bot{bot_token}/sendMessage',
                 data=payload, headers={'Content-Type': 'application/json'}
             )
-            _ur.urlopen(req, timeout=5)
+            _ur.urlopen(req, timeout=10)
         except Exception:
             pass
 
+    if not text:
+        return jsonify({'ok': True})
+
+    # ── /start <code> — login code flow ───────────────────────────────────────
     if text.startswith('/start'):
         parts = text.split(maxsplit=1)
         code = parts[1].strip().upper() if len(parts) > 1 else ''
@@ -5117,11 +5124,105 @@ def telegram_bot_webhook():
                     'last_name':  from_user.get('last_name', ''),
                     'username':   from_user.get('username', ''),
                 }
-                _bot_send(chat_id, f"✅ Logged in! Return to the Trading Galaxy dashboard.")
+                _bot_send(chat_id, "✅ Logged in! Return to the Trading Galaxy dashboard.")
             else:
                 _bot_send(chat_id, "⚠️ That login code has expired. Please request a new one.")
         else:
-            _bot_send(chat_id, "👋 Welcome to Trading Galaxy! Use the Sign in button on the dashboard to get a login code.")
+            _bot_send(chat_id, "👋 Welcome to Trading Galaxy!\n\nSend me any question about markets, tickers, or your portfolio and I'll answer from the live knowledge base.\n\nTo link your account, use the Sign In button on the dashboard.")
+        return jsonify({'ok': True})
+
+    # ── /help ─────────────────────────────────────────────────────────────────
+    if text.startswith('/help'):
+        _bot_send(chat_id,
+            "Trading Galaxy Bot\n\n"
+            "Ask me anything about markets, tickers, signals, or your portfolio.\n\n"
+            "Examples:\n"
+            "• Tell me about NVDA\n"
+            "• What's the current market regime?\n"
+            "• What's the signal on gold?\n"
+            "• What market are we in?\n\n"
+            "Your chat is linked to your Trading Galaxy account if you've signed in via the dashboard."
+        )
+        return jsonify({'ok': True})
+
+    # ── Ignore other bot commands ─────────────────────────────────────────────
+    if text.startswith('/'):
+        return jsonify({'ok': True})
+
+    # ── General chat — route through KB pipeline ──────────────────────────────
+    if not HAS_LLM or not is_available():
+        _bot_send(chat_id, "⚠️ The knowledge engine is temporarily unavailable. Please try again shortly.")
+        return jsonify({'ok': True})
+
+    # Look up the user_id linked to this telegram_chat_id so KB is personalised
+    tg_user_id = None
+    try:
+        _tc = _sq3.connect(_DB_PATH, timeout=5)
+        _tr = _tc.execute(
+            "SELECT user_id FROM user_preferences WHERE telegram_chat_id=? LIMIT 1",
+            (str(chat_id),)
+        ).fetchone()
+        _tc.close()
+        if _tr:
+            tg_user_id = _tr[0]
+    except Exception:
+        pass
+
+    try:
+        # Reuse the KB retrieval + LLM pipeline directly
+        conn = _kg.thread_local_conn()
+        snippet, atoms = retrieve(text, conn, limit=25)
+
+        # Trader level for prompt formatting
+        _tg_trader_level = 'developing'
+        if tg_user_id and HAS_PRODUCT_LAYER:
+            try:
+                _tl = get_user(_DB_PATH, tg_user_id)
+                if _tl:
+                    _tg_trader_level = _tl.get('trader_level') or 'developing'
+            except Exception:
+                pass
+
+        stress_dict = None
+        if HAS_STRESS and atoms:
+            try:
+                import re as _re
+                _words = _re.findall(r'\b[a-zA-Z][a-zA-Z0-9_/-]{1,}\b', text)
+                _key_terms = list({w.lower() for w in _words if len(w) > 2})[:10]
+                _sr = compute_stress(atoms, _key_terms, conn)
+                stress_dict = {
+                    'composite_stress':     _sr.composite_stress,
+                    'decay_pressure':       _sr.decay_pressure,
+                    'authority_conflict':   _sr.authority_conflict,
+                    'supersession_density': _sr.supersession_density,
+                    'conflict_cluster':     _sr.conflict_cluster,
+                    'domain_entropy':       _sr.domain_entropy,
+                }
+            except Exception:
+                pass
+
+        messages = build_prompt(
+            user_message=text,
+            snippet=snippet,
+            stress=stress_dict,
+            atom_count=len(atoms),
+            trader_level=_tg_trader_level,
+        )
+        answer = _llm_chat(messages, model=DEFAULT_MODEL if HAS_LLM else 'llama3.2')
+
+        if answer:
+            # Telegram plain-text: strip markdown bold/italic for readability
+            import re as _re2
+            plain = _re2.sub(r'\*\*(.+?)\*\*', r'\1', answer)
+            plain = _re2.sub(r'\*(.+?)\*', r'\1', plain)
+            plain = plain[:4000]  # Telegram message limit
+            _bot_send(chat_id, plain)
+        else:
+            _bot_send(chat_id, "⚠️ Couldn't generate a response right now. Please try again.")
+    except Exception as _exc:
+        _log.error('telegram_bot_webhook chat error: %s', _exc)
+        _bot_send(chat_id, "⚠️ Something went wrong. Please try again in a moment.")
+
     return jsonify({'ok': True})
 
 
