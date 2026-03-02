@@ -1,0 +1,59 @@
+{
+  "single_ticker": [
+    "What's the setup on {ticker}?",
+    "What does the KB say about {ticker}?",
+    "Is {ticker} bullish or bearish right now?",
+    "What's the conviction on {ticker}?",
+    "Show me the signal for {ticker}",
+    "What's the price target for {ticker}?",
+    "What's the signal quality on {ticker}?"
+  ],
+  "portfolio_review": [
+    "How is my portfolio doing?",
+    "Give me an overview of my holdings",
+    "Which of my stocks has the strongest signal?",
+    "What should I be watching this week?",
+    "Review my positions",
+    "Which holding has the best conviction?",
+    "Analyse my portfolio"
+  ],
+  "opportunity": [
+    "What's the best setup in my portfolio right now?",
+    "What should I trade this week?",
+    "Which of my holdings has the strongest opportunity?",
+    "Find me the best position to open",
+    "Give me a tip",
+    "What's the top trade idea today?",
+    "Which of my stocks has the most asymmetric setup?"
+  ],
+  "geo": [
+    "How does the Ukraine conflict affect my portfolio?",
+    "What's the impact of Middle East tensions on my holdings?",
+    "Does the Russia situation affect my positions?",
+    "How is geopolitical risk affecting markets right now?",
+    "What does the world monitor say about current conflict levels?"
+  ],
+  "greeks": [
+    "What's the IV on {ticker}?",
+    "Show me the options data for {ticker}",
+    "What does the delta say about {ticker}?",
+    "What's the gamma exposure on {ticker}?",
+    "Is the implied volatility on {ticker} elevated?"
+  ],
+  "macro": [
+    "What's the current market regime?",
+    "How are bond markets affecting equities?",
+    "What does the yield curve say about the market?",
+    "What's the Fed stance right now?",
+    "What does macro say about positioning?",
+    "Is the yield curve inverted?",
+    "What's the current inflation environment?"
+  ],
+  "no_data": [
+    "What's the setup on RANDOMTICKER123?",
+    "Tell me about XYZ Corp",
+    "What does the KB say about FAKECO?",
+    "What's the signal on NOTREAL99?",
+    "Is MADEUPTICKER bullish?"
+  ]
+}

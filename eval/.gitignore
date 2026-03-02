@@ -1,0 +1,5 @@
+portfolios.json
+trading_knowledge_eval.db
+results/
+__pycache__/
+*.pyc
