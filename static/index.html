@@ -901,6 +901,17 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .sub-page-header { margin-bottom: 6px; }
 .sub-page-title { font-size: 20px; font-weight: 700; color: var(--text); }
 .sub-page-subtitle { color: var(--muted); font-size: 12px; margin-bottom: 24px; line-height: 1.5; }
+.sub-locked-banner {
+  display: none;
+  background: rgba(245,158,11,.10); border: 1px solid rgba(245,158,11,.35);
+  border-radius: 10px; padding: 16px 20px; margin-bottom: 24px;
+  display: flex; align-items: center; gap: 14px;
+}
+.sub-locked-banner.hidden { display: none !important; }
+.sub-locked-icon { font-size: 28px; flex-shrink: 0; }
+.sub-locked-text { flex: 1; }
+.sub-locked-title { font-size: 14px; font-weight: 700; color: var(--accent); margin-bottom: 3px; }
+.sub-locked-desc { font-size: 12px; color: var(--muted); line-height: 1.5; }
 
 .sub-plan-banner {
   background: var(--card); border: 1px solid var(--border);
@@ -1947,6 +1958,15 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
     <h1 class="sub-page-title">Subscription</h1>
   </div>
   <p class="sub-page-subtitle">Manage your plan. All tiers include Monday + Wednesday briefings via Telegram.</p>
+
+  <!-- Locked-state callout — shown only for basic (no active sub) -->
+  <div class="sub-locked-banner hidden" id="sub-locked-banner">
+    <div class="sub-locked-icon">🔒</div>
+    <div class="sub-locked-text">
+      <div class="sub-locked-title">Subscribe to unlock the full app</div>
+      <div class="sub-locked-desc">Your account is on the free Basic plan. Upgrade to Pro or Premium below to access Dashboard, Portfolio, Chat, Tips, Patterns, and History.</div>
+    </div>
+  </div>
 
   <!-- Current plan banner -->
   <div class="sub-plan-banner">
@@ -4695,10 +4715,14 @@ async function loadSubscription() {
   try {
     const me = await apiFetch('/auth/me');
     const tier = (me?.tier || 'basic').toLowerCase();
+    state.tier = tier;  // keep state fresh
+    // Locked-state banner
+    const lockedBanner = document.getElementById('sub-locked-banner');
+    if (lockedBanner) lockedBanner.classList.toggle('hidden', tier !== 'basic');
     // Update current plan banner
-    const planNames = { basic: 'Basic — £9/month', pro: 'Pro — £29/month', premium: 'Premium — £79/month' };
+    const planNames = { basic: 'Basic — £9/month (no active subscription)', pro: 'Pro — £29/month', premium: 'Premium — £79/month' };
     document.getElementById('sub-plan-name').textContent   = planNames[tier] || tier;
-    document.getElementById('sub-plan-renews').textContent = 'Billed monthly';
+    document.getElementById('sub-plan-renews').textContent = tier === 'basic' ? 'No active subscription' : 'Billed monthly';
 
     // Highlight current card and update CTA buttons
     ['basic', 'pro', 'premium'].forEach(t => {
