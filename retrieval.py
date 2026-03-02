@@ -720,7 +720,7 @@ def retrieve(
     # Without this, multi-ticker queries (e.g. "rank AAPL MSFT GOOGL AMZN
     # NVDA META by upside") exhaust the 30-atom limit before all tickers
     # get their price/target atoms, leaving the LLM with gaps.
-    _PINNED_PREDICATES = (
+    _PINNED_PREDICATES_BASE = (
         'last_price', 'currency', 'price_target', 'signal_direction', 'earnings_quality',
         'signal_quality', 'macro_confirmation', 'price_regime', 'upside_pct',
         'return_1m', 'return_3m', 'return_6m', 'return_1y',
@@ -728,19 +728,31 @@ def retrieve(
         'return_vs_spy_1m', 'return_vs_spy_3m',
         'invalidation_price', 'invalidation_distance', 'thesis_risk_level',
         'conviction_tier', 'volatility_scalar', 'position_size_pct',
+    )
+    _PINNED_PREDICATES_GREEKS = (
         'delta_atm', 'gamma_atm', 'theta_atm', 'vega_atm',
         'iv_true', 'put_call_oi_ratio', 'gamma_exposure',
     )
-    _pin_ph = ','.join('?' * len(_PINNED_PREDICATES))
+    # Tickers covered by the Polygon options adapter (US single-name equities + SPY).
+    # Greeks predicates are only pinned for these — FTSE / smaller-cap tickers not
+    # in this set have no options atoms and would waste query slots on empty rows.
+    _OPTIONS_COVERED = frozenset({
+        'COIN', 'HOOD', 'MSTR', 'PLTR', 'NVDA',
+        'AMZN', 'META', 'GOOGL', 'AAPL', 'MSFT', 'MA', 'SPY',
+    })
     for ticker in tickers:
         try:
+            pinned = list(_PINNED_PREDICATES_BASE)
+            if ticker.upper() in _OPTIONS_COVERED:
+                pinned = pinned + list(_PINNED_PREDICATES_GREEKS)
+            _pin_ph = ','.join('?' * len(pinned))
             c.execute(f"""
                 SELECT subject, predicate, object, source, confidence
                 FROM facts
                 WHERE LOWER(subject) = ?
                 AND predicate IN ({_pin_ph})
                 ORDER BY confidence DESC
-            """, (ticker.lower(), *_PINNED_PREDICATES))
+            """, (ticker.lower(), *pinned))
             _add(c.fetchall())
         except Exception:
             pass
