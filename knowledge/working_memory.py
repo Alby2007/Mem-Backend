@@ -98,9 +98,9 @@ _MISSING_THRESHOLD = 1
 # Maps KB/display tickers → yfinance ticker symbols for on-demand fetch
 _YF_TICKER_MAP: dict[str, str] = {
     # Precious metals
-    # Note: GC=F (COMEX gold futures) returns ~double the per-oz spot price in
-    # yfinance. Use GLD ETF instead — it tracks gold accurately (~$479/share).
-    'XAUUSD': 'GLD',    'GOLD':   'GLD',
+    # GC=F = COMEX gold futures (per-oz spot price in USD, ~$2,900 at 2026 highs)
+    # GLD ETF tracks gold but at ~1/10th oz per share — misleading for spot price queries
+    'XAUUSD': 'GC=F',   'GOLD':   'GC=F',
     'XAGUSD': 'SI=F',   'SILVER': 'SI=F',
     'XPTUSD': 'PL=F',
     'XPDUSD': 'PA=F',
@@ -138,6 +138,7 @@ _YF_TICKER_MAP: dict[str, str] = {
     'XRP-USD':'XRP-USD', 'BNB-USD':'BNB-USD', 'ADA-USD':'ADA-USD',
     'DOGE-USD':'DOGE-USD','AVAX-USD':'AVAX-USD','GBPUSD=X':'GBPUSD=X',
     'EURUSD=X':'EURUSD=X','GBP=X':  'GBP=X',  'JPY=X':  'JPY=X',
+    'GLD':    'GC=F',
     'GC=F':   'GC=F',   'SI=F':   'SI=F',    'CL=F':   'CL=F',
     'BZ=F':   'BZ=F',   'NG=F':   'NG=F',    'PL=F':   'PL=F',
     '^GSPC':  '^GSPC',  '^NDX':   '^NDX',    '^FTSE':  '^FTSE',
@@ -493,11 +494,22 @@ class WorkingMemory:
             return ''
 
         now_ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+        # Unit annotations for commodity/futures tickers so LLM reports correctly
+        _UNIT_NOTES: dict = {
+            'GC=F': 'USD/oz', 'GOLD': 'USD/oz', 'XAUUSD': 'USD/oz',
+            'SI=F': 'USD/oz', 'SILVER': 'USD/oz', 'XAGUSD': 'USD/oz',
+            'CL=F': 'USD/bbl', 'BZ=F': 'USD/bbl', 'CRUDE': 'USD/bbl', 'BRENT': 'USD/bbl',
+            'NG=F': 'USD/MMBtu', 'PL=F': 'USD/oz', 'PA=F': 'USD/oz',
+            'HG=F': 'USD/lb',
+        }
         lines = [f'=== LIVE DATA (fetched live at {now_ts} — treat as current) ===']
         for a in session.atoms:
             ts = a.get('fetched_at', '')[:16]
+            subj = a['subject']
+            unit = _UNIT_NOTES.get(subj.upper(), '')
+            unit_str = f' ({unit})' if unit and a['predicate'] == 'last_price' else ''
             lines.append(
-                f"{a['subject']} | {a['predicate']} | {a['object']}"
+                f"{subj} | {a['predicate']} | {a['object']}{unit_str}"
                 f"  [conf:{a['confidence']:.2f}, fetched:{ts}]"
             )
         if session.fetch_log:

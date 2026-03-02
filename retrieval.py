@@ -170,48 +170,52 @@ _KEYWORD_PREDICATE_BOOST: dict = {
 # Common name / forex pair → canonical KB ticker alias map
 # Covers formal symbols, common names, broker platform names, and typo variants
 TICKER_ALIASES: dict = {
-    # ── Gold ──────────────────────────────────────────────────────────────
-    'XAUUSD':   'GLD',
-    'XAUUSD=X': 'GLD',
-    'XAU':      'GLD',
-    'GOLD':     'GLD',
-    'GOLDUSD':  'GLD',
-    'USDXAU':   'GLD',
-    'AXUUSD':   'GLD',   # transposition typo
-    'XAUUDS':   'GLD',   # transposition typo
-    'XUAUSD':   'GLD',   # transposition typo
-    'AUUSD':    'GLD',   # partial
-    'GOLDX':    'GLD',
-    'XGOLD':    'GLD',
-    # ── Silver ────────────────────────────────────────────────────────────
-    'XAGUSD':   'SLV',
-    'XAGUSD=X': 'SLV',
-    'XAG':      'SLV',
-    'SILVER':   'SLV',
-    'SILVERUSD':'SLV',
-    'AGUUSD':   'SLV',   # common typo / broker variant
-    'AGSUSD':   'SLV',
-    'SILV':     'SLV',
-    # ── Oil / Energy ──────────────────────────────────────────────────────
-    'OIL':      'USO',
-    'CRUDE':    'USO',
-    'CRUDEOIL': 'USO',
-    'WTI':      'USO',
-    'WTIOIL':   'USO',
-    'USOIL':    'USO',
-    'BRENT':    'USO',
-    'BRENTOIL': 'USO',
-    'UKOIL':    'USO',
-    'CL':       'USO',
-    'CLF':      'USO',
-    'CL=F':     'USO',
-    'BZ=F':     'USO',
-    # ── Natural Gas ───────────────────────────────────────────────────────
-    'NATGAS':   'UNG',
-    'GAS':      'UNG',
-    'NATURALGAS':'UNG',
-    'NG':       'UNG',
-    'NG=F':     'UNG',
+    # ── Gold (GC=F = COMEX futures, USD/oz spot price ~$2,900) ─────────────
+    'XAUUSD':   'GC=F',
+    'XAUUSD=X': 'GC=F',
+    'XAU':      'GC=F',
+    'GOLD':     'GC=F',
+    'GOLDUSD':  'GC=F',
+    'USDXAU':   'GC=F',
+    'AXUUSD':   'GC=F',   # transposition typo
+    'XAUUDS':   'GC=F',   # transposition typo
+    'XUAUSD':   'GC=F',   # transposition typo
+    'AUUSD':    'GC=F',   # partial
+    'GOLDX':    'GC=F',
+    'XGOLD':    'GC=F',
+    'GLD':      'GC=F',   # GLD ETF queries → actual spot price
+    # ── Silver (SI=F = COMEX futures, USD/oz) ──────────────────────────────
+    'XAGUSD':   'SI=F',
+    'XAGUSD=X': 'SI=F',
+    'XAG':      'SI=F',
+    'SILVER':   'SI=F',
+    'SILVERUSD':'SI=F',
+    'AGUUSD':   'SI=F',   # common typo / broker variant
+    'AGSUSD':   'SI=F',
+    'SILV':     'SI=F',
+    'SLV':      'SI=F',   # SLV ETF queries → actual spot price
+    # ── Oil / Energy (CL=F = WTI futures USD/bbl, BZ=F = Brent) ──────────
+    'OIL':      'CL=F',
+    'CRUDE':    'CL=F',
+    'CRUDEOIL': 'CL=F',
+    'WTI':      'CL=F',
+    'WTIOIL':   'CL=F',
+    'USOIL':    'CL=F',
+    'BRENT':    'BZ=F',
+    'BRENTOIL': 'BZ=F',
+    'UKOIL':    'BZ=F',
+    'CL':       'CL=F',
+    'CLF':      'CL=F',
+    'CL=F':     'CL=F',
+    'BZ=F':     'BZ=F',
+    'USO':      'CL=F',   # USO ETF queries → actual spot price
+    # ── Natural Gas (NG=F = Henry Hub futures, USD/MMBtu) ─────────────────
+    'NATGAS':   'NG=F',
+    'GAS':      'NG=F',
+    'NATURALGAS':'NG=F',
+    'NG':       'NG=F',
+    'NG=F':     'NG=F',
+    'UNG':      'NG=F',   # UNG ETF queries → actual spot price
     # ── UK Indices ────────────────────────────────────────────────────────
     'UK100':    '^FTSE',
     'FTSE100':  '^FTSE',
