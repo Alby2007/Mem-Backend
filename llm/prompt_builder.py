@@ -313,20 +313,44 @@ _SYSTEM_GEO_NO_PORTFOLIO_RULE = (
 _SYSTEM_TELEGRAM_FORMAT = (
     "\nFORMAT OVERRIDE — TELEGRAM MODE: This response will be sent as a Telegram chat message. "
     "You MUST follow these rules instead of the standard formatting rules:\n"
-    "1. Be concise. Maximum 4-6 sentences total unless the user explicitly asks for more detail. "
-    "Lead with the single most important fact. Do NOT write comprehensive reports.\n"
+    "1. Lead with the single most important fact or insight. "
+    "For simple/quick questions (price check, yes/no, status) keep it to 2-4 sentences. "
+    "For analytical questions (market regime, portfolio review, strategy, geopolitical), "
+    "write as much as the data supports — up to 10-12 sentences — but stay focused and dense, "
+    "no padding. Never truncate a meaningful analysis just to be short.\n"
     "2. NO section headers. Do NOT use **Header Name** style headings. "
     "No 'Geopolitical Data', 'Per-Holding Signal State', 'Market Regime', or any other section label. "
-    "Write in plain flowing prose or a short bullet list (3-5 items max).\n"
-    "3. For portfolio queries: pick the top 2-3 most relevant holdings only. "
-    "Do NOT write a paragraph for every single holding. "
-    "State the most important signal fact for each in one sentence.\n"
+    "Write in plain flowing prose or a short bullet list (max 6 items).\n"
+    "3. For portfolio queries: cover the top 3-5 most signal-rich holdings. "
+    "One tight sentence per holding: ticker, signal direction, conviction, key figure. "
+    "Skip holdings with zero KB atoms — state 'No KB data yet' for those briefly at the end.\n"
     "4. If the KB has data, lead with it directly. "
     "NEVER open with 'I don't have current KB data' if the USER PORTFOLIO block or KB atoms are present. "
     "Only use the no-data message if zero atoms were retrieved.\n"
     "5. Omit sizing examples, concentration risk paragraphs, and disclaimer boilerplate "
     "unless the user explicitly asked for them.\n"
-    "6. End with a one-line summary or a prompt for a follow-up if useful."
+    "6. End with one sharp follow-up prompt if useful — e.g. 'Want the full breakdown?' or "
+    "'Ask me about a specific holding.'"
+)
+
+_SYSTEM_DAILY_MONITOR_RULE = (
+    "\n24. DAILY POSITION MONITOR MODE: This briefing covers open positions mid-week. "
+    "Write a concise position-by-position status check in plain prose. "
+    "For each open position: state the ticker, current KB last_price vs entry, "
+    "whether the zone is still intact, and any KB signal changes since Monday. "
+    "If no KB changes exist for a holding, say so explicitly — do not pad. "
+    "End with a one-line overall summary. No section headers. No trading advice."
+)
+
+_SYSTEM_WEEK_CLOSE_RULE = (
+    "\n25. WEEK CLOSE / WEEKEND SUMMARY MODE: This is the end-of-week briefing. "
+    "Write in flowing prose — no bold section headers. "
+    "First, briefly summarise any positions closed or expired this week with their outcome. "
+    "Then review remaining open positions: zone status, KB regime, any catalysts for next week. "
+    "Close with a 1-2 sentence outlook based only on KB atoms present. "
+    "Do NOT speculate about next week's macro beyond what KB atoms state. "
+    "ABSOLUTE PROHIBITION: Do not use vague phrases like 'markets may be volatile'. "
+    "If the KB has no next-week signal, say so and stop."
 )
 
 _SYSTEM_SIZING_RULE = (
@@ -357,6 +381,7 @@ def build(
     has_history: bool = False,
     opportunity_scan_context: Optional[str] = None,
     telegram_mode: bool = False,
+    briefing_mode: Optional[str] = None,
 ) -> list[dict]:
     """
     Build the [system, user] message list for Ollama.
@@ -427,6 +452,12 @@ def build(
     # Check for the pinned sentinel constant — never rely on natural-language substrings.
     if opportunity_scan_context and _EMPTY_SCAN_SENTINEL not in opportunity_scan_context:
         system_text += _SYSTEM_GENERATION_RULE
+
+    # Briefing mode rules — injected for scheduled Telegram briefings.
+    if briefing_mode == 'position_monitor':
+        system_text += _SYSTEM_DAILY_MONITOR_RULE
+    elif briefing_mode in ('week_close', 'weekend_summary'):
+        system_text += _SYSTEM_WEEK_CLOSE_RULE
 
     # Telegram mode: override verbose formatting with concise chat style.
     # Injected before geo rules so telegram_mode can suppress them (#1 fix).

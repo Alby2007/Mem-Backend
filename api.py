@@ -6283,7 +6283,8 @@ def _handle_tg_message(msg: dict) -> None:
                         _retrieve_text = text + ' ' + ' '.join(_tg_port_tickers)
             except Exception:
                 pass
-        snippet, atoms = retrieve(_retrieve_text, conn, limit=30)
+        _tg_limit = 80 if _tg_wants_portfolio else 50
+        snippet, atoms = retrieve(_retrieve_text, conn, limit=_tg_limit)
     except Exception as _re:
         app.logger.error('telegram_webhook: retrieve failed: %s', _re)
         snippet, atoms = '', []
@@ -6365,6 +6366,54 @@ def _handle_tg_message(msg: dict) -> None:
         except Exception:
             pass
 
+    # ── Live data fetch for Telegram (on-demand prices) ─────────────────
+    tg_live_context = ''
+    if HAS_WORKING_MEMORY and _working_memory is not None:
+        try:
+            from retrieval import _extract_tickers as _et_tg2
+            from knowledge.working_memory import _YF_TICKER_MAP, MAX_ON_DEMAND_TICKERS
+            _tg_tickers = _et_tg2(text)
+            if not _tg_tickers and _tg_wants_portfolio:
+                try:
+                    from users.user_store import get_portfolio as _gp3
+                    _tg_ph = _gp3(_DB_PATH, user_id)
+                    _tg_tickers = [h['ticker'] for h in (_tg_ph or []) if h.get('ticker')]
+                except Exception:
+                    pass
+            _tg_wm_session = f'TG_WM_{chat_id}'
+            _yf_vals = set(_YF_TICKER_MAP.values())
+            _tg_missing = [
+                t for t in _tg_tickers[:MAX_ON_DEMAND_TICKERS]
+                if not kb_has_atoms(t, _DB_PATH)
+                or t in _YF_TICKER_MAP
+                or t in _yf_vals
+            ]
+            if _tg_missing:
+                _working_memory.open_session(_tg_wm_session)
+                for _tt in _tg_missing[:MAX_ON_DEMAND_TICKERS]:
+                    _working_memory.fetch_on_demand(_tt, _tg_wm_session, _DB_PATH)
+                tg_live_context = _working_memory.get_session_snippet(_tg_wm_session)
+        except Exception as _tg_wm_err:
+            app.logger.debug('telegram_webhook: live fetch failed: %s', _tg_wm_err)
+
+    # ── Epistemic stress ─────────────────────────────────────────────────
+    tg_stress_dict = None
+    if HAS_STRESS and atoms:
+        try:
+            _tg_words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_/-]{1,}\b', text)
+            _tg_key_terms = list({w.lower() for w in _tg_words if len(w) > 2})[:10]
+            _tg_stress = compute_stress(atoms, _tg_key_terms, conn)
+            tg_stress_dict = {
+                'composite_stress':     _tg_stress.composite_stress,
+                'decay_pressure':       _tg_stress.decay_pressure,
+                'authority_conflict':   _tg_stress.authority_conflict,
+                'supersession_density': _tg_stress.supersession_density,
+                'conflict_cluster':     _tg_stress.conflict_cluster,
+                'domain_entropy':       _tg_stress.domain_entropy,
+            }
+        except Exception:
+            pass
+
     # ── Build prompt ───────────────────────────────────────────────────────
     try:
         from llm.prompt_builder import build as _build_prompt
@@ -6373,7 +6422,8 @@ def _handle_tg_message(msg: dict) -> None:
             snippet=snippet,
             portfolio_context=portfolio_context,
             atom_count=len(atoms),
-            live_context='',
+            live_context=tg_live_context or None,
+            stress=tg_stress_dict,
             has_history=bool(history_messages),
             telegram_mode=True,
         )
