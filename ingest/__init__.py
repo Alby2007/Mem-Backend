@@ -52,11 +52,16 @@ try:
 except ImportError:
     PolygonOptionsAdapter = None  # type: ignore
 
+try:
+    from .yield_curve_adapter import YieldCurveAdapter
+except ImportError:
+    YieldCurveAdapter = None  # type: ignore
+
 
 __all__ = [
     'BaseIngestAdapter', 'RawAtom', 'IngestScheduler',
     'YFinanceAdapter', 'FREDAdapter', 'EDGARAdapter', 'RSSAdapter',
     'SignalEnrichmentAdapter', 'HistoricalBackfillAdapter',
     'LLMExtractionAdapter', 'EDGARRealtimeAdapter', 'OptionsAdapter',
-    'PolygonOptionsAdapter',
+    'PolygonOptionsAdapter', 'YieldCurveAdapter',
 ]

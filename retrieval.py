@@ -150,6 +150,16 @@ _KEYWORD_PREDICATE_BOOST: dict = {
     'pin':         ('gamma_exposure', 'gamma_atm'),
     'skew':        ('put_call_oi_ratio', 'iv_true', 'iv_skew_ratio'),
     'hedge':       ('gamma_exposure', 'delta_atm', 'put_call_oi_ratio'),
+    'yield':      ('yield_curve_regime', 'yield_curve_slope', 'yield_curve_tlt_shy', 'tlt_1d_change_pct', 'long_end_stress'),
+    'yields':     ('yield_curve_regime', 'yield_curve_slope', 'yield_curve_tlt_shy', 'tlt_1d_change_pct', 'long_end_stress'),
+    'treasury':   ('yield_curve_regime', 'yield_curve_slope', 'tlt_close', 'ief_close', 'shy_close', 'long_end_stress'),
+    'curve':      ('yield_curve_regime', 'yield_curve_slope', 'yield_curve_tlt_shy', 'long_end_stress'),
+    'inversion':  ('yield_curve_slope', 'yield_curve_regime', 'yield_curve_tlt_shy'),
+    'steepen':    ('yield_curve_slope', 'yield_curve_regime'),
+    'flatten':    ('yield_curve_slope', 'yield_curve_regime'),
+    'rates':      ('yield_curve_regime', 'yield_curve_slope', 'tlt_1d_change_pct', 'long_end_stress', 'central_bank_stance'),
+    'tlt':        ('tlt_close', 'tlt_1d_change_pct', 'yield_curve_regime', 'long_end_stress'),
+    'bonds':      ('tlt_close', 'ief_close', 'yield_curve_regime', 'yield_curve_slope', 'long_end_stress'),
 }
 
 # Common name / forex pair → canonical KB ticker alias map
@@ -1141,8 +1151,14 @@ def retrieve(
         'iv_true', 'put_call_oi_ratio', 'gamma_exposure',
         'iv_rank', 'iv_skew_ratio', 'iv_skew_25d',
     })
+    _YIELD_CURVE_PREDICATES = frozenset({
+        'tlt_close', 'ief_close', 'shy_close',
+        'tlt_1d_change_pct', 'ief_1d_change_pct', 'shy_1d_change_pct',
+        'yield_curve_slope', 'yield_curve_regime', 'yield_curve_tlt_shy',
+        'long_end_stress',
+    })
 
-    signals, invalidation, quality, theses, macro, research, historical, geo, options_greeks, other = [], [], [], [], [], [], [], [], [], []
+    signals, invalidation, quality, theses, macro, research, historical, geo, options_greeks, yield_curve, other = [], [], [], [], [], [], [], [], [], [], []
     for r in results:
         pred = r['predicate']
         src = r['source']
@@ -1179,6 +1195,8 @@ def retrieve(
             geo.append(r)
         elif pred in _OPTIONS_GREEKS_PREDICATES:
             options_greeks.append(r)
+        elif pred in _YIELD_CURVE_PREDICATES or src == 'yield_curve':
+            yield_curve.append(r)
         elif src.startswith('broker_research') or pred in ('rating', 'key_finding',
                                                             'compared_to_consensus'):
             research.append(r)
@@ -1231,6 +1249,9 @@ def retrieve(
     if options_greeks:
         lines.append('# options-greeks')
         lines.extend(_fmt(r) for r in options_greeks[:15])
+    if yield_curve:
+        lines.append('# yield-curve')
+        lines.extend(_fmt(r) for r in yield_curve[:10])
     if other:
         # Log predicate distribution of other[] so we can detect important atom
         # types that are falling through all bucket filters unexpectedly.
