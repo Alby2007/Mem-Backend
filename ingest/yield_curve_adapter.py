@@ -213,10 +213,9 @@ class YieldCurveAdapter(BaseIngestAdapter):
             return RawAtom(
                 subject    = 'macro',
                 predicate  = predicate,
-                object_    = value,
+                object     = value,
                 source     = _SOURCE_PFX,
-                authority  = _AUTHORITY,
-                timestamp  = now_iso,
+                confidence = _AUTHORITY,
                 upsert     = True,
             )
 

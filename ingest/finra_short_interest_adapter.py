@@ -261,13 +261,12 @@ class FINRAShortInterestAdapter(BaseIngestAdapter):
 
             def _a(pred: str, val: str) -> RawAtom:
                 return RawAtom(
-                    subject   = sym,
-                    predicate = pred,
-                    object_   = val,
-                    source    = _SOURCE_PFX,
-                    authority = _AUTHORITY,
-                    timestamp = now_iso,
-                    upsert    = True,
+                    subject    = sym,
+                    predicate  = pred,
+                    object     = val,
+                    source     = _SOURCE_PFX,
+                    confidence = _AUTHORITY,
+                    upsert     = True,
                 )
 
             atoms.append(_a('short_interest',     str(short_int)))
