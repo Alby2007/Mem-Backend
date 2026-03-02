@@ -354,6 +354,31 @@ _SYSTEM_GREEKS_RULE = (
     "Never invent or estimate Greeks values from training data."
 )
 
+_SYSTEM_YIELD_CURVE_RULE = (
+    "\n27. YIELD CURVE ATOMS: When the KNOWLEDGE CONTEXT contains a '# yield-curve' section, "
+    "interpret those atoms using these rules — cite the actual values, never invent them:\n"
+    "- yield_curve_regime: current rate environment. "
+    "bull_steepen = long-end rallying, risk-on; "
+    "bear_steepen = inflation premium building, long-end selling off faster than short-end; "
+    "bull_flatten = rate cut expectations, short-end outperforming; "
+    "bear_flatten = Fed hike cycle peak signal, both ends selling off.\n"
+    "- yield_curve_slope: steepening | flattening | neutral — direction of the TLT/SHY ratio.\n"
+    "- yield_curve_tlt_shy: TLT/SHY price ratio proxy for 20Y/2Y curve slope. "
+    "Rising = steepening (long end outperforming). Falling = flattening or inversion risk.\n"
+    "- tlt_1d_change_pct: 1-day % change in TLT (20Y bond ETF). "
+    "Negative = long-end yields rising (bond prices down). "
+    "A reading below -0.5% = notable yield spike — flag as a headwind for rate-sensitive equities "
+    "(tech, growth, high-multiple stocks).\n"
+    "- long_end_stress: 'true' when TLT fell >0.5% in a day — indicates bond market stress. "
+    "This is a meaningful macro risk-off signal for bullish equity setups.\n"
+    "CROSS-SIGNAL RULE: When long_end_stress=true or yield_curve_regime=bear_steepen, "
+    "AND the user is asking about a bullish growth/tech setup, "
+    "flag the yield environment as a potential headwind and mention it before the setup details. "
+    "Do NOT suppress the setup — just add the macro context.\n"
+    "CRITICAL: Only interpret these atoms when they are present in the context. "
+    "Never invent yield curve data from training data."
+)
+
 _SYSTEM_LEVEL_BEGINNER = """
 COMMUNICATION LEVEL: BEGINNER TRADER
 Your user is new to trading. Follow these rules strictly:
@@ -552,6 +577,13 @@ def build(
     _level_shows_greeks = _effective_level in ('experienced', 'quant')
     if _greeks_in_snippet and _level_shows_greeks:
         system_text += _SYSTEM_GREEKS_RULE
+
+    # ── Yield curve rule ───────────────────────────────────────────────────────
+    # Injected for all levels when yield-curve atoms are in the snippet.
+    # Yield curve is macro context — not jargon — so beginner users also benefit.
+    # The level rule controls how verbosely to explain it, not whether to surface it.
+    if snippet and '# yield-curve' in snippet:
+        system_text += _SYSTEM_YIELD_CURVE_RULE
 
     # ── Trader level rule — always inject exactly one ──────────────────────────
     system_text += _LEVEL_RULES[_effective_level]

@@ -445,6 +445,32 @@ def _validate_tip(row: dict, tier: str, is_weekly: bool = False,
                             )
                     except (ValueError, TypeError):
                         pass
+
+                # yield_curve: long_end_stress or bear_steepen regime conflicts with
+                # bullish setups — macro headwind for rate-sensitive equities.
+                # Atoms are on subject='macro', not the ticker.
+                _yc_stress_row = _gc.execute(
+                    "SELECT object FROM facts WHERE subject='macro' AND predicate='long_end_stress'"
+                    " ORDER BY timestamp DESC LIMIT 1"
+                ).fetchone()
+                _yc_regime_row = _gc.execute(
+                    "SELECT object FROM facts WHERE subject='macro' AND predicate='yield_curve_regime'"
+                    " ORDER BY timestamp DESC LIMIT 1"
+                ).fetchone()
+                if direction in ('bullish', 'long'):
+                    _yc_stress  = (_yc_stress_row[0] == 'true') if _yc_stress_row else False
+                    _yc_regime  = _yc_regime_row[0] if _yc_regime_row else None
+                    if _yc_stress:
+                        warnings.append(
+                            'long_end_stress=true — bond market selling off (TLT down >0.5%): '
+                            'rising yields are a headwind for rate-sensitive/growth setups'
+                        )
+                    elif _yc_regime in ('bear_steepen', 'bear_flatten'):
+                        warnings.append(
+                            f'yield_curve_regime={_yc_regime} — rate environment is '
+                            f'unfavourable for high-multiple growth stocks; '
+                            f'consider tighter stops or smaller size'
+                        )
             finally:
                 _gc.close()
         except Exception:
