@@ -63,15 +63,18 @@ def create_checkout_session(
     stripe.api_key = _sk()
     price_id = _price_id(tier, annual)
 
-    session = stripe.checkout.Session.create(
+    params = dict(
         mode='subscription',
         line_items=[{'price': price_id, 'quantity': 1}],
-        customer_email=user_email,
         success_url=success_url,
         cancel_url=cancel_url,
         metadata={'user_id': user_id, 'tier': tier},
         subscription_data={'metadata': {'user_id': user_id, 'tier': tier}},
     )
+    if user_email and '@' in user_email:
+        params['customer_email'] = user_email
+
+    session = stripe.checkout.Session.create(**params)
     return session.url
 
 
