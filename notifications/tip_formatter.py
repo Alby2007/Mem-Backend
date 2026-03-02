@@ -506,6 +506,44 @@ def format_tip(
         currency = position.account_currency
         lines += _forecast_block(position.forecast, currency)
 
+    # ── Greeks block for experienced level — gated on level AND atom presence ──
+    # Only shown when: (a) level is experienced or quant, AND
+    # (b) at least one greeks atom actually exists in the DB for this ticker.
+    # Never show empty/placeholder greeks fields.
+    if _level in ('experienced',) and db_path:
+        try:
+            import sqlite3 as _sq2
+            _gc2 = _sq2.connect(db_path, timeout=5)
+            _greeks_found = {}
+            for _gp in ['delta_atm', 'iv_true', 'put_call_oi_ratio', 'gamma_exposure']:
+                _gr = _gc2.execute(
+                    "SELECT object FROM facts WHERE subject=? AND predicate=?"
+                    " ORDER BY timestamp DESC LIMIT 1",
+                    (pattern.ticker.lower(), _gp)
+                ).fetchone()
+                if _gr:
+                    _greeks_found[_gp] = _gr[0]
+            _gc2.close()
+            if _greeks_found:
+                _g2_parts = []
+                if 'delta_atm' in _greeks_found:
+                    _g2_parts.append(f'\u0394:{_escape_mdv2(_greeks_found["delta_atm"])}')
+                if 'iv_true' in _greeks_found:
+                    _g2_parts.append(f'IV:{_escape_mdv2(_greeks_found["iv_true"])}%')
+                if 'put_call_oi_ratio' in _greeks_found:
+                    _g2_parts.append(f'PCR:{_escape_mdv2(_greeks_found["put_call_oi_ratio"])}')
+                if 'gamma_exposure' in _greeks_found:
+                    try:
+                        _gex2 = float(_greeks_found['gamma_exposure'])
+                        _gex2_dir = 'long\u03b3' if _gex2 >= 0 else 'short\u03b3'
+                        _g2_parts.append(f'GEX:{_escape_mdv2(f"{_gex2:,.0f}")} \\({_escape_mdv2(_gex2_dir)}\\)')
+                    except Exception:
+                        pass
+                if _g2_parts:
+                    lines += ['', 'Greeks: ' + ' \\| '.join(_g2_parts)]
+        except Exception:
+            pass
+
     lines += kb_lines
 
     # ── Fallback source label ─────────────────────────────────────────────────

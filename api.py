@@ -6450,6 +6450,18 @@ def _handle_tg_message(msg: dict) -> None:
         except Exception:
             pass
 
+    # ── Trader level — fresh DB fetch, no session state in Telegram ────────
+    # Telegram messages carry no session — must query DB on every request so
+    # a level change takes effect immediately without waiting for cache expiry.
+    _tg_trader_level = 'developing'
+    try:
+        from users.user_store import get_user as _get_tg_user
+        _tg_user_row = _get_tg_user(_DB_PATH, user_id)
+        if _tg_user_row:
+            _tg_trader_level = _tg_user_row.get('trader_level') or 'developing'
+    except Exception:
+        pass
+
     # ── Build prompt ───────────────────────────────────────────────────────
     try:
         from llm.prompt_builder import build as _build_prompt
@@ -6462,6 +6474,7 @@ def _handle_tg_message(msg: dict) -> None:
             stress=tg_stress_dict,
             has_history=bool(history_messages),
             telegram_mode=True,
+            trader_level=_tg_trader_level,
         )
         # Splice conversation history between system and user turns
         # Strip 'id' and any non-standard fields — Groq rejects them with 400

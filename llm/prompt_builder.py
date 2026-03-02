@@ -534,14 +534,27 @@ def build(
     if opportunity_scan_context and _EMPTY_SCAN_SENTINEL not in opportunity_scan_context:
         system_text += _SYSTEM_GENERATION_RULE
 
-    # Options Greeks rule — injected when KB snippet contains greeks atoms.
-    # Suppressed for beginner level — no raw atom values or Greek letters.
+    # ── Trader level resolution ────────────────────────────────────────────────
     _effective_level = (trader_level or 'developing').lower()
-    if snippet and '# options-greeks' in snippet and _effective_level not in ('beginner', 'developing'):
+    if _effective_level not in _LEVEL_RULES:
+        _effective_level = 'developing'
+
+    # ── Options Greeks rule ────────────────────────────────────────────────────
+    # Two conditions BOTH required — explicit and independent of the level rule:
+    #   1. greeks atoms are actually present in the retrieved snippet
+    #   2. trader level is experienced or quant (not beginner / developing)
+    # This is an explicit gate, NOT relying on the level rule to suppress greeks.
+    # Injecting the greeks rule for beginner/developing and then having the level
+    # rule say "never show greeks" creates the same prompt contradiction that
+    # caused the geo rules conflict. The gate prevents both rules from being
+    # present in the same prompt simultaneously.
+    _greeks_in_snippet = bool(snippet and '# options-greeks' in snippet)
+    _level_shows_greeks = _effective_level in ('experienced', 'quant')
+    if _greeks_in_snippet and _level_shows_greeks:
         system_text += _SYSTEM_GREEKS_RULE
 
-    # Trader level rule — always inject exactly one level rule.
-    system_text += _LEVEL_RULES.get(_effective_level, _SYSTEM_LEVEL_DEVELOPING)
+    # ── Trader level rule — always inject exactly one ──────────────────────────
+    system_text += _LEVEL_RULES[_effective_level]
 
     # Briefing mode rules — injected for scheduled Telegram briefings.
     if briefing_mode == 'position_monitor':
