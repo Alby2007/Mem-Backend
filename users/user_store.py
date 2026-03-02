@@ -123,6 +123,7 @@ _PREFERENCES_MIGRATIONS = [
     "ALTER TABLE user_preferences ADD COLUMN available_cash REAL DEFAULT NULL",
     "ALTER TABLE user_preferences ADD COLUMN cash_currency TEXT DEFAULT 'GBP'",
     "ALTER TABLE user_preferences ADD COLUMN is_dev INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE user_preferences ADD COLUMN trader_level TEXT DEFAULT 'developing'",
 ]
 
 _DDL_DELIVERY_LOG = """
@@ -193,7 +194,7 @@ def get_user(db_path: str, user_id: str) -> Optional[dict]:
             """SELECT user_id, onboarding_complete, selected_sectors,
                       selected_risk, telegram_chat_id, delivery_time, timezone,
                       tier, max_risk_per_trade_pct, is_dev,
-                      tip_delivery_time, tip_delivery_timezone
+                      tip_delivery_time, tip_delivery_timezone, trader_level
                FROM user_preferences WHERE user_id = ?""",
             (user_id,),
         ).fetchone()
@@ -202,7 +203,7 @@ def get_user(db_path: str, user_id: str) -> Optional[dict]:
         cols = ['user_id', 'onboarding_complete', 'selected_sectors',
                 'selected_risk', 'telegram_chat_id', 'delivery_time', 'timezone',
                 'tier', 'max_risk_per_trade_pct', 'is_dev',
-                'tip_delivery_time', 'tip_delivery_timezone']
+                'tip_delivery_time', 'tip_delivery_timezone', 'trader_level']
         d = dict(zip(cols, row))
         try:
             d['selected_sectors'] = json.loads(d['selected_sectors'] or '[]')
@@ -210,6 +211,7 @@ def get_user(db_path: str, user_id: str) -> Optional[dict]:
             d['selected_sectors'] = []
         d['telegram_chat_id'] = decrypt_field(d.get('telegram_chat_id'))
         d['tier'] = d.get('tier') or 'free'
+        d['trader_level'] = d.get('trader_level') or 'developing'
         return d
     finally:
         conn.close()
@@ -1024,6 +1026,27 @@ def set_user_tier(db_path: str, user_id: str, tier: str) -> None:
                VALUES (?, ?)
                ON CONFLICT(user_id) DO UPDATE SET tier = excluded.tier""",
             (user_id, tier),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_VALID_TRADER_LEVELS = frozenset({'beginner', 'developing', 'experienced', 'quant'})
+
+
+def set_trader_level(db_path: str, user_id: str, level: str) -> None:
+    """Set the trader_level for a user. level must be one of the four valid values."""
+    if level not in _VALID_TRADER_LEVELS:
+        raise ValueError(f"Invalid trader_level '{level}'. Must be one of: {sorted(_VALID_TRADER_LEVELS)}")
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_tables(conn)
+        conn.execute(
+            """INSERT INTO user_preferences (user_id, trader_level)
+               VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET trader_level = excluded.trader_level""",
+            (user_id, level),
         )
         conn.commit()
     finally:

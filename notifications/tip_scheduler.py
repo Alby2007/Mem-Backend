@@ -650,6 +650,7 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
         return
 
     tier              = user_prefs.get('tier', 'basic')
+    trader_level      = user_prefs.get('trader_level') or 'developing'
     tip_timeframes    = user_prefs.get('tip_timeframes') or ['1h']
     tip_pattern_types = user_prefs.get('tip_pattern_types')
     tip_markets       = user_prefs.get('tip_markets')
@@ -910,7 +911,10 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
                 _log.debug('TipScheduler: forecast failed for %s: %s', sig.ticker, _fe)
 
         tip_source = pattern_row.get('tip_source')
-        message  = format_tip(sig, position, tier=tier, calibration=calibration, tip_source=tip_source)
+        message  = format_tip(
+            sig, position, tier=tier, calibration=calibration,
+            tip_source=tip_source, trader_level=trader_level,
+        )
 
         notifier = TelegramNotifier()
         sent     = notifier.send(chat_id, message)

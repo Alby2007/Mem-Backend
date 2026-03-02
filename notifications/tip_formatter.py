@@ -106,32 +106,10 @@ def _signal_dir_line(pattern: PatternSignal) -> str:
 
 
 # ── TIER_LIMITS ────────────────────────────────────────────────────────────────
+# Single source of truth lives in core/tiers.py — re-exported here for
+# backwards compatibility with any direct TIER_LIMITS imports.
 
-_ALL_PATTERNS = ['fvg', 'ifvg', 'bpr', 'order_block', 'breaker', 'liquidity_void', 'mitigation']
-
-TIER_LIMITS = {
-    'basic': {
-        'delivery_days': ['monday', 'wednesday'],
-        'batch_size':    2,
-        'patterns':      ['fvg', 'ifvg'],
-        'timeframes':    ['1h', '4h'],
-        'targets':       2,
-    },
-    'pro': {
-        'delivery_days': ['monday', 'wednesday'],
-        'batch_size':    5,
-        'patterns':      _ALL_PATTERNS,
-        'timeframes':    ['1h', '4h', '1d'],
-        'targets':       2,
-    },
-    'premium': {
-        'delivery_days': 'daily',
-        'batch_size':    1,
-        'patterns':      _ALL_PATTERNS,
-        'timeframes':    ['15m', '1h', '4h', '1d'],
-        'targets':       3,
-    },
-}
+from core.tiers import TIER_CONFIG as TIER_LIMITS, _ALL_PATTERNS
 
 
 def pattern_allowed_for_tier(pattern_type: str, tier: str) -> bool:
@@ -260,13 +238,149 @@ _TIP_SOURCE_LABELS = {
 }
 
 
+def _format_tip_narrative(
+    pattern:  PatternSignal,
+    position: Optional[PositionRecommendation],
+) -> str:
+    """
+    Beginner-friendly tip: plain English, no jargon, risk-first framing.
+    No quality scores, no Greek letters, no raw atom values.
+    """
+    _e = _escape_mdv2
+    direction_word = 'rising' if pattern.direction == 'bullish' else 'falling'
+    direction_label = 'Bullish \\(upward\\)' if pattern.direction == 'bullish' else 'Bearish \\(downward\\)'
+    now_str = datetime.now(timezone.utc).strftime('%A %d %b, %H:%M UTC')
+
+    lines = [
+        f'📋 *TRADE IDEA — {_e(pattern.ticker)}*',
+        f'_{_e(now_str)}_',
+        '',
+        f'*What is this?*',
+        f'A {direction_label} setup has been detected on {_e(pattern.ticker)}\\.',
+        f'The price has created a support zone \\(an area where buyers have previously stepped in\\) '
+        f'between {_e(_fmt_price(pattern.zone_low))} and {_e(_fmt_price(pattern.zone_high))}\\.',
+        '',
+        f'*What does this mean?*',
+        f'If the price returns to this zone, it may be a good area to consider buying',
+        f'\\(for a {_e(direction_word)} move\\)\\. This is not guaranteed — the market can always move against you\\.',
+    ]
+
+    if position:
+        _e2 = _escape_mdv2
+        lines += [
+            '',
+            f'*If you decide to act:*',
+            f'• Suggested entry \\(where to buy\\): {_e2(_fmt_price(position.suggested_entry))}',
+            f'• Stop loss \\(where to exit if wrong\\): {_e2(_fmt_price(position.stop_loss))}',
+            f'  ↳ A stop loss is an automatic exit point that limits your losses if the trade goes against you\\.',
+            f'• First profit target: {_e2(_fmt_price(position.target_1))}',
+            f'• Risk per trade: {_e2(str(position.risk_pct))}% of your account',
+        ]
+    else:
+        lines += [
+            '',
+            '_Set your account size in Settings → Tips to see position sizing_',
+        ]
+
+    lines += [
+        '',
+        '⚠️ *Important risk reminder*',
+        'Only risk money you can genuinely afford to lose\\. Never risk more than you are',
+        'comfortable losing entirely\\. This is not financial advice\\.',
+    ]
+    return '\n'.join(lines)
+
+
+def _format_tip_raw(
+    pattern:    PatternSignal,
+    position:   Optional[PositionRecommendation],
+    tier:       str,
+    db_path:    Optional[str] = None,
+) -> str:
+    """
+    Quant/dense tip: maximum information density, raw atom values, greeks inline.
+    Single-line header format where possible.
+    """
+    _e = _escape_mdv2
+    tf   = _TF_LABELS.get(pattern.timeframe, pattern.timeframe.upper())
+    pat  = pattern.pattern_type.upper()
+    qs   = f'{pattern.quality_score:.2f}'
+    conv = (pattern.kb_conviction or '?').upper()
+    sig  = (pattern.kb_signal_dir or '?')
+    reg  = (pattern.kb_regime or '?').replace('_', ' ')
+    now_str = datetime.now(timezone.utc).strftime('%d %b %Y %H:%M UTC')
+
+    lines = [
+        f'⚡ *{_e(pattern.ticker)}* \\| {_e(pat)} \\| {_e(tf)} \\| Q:{_e(qs)} \\| Conv:{_e(conv)}',
+        f'`{_e(now_str)}`',
+        f'Zone: {_e(_fmt_price(pattern.zone_low))}–{_e(_fmt_price(pattern.zone_high))} '
+        f'\\| Dir: {_e(sig)} \\| Regime: {_e(reg)}',
+    ]
+
+    if position:
+        limits   = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
+        show_t3  = limits['targets'] >= 3
+        currency = position.account_currency
+        asym = (position.target_2 - position.suggested_entry) / max(
+            abs(position.suggested_entry - position.stop_loss), 0.0001
+        ) if position.suggested_entry and position.stop_loss else 0.0
+        lines += [
+            f'Entry: {_e(_fmt_price(position.suggested_entry))} \\| SL: {_e(_fmt_price(position.stop_loss))} '
+            f'\\| T1: {_e(_fmt_price(position.target_1))} \\| T2: {_e(_fmt_price(position.target_2))}'
+            + (f' \\| T3: {_e(_fmt_price(position.target_3))}' if show_t3 else ''),
+            f'Asymmetry: 1:{_e(f"{asym:.1f}")} \\| Size: {_e(str(position.risk_pct))}% \\| '
+            f'Risk: {_e(_fmt_currency(position.risk_amount, currency))}',
+        ]
+    else:
+        lines.append('_No position sizing — set account size in Settings → Tips_')
+
+    # Inline greeks from DB if available
+    if db_path:
+        try:
+            import sqlite3 as _sq
+            _gc = _sq.connect(db_path, timeout=5)
+            _greek_preds = ['delta_atm', 'iv_true', 'put_call_oi_ratio', 'gamma_exposure']
+            _greek_vals = {}
+            for _p in _greek_preds:
+                _row = _gc.execute(
+                    "SELECT object FROM facts WHERE subject=? AND predicate=? ORDER BY timestamp DESC LIMIT 1",
+                    (pattern.ticker.lower(), _p)
+                ).fetchone()
+                if _row:
+                    _greek_vals[_p] = _row[0]
+            _gc.close()
+            if _greek_vals:
+                _g_parts = []
+                if 'delta_atm' in _greek_vals:
+                    _g_parts.append(f'Δ:{_e(_greek_vals["delta_atm"])}')
+                if 'iv_true' in _greek_vals:
+                    _g_parts.append(f'IV:{_e(_greek_vals["iv_true"])}%')
+                if 'put_call_oi_ratio' in _greek_vals:
+                    _g_parts.append(f'PCR:{_e(_greek_vals["put_call_oi_ratio"])}')
+                if 'gamma_exposure' in _greek_vals:
+                    try:
+                        _gex = float(_greek_vals['gamma_exposure'])
+                        _gex_dir = 'long\u03b3' if _gex >= 0 else 'short\u03b3'
+                        _g_parts.append(f'GEX:{_e(f"{_gex:,.0f}")} \\({_e(_gex_dir)}\\)')
+                    except Exception:
+                        pass
+                if _g_parts:
+                    lines.append('Greeks: ' + ' \\| '.join(_g_parts))
+        except Exception:
+            pass
+
+    return '\n'.join(lines)
+
+
 def format_tip(
-    pattern:     PatternSignal,
-    position:    Optional[PositionRecommendation],
-    tier:        str = 'basic',
-    skew_filter: Optional[dict] = None,
-    calibration: Optional[object] = None,
-    tip_source:  Optional[str] = None,
+    pattern:      PatternSignal,
+    position:     Optional[PositionRecommendation],
+    tier:         str = 'basic',
+    skew_filter:  Optional[dict] = None,
+    calibration:  Optional[object] = None,
+    tip_source:   Optional[str] = None,
+    trader_level: str = 'developing',
+    db_path:      Optional[str] = None,
 ) -> str:
     """
     Render a complete Telegram MarkdownV2 tip message.
@@ -287,6 +401,13 @@ def format_tip(
     -------
     MarkdownV2-escaped string ready for Telegram sendMessage.
     """
+    # ── Trader level branching ────────────────────────────────────────────────
+    _level = (trader_level or 'developing').lower()
+    if _level == 'beginner':
+        return _format_tip_narrative(pattern, position)
+    if _level == 'quant':
+        return _format_tip_raw(pattern, position, tier, db_path=db_path)
+
     limits       = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
     show_t3      = limits['targets'] >= 3
     tf_label     = _TF_LABELS.get(pattern.timeframe, pattern.timeframe.upper())

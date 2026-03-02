@@ -354,6 +354,65 @@ _SYSTEM_GREEKS_RULE = (
     "Never invent or estimate Greeks values from training data."
 )
 
+_SYSTEM_LEVEL_BEGINNER = """
+COMMUNICATION LEVEL: BEGINNER TRADER
+Your user is new to trading. Follow these rules strictly:
+- NEVER use trading jargon without immediately explaining it in plain English in parentheses
+  e.g. "FVG (Fair Value Gap — a price gap the market tends to return to)"
+- Use simple analogies. Frame everything in terms of risk first, reward second
+- Always include a one-sentence plain English summary at the end of any trade discussion
+- Tone: patient, clear, encouraging — never condescending
+- NEVER show raw atom values, quality scores, Greek letters, or statistical scores
+- NEVER mention delta, gamma, theta, vega, PCR, GEX, or any options metrics
+- Always include a brief risk reminder at the end of any tip or setup discussion:
+  "Remember: only risk money you can genuinely afford to lose."
+- Explain what a stop loss is the first time it appears
+- Keep responses short and focused — one concept at a time
+"""
+
+_SYSTEM_LEVEL_DEVELOPING = """
+COMMUNICATION LEVEL: DEVELOPING TRADER
+Your user has some trading experience. Follow these rules:
+- Use standard trading terminology but briefly clarify less common terms on first use
+  e.g. "order block (a consolidation zone before a strong move)"
+- Standard structured format: lead with the setup, then context, then risk
+- Show quality scores and conviction tiers when available
+- Include a brief risk note for any tip or setup discussion
+- Tone: informative, professional, supportive
+"""
+
+_SYSTEM_LEVEL_EXPERIENCED = """
+COMMUNICATION LEVEL: EXPERIENCED TRADER
+Your user is experienced. Follow these rules:
+- Use full trading and technical analysis terminology without explanation
+- Dense format — lead with the signal, skip preamble and hand-holding
+- Include options Greeks (delta, IV, PCR, GEX) when present in KB context
+- No risk disclaimers unless extreme conditions are present (IV >60, negative GEX)
+- Tone: direct, peer-level, data-focused
+- Quote raw KB atom values when relevant (prices, scores, percentages)
+"""
+
+_SYSTEM_LEVEL_QUANT = """
+COMMUNICATION LEVEL: QUANTITATIVE TRADER
+Your user is a quantitative/data-driven trader. Follow these rules:
+- Maximum information density. Zero narrative padding.
+- Always surface raw KB atom values: quality scores, conviction tiers, atom timestamps
+- Include all available options Greeks: delta_atm, gamma_atm, theta_atm, vega_atm,
+  iv_true, put_call_oi_ratio, gamma_exposure — with their exact values from the KB
+- Use statistical framing where appropriate: percentiles, confidence scores, ratios
+- If conflicting signals exist, state them explicitly and give the probability-weighted interpretation
+- Surface GEX direction and magnitude directly (e.g. "GEX: -2.3M — dealers short gamma")
+- Tone: analytical, data-first, zero hand-holding
+- Format terse: ticker | pattern | timeframe | score | key atoms on one line where possible
+"""
+
+_LEVEL_RULES = {
+    'beginner':   _SYSTEM_LEVEL_BEGINNER,
+    'developing': _SYSTEM_LEVEL_DEVELOPING,
+    'experienced': _SYSTEM_LEVEL_EXPERIENCED,
+    'quant':      _SYSTEM_LEVEL_QUANT,
+}
+
 _SYSTEM_DAILY_MONITOR_RULE = (
     "\n24. DAILY POSITION MONITOR MODE: This briefing covers open positions mid-week. "
     "Write a concise position-by-position status check in plain prose. "
@@ -403,6 +462,7 @@ def build(
     opportunity_scan_context: Optional[str] = None,
     telegram_mode: bool = False,
     briefing_mode: Optional[str] = None,
+    trader_level: Optional[str] = None,
 ) -> list[dict]:
     """
     Build the [system, user] message list for Ollama.
@@ -475,8 +535,13 @@ def build(
         system_text += _SYSTEM_GENERATION_RULE
 
     # Options Greeks rule — injected when KB snippet contains greeks atoms.
-    if snippet and '# options-greeks' in snippet:
+    # Suppressed for beginner level — no raw atom values or Greek letters.
+    _effective_level = (trader_level or 'developing').lower()
+    if snippet and '# options-greeks' in snippet and _effective_level not in ('beginner', 'developing'):
         system_text += _SYSTEM_GREEKS_RULE
+
+    # Trader level rule — always inject exactly one level rule.
+    system_text += _LEVEL_RULES.get(_effective_level, _SYSTEM_LEVEL_DEVELOPING)
 
     # Briefing mode rules — injected for scheduled Telegram briefings.
     if briefing_mode == 'position_monitor':

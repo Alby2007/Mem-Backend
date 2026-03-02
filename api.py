@@ -2352,6 +2352,16 @@ def chat_endpoint():
     # Trust the authenticated token identity over the request body to prevent spoofing
     chat_user_id    = getattr(g, 'user_id', None) or data.get('user_id') or None
 
+    # ── Trader level — controls communication style in the LLM prompt ──────
+    _chat_trader_level = 'developing'
+    if chat_user_id and HAS_PRODUCT_LAYER:
+        try:
+            _tl_row = get_user(_DB_PATH, chat_user_id)
+            if _tl_row:
+                _chat_trader_level = _tl_row.get('trader_level') or 'developing'
+        except Exception:
+            pass
+
     # ── Chat quota enforcement (basic tier: 10 queries/day) ────────────────
     if chat_user_id and HAS_TIERS and HAS_PATTERN_LAYER:
         try:
@@ -3032,6 +3042,7 @@ def chat_endpoint():
         web_searched=web_searched or None,
         has_history=_has_prior_turns,
         opportunity_scan_context=_opportunity_scan_context,
+        trader_level=_chat_trader_level,
     )
 
     # ── Persist user turn + inject DB-backed conversation history ──────────
@@ -6112,6 +6123,31 @@ def user_telegram_verify(user_id: str):
         notifier = TelegramNotifier()
         sent = notifier.send_test(chat_id)
         return jsonify({'sent': sent})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/trader-level', methods=['POST'])
+@require_auth
+def user_set_trader_level(user_id: str):
+    """
+    POST /users/<user_id>/trader-level
+
+    Set the trader experience level for the authenticated user.
+    Body: {"level": "beginner" | "developing" | "experienced" | "quant"}
+    Returns {"trader_level": "<level>"}.
+    """
+    err = assert_self(user_id)
+    if err: return err
+    body = request.get_json(force=True, silent=True) or {}
+    level = (body.get('level') or '').strip().lower()
+    _valid = {'beginner', 'developing', 'experienced', 'quant'}
+    if level not in _valid:
+        return jsonify({'error': f"Invalid level '{level}'. Must be one of: {sorted(_valid)}"}), 400
+    try:
+        from users.user_store import set_trader_level as _set_level
+        _set_level(_DB_PATH, user_id, level)
+        return jsonify({'trader_level': level})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
