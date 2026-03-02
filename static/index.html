@@ -971,6 +971,7 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .sub-cta-secondary { background: transparent; border: 1px solid var(--border); color: var(--muted); }
 .sub-cta-secondary:hover { border-color: var(--accent); color: var(--accent); }
 .sub-cta-current   { background: transparent; border: 1px solid var(--accent2); color: var(--accent2); cursor: default; }
+.sub-cta-noop      { cursor: default; pointer-events: none; }
 
 .sub-guarantee { background: rgba(16,185,129,.07); border: 1px solid rgba(16,185,129,.2); border-radius: 6px; padding: 12px 18px; display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
 .sub-guarantee-icon { font-size: 18px; flex-shrink: 0; }
@@ -2013,16 +2014,15 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
         <div class="sub-feature-group-label">Setups</div>
         <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">2 setups</span> per Monday</span></div>
         <div class="sub-feature-row"><span class="sub-fcheck">✓</span> FVG + IFVG patterns</div>
-        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> 1h &amp; 4h timeframes</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> 4h &amp; daily timeframes</div>
         <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> All pattern types</div>
-        <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Daily timeframe</div>
         <div class="sub-feature-group-label">Alerts</div>
         <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Zone + thesis alerts</div>
         <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Profit lock alerts</div>
         <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Trailing pullback alerts</div>
       </div>
       <div class="sub-tier-cta">
-        <button class="sub-cta-btn sub-cta-secondary" id="sub-cta-basic" onclick="showToast('Plan selection coming soon','ok')">Choose Basic</button>
+        <button class="sub-cta-btn sub-cta-current sub-cta-noop" id="sub-cta-basic">Free tier — upgrade below</button>
       </div>
     </div>
 
@@ -2044,11 +2044,11 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
         <div class="sub-feature-group-label">Briefings</div>
         <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Monday Week Ahead briefing</div>
         <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Wednesday compound update</div>
-        <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Daily briefing</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">Daily briefing</span> Mon–Fri</span></div>
         <div class="sub-feature-group-label">Setups</div>
-        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">5 setups</span> per Monday</span></div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">3 setups</span> per Monday</span></div>
         <div class="sub-feature-row"><span class="sub-fcheck">✓</span> All pattern types</div>
-        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> 1h, 4h &amp; daily timeframes</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> 4h &amp; daily timeframes</div>
         <div class="sub-feature-group-label">Alerts</div>
         <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Zone + thesis alerts</div>
         <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Profit lock alerts (T1/T2)</div>
