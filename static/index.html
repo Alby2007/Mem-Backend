@@ -2217,6 +2217,13 @@ function applySubscriptionGating() {
       else        el.classList.remove('locked');
     }
   });
+  // Show Subscription nav item only when user has no paid tier (free users need to find it)
+  // Hide it once they have a subscription — they don't need to see it constantly
+  const navSub  = document.getElementById('nav-subscription');
+  const mnavSub = document.getElementById('mnav-subscription');
+  const showSub = !_hasSubscription();
+  if (navSub)  navSub.style.display  = showSub ? '' : 'none';
+  if (mnavSub) mnavSub.style.display = showSub ? '' : 'none';
 }
 
 function checkFeature(feature) {
@@ -2278,9 +2285,20 @@ function applyTierGating() {
 
 function applyDevGating() {
   const dev = state.isDev;
-  // Nav: hide Network for non-dev
+  // Nav: hide Network, Patterns, History for non-dev
   const navNetwork = document.getElementById('nav-network');
   if (navNetwork) navNetwork.style.display = dev ? '' : 'none';
+  const navPatterns = document.getElementById('nav-patterns');
+  if (navPatterns) navPatterns.style.display = dev ? '' : 'none';
+  const navHistory = document.getElementById('nav-history');
+  if (navHistory) navHistory.style.display = dev ? '' : 'none';
+  // Mobile nav
+  const mnavNetwork = document.getElementById('mnav-network');
+  if (mnavNetwork) mnavNetwork.style.display = dev ? '' : 'none';
+  const mnavPatterns = document.getElementById('mnav-patterns');
+  if (mnavPatterns) mnavPatterns.style.display = dev ? '' : 'none';
+  const mnavHistory = document.getElementById('mnav-history');
+  if (mnavHistory) mnavHistory.style.display = dev ? '' : 'none';
   // Topbar KB count
   const kbCount = document.getElementById('kb-count');
   if (kbCount) kbCount.style.display = dev ? '' : 'none';
@@ -2355,8 +2373,8 @@ function _injectAuthTgWidget() {
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
-const _SCREENS = ['dashboard','portfolio','markets','chat','tips','patterns','network','history','profile'];
-const _NEXT_RE = /^\/[a-z0-9_-]+\/(dashboard|portfolio|markets|chat|tips|patterns|network|history|profile)$/;
+const _SCREENS = ['dashboard','portfolio','markets','chat','tips','patterns','network','history','subscription','profile'];
+const _NEXT_RE = /^\/[a-z0-9_-]+\/(dashboard|portfolio|markets|chat|tips|patterns|network|history|subscription|profile)$/;
 
 function _screenFromPath(path) {
   // /:username/screen  → screen name

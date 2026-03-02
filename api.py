@@ -367,7 +367,7 @@ try:
             "https://trading-galaxy.uk",
             "https://www.trading-galaxy.uk",
             "https://app.trading-galaxy.uk",
-            "https://*.netlify.app",
+            "https://*.pages.dev",
             "http://localhost:3000",
             "http://localhost:5050",
         ],
