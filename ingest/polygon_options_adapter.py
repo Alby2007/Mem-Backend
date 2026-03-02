@@ -29,7 +29,7 @@ not covered by Polygon US options data).
 
 ENDPOINT
 ========
-GET https://api.massive.com/v3/snapshot/options/{ticker}?apiKey={key}
+GET https://api.polygon.io/v3/snapshot/options/{ticker}?apiKey={key}
 
 Response: results[] → each result has:
   greeks.delta, greeks.gamma, greeks.theta, greeks.vega
@@ -61,7 +61,7 @@ from ingest.base import BaseIngestAdapter, RawAtom
 
 _logger = logging.getLogger(__name__)
 
-_BASE_URL = 'https://api.massive.com/v3/snapshot/options'
+_BASE_URL = 'https://api.polygon.io/v3/snapshot/options'
 
 # US-only options universe (FTSE .L tickers excluded)
 _US_OPTIONS_TICKERS = [
