@@ -47,10 +47,16 @@ try:
 except ImportError:
     OptionsAdapter = None  # type: ignore
 
+try:
+    from .polygon_options_adapter import PolygonOptionsAdapter
+except ImportError:
+    PolygonOptionsAdapter = None  # type: ignore
+
 
 __all__ = [
     'BaseIngestAdapter', 'RawAtom', 'IngestScheduler',
     'YFinanceAdapter', 'FREDAdapter', 'EDGARAdapter', 'RSSAdapter',
     'SignalEnrichmentAdapter', 'HistoricalBackfillAdapter',
     'LLMExtractionAdapter', 'EDGARRealtimeAdapter', 'OptionsAdapter',
+    'PolygonOptionsAdapter',
 ]

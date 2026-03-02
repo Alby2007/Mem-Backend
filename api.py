@@ -90,6 +90,7 @@ try:
     from ingest.llm_extraction_adapter import LLMExtractionAdapter
     from ingest.edgar_realtime_adapter import EDGARRealtimeAdapter
     from ingest.options_adapter import OptionsAdapter
+    from ingest.polygon_options_adapter import PolygonOptionsAdapter
     from ingest.boe_adapter import BoEAdapter
     from ingest.earnings_calendar_adapter import EarningsCalendarAdapter
     from ingest.fca_short_interest_adapter import FCAShortInterestAdapter
@@ -572,6 +573,8 @@ if HAS_INGEST:
         _ingest_scheduler.register(EDGARAdapter(db_path=_DB_PATH),           interval_sec=21600)  # 6 hours
         _ingest_scheduler.register(EDGARRealtimeAdapter(db_path=_DB_PATH),   interval_sec=180)    # 3 min real-time 8-K
         _ingest_scheduler.register(OptionsAdapter(),                          interval_sec=1800)   # 30 min options chain
+        if os.environ.get('POLYGON_API_KEY'):
+            _ingest_scheduler.register(PolygonOptionsAdapter(),               interval_sec=1800)   # 30 min Polygon Greeks
         _ingest_scheduler.register(FREDAdapter(),                             interval_sec=86400)  # 24 hours
         _ingest_scheduler.register(BoEAdapter(),                              interval_sec=86400)  # 24 hours UK macro
         _ingest_scheduler.register(EarningsCalendarAdapter(db_path=_DB_PATH), interval_sec=3600)   # 1 hour earnings calendar
