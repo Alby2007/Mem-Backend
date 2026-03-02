@@ -333,6 +333,27 @@ _SYSTEM_TELEGRAM_FORMAT = (
     "'Ask me about a specific holding.'"
 )
 
+_SYSTEM_GREEKS_RULE = (
+    "\n26. OPTIONS GREEKS ATOMS: When the KNOWLEDGE CONTEXT contains a '# options-greeks' section, "
+    "interpret those atoms using these rules — cite the actual values from the atoms, never invent them:\n"
+    "- delta_atm: probability proxy for the ATM option (0.50 = perfectly ATM). "
+    "Report as-is — do NOT convert to a percentage.\n"
+    "- gamma_atm: rate of delta change. High gamma (>0.10) near expiry = delta accelerates rapidly on moves.\n"
+    "- theta_atm: daily time decay in price terms. Negative = cost of holding options per day.\n"
+    "- vega_atm: sensitivity to a 1-point IV move. High vega = position value swings with vol.\n"
+    "- iv_true: true implied volatility %. Thresholds: <20 = low vol, 20-40 = normal, "
+    ">40 = elevated (widen stops, reduce size), >60 = very high (extreme caution).\n"
+    "- put_call_oi_ratio: total put OI / call OI. "
+    ">1.3 = heavy put buying / bearish positioning. "
+    "<0.7 = heavy call buying / bullish positioning. "
+    "0.7-1.3 = balanced. Flag any conflict with the directional signal.\n"
+    "- gamma_exposure (GEX): aggregate dealer hedging pressure. "
+    ">0 = dealers long gamma → dampens moves, price tends to pin near this level (range-bound). "
+    "<0 = dealers short gamma → amplifies moves, expect larger swings in both directions.\n"
+    "CRITICAL: Only interpret these atoms when they are present in the context. "
+    "Never invent or estimate Greeks values from training data."
+)
+
 _SYSTEM_DAILY_MONITOR_RULE = (
     "\n24. DAILY POSITION MONITOR MODE: This briefing covers open positions mid-week. "
     "Write a concise position-by-position status check in plain prose. "
@@ -452,6 +473,10 @@ def build(
     # Check for the pinned sentinel constant — never rely on natural-language substrings.
     if opportunity_scan_context and _EMPTY_SCAN_SENTINEL not in opportunity_scan_context:
         system_text += _SYSTEM_GENERATION_RULE
+
+    # Options Greeks rule — injected when KB snippet contains greeks atoms.
+    if snippet and '# options-greeks' in snippet:
+        system_text += _SYSTEM_GREEKS_RULE
 
     # Briefing mode rules — injected for scheduled Telegram briefings.
     if briefing_mode == 'position_monitor':

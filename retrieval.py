@@ -134,6 +134,22 @@ _KEYWORD_PREDICATE_BOOST: dict = {
     'outperform':  ('return_vs_spy_1m', 'return_vs_spy_3m'),
     'vol':         ('volatility_30d', 'volatility_90d', 'volatility_regime'),
     'trend':       ('return_1m', 'return_3m', 'price_regime', 'signal_direction'),
+    'greek':       ('delta_atm', 'gamma_atm', 'theta_atm', 'vega_atm', 'iv_true', 'put_call_oi_ratio', 'gamma_exposure'),
+    'greeks':      ('delta_atm', 'gamma_atm', 'theta_atm', 'vega_atm', 'iv_true', 'put_call_oi_ratio', 'gamma_exposure'),
+    'delta':       ('delta_atm', 'gamma_atm', 'iv_true'),
+    'gamma':       ('gamma_atm', 'gamma_exposure', 'iv_true'),
+    'theta':       ('theta_atm', 'iv_true'),
+    'vega':        ('vega_atm', 'iv_true'),
+    'implied':     ('iv_true', 'put_call_oi_ratio'),
+    'iv':          ('iv_true', 'put_call_oi_ratio'),
+    'options':     ('delta_atm', 'gamma_atm', 'theta_atm', 'vega_atm', 'iv_true', 'put_call_oi_ratio', 'gamma_exposure', 'iv_rank'),
+    'put':         ('put_call_oi_ratio', 'iv_true', 'delta_atm'),
+    'call':        ('put_call_oi_ratio', 'iv_true', 'delta_atm'),
+    'gex':         ('gamma_exposure', 'gamma_atm', 'iv_true'),
+    'dealer':      ('gamma_exposure', 'gamma_atm'),
+    'pin':         ('gamma_exposure', 'gamma_atm'),
+    'skew':        ('put_call_oi_ratio', 'iv_true', 'iv_skew_ratio'),
+    'hedge':       ('gamma_exposure', 'delta_atm', 'put_call_oi_ratio'),
 }
 
 # Common name / forex pair → canonical KB ticker alias map
@@ -712,6 +728,8 @@ def retrieve(
         'return_vs_spy_1m', 'return_vs_spy_3m',
         'invalidation_price', 'invalidation_distance', 'thesis_risk_level',
         'conviction_tier', 'volatility_scalar', 'position_size_pct',
+        'delta_atm', 'gamma_atm', 'theta_atm', 'vega_atm',
+        'iv_true', 'put_call_oi_ratio', 'gamma_exposure',
     )
     _pin_ph = ','.join('?' * len(_PINNED_PREDICATES))
     for ticker in tickers:
@@ -1106,7 +1124,13 @@ def retrieve(
     # GDELT stores tension scores as compound predicates e.g. russia_ukraine_score,
     # us_iran_trend, china_taiwan_score. Route these to geo, not other.
     _GDELT_SCORE_SUFFIXES = ('_score', '_trend', '_risk')
-    signals, invalidation, quality, theses, macro, research, historical, geo, other = [], [], [], [], [], [], [], [], []
+    _OPTIONS_GREEKS_PREDICATES = frozenset({
+        'delta_atm', 'gamma_atm', 'theta_atm', 'vega_atm',
+        'iv_true', 'put_call_oi_ratio', 'gamma_exposure',
+        'iv_rank', 'iv_skew_ratio', 'iv_skew_25d',
+    })
+
+    signals, invalidation, quality, theses, macro, research, historical, geo, options_greeks, other = [], [], [], [], [], [], [], [], [], []
     for r in results:
         pred = r['predicate']
         src = r['source']
@@ -1141,6 +1165,8 @@ def retrieve(
         elif (_is_geo_src or pred in _GEO_PREDICATES or _is_gdelt_score
               or (pred in ('key_finding', 'catalyst', 'risk_factor') and _is_geo_src)):
             geo.append(r)
+        elif pred in _OPTIONS_GREEKS_PREDICATES:
+            options_greeks.append(r)
         elif src.startswith('broker_research') or pred in ('rating', 'key_finding',
                                                             'compared_to_consensus'):
             research.append(r)
@@ -1190,6 +1216,9 @@ def retrieve(
                 lines.extend(_fmt_geo(r) for r in _geo_other[:10])
         else:
             lines.extend(_fmt_geo(r) for r in geo[:50])
+    if options_greeks:
+        lines.append('# options-greeks')
+        lines.extend(_fmt(r) for r in options_greeks[:15])
     if other:
         # Log predicate distribution of other[] so we can detect important atom
         # types that are falling through all bucket filters unexpectedly.

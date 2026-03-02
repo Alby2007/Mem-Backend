@@ -55,6 +55,27 @@ def _week_monday(local_date) -> str:
     return (local_date - timedelta(days=local_date.weekday())).strftime('%Y-%m-%d')
 
 
+def _get_briefing_mode(day: str) -> str:
+    """
+    Map a weekday name to a briefing mode string.
+
+    monday    → weekly_setup      (new setups + portfolio open recap)
+    tue/wed/thu → position_monitor (KB change check on open positions)
+    friday    → week_close        (week summary + closed positions)
+    saturday  → weekend_summary   (premium only)
+    sunday    → position_monitor  (fallback)
+    """
+    modes = {
+        'monday':    'weekly_setup',
+        'tuesday':   'position_monitor',
+        'wednesday': 'position_monitor',
+        'thursday':  'position_monitor',
+        'friday':    'week_close',
+        'saturday':  'weekend_summary',
+    }
+    return modes.get(day, 'position_monitor')
+
+
 def _should_send_batch(
     db_path: str,
     user_id: str,
@@ -63,45 +84,49 @@ def _should_send_batch(
     timezone_str: str,
 ) -> tuple:
     """
-    Return (should_send: bool, weekday: str) where weekday is 'monday'/'wednesday'/'daily'.
+    Return (should_send: bool, weekday: str).
 
-    Premium tier: existing daily logic — HH:MM match + not tipped today.
-    Basic/Pro tier: weekly cadence — HH:MM match + correct weekday for tier
-                    + not already sent this ISO week on this weekday slot.
+    Checks both delivery_days (setup batches) and briefing_days (Pro/Premium
+    daily monitoring briefings). Monday is always a setup day; other briefing_days
+    route to position_monitor / week_close / weekend_summary modes.
     """
-    from datetime import date
-    from notifications.tip_formatter import TIER_LIMITS
+    from core.tiers import TIER_CONFIG as TIER_LIMITS, get_tier as _get_tier_cfg
 
-    local_now  = _get_local_now(timezone_str)
-    local_time = local_now.strftime('%H:%M')
+    local_now      = _get_local_now(timezone_str)
+    local_time     = local_now.strftime('%H:%M')
     local_date_obj = local_now.date()
     local_date_str = local_date_obj.strftime('%Y-%m-%d')
 
     if local_time != delivery_time:
         return False, ''
 
-    limits = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
-    delivery_days = limits.get('delivery_days', 'daily')
-
-    # Premium = daily
-    if delivery_days == 'daily':
-        from users.user_store import already_tipped_today
-        if already_tipped_today(db_path, user_id, local_date_str):
-            return False, ''
-        return True, 'daily'
-
-    # Weekly cadence
-    _WEEKDAY_NAMES = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
+    _WEEKDAY_NAMES = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
     today_name = _WEEKDAY_NAMES[local_date_obj.weekday()]
-    if today_name not in delivery_days:
-        return False, ''
+
+    limits        = _get_tier_cfg(tier)
+    delivery_days = limits.get('delivery_days', ['monday'])
+    briefing_days = limits.get('briefing_days', delivery_days)
+
+    # Legacy: premium used to have delivery_days='daily' — normalise
+    if delivery_days == 'daily':
+        delivery_days = briefing_days
 
     monday_str = _week_monday(local_date_obj)
-    from users.user_store import already_sent_this_week_slot
-    if already_sent_this_week_slot(db_path, user_id, today_name, monday_str):
-        return False, ''
+    from users.user_store import already_tipped_today, already_sent_this_week_slot
 
-    return True, today_name
+    # Is today a setup delivery day?
+    if today_name in delivery_days:
+        if already_sent_this_week_slot(db_path, user_id, today_name, monday_str):
+            return False, ''
+        return True, today_name
+
+    # Is today a briefing-only day (Pro Mon–Fri, Premium Mon–Sat)?
+    if today_name in briefing_days:
+        if already_tipped_today(db_path, user_id, local_date_str):
+            return False, ''
+        return True, today_name
+
+    return False, ''
 
 
 # ── Sector → connected-ticker map ─────────────────────────────────────────────
@@ -233,7 +258,7 @@ def _pick_best_pattern(
     When tip_markets is None (All Markets mode), levels 1–3 are skipped
     and the full universe is scanned immediately (no label appended).
     """
-    from notifications.tip_formatter import TIER_LIMITS
+    from core.tiers import TIER_CONFIG as TIER_LIMITS
     from users.user_store import get_open_patterns
 
     limits = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
@@ -324,6 +349,110 @@ def _pick_best_pattern(
     return None
 
 
+def _validate_tip(row: dict, tier: str, is_weekly: bool = False,
+                   db_path: Optional[str] = None) -> tuple:
+    """
+    Validate a pattern row against tier quality thresholds.
+    Returns (ok: bool, reason: str, warnings: list[str]).
+
+    warnings is a list of non-blocking caution strings to surface in the tip
+    (e.g. elevated put/call OI ratio conflicting with a bullish setup).
+    """
+    from core.tiers import get_tier as _gt
+    config = _gt(tier)
+    min_quality   = config.get('min_pattern_quality', 0.75)
+    min_asymmetry = config.get('min_asymmetry', 2.0)
+    warnings: list = []
+
+    quality = row.get('quality_score') or 0.0
+    if quality < min_quality:
+        return False, f"quality {quality:.2f} below threshold {min_quality}", warnings
+
+    zone_high = row.get('zone_high', 0.0)
+    zone_low  = row.get('zone_low', 0.0)
+    direction = row.get('direction', 'bullish')
+    if zone_high > zone_low:
+        entry = (zone_high + zone_low) / 2.0
+        stop_dist = abs(entry - zone_low) if direction == 'bullish' else abs(zone_high - entry)
+        # Use quality_score as a gate — proper asymmetry needs position calc.
+        pass
+
+    if is_weekly and row.get('timeframe') == '1h':
+        return False, "1h timeframe not valid for weekly delivery", warnings
+
+    # ── Options Greeks conviction checks (non-blocking warnings) ──────────────
+    if db_path:
+        ticker = row.get('ticker', '')
+        try:
+            import sqlite3 as _sq
+            _gc = _sq.connect(db_path, timeout=5)
+            try:
+                # put_call_oi_ratio: heavy put buying against a bullish setup
+                _pcr_row = _gc.execute(
+                    "SELECT object FROM facts WHERE subject=? AND predicate='put_call_oi_ratio'"
+                    " ORDER BY timestamp DESC LIMIT 1",
+                    (ticker.lower(),)
+                ).fetchone()
+                if _pcr_row:
+                    try:
+                        pcr = float(_pcr_row[0])
+                        if direction in ('bullish', 'long') and pcr > 1.3:
+                            warnings.append(
+                                f'put_call_oi_ratio={pcr:.2f} — heavy put positioning '
+                                f'conflicts with bullish setup (reduce size or wait for confirmation)'
+                            )
+                        elif direction in ('bearish', 'short') and pcr < 0.7:
+                            warnings.append(
+                                f'put_call_oi_ratio={pcr:.2f} — heavy call positioning '
+                                f'conflicts with bearish setup'
+                            )
+                    except (ValueError, TypeError):
+                        pass
+
+                # iv_true: elevated IV → widen stops, reduce size
+                _iv_row = _gc.execute(
+                    "SELECT object FROM facts WHERE subject=? AND predicate='iv_true'"
+                    " ORDER BY timestamp DESC LIMIT 1",
+                    (ticker.lower(),)
+                ).fetchone()
+                if _iv_row:
+                    try:
+                        iv = float(_iv_row[0])
+                        if iv > 60:
+                            warnings.append(
+                                f'iv_true={iv:.1f}% — very high IV: widen stops and reduce position size'
+                            )
+                        elif iv > 40:
+                            warnings.append(
+                                f'iv_true={iv:.1f}% — elevated IV: consider wider stops'
+                            )
+                    except (ValueError, TypeError):
+                        pass
+
+                # gamma_exposure: negative GEX = dealers short gamma = amplified moves
+                _gex_row = _gc.execute(
+                    "SELECT object FROM facts WHERE subject=? AND predicate='gamma_exposure'"
+                    " ORDER BY timestamp DESC LIMIT 1",
+                    (ticker.lower(),)
+                ).fetchone()
+                if _gex_row:
+                    try:
+                        gex = float(_gex_row[0])
+                        if gex < 0:
+                            warnings.append(
+                                f'gamma_exposure={gex:,.0f} — dealers short gamma: '
+                                f'expect amplified moves, tighter stop management advised'
+                            )
+                    except (ValueError, TypeError):
+                        pass
+            finally:
+                _gc.close()
+        except Exception:
+            pass
+
+    return True, 'ok', warnings
+
+
 def _pick_batch(
     db_path: str,
     user_id: str,
@@ -337,7 +466,7 @@ def _pick_batch(
     Pick up to batch_size non-overlapping patterns using the fallback chain.
     Returns (list[pattern_row], tip_source_str).
     """
-    from notifications.tip_formatter import TIER_LIMITS
+    from core.tiers import TIER_CONFIG as TIER_LIMITS
     from users.user_store import get_open_patterns
 
     limits = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
@@ -408,9 +537,20 @@ def _pick_batch(
             row = _scan_candidates(remaining, ticker_set, **common)
             if row is None:
                 break
-            batch.append(dict(row))
+            ok, reason, tip_warnings = _validate_tip(
+                row, tier,
+                is_weekly=is_weekly if 'is_weekly' in dir() else False,
+                db_path=db_path,
+            )
             used_tickers.add(row['ticker'].upper())
             remaining = [r for r in remaining if r['ticker'].upper() not in used_tickers]
+            if not ok:
+                _log.debug('TipScheduler: skipping %s — %s', row.get('ticker'), reason)
+                continue
+            _row = dict(row)
+            if tip_warnings:
+                _row['options_warnings'] = tip_warnings
+            batch.append(_row)
         if batch:
             final_source = source_label
             if len(batch) >= batch_size:
@@ -492,8 +632,9 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
     """Run the full tip delivery pipeline for one user."""
     from analytics.pattern_detector import PatternSignal
     from analytics.position_calculator import calculate_position
+    from core.tiers import TIER_CONFIG as TIER_LIMITS
     from notifications.tip_formatter import (
-        TIER_LIMITS, format_tip, format_monday_briefing, format_wednesday_update,
+        format_tip, format_monday_briefing, format_wednesday_update,
         pattern_allowed_for_tier, timeframe_allowed_for_tier,
     )
     from notifications.telegram_notifier import TelegramNotifier
@@ -515,7 +656,8 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
 
     limits     = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
     batch_size = limits.get('batch_size', 1) if weekday != 'daily' else 1
-    is_weekly  = weekday in ('monday', 'wednesday')
+    briefing_mode = _get_briefing_mode(weekday) if weekday else 'position_monitor'
+    is_weekly  = weekday in ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday')
 
     local_now  = _get_local_now(user_prefs.get('tip_delivery_timezone', 'UTC'))
     local_date = local_now.strftime('%Y-%m-%d')
@@ -647,10 +789,12 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
                 _log.warning('TipScheduler: Telegram send failed for user %s', user_id)
             return
 
-        # ── WEDNESDAY: compound update ────────────────────────────────────────
-        if weekday == 'wednesday':
+        # ── POSITION MONITOR (Wed, Tue, Thu, Fri, Sat) ───────────────────────
+        # briefing_mode: position_monitor | week_close | weekend_summary
+        if briefing_mode in ('position_monitor', 'week_close', 'weekend_summary'):
             open_positions = []
             kb_changes = []
+            closed_positions: list = []
             try:
                 open_positions = get_user_open_positions(db_path, user_id)
             except Exception as _oe:
@@ -658,7 +802,6 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
 
             if open_positions:
                 try:
-                    # KB changes since Monday 00:00 UTC
                     from datetime import timezone as _tz
                     from datetime import datetime as _dt
                     monday_dt = _dt.strptime(monday_str, '%Y-%m-%d').replace(tzinfo=_tz.utc)
@@ -667,8 +810,18 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
                 except Exception as _ke:
                     _log.debug('TipScheduler: get_kb_changes_since failed: %s', _ke)
 
-            if not open_positions and not kb_changes and not expired_this_cycle:
-                _log.info('TipScheduler: nothing for Wednesday update for user %s', user_id)
+            if briefing_mode in ('week_close', 'weekend_summary'):
+                try:
+                    from datetime import timedelta
+                    prev_monday = (local_now.date() - timedelta(days=7)).strftime('%Y-%m-%d')
+                    closed_positions = get_recently_closed_positions(db_path, user_id, prev_monday)
+                    expired_ids = {e['id'] for e in expired_this_cycle}
+                    closed_positions = [c for c in closed_positions if c['id'] not in expired_ids]
+                except Exception as _ce:
+                    _log.debug('TipScheduler: get_recently_closed_positions failed: %s', _ce)
+
+            if not open_positions and not kb_changes and not expired_this_cycle and not closed_positions:
+                _log.info('TipScheduler: nothing for %s briefing for user %s', briefing_mode, user_id)
                 return
 
             message = format_wednesday_update(
@@ -691,8 +844,8 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
                 pattern_meta=None,
             )
             if sent:
-                _log.info('TipScheduler: Wednesday update delivered to user %s (%d open, %d KB changes)',
-                          user_id, len(open_positions), len(kb_changes))
+                _log.info('TipScheduler: %s briefing delivered to user %s (%d open, %d KB changes)',
+                          briefing_mode, user_id, len(open_positions), len(kb_changes))
             else:
                 _log.warning('TipScheduler: Telegram send failed for user %s', user_id)
             return
