@@ -160,6 +160,11 @@ _KEYWORD_PREDICATE_BOOST: dict = {
     'rates':      ('yield_curve_regime', 'yield_curve_slope', 'tlt_1d_change_pct', 'long_end_stress', 'central_bank_stance'),
     'tlt':        ('tlt_close', 'tlt_1d_change_pct', 'yield_curve_regime', 'long_end_stress'),
     'bonds':      ('tlt_close', 'ief_close', 'yield_curve_regime', 'yield_curve_slope', 'long_end_stress'),
+    'short':       ('short_interest', 'days_to_cover', 'short_squeeze_risk', 'short_vs_signal'),
+    'shorts':      ('short_interest', 'days_to_cover', 'short_squeeze_risk', 'short_vs_signal'),
+    'squeeze':     ('short_squeeze_risk', 'days_to_cover', 'short_interest'),
+    'borrow':      ('short_interest', 'days_to_cover', 'short_squeeze_risk'),
+    'finra':       ('short_interest', 'days_to_cover', 'short_squeeze_risk', 'short_vs_signal'),
 }
 
 # Common name / forex pair → canonical KB ticker alias map
@@ -1155,10 +1160,14 @@ def retrieve(
         'tlt_close', 'ief_close', 'shy_close',
         'tlt_1d_change_pct', 'ief_1d_change_pct', 'shy_1d_change_pct',
         'yield_curve_slope', 'yield_curve_regime', 'yield_curve_tlt_shy',
-        'long_end_stress',
+        'long_end_stress', 'long_end_stress_level',
+    })
+    _SHORT_INTEREST_PREDICATES = frozenset({
+        'short_interest', 'days_to_cover',
+        'short_squeeze_risk', 'short_vs_signal',
     })
 
-    signals, invalidation, quality, theses, macro, research, historical, geo, options_greeks, yield_curve, other = [], [], [], [], [], [], [], [], [], [], []
+    signals, invalidation, quality, theses, macro, research, historical, geo, options_greeks, yield_curve, short_interest, other = [], [], [], [], [], [], [], [], [], [], [], []
     for r in results:
         pred = r['predicate']
         src = r['source']
@@ -1197,6 +1206,8 @@ def retrieve(
             options_greeks.append(r)
         elif pred in _YIELD_CURVE_PREDICATES or src == 'yield_curve':
             yield_curve.append(r)
+        elif pred in _SHORT_INTEREST_PREDICATES or src in ('finra_short_interest', 'alt_data_fca_shorts'):
+            short_interest.append(r)
         elif src.startswith('broker_research') or pred in ('rating', 'key_finding',
                                                             'compared_to_consensus'):
             research.append(r)
@@ -1252,6 +1263,9 @@ def retrieve(
     if yield_curve:
         lines.append('# yield-curve')
         lines.extend(_fmt(r) for r in yield_curve[:10])
+    if short_interest:
+        lines.append('# short-interest')
+        lines.extend(_fmt(r) for r in short_interest[:12])
     if other:
         # Log predicate distribution of other[] so we can detect important atom
         # types that are falling through all bucket filters unexpectedly.

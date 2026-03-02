@@ -458,16 +458,30 @@ def _validate_tip(row: dict, tier: str, is_weekly: bool = False,
                     " ORDER BY timestamp DESC LIMIT 1"
                 ).fetchone()
                 if direction in ('bullish', 'long'):
-                    _yc_stress  = (_yc_stress_row[0] == 'true') if _yc_stress_row else False
-                    _yc_regime  = _yc_regime_row[0] if _yc_regime_row else None
-                    if _yc_stress:
+                    _yc_regime = _yc_regime_row[0] if _yc_regime_row else None
+                    # Use graded stress level if available, fall back to boolean
+                    _yc_stress_level_row = _gc.execute(
+                        "SELECT object FROM facts WHERE subject='macro'"
+                        " AND predicate='long_end_stress_level'"
+                        " ORDER BY timestamp DESC LIMIT 1"
+                    ).fetchone()
+                    _yc_stress_level = _yc_stress_level_row[0] if _yc_stress_level_row else (
+                        'elevated' if (_yc_stress_row and _yc_stress_row[0] == 'true') else 'none'
+                    )
+                    if _yc_stress_level == 'severe':
                         warnings.append(
-                            'long_end_stress=true — bond market selling off (TLT down >0.5%): '
-                            'rising yields are a headwind for rate-sensitive/growth setups'
+                            'long_end_stress=severe — TLT down >1% today: '
+                            'significant bond market selloff, yields spiking; '
+                            'strong headwind for rate-sensitive setups — reduce size or wait'
+                        )
+                    elif _yc_stress_level == 'elevated':
+                        warnings.append(
+                            'long_end_stress=elevated — TLT down >0.5% today: '
+                            'rising long-end yields are a headwind for growth/tech setups'
                         )
                     elif _yc_regime in ('bear_steepen', 'bear_flatten'):
                         warnings.append(
-                            f'yield_curve_regime={_yc_regime} — rate environment is '
+                            f'yield_curve_regime={_yc_regime} — rate environment '
                             f'unfavourable for high-multiple growth stocks; '
                             f'consider tighter stops or smaller size'
                         )

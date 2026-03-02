@@ -77,25 +77,33 @@ def _api_key() -> Optional[str]:
     return os.environ.get('POLYGON_API_KEY') or None
 
 
-def _fetch_last_two_closes(ticker: str, key: str) -> Optional[tuple[float, float]]:
+def _fetch_last_two_closes(ticker: str, key: str, retry: int = 1) -> Optional[tuple[float, float]]:
     """
     Return (prev_close, last_close) for a ticker using Polygon /v2/aggs.
-    Uses the last 3 trading days to ensure we get at least 2 bars even around
-    weekends/holidays.
+    Uses the last 10 calendar days to ensure >= 2 bars across weekends/holidays.
+    Retries once on 429 with a 15s backoff (Polygon Starter = 5 req/min).
     """
     try:
         import urllib.request
+        import urllib.error
         import json
 
         end   = datetime.now(timezone.utc).date()
-        start = end - timedelta(days=6)
+        start = end - timedelta(days=10)
         url   = (
             f'{_POLYGON_BASE}/v2/aggs/ticker/{ticker}/range/1/day'
             f'/{start}/{end}'
-            f'?adjusted=true&sort=asc&limit=5&apiKey={key}'
+            f'?adjusted=true&sort=asc&limit=10&apiKey={key}'
         )
-        with urllib.request.urlopen(url, timeout=10) as r:
-            d = json.loads(r.read())
+        try:
+            with urllib.request.urlopen(url, timeout=15) as r:
+                d = json.loads(r.read())
+        except urllib.error.HTTPError as http_err:
+            if http_err.code == 429 and retry > 0:
+                _logger.info('[yield_curve] 429 on %s — waiting 15s before retry', ticker)
+                time.sleep(15)
+                return _fetch_last_two_closes(ticker, key, retry=0)
+            raise
 
         results = d.get('results') or []
         if len(results) < 2:
@@ -164,11 +172,12 @@ class YieldCurveAdapter(BaseIngestAdapter):
             _logger.info('[yield_curve] POLYGON_API_KEY not set — skipping')
             return []
 
-        # Fetch last two closes for each ETF
+        # Fetch last two closes for each ETF.
+        # Polygon Starter plan = 5 requests/minute — sleep 13s between calls.
         tlt = _fetch_last_two_closes(_TLT, key)
-        time.sleep(0.3)
+        time.sleep(13)
         ief = _fetch_last_two_closes(_IEF, key)
-        time.sleep(0.3)
+        time.sleep(13)
         shy = _fetch_last_two_closes(_SHY, key)
 
         if not tlt or not shy:
@@ -188,7 +197,15 @@ class YieldCurveAdapter(BaseIngestAdapter):
         slope  = _classify_slope(tlt_shy_now, tlt_shy_prev) if (tlt_shy_now and tlt_shy_prev) else 'neutral'
         regime = _classify_regime(tlt_chg, shy_chg)
 
-        long_end_stress = tlt_chg < -0.5   # TLT fell >0.5% = notable yield spike
+        # Graded long_end_stress: severe / elevated / none
+        # More informative than binary — allows tip warnings to be proportionate.
+        if tlt_chg < -1.0:
+            long_end_stress_level = 'severe'
+        elif tlt_chg < -0.5:
+            long_end_stress_level = 'elevated'
+        else:
+            long_end_stress_level = 'none'
+        long_end_stress = long_end_stress_level in ('severe', 'elevated')  # bool for backward compat
 
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -210,7 +227,8 @@ class YieldCurveAdapter(BaseIngestAdapter):
             _atom('shy_1d_change_pct',   str(shy_chg)),
             _atom('yield_curve_slope',   slope),
             _atom('yield_curve_regime',  regime),
-            _atom('long_end_stress',     'true' if long_end_stress else 'false'),
+            _atom('long_end_stress',       'true' if long_end_stress else 'false'),
+            _atom('long_end_stress_level',  long_end_stress_level),
         ]
 
         if tlt_shy_now is not None:

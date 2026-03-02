@@ -92,6 +92,7 @@ try:
     from ingest.options_adapter import OptionsAdapter
     from ingest.polygon_options_adapter import PolygonOptionsAdapter
     from ingest.yield_curve_adapter import YieldCurveAdapter
+    from ingest.finra_short_interest_adapter import FINRAShortInterestAdapter
     from ingest.boe_adapter import BoEAdapter
     from ingest.earnings_calendar_adapter import EarningsCalendarAdapter
     from ingest.fca_short_interest_adapter import FCAShortInterestAdapter
@@ -577,6 +578,7 @@ if HAS_INGEST:
         if os.environ.get('POLYGON_API_KEY'):
             _ingest_scheduler.register(PolygonOptionsAdapter(),               interval_sec=1800)   # 30 min Polygon Greeks
             _ingest_scheduler.register(YieldCurveAdapter(),                   interval_sec=86400)  # 24 hours yield curve
+        _ingest_scheduler.register(FINRAShortInterestAdapter(db_path=_DB_PATH), interval_sec=86400) # 24 hours FINRA short interest
         _ingest_scheduler.register(FREDAdapter(),                             interval_sec=86400)  # 24 hours
         _ingest_scheduler.register(BoEAdapter(),                              interval_sec=86400)  # 24 hours UK macro
         _ingest_scheduler.register(EarningsCalendarAdapter(db_path=_DB_PATH), interval_sec=3600)   # 1 hour earnings calendar

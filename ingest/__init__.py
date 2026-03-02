@@ -57,11 +57,16 @@ try:
 except ImportError:
     YieldCurveAdapter = None  # type: ignore
 
+try:
+    from .finra_short_interest_adapter import FINRAShortInterestAdapter
+except ImportError:
+    FINRAShortInterestAdapter = None  # type: ignore
+
 
 __all__ = [
     'BaseIngestAdapter', 'RawAtom', 'IngestScheduler',
     'YFinanceAdapter', 'FREDAdapter', 'EDGARAdapter', 'RSSAdapter',
     'SignalEnrichmentAdapter', 'HistoricalBackfillAdapter',
     'LLMExtractionAdapter', 'EDGARRealtimeAdapter', 'OptionsAdapter',
-    'PolygonOptionsAdapter', 'YieldCurveAdapter',
+    'PolygonOptionsAdapter', 'YieldCurveAdapter', 'FINRAShortInterestAdapter',
 ]
