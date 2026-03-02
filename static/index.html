@@ -74,6 +74,8 @@ body.auth-mode #main { left: 0; }
 }
 .nav-item:hover { color: var(--text); background: var(--card); }
 .nav-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(245,158,11,.06); }
+.nav-item.locked { opacity: 0.32; cursor: not-allowed; pointer-events: none; }
+.mnav-item.locked { opacity: 0.32; cursor: not-allowed; pointer-events: none; }
 .nav-icon { font-size: 16px; flex-shrink: 0; width: 24px; text-align: center; }
 .nav-label { opacity: 1; font-family: var(--sans); }
 .nav-spacer { flex: 1; }
@@ -2164,8 +2166,93 @@ const state = {
   token: null,
   userId: null,
   isDev: false,
+  tier: 'basic',
+  chatQueriesUsedToday: 0,
   holdings: [],     // pending holdings before submit
 };
+
+// ── Tier config (mirrors core/tiers.py — kept in sync manually until Stripe) ──
+const TIER_CONFIG = {
+  basic:   { opportunity_scan: false, chat_queries_per_day: 10,   t3_targets: false, live_price_fetch: false },
+  pro:     { opportunity_scan: true,  chat_queries_per_day: null,  t3_targets: false, live_price_fetch: true  },
+  premium: { opportunity_scan: true,  chat_queries_per_day: null,  t3_targets: true,  live_price_fetch: true  },
+};
+
+const _SUBSCRIPTION_FREE_SCREENS = new Set(['profile', 'subscription', 'auth']);
+
+function _hasSubscription() {
+  return state.tier === 'pro' || state.tier === 'premium';
+}
+
+function applySubscriptionGating() {
+  const locked = !_hasSubscription();
+  document.querySelectorAll('.nav-item[data-screen], .mnav-item[data-screen]').forEach(el => {
+    const screen = el.dataset.screen;
+    if (_SUBSCRIPTION_FREE_SCREENS.has(screen)) {
+      el.classList.remove('locked');
+    } else {
+      if (locked) el.classList.add('locked');
+      else        el.classList.remove('locked');
+    }
+  });
+}
+
+function checkFeature(feature) {
+  return TIER_CONFIG[state.tier]?.[feature] ?? false;
+}
+
+function handleUpgradeRequired(resp) {
+  window.location.href = '/subscription';
+}
+
+function _renderChatQuotaBadge() {
+  const badge = document.getElementById('chat-quota-badge');
+  if (!badge) return;
+  const limit = TIER_CONFIG[state.tier]?.chat_queries_per_day;
+  if (limit === null || limit === undefined || state.tier !== 'basic') {
+    badge.style.display = 'none';
+    return;
+  }
+  badge.style.display = '';
+  badge.textContent = `${state.chatQueriesUsedToday} / ${limit} queries today`;
+}
+
+function applyTierGating() {
+  const tier = state.tier;
+
+  // Opportunity scan button — Pro+ only
+  const scanBtn = document.getElementById('opportunity-scan-btn');
+  if (scanBtn) {
+    if (!checkFeature('opportunity_scan')) {
+      scanBtn.style.display = 'none';
+      let label = document.getElementById('scan-upgrade-label');
+      if (!label) {
+        label = document.createElement('span');
+        label.id = 'scan-upgrade-label';
+        label.className = 'text-xs text-muted';
+        label.textContent = 'Pro feature — upgrade to scan';
+        label.style.cursor = 'pointer';
+        label.addEventListener('click', () => { window.location.href = '/subscription'; });
+        scanBtn.parentNode && scanBtn.parentNode.appendChild(label);
+      }
+      label.style.display = '';
+    } else {
+      scanBtn.style.display = '';
+      const label = document.getElementById('scan-upgrade-label');
+      if (label) label.style.display = 'none';
+    }
+  }
+
+  // T3 targets — Premium only
+  if (!checkFeature('t3_targets')) {
+    document.querySelectorAll('.t3-target').forEach(el => el.style.display = 'none');
+  } else {
+    document.querySelectorAll('.t3-target').forEach(el => el.style.display = '');
+  }
+
+  // Chat quota badge — Basic only
+  _renderChatQuotaBadge();
+}
 
 function applyDevGating() {
   const dev = state.isDev;
@@ -2212,6 +2299,7 @@ async function apiFetch(path, opts = {}) {
   if (res.status === 401) { signOut(); showToast('Session expired — please sign in again'); return null; }
   if (res.status === 429) { showToast('Too many requests — please wait a moment'); return null; }
   const data = await res.json().catch(() => ({}));
+  if (res.status === 403 && data.error === 'upgrade_required') { handleUpgradeRequired(data); return null; }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
@@ -2296,6 +2384,14 @@ function navigate(name, { replace = false } = {}) {
     showScreen('auth');
     return;
   }
+  // Subscription guard — redirect to /subscription for gated screens
+  if (!_SUBSCRIPTION_FREE_SCREENS.has(name) && !_hasSubscription() && state.userId) {
+    const path = _pathForScreen('subscription');
+    if (replace) window.history.replaceState(null, '', path);
+    else         window.history.pushState(null, '', path);
+    showScreen('subscription');
+    return;
+  }
   const path = _pathForScreen(name);
   if (replace) window.history.replaceState(null, '', path);
   else         window.history.pushState(null, '', path);
@@ -2308,6 +2404,10 @@ window.addEventListener('popstate', () => {
     showScreen('auth');
     return;
   }
+  if (!_SUBSCRIPTION_FREE_SCREENS.has(name) && !_hasSubscription() && state.userId) {
+    showScreen('subscription');
+    return;
+  }
   showScreen(name);
 });
 
@@ -2315,6 +2415,10 @@ document.querySelectorAll('.nav-item, .mnav-item').forEach(el => {
   el.addEventListener('click', () => {
     const s = el.dataset.screen;
     if (s !== 'auth' && !state.userId) { navigate('auth'); return; }
+    if (!_SUBSCRIPTION_FREE_SCREENS.has(s) && !_hasSubscription()) {
+      navigate('subscription');
+      return;
+    }
     navigate(s);
   });
 });
@@ -2852,7 +2956,7 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   try {
     const d = await apiFetch('/auth/token', { method: 'POST', body: JSON.stringify({ email, password: pw }) });
     if (!d) { msg.textContent = 'Failed.'; return; }
-    _saveSession(d.access_token || d.token, d.user_id);
+    await _saveSession(d.access_token || d.token, d.user_id);
     // Honour ?next= param if it passes the allowlist, else go to dashboard
     const _nextRaw = new URLSearchParams(window.location.search).get('next') || '';
     const _nextScreen = _nextRaw && _NEXT_RE.test(_nextRaw)
@@ -2872,12 +2976,15 @@ async function _saveSession(token, userId, tgData) {
     localStorage.setItem('tg_user_id', userId);  // display only — not a secret
   } catch { /* storage blocked in some contexts */ }
   _renderTgChip(tgData || null, userId);
-  // Fetch is_dev so dev gating applies immediately after login
+  // Fetch is_dev + tier so gating applies immediately after login
   try {
     const me = await apiFetch('/auth/me');
     state.isDev = !!(me && me.is_dev);
-  } catch { state.isDev = false; }
+    state.tier  = (me && me.tier) ? me.tier.toLowerCase() : 'basic';
+  } catch { state.isDev = false; state.tier = 'basic'; }
   applyDevGating();
+  applyTierGating();
+  applySubscriptionGating();
 }
 
 function _renderTgChip(tgData, userId) {
@@ -2909,7 +3016,7 @@ async function signOut() {
   // Ask backend to clear HttpOnly cookies + revoke refresh token
   try { await fetch(API + '/auth/logout', { method: 'POST', credentials: 'include',
     headers: { 'Content-Type': 'application/json' } }); } catch { /* ignore */ }
-  state.token = null; state.userId = null; state.isDev = false; state.holdings = [];
+  state.token = null; state.userId = null; state.isDev = false; state.tier = 'basic'; state.chatQueriesUsedToday = 0; state.holdings = [];
   try { localStorage.removeItem('tg_user_id'); localStorage.removeItem('tg_user_data'); } catch { /* storage blocked */ }
   _renderTgChip(null, null);
   window.history.replaceState(null, '', '/login');
@@ -2924,7 +3031,7 @@ window.onTelegramAuth = async function(tgData) {
       body: JSON.stringify(tgData),
     });
     if (!d || !d.access_token) { showToast('Telegram auth failed'); return; }
-    _saveSession(d.access_token, d.user_id || String(tgData.id), tgData);
+    await _saveSession(d.access_token, d.user_id || String(tgData.id), tgData);
     showToast('Signed in as ' + (tgData.first_name || tgData.username), 'ok');
     navigate('dashboard', { replace: true });
   } catch(e) {
@@ -5232,12 +5339,15 @@ document.getElementById('hist-atoms-overlay').addEventListener('click', e => {
     if (me && me.user_id) {
       state.userId = me.user_id;
       state.isDev  = !!me.is_dev;
+      state.tier   = (me.tier || 'basic').toLowerCase();
       state.token  = '__cookie__'; // sentinel — actual token is in HttpOnly cookie
       let storedTgData = null;
       try { storedTgData = localStorage.getItem('tg_user_data'); } catch { /* storage blocked */ }
       const tgData = storedTgData ? JSON.parse(storedTgData) : null;
       _renderTgChip(tgData, me.user_id);
       applyDevGating();
+      applyTierGating();
+      applySubscriptionGating();
 
       // Route to the screen from the URL if valid, else dashboard
       const fromPath = _screenFromPath(window.location.pathname);
