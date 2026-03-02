@@ -1976,7 +1976,7 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
       <div class="sub-plan-name" id="sub-plan-name">—</div>
       <div class="sub-plan-renews" id="sub-plan-renews">Billed monthly</div>
     </div>
-    <button class="sub-manage-btn" onclick="showToast('Billing portal coming soon','ok')">Manage Billing →</button>
+    <button class="sub-manage-btn" id="sub-manage-btn" onclick="openBillingPortal()">Manage Billing →</button>
   </div>
 
   <!-- Billing toggle -->
@@ -2022,7 +2022,7 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
         <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Trailing pullback alerts</div>
       </div>
       <div class="sub-tier-cta">
-        <button class="sub-cta-btn sub-cta-current sub-cta-noop" id="sub-cta-basic">Free tier — upgrade below</button>
+        <button class="sub-cta-btn sub-cta-primary" id="sub-cta-basic" onclick="startCheckout('basic')">Upgrade to Basic →</button>
       </div>
     </div>
 
@@ -2055,7 +2055,7 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
         <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Trailing pullback alerts</div>
       </div>
       <div class="sub-tier-cta">
-        <button class="sub-cta-btn sub-cta-primary" id="sub-cta-pro" onclick="showToast('Plan selection coming soon','ok')">Upgrade to Pro →</button>
+        <button class="sub-cta-btn sub-cta-primary" id="sub-cta-pro" onclick="startCheckout('pro')">Upgrade to Pro →</button>
       </div>
     </div>
 
@@ -2088,7 +2088,7 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
         <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Trailing pullback alerts</div>
       </div>
       <div class="sub-tier-cta">
-        <button class="sub-cta-btn sub-cta-secondary" id="sub-cta-premium" onclick="showToast('Plan selection coming soon','ok')">Upgrade to Premium →</button>
+        <button class="sub-cta-btn sub-cta-secondary" id="sub-cta-premium" onclick="startCheckout('premium')">Upgrade to Premium →</button>
       </div>
     </div>
 
@@ -4743,7 +4743,7 @@ async function loadSubscription() {
           const isUp = ['basic','pro','premium'].indexOf(t) > ['basic','pro','premium'].indexOf(tier);
           cta.className = isUp ? 'sub-cta-btn sub-cta-primary' : 'sub-cta-btn sub-cta-secondary';
           cta.textContent = isUp ? `Upgrade to ${t.charAt(0).toUpperCase()+t.slice(1)} →` : `Switch to ${t.charAt(0).toUpperCase()+t.slice(1)}`;
-          cta.onclick = () => showToast('Plan selection coming soon', 'ok');
+          cta.onclick = () => startCheckout(t);
         }
       }
     });
@@ -4752,6 +4752,46 @@ async function loadSubscription() {
     const proBadge = document.getElementById('sub-badge-pro');
     if (proBadge && tier !== 'pro') { proBadge.className = 'sub-badge sub-badge-popular'; proBadge.style.display = ''; proBadge.textContent = 'MOST POPULAR'; }
   } catch(e) { /* silent — banner stays at defaults */ }
+}
+
+async function startCheckout(tier) {
+  if (!state.userId) { navigate('auth'); return; }
+  const annual = document.getElementById('sub-tog-annual')?.classList.contains('active') || false;
+  const btn = document.getElementById(`sub-cta-${tier}`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Redirecting…'; }
+  try {
+    const d = await apiFetch('/stripe/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ tier, annual }),
+    });
+    if (d?.url) {
+      window.location.href = d.url;
+    } else {
+      showToast('Could not start checkout — please try again', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = `Upgrade to ${tier.charAt(0).toUpperCase()+tier.slice(1)} →`; }
+    }
+  } catch(e) {
+    showToast('Checkout error: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = `Upgrade to ${tier.charAt(0).toUpperCase()+tier.slice(1)} →`; }
+  }
+}
+
+async function openBillingPortal() {
+  if (!state.userId) return;
+  const btn = document.getElementById('sub-manage-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Opening…'; }
+  try {
+    const d = await apiFetch('/stripe/portal', { method: 'POST' });
+    if (d?.url) {
+      window.location.href = d.url;
+    } else {
+      showToast('Billing portal unavailable — contact support', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Manage Billing →'; }
+    }
+  } catch(e) {
+    showToast('Portal error: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Manage Billing →'; }
+  }
 }
 
 // ── TIPS ──────────────────────────────────────────────────────────────────────
@@ -5364,7 +5404,7 @@ document.getElementById('hist-atoms-overlay').addEventListener('click', e => {
     if (me && me.user_id) {
       state.userId = me.user_id;
       state.isDev  = !!me.is_dev;
-      state.tier   = (me.tier || 'basic').toLowerCase();
+      state.tier   = (me.tier || 'free').toLowerCase();
       state.token  = '__cookie__'; // sentinel — actual token is in HttpOnly cookie
       let storedTgData = null;
       try { storedTgData = localStorage.getItem('tg_user_data'); } catch { /* storage blocked */ }
@@ -5373,6 +5413,16 @@ document.getElementById('hist-atoms-overlay').addEventListener('click', e => {
       applyDevGating();
       applyTierGating();
       applySubscriptionGating();
+
+      // Handle Stripe return params before routing
+      const _sp = new URLSearchParams(window.location.search);
+      if (_sp.get('success') === '1') {
+        showToast('Payment successful — your plan has been upgraded!', 'ok');
+        window.history.replaceState(null, '', window.location.pathname);
+      } else if (_sp.get('cancelled') === '1') {
+        showToast('Checkout cancelled — no charge made.', 'ok');
+        window.history.replaceState(null, '', window.location.pathname);
+      }
 
       // Route to the screen from the URL if valid, else dashboard
       const fromPath = _screenFromPath(window.location.pathname);

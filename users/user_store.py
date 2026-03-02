@@ -1014,6 +1014,22 @@ def get_user_tier(db_path: str, user_id: str) -> str:
         conn.close()
 
 
+def set_user_tier(db_path: str, user_id: str, tier: str) -> None:
+    """Set the user's tier in user_preferences, upserting the row if needed."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_tables(conn)
+        conn.execute(
+            """INSERT INTO user_preferences (user_id, tier)
+               VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET tier = excluded.tier""",
+            (user_id, tier),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_today_chat_count(db_path: str, user_id: str) -> int:
     """
     Return the number of user chat messages sent today (in UTC).

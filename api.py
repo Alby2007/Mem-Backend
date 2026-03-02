@@ -142,6 +142,7 @@ try:
         get_tip_history, update_tip_config, get_user_tier,
         already_tipped_today, log_tip_feedback, get_tip_performance,
         get_user_watchlist_tickers, ensure_tip_feedback_table,
+        get_today_chat_count,
     )
     from analytics.pattern_detector import detect_all_patterns, OHLCV
     from analytics.position_calculator import calculate_position
@@ -302,6 +303,53 @@ try:
 except ImportError:
     HAS_AUDIT = False
     def log_audit_event(*a, **kw): pass  # type: ignore
+
+
+try:
+    from core.tiers import get_tier as _get_tier, check_feature as _check_feature, _next_tier as _next_tier_name
+    HAS_TIERS = True
+except ImportError:
+    HAS_TIERS = False
+
+
+# ── Tier feature guard ────────────────────────────────────────────────────────
+
+def _get_user_tier_for_request(user_id: str) -> str:
+    """Fetch the tier for user_id from the DB. Defaults to 'basic'."""
+    try:
+        if HAS_PATTERN_LAYER:
+            return get_user_tier(_DB_PATH, user_id)
+    except Exception:
+        pass
+    return 'basic'
+
+
+def require_feature(feature: str):
+    """
+    Decorator: gate an endpoint by tier feature.
+    Must be applied AFTER @require_auth so g.user_id is set.
+    Returns 403 with upgrade_required payload when feature is not available.
+    """
+    from functools import wraps as _wraps
+    def decorator(f):
+        @_wraps(f)
+        def wrapper(*args, **kwargs):
+            if not HAS_TIERS:
+                return f(*args, **kwargs)
+            uid  = getattr(g, 'user_id', None)
+            tier = _get_user_tier_for_request(uid) if uid else 'basic'
+            if not _check_feature(tier, feature):
+                next_t = _next_tier_name(tier)
+                return jsonify({
+                    'error':        'upgrade_required',
+                    'feature':      feature,
+                    'current_tier': tier,
+                    'upgrade_to':   next_t,
+                    'message':      f'This feature requires {next_t} or above',
+                }), 403
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 # ── App setup ─────────────────────────────────────────────────────────────────
@@ -1176,6 +1224,8 @@ def market_snapshot():
 
 
 @app.route('/opportunities', methods=['POST'])
+@require_auth
+@require_feature('opportunity_scan')
 def opportunities_endpoint():
     """
     POST /opportunities
@@ -2298,6 +2348,26 @@ def chat_endpoint():
     overlay_mode    = bool(data.get('overlay_mode', False))
     # Trust the authenticated token identity over the request body to prevent spoofing
     chat_user_id    = getattr(g, 'user_id', None) or data.get('user_id') or None
+
+    # ── Chat quota enforcement (basic tier: 10 queries/day) ────────────────
+    if chat_user_id and HAS_TIERS and HAS_PATTERN_LAYER:
+        try:
+            _chat_tier = _get_user_tier_for_request(chat_user_id)
+            _quota = _get_tier(_chat_tier).get('chat_queries_per_day')
+            if _quota is not None:
+                _used = get_today_chat_count(_DB_PATH, chat_user_id)
+                if _used >= _quota:
+                    return jsonify({
+                        'error':        'upgrade_required',
+                        'feature':      'chat_queries_per_day',
+                        'current_tier': _chat_tier,
+                        'upgrade_to':   _next_tier_name(_chat_tier),
+                        'queries_used': _used,
+                        'queries_limit': _quota,
+                        'message':      f'Daily chat limit of {_quota} reached. Upgrade to Pro for unlimited queries.',
+                    }), 403
+        except Exception:
+            pass
 
     # ── Portfolio-intent detection ─────────────────────────────────────────
     # Keywords that signal the user is explicitly asking about their own holdings.
@@ -4229,7 +4299,7 @@ def tip_preview(user_id: str):
         except Exception:
             prefs[jcol] = None
 
-    from notifications.tip_formatter import TIER_LIMITS
+    from core.tiers import TIER_CONFIG as TIER_LIMITS
     limits          = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
     tip_timeframes  = prefs.get('tip_timeframes') or limits['timeframes']
     tip_pattern_tys = prefs.get('tip_pattern_types')
@@ -5204,6 +5274,102 @@ def admin_set_dev(target_user_id):
         from users.user_store import set_user_dev
         set_user_dev(_DB_PATH, target_user_id, is_dev)
         return jsonify({'ok': True, 'user_id': target_user_id, 'is_dev': is_dev})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Stripe ─────────────────────────────────────────────────────────────────
+
+@app.route('/stripe/checkout', methods=['POST'])
+@require_auth
+def stripe_checkout():
+    """
+    POST /stripe/checkout
+    Body: { "tier": "basic"|"pro"|"premium", "annual": false }
+    Returns: { "url": "https://checkout.stripe.com/..." }
+    """
+    from flask import g as _g, request as _req
+    from middleware.stripe_billing import create_checkout_session
+    from users.user_store import get_user as _get_user
+    import os as _os
+
+    data     = _req.get_json(silent=True) or {}
+    tier     = data.get('tier', '').lower()
+    annual   = bool(data.get('annual', False))
+
+    if tier not in ('basic', 'pro', 'premium'):
+        return jsonify({'error': 'invalid tier'}), 400
+
+    # Fetch user email for Stripe pre-fill
+    try:
+        user_row = _get_user(_DB_PATH, _g.user_id)
+        email    = user_row.get('email') if user_row else None
+    except Exception:
+        email = None
+
+    base_url    = _req.host_url.rstrip('/')
+    success_url = f'{base_url}/subscription?success=1'
+    cancel_url  = f'{base_url}/subscription?cancelled=1'
+
+    try:
+        url = create_checkout_session(
+            user_id=_g.user_id,
+            user_email=email or '',
+            tier=tier,
+            annual=annual,
+            success_url=success_url,
+            cancel_url=cancel_url,
+        )
+        return jsonify({'url': url})
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/stripe/portal', methods=['POST'])
+@require_auth
+def stripe_portal():
+    """
+    POST /stripe/portal
+    Returns: { "url": "https://billing.stripe.com/..." }
+    """
+    from flask import g as _g, request as _req
+    from middleware.stripe_billing import create_portal_session
+
+    base_url   = _req.host_url.rstrip('/')
+    return_url = f'{base_url}/subscription'
+
+    try:
+        url = create_portal_session(user_id=_g.user_id, return_url=return_url)
+        return jsonify({'url': url})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/stripe/webhook', methods=['POST'])
+def stripe_webhook():
+    """
+    POST /stripe/webhook
+    Stripe sends signed events here. Verifies signature, updates user tier.
+    """
+    from flask import request as _req
+    from middleware.stripe_billing import handle_webhook
+
+    payload    = _req.get_data()
+    sig_header = _req.headers.get('Stripe-Signature', '')
+
+    try:
+        result = handle_webhook(payload, sig_header, _DB_PATH)
+        return jsonify(result)
+    except ValueError:
+        return jsonify({'error': 'invalid signature'}), 400
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 503
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
