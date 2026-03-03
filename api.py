@@ -4407,7 +4407,7 @@ def _paper_ai_run(user_id: str) -> dict:
                FROM pattern_signals
                WHERE status NOT IN ('filled','broken')
                  AND quality_score >= 0.75
-                 AND (kb_conviction = 'HIGH' OR kb_conviction = 'CONFIRMED')
+                 AND LOWER(kb_conviction) IN ('high','confirmed','strong')
                ORDER BY quality_score DESC
                LIMIT 20"""
         ).fetchall()
