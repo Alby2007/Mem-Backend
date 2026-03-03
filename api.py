@@ -4455,7 +4455,13 @@ def _paper_ai_run(user_id: str) -> dict:
             (user_id,)
         ).fetchall()
         open_tickers = {r['ticker'] for r in open_rows}
-        max_positions = 5  # cap concurrent open positions
+
+        # Fetch current balance for position sizing
+        acct_row = conn.execute(
+            "SELECT virtual_balance FROM paper_account WHERE user_id=?", (user_id,)
+        ).fetchone()
+        balance = float(acct_row['virtual_balance']) if acct_row else 500000.0
+        risk_per_trade = balance * 0.01  # risk 1% of balance per trade
 
         entries = 0
         skips   = 0
@@ -4466,15 +4472,6 @@ def _paper_ai_run(user_id: str) -> dict:
             (user_id, 'scan_start', None, f'Scanning open patterns for {user_id}', now_iso)
         )
         conn.commit()
-
-        if len(open_tickers) >= max_positions:
-            conn.execute(
-                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-                (user_id, 'skip', None, f'Max positions reached ({max_positions}) — skipping scan', now_iso)
-            )
-            conn.commit()
-            conn.close()
-            return {'entries': 0, 'skips': 0, 'monitor_updates': []}
 
         # --- Fetch candidate patterns ---
         candidate_rows = conn.execute(
@@ -4519,11 +4516,6 @@ def _paper_ai_run(user_id: str) -> dict:
 
             # Hard rule: skip already-open tickers
             if ticker in open_tickers:
-                skips += 1
-                continue
-
-            # Hard rule: skip if max positions reached this run
-            if entries + len(open_tickers) >= max_positions:
                 skips += 1
                 continue
 
@@ -4611,21 +4603,25 @@ def _paper_ai_run(user_id: str) -> dict:
             evaluated.append({'ticker': ticker, 'action': action, 'reasoning': reasoning})
 
             if action == 'ENTER' and risk > 0:
+                # Size quantity: risk_per_trade / risk_per_unit gives shares/units
+                qty = round(risk_per_trade / risk, 4) if risk > 0 else 1.0
+                qty = max(qty, 0.0001)  # floor
+                position_value = round(entry_p * qty, 2)
                 # Insert position
                 conn.row_factory = None
                 conn.execute(
                     """INSERT INTO paper_positions
                        (user_id, pattern_id, ticker, direction, entry_price, stop, t1, t2,
                         quantity, status, partial_closed, opened_at, note, ai_reasoning)
-                       VALUES (?,?,?,?,?,?,?,?,1,'open',0,?,?,?)""",
+                       VALUES (?,?,?,?,?,?,?,?,?,'open',0,?,?,?)""",
                     (user_id, pattern_id, ticker, direction,
-                     entry_p, stop_p, t1_p, t2_p,
+                     entry_p, stop_p, t1_p, t2_p, qty,
                      now_iso, f'AI agent: {c.get("pattern_type","")}', reasoning)
                 )
                 conn.execute(
                     "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
                     (user_id, 'entry', ticker,
-                     f'{direction} entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} | {reasoning}',
+                     f'{direction} entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} qty={qty:.4f} value=£{position_value:,.2f} | {reasoning}',
                      now_iso)
                 )
                 open_tickers.add(ticker)

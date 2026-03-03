@@ -1778,6 +1778,9 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
             <th>Stop</th>
             <th>T1</th>
             <th>T2</th>
+            <th>Now</th>
+            <th>Value</th>
+            <th>Unreal. R</th>
             <th>Status</th>
             <th>Opened</th>
             <th>AI Reasoning</th>
@@ -4629,6 +4632,9 @@ function _ptRenderOpen(rows) {
     const unr        = p.unrealised_pnl_r;
     const unrStr     = unr != null ? (unr >= 0 ? '+' : '') + unr + 'R' : '—';
     const unrCls     = unr != null ? (unr >= 0 ? 'pt-pnl-pos' : 'pt-pnl-neg') : '';
+    const qty        = p.quantity != null ? p.quantity : 1;
+    const posVal     = p.entry_price != null ? (p.entry_price * qty) : null;
+    const posValStr  = posVal != null ? '£' + posVal.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
     return `<tr>
       <td><span class="mono" style="font-weight:700;">${escHtml(p.ticker)}</span></td>
       <td><span class="${dirCls}">${p.direction === 'bullish' ? '▲' : '▼'}</span></td>
@@ -4637,6 +4643,7 @@ function _ptRenderOpen(rows) {
       <td class="mono mono-amber">${_ptFmt(p.t1)}</td>
       <td class="mono mono-green">${t2}</td>
       <td class="mono">${nowPrice}</td>
+      <td class="mono" style="color:var(--accent);">${posValStr}</td>
       <td class="${unrCls}" style="font-weight:600;">${unrStr}</td>
       <td><span class="${statusCls}">${(p.status||'open').toUpperCase()}${partialDot}</span></td>
       <td class="mono-muted" style="font-size:10px;">${dateStr}</td>
