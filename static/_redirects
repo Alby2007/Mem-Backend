@@ -1,0 +1,26 @@
+# SPA routes — all served by /app.html (the Trading Galaxy app)
+/login                      /app.html           200
+/dashboard                  /app.html           200
+/portfolio                  /app.html           200
+/chat                       /app.html           200
+/markets                    /app.html           200
+/tips                       /app.html           200
+/patterns                   /app.html           200
+/network                    /app.html           200
+/history                    /app.html           200
+/paper                      /app.html           200
+/subscription               /app.html           200
+/profile                    /app.html           200
+
+# /:username/screen routes
+/:username/dashboard        /app.html           200
+/:username/portfolio        /app.html           200
+/:username/chat             /app.html           200
+/:username/markets          /app.html           200
+/:username/tips             /app.html           200
+/:username/patterns         /app.html           200
+/:username/network          /app.html           200
+/:username/history          /app.html           200
+/:username/paper            /app.html           200
+/:username/subscription     /app.html           200
+/:username/profile          /app.html           200
