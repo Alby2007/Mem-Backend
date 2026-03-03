@@ -4475,17 +4475,36 @@ def _paper_ai_run(user_id: str) -> dict:
         conn.commit()
 
         # --- Fetch candidate patterns ---
+        # Best pattern per unique ticker (deduped), large pool, shuffled within bands
         candidate_rows = conn.execute(
             """SELECT id, ticker, pattern_type, direction, zone_high, zone_low,
                       quality_score, kb_conviction, kb_regime, kb_signal_dir
-               FROM pattern_signals
+               FROM pattern_signals p
                WHERE status NOT IN ('filled','broken')
-                 AND quality_score >= 0.75
+                 AND quality_score >= 0.70
                  AND LOWER(kb_conviction) IN ('high','confirmed','strong')
-               ORDER BY quality_score DESC
-               LIMIT 20"""
+                 AND id = (
+                     SELECT id FROM pattern_signals p2
+                     WHERE p2.ticker = p.ticker
+                       AND p2.status NOT IN ('filled','broken')
+                       AND p2.quality_score >= 0.70
+                       AND LOWER(p2.kb_conviction) IN ('high','confirmed','strong')
+                     ORDER BY p2.quality_score DESC
+                     LIMIT 1
+                 )
+               ORDER BY RANDOM()
+               LIMIT 200"""
         ).fetchall()
-        candidates = [dict(r) for r in candidate_rows]
+        import random as _random
+        # Sort into quality bands then shuffle within each band for diversity
+        all_cands = [dict(r) for r in candidate_rows]
+        high_band  = [c for c in all_cands if c['quality_score'] >= 0.85]
+        mid_band   = [c for c in all_cands if 0.75 <= c['quality_score'] < 0.85]
+        low_band   = [c for c in all_cands if c['quality_score'] < 0.75]
+        _random.shuffle(high_band)
+        _random.shuffle(mid_band)
+        _random.shuffle(low_band)
+        candidates = (high_band + mid_band + low_band)[:50]
 
         # --- Fetch warning atoms for SKIP conditions (PCR, long_end_stress, regime) ---
         _warning_atoms = {}
