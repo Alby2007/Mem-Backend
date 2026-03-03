@@ -1892,3 +1892,16 @@ def update_tip_config(
         return d
     finally:
         conn.close()
+
+
+def get_pro_premium_users(db_path: str) -> List[str]:
+    """Return list of user_ids whose tier is 'pro' or 'premium'."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_tables(conn)
+        rows = conn.execute(
+            "SELECT user_id FROM user_preferences WHERE tier IN ('pro', 'premium')"
+        ).fetchall()
+        return [row[0] for row in rows]
+    finally:
+        conn.close()

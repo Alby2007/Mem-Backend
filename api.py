@@ -607,6 +607,7 @@ if HAS_INGEST:
         _ingest_scheduler.register(UCDPAdapter(),                              interval_sec=86400)  # 24 hours UCDP conflict baseline
         _ingest_scheduler.register(ACLEDAdapter(),                             interval_sec=21600)  # 6 hours ACLED protest/unrest
         _ingest_scheduler.register(USGSAdapter(),                              interval_sec=3600)   # 1 hour USGS earthquakes
+        _ingest_scheduler.register(PaperAgentAdapter(),                        interval_sec=1800)   # 30 min autonomous paper trading agent
         _ingest_scheduler.start()
     except Exception as _e:
         import logging as _logging
@@ -3944,6 +3945,22 @@ def user_portfolio_generate_sim(user_id):
 
 # ── Paper Trading endpoints ───────────────────────────────────────────────────
 
+_PAPER_AGENT_SYSTEM = """You are an autonomous paper trading agent. You have no emotions and no bias.
+Your only goal is to evaluate KB signals and decide ENTER or SKIP.
+
+Rules:
+- ENTER only if: quality >= 0.75, conviction = HIGH or CONFIRMED, no conflicting signals
+- SKIP if: put_call_ratio > 1.3 on bullish, long_end_stress = true, bear_steepen regime
+- SKIP if: ticker already has an open paper position
+- Entry = midpoint of zone_low/zone_high
+- Stop = zone_low minus 0.5% buffer (bullish) or zone_high plus 0.5% (bearish)
+- T1 = entry + (entry - stop) * 2
+- T2 = entry + (entry - stop) * 3
+
+Respond ONLY with valid JSON. No explanation outside the JSON.
+{"action": "ENTER"|"SKIP", "entry": float, "stop": float, "t1": float, "t2": float, "reasoning": "one sentence max"}"""
+
+
 def _ensure_paper_tables(conn):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_account (
@@ -3971,9 +3988,25 @@ def _ensure_paper_tables(conn):
             closed_at TEXT,
             exit_price REAL,
             pnl_r REAL,
-            note TEXT
+            note TEXT,
+            ai_reasoning TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_agent_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            ticker TEXT,
+            detail TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    # Migrate: add ai_reasoning to paper_positions if it doesn't exist yet
+    try:
+        conn.execute("ALTER TABLE paper_positions ADD COLUMN ai_reasoning TEXT")
+    except Exception:
+        pass
     conn.commit()
 
 
@@ -4309,6 +4342,376 @@ def paper_stats(user_id):
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+def _paper_ai_run(user_id: str) -> dict:
+    """
+    Core autonomous paper trading agent for one user.
+
+    1. Logs scan_start
+    2. Fetches top open patterns (quality>=0.75, HIGH/CONFIRMED conviction)
+    3. Skips tickers already in open positions
+    4. For each candidate: calls LLM (or rule-based fallback) → ENTER or SKIP
+    5. Runs existing price monitor on open positions
+    6. Returns summary dict
+    """
+    import sqlite3 as _sq3
+    import json as _json
+    import logging as _logging
+
+    _log = _logging.getLogger('paper_agent')
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    try:
+        conn = _sq3.connect(_DB_PATH, timeout=15)
+        _ensure_paper_tables(conn)
+        conn.row_factory = _sq3.Row
+
+        # Ensure account row exists
+        conn.execute(
+            "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,10000.0,'GBP',?)",
+            (user_id, now_iso)
+        )
+
+        # --- Get tickers already in open positions (skip duplicates) ---
+        open_rows = conn.execute(
+            "SELECT ticker FROM paper_positions WHERE user_id=? AND status='open'",
+            (user_id,)
+        ).fetchall()
+        open_tickers = {r['ticker'] for r in open_rows}
+        max_positions = 5  # cap concurrent open positions
+
+        entries = 0
+        skips   = 0
+
+        # Log scan start
+        conn.execute(
+            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+            (user_id, 'scan_start', None, f'Scanning open patterns for {user_id}', now_iso)
+        )
+        conn.commit()
+
+        if len(open_tickers) >= max_positions:
+            conn.execute(
+                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                (user_id, 'skip', None, f'Max positions reached ({max_positions}) — skipping scan', now_iso)
+            )
+            conn.commit()
+            conn.close()
+            return {'entries': 0, 'skips': 0, 'monitor_updates': []}
+
+        # --- Fetch candidate patterns ---
+        candidate_rows = conn.execute(
+            """SELECT id, ticker, pattern_type, direction, zone_high, zone_low,
+                      quality_score, kb_conviction, kb_regime, kb_signal_dir
+               FROM pattern_signals
+               WHERE status NOT IN ('filled','broken')
+                 AND quality_score >= 0.75
+                 AND (kb_conviction = 'HIGH' OR kb_conviction = 'CONFIRMED')
+               ORDER BY quality_score DESC
+               LIMIT 20"""
+        ).fetchall()
+        candidates = [dict(r) for r in candidate_rows]
+
+        # --- Fetch warning atoms for SKIP conditions (PCR, long_end_stress, regime) ---
+        _warning_atoms = {}
+        try:
+            atom_rows = conn.execute(
+                """SELECT subject, predicate, object FROM knowledge_atoms
+                   WHERE predicate IN ('put_call_ratio','long_end_stress','price_regime','bear_steepener')
+                   ORDER BY confidence DESC LIMIT 30"""
+            ).fetchall()
+            for ar in atom_rows:
+                _warning_atoms.setdefault(ar[0], {})[ar[1]] = ar[2]
+        except Exception:
+            pass
+
+        conn.row_factory = None
+
+        scanned = len(candidates)
+        evaluated = []
+
+        for c in candidates:
+            ticker    = c['ticker']
+            direction = c['direction']
+            quality   = c.get('quality_score') or 0
+            conviction = (c.get('kb_conviction') or '').upper()
+            zone_low  = float(c.get('zone_low') or 0)
+            zone_high = float(c.get('zone_high') or 0)
+            regime    = (c.get('kb_regime') or '').lower()
+            pattern_id = c['id']
+
+            # Hard rule: skip already-open tickers
+            if ticker in open_tickers:
+                skips += 1
+                continue
+
+            # Hard rule: skip if max positions reached this run
+            if entries + len(open_tickers) >= max_positions:
+                skips += 1
+                continue
+
+            # Pre-LLM rule-based SKIP checks
+            skip_reason = None
+            _ticker_atoms = _warning_atoms.get(ticker, {})
+            try:
+                pcr = float(_ticker_atoms.get('put_call_ratio', 0) or 0)
+                if direction == 'bullish' and pcr > 1.3:
+                    skip_reason = f'PCR={pcr:.2f} > 1.3 on bullish'
+            except Exception:
+                pass
+            if not skip_reason:
+                if _ticker_atoms.get('long_end_stress', '').lower() in ('true', '1', 'yes'):
+                    skip_reason = 'long_end_stress=true'
+            if not skip_reason:
+                if 'bear_steepen' in regime or 'risk_off' in regime:
+                    skip_reason = f'regime={regime} unfavourable'
+
+            # Rule-based price calculation
+            midpoint = (zone_low + zone_high) / 2.0 if zone_low and zone_high else None
+            if midpoint and midpoint > 0:
+                if direction == 'bullish':
+                    entry_p = midpoint
+                    stop_p  = round(zone_low * 0.995, 6)  # -0.5% buffer
+                    risk    = entry_p - stop_p
+                    t1_p    = round(entry_p + risk * 2, 6)
+                    t2_p    = round(entry_p + risk * 3, 6)
+                else:
+                    entry_p = midpoint
+                    stop_p  = round(zone_high * 1.005, 6)  # +0.5% buffer
+                    risk    = stop_p - entry_p
+                    t1_p    = round(entry_p - risk * 2, 6)
+                    t2_p    = round(entry_p - risk * 3, 6)
+            else:
+                skips += 1
+                continue
+
+            if risk <= 0:
+                skips += 1
+                continue
+
+            action    = 'SKIP' if skip_reason else 'ENTER'
+            reasoning = skip_reason or f'Quality {quality:.2f} {conviction} — zone entry'
+
+            # ── LLM decision (overrides rule-based) ───────────────────
+            if not skip_reason:
+                signal_ctx = (
+                    f"Ticker: {ticker}\n"
+                    f"Pattern: {c.get('pattern_type','?')}\n"
+                    f"Direction: {direction}\n"
+                    f"Quality: {quality:.3f}\n"
+                    f"Conviction: {conviction}\n"
+                    f"Regime: {c.get('kb_regime','?')}\n"
+                    f"Signal Dir: {c.get('kb_signal_dir','?')}\n"
+                    f"Zone: {zone_low} – {zone_high}\n"
+                    f"Rule-based entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} t2={t2_p:.4f}\n"
+                    f"Warning atoms: {_ticker_atoms or 'none'}"
+                )
+                try:
+                    messages = [
+                        {'role': 'system', 'content': _PAPER_AGENT_SYSTEM},
+                        {'role': 'user',   'content': signal_ctx},
+                    ]
+                    raw = _llm_chat(messages)
+                    if raw:
+                        raw = raw.strip()
+                        # Extract JSON even if LLM adds surrounding text
+                        start = raw.find('{')
+                        end   = raw.rfind('}') + 1
+                        if start >= 0 and end > start:
+                            parsed = _json.loads(raw[start:end])
+                            action = parsed.get('action', 'SKIP').upper()
+                            reasoning = parsed.get('reasoning', reasoning)[:200]
+                            if action == 'ENTER':
+                                entry_p = float(parsed.get('entry', entry_p))
+                                stop_p  = float(parsed.get('stop',  stop_p))
+                                t1_p    = float(parsed.get('t1',    t1_p))
+                                t2_p    = float(parsed.get('t2',    t2_p))
+                                risk    = abs(entry_p - stop_p)
+                except Exception as llm_err:
+                    _log.warning('LLM paper agent error for %s: %s', ticker, llm_err)
+                    # Fall through with rule-based result
+
+            evaluated.append({'ticker': ticker, 'action': action, 'reasoning': reasoning})
+
+            if action == 'ENTER' and risk > 0:
+                # Insert position
+                conn.row_factory = None
+                conn.execute(
+                    """INSERT INTO paper_positions
+                       (user_id, pattern_id, ticker, direction, entry_price, stop, t1, t2,
+                        quantity, status, partial_closed, opened_at, note, ai_reasoning)
+                       VALUES (?,?,?,?,?,?,?,?,1,'open',0,?,?,?)""",
+                    (user_id, pattern_id, ticker, direction,
+                     entry_p, stop_p, t1_p, t2_p,
+                     now_iso, f'AI agent: {c.get("pattern_type","")}', reasoning)
+                )
+                conn.execute(
+                    "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                    (user_id, 'entry', ticker,
+                     f'{direction} entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} | {reasoning}',
+                     now_iso)
+                )
+                open_tickers.add(ticker)
+                entries += 1
+            else:
+                skips += 1
+
+        # Summarise skips in one log entry (not per-skip)
+        if skips > 0:
+            conn.execute(
+                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                (user_id, 'skip', None,
+                 f'Scanned {scanned} patterns — {entries} entr{"y" if entries==1 else "ies"}, {skips} skipped',
+                 now_iso)
+            )
+
+        conn.commit()
+
+        # ── Price monitor on all open positions ───────────────────────
+        monitor_updates = []
+        try:
+            conn.row_factory = _sq3.Row
+            open_pos = conn.execute(
+                "SELECT * FROM paper_positions WHERE user_id=? AND status='open'",
+                (user_id,)
+            ).fetchall()
+            import yfinance as _yf
+            for pos in open_pos:
+                ticker    = pos['ticker']
+                direction = pos['direction']
+                entry     = pos['entry_price']
+                stop      = pos['stop']
+                t1        = pos['t1']
+                t2        = pos['t2']
+                risk      = abs(entry - stop)
+                if risk == 0:
+                    continue
+                try:
+                    hist = _yf.Ticker(ticker).history(period='1d', interval='1m')
+                    price = float(hist['Close'].iloc[-1]) if not hist.empty else None
+                except Exception:
+                    price = None
+                if price is None:
+                    continue
+                new_status = None
+                exit_p     = None
+                if direction == 'bullish':
+                    if price <= stop:
+                        new_status, exit_p = 'stopped_out', price
+                    elif t2 and price >= t2:
+                        new_status, exit_p = 't2_hit', price
+                    elif not pos['partial_closed'] and price >= t1:
+                        conn.execute("UPDATE paper_positions SET partial_closed=1 WHERE id=?", (pos['id'],))
+                        monitor_updates.append({'id': pos['id'], 'ticker': ticker, 'event': 't1_hit', 'price': price})
+                else:
+                    if price >= stop:
+                        new_status, exit_p = 'stopped_out', price
+                    elif t2 and price <= t2:
+                        new_status, exit_p = 't2_hit', price
+                    elif not pos['partial_closed'] and price <= t1:
+                        conn.execute("UPDATE paper_positions SET partial_closed=1 WHERE id=?", (pos['id'],))
+                        monitor_updates.append({'id': pos['id'], 'ticker': ticker, 'event': 't1_hit', 'price': price})
+                if new_status and exit_p is not None:
+                    if direction == 'bullish':
+                        pnl_r = round((exit_p - entry) / risk, 2)
+                    else:
+                        pnl_r = round((entry - exit_p) / risk, 2)
+                    conn.execute(
+                        "UPDATE paper_positions SET status=?, exit_price=?, pnl_r=?, closed_at=? WHERE id=?",
+                        (new_status, exit_p, pnl_r, now_iso, pos['id'])
+                    )
+                    conn.execute(
+                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                        (user_id, new_status, ticker,
+                         f'exit={exit_p:.4f} P&L={pnl_r:+.2f}R', now_iso)
+                    )
+                    monitor_updates.append({'id': pos['id'], 'ticker': ticker, 'event': new_status, 'pnl_r': pnl_r})
+            conn.commit()
+        except Exception as mon_err:
+            _log.warning('Paper monitor error for %s: %s', user_id, mon_err)
+
+        if monitor_updates:
+            conn.row_factory = None
+            conn.execute(
+                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                (user_id, 'monitor_run', None,
+                 f'Monitor: {len(monitor_updates)} update(s)', now_iso)
+            )
+            conn.commit()
+
+        conn.close()
+        return {'entries': entries, 'skips': skips, 'monitor_updates': monitor_updates}
+
+    except Exception as e:
+        import logging as _log2
+        _log2.getLogger('paper_agent').error('_paper_ai_run error for %s: %s', user_id, e)
+        return {'error': str(e)}
+
+
+def _paper_ai_global_run():
+    """Called by PaperAgentAdapter scheduler — runs agent for every pro/premium user."""
+    try:
+        from users.user_store import get_pro_premium_users
+        users = get_pro_premium_users(_DB_PATH)
+    except Exception:
+        users = []
+    for uid in users:
+        try:
+            _paper_ai_run(uid)
+        except Exception:
+            pass
+
+
+class PaperAgentAdapter:
+    """Ingest-scheduler-compatible adapter that runs the autonomous paper trading agent."""
+    name = 'paper_agent'
+
+    def run(self) -> None:
+        _paper_ai_global_run()
+
+
+@app.route('/users/<user_id>/paper/agent/log', methods=['GET'])
+@require_auth
+def paper_agent_log_get(user_id):
+    """GET /users/<user_id>/paper/agent/log — last 100 agent activity entries."""
+    err = assert_self(user_id)
+    if err: return err
+    _, terr = _paper_tier_check(user_id)
+    if terr: return terr
+    import sqlite3 as _sq3
+    try:
+        conn = _sq3.connect(_DB_PATH, timeout=10)
+        _ensure_paper_tables(conn)
+        conn.row_factory = _sq3.Row
+        rows = conn.execute(
+            """SELECT id, user_id, event_type, ticker, detail, created_at
+               FROM paper_agent_log
+               WHERE user_id=?
+               ORDER BY created_at DESC LIMIT 100""",
+            (user_id,)
+        ).fetchall()
+        conn.close()
+        return jsonify({'log': [dict(r) for r in rows]})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/paper/agent/run', methods=['POST'])
+@require_auth
+@rate_limit('paper_agent')
+def paper_agent_run(user_id):
+    """POST /users/<user_id>/paper/agent/run — trigger agent immediately."""
+    err = assert_self(user_id)
+    if err: return err
+    _, terr = _paper_tier_check(user_id)
+    if terr: return terr
+    import threading as _threading
+    def _bg():
+        _paper_ai_run(user_id)
+    t = _threading.Thread(target=_bg, daemon=True)
+    t.start()
+    return jsonify({'status': 'running', 'message': 'Agent started — refresh log in a few seconds'})
 
 
 @app.route('/users/<user_id>/history/screenshot', methods=['POST'])

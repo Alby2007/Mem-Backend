@@ -1719,10 +1719,10 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
     <div style="display:flex;align-items:center;gap:12px;">
       <div style="font-size:16px;font-weight:700;">Paper Trader</div>
-      <span style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--accent);background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:3px;padding:2px 7px;">VIRTUAL</span>
+      <span style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--accent);background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:3px;padding:2px 7px;">AI AUTONOMOUS</span>
     </div>
     <div style="display:flex;gap:8px;">
-      <button class="btn btn-outline btn-sm" id="pt-monitor-btn" title="Check live prices against all open positions">↻ Check Prices</button>
+      <button class="btn btn-primary btn-sm" id="pt-run-btn" title="Trigger the AI agent to scan and place trades now">▶ Run Agent Now</button>
       <button class="btn btn-ghost btn-sm" id="pt-refresh-btn">↺ Refresh</button>
     </div>
   </div>
@@ -1751,101 +1751,47 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
     </div>
   </div>
 
-  <!-- Main two-col: open positions + new position panel -->
-  <div class="pt-main-grid">
-
-    <!-- Open Positions -->
-    <div class="ptf-card">
-      <div class="ptf-card-header">
-        <div class="ptf-card-title">Open Positions</div>
-        <span id="pt-open-label" style="font-size:10px;color:var(--muted);"></span>
-      </div>
-      <div style="overflow-x:auto;">
-        <table class="tbl" id="pt-open-table">
-          <thead>
-            <tr>
-              <th>Ticker</th>
-              <th>Dir</th>
-              <th>Entry</th>
-              <th>Stop</th>
-              <th>T1</th>
-              <th>T2</th>
-              <th>Status</th>
-              <th>Opened</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="pt-open-tbody">
-            <tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No open positions</td></tr>
-          </tbody>
-        </table>
-      </div>
+  <!-- AI Activity Feed -->
+  <div class="ptf-card" style="margin-bottom:16px;">
+    <div class="ptf-card-header">
+      <div class="ptf-card-title">AI Activity Feed</div>
+      <span id="pt-feed-status" style="font-size:10px;color:var(--muted);font-family:var(--mono);">auto-refreshes every 60s</span>
     </div>
-
-    <!-- New Position form -->
-    <div class="ptf-card">
-      <div class="ptf-card-header">
-        <div class="ptf-card-title">New Paper Position</div>
-      </div>
-      <div style="padding:16px;">
-        <div style="margin-bottom:14px;">
-          <div style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px;">Quick open from pattern</div>
-          <select id="pt-pattern-select" style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;padding:7px 10px;outline:none;">
-            <option value="">Select a live pattern…</option>
-          </select>
-          <button class="btn btn-outline btn-sm" id="pt-from-pattern-btn" style="width:100%;margin-top:6px;">Load Pattern Fields</button>
-        </div>
-        <div style="border-top:1px solid var(--border);margin-bottom:14px;"></div>
-        <div class="form-row">
-          <label>Ticker</label>
-          <input id="pt-new-ticker" placeholder="e.g. BARC.L" style="text-transform:uppercase;" autocomplete="off" />
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-          <div class="form-row">
-            <label>Direction</label>
-            <select id="pt-new-direction">
-              <option value="bullish">Bullish ▲</option>
-              <option value="bearish">Bearish ▼</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label>Qty (units)</label>
-            <input id="pt-new-qty" type="number" min="0.01" step="0.01" value="1" placeholder="1" />
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-          <div class="form-row">
-            <label>Entry Price</label>
-            <input id="pt-new-entry" type="number" step="0.0001" placeholder="0.00" />
-          </div>
-          <div class="form-row">
-            <label>Stop</label>
-            <input id="pt-new-stop" type="number" step="0.0001" placeholder="0.00" />
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-          <div class="form-row">
-            <label>T1 Target</label>
-            <input id="pt-new-t1" type="number" step="0.0001" placeholder="0.00" />
-          </div>
-          <div class="form-row">
-            <label>T2 Target (opt)</label>
-            <input id="pt-new-t2" type="number" step="0.0001" placeholder="0.00" />
-          </div>
-        </div>
-        <div class="form-row">
-          <label>Note (opt)</label>
-          <input id="pt-new-note" placeholder="e.g. FVG retest on FTSE open" />
-        </div>
-        <button class="btn btn-primary" id="pt-open-btn" style="width:100%;margin-top:4px;">Open Paper Position</button>
-        <div id="pt-open-msg" style="font-size:11px;margin-top:8px;min-height:14px;"></div>
-      </div>
+    <div id="pt-feed" style="font-family:var(--mono);font-size:11px;line-height:1.8;padding:12px 16px;max-height:260px;overflow-y:auto;">
+      <div style="color:var(--muted);">Waiting for agent activity…</div>
     </div>
+  </div>
 
+  <!-- Open Positions (read-only) -->
+  <div class="ptf-card" style="margin-bottom:16px;">
+    <div class="ptf-card-header">
+      <div class="ptf-card-title">Open Positions</div>
+      <span id="pt-open-label" style="font-size:10px;color:var(--muted);"></span>
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="tbl" id="pt-open-table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Dir</th>
+            <th>Entry</th>
+            <th>Stop</th>
+            <th>T1</th>
+            <th>T2</th>
+            <th>Status</th>
+            <th>Opened</th>
+            <th>AI Reasoning</th>
+          </tr>
+        </thead>
+        <tbody id="pt-open-tbody">
+          <tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No open positions — agent runs every 30 min</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <!-- Trade Log -->
-  <div class="ptf-card" style="margin-top:16px;">
+  <div class="ptf-card">
     <div class="ptf-card-header">
       <div class="ptf-card-title">Trade Log</div>
       <div style="display:flex;gap:6px;">
@@ -1872,7 +1818,7 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
       </table>
     </div>
     <div id="pt-log-stats" class="pt-log-panel" style="display:none;padding:16px;">
-      <div id="pt-stats-body"><div style="color:var(--muted);font-size:12px;text-align:center;padding:20px;">No stats yet — close some trades first.</div></div>
+      <div id="pt-stats-body"><div style="color:var(--muted);font-size:12px;text-align:center;padding:20px;">No stats yet — the AI agent needs to close some trades first.</div></div>
     </div>
   </div>
 
@@ -4549,11 +4495,23 @@ document.getElementById('chat-input').addEventListener('input', function() {
 
 // ── PAPER TRADER ─────────────────────────────────────────────────────────────
 
-let _ptPatterns = [];
+let _ptPollTimer = null;
 
 async function loadPaperTrader() {
   if (!state.userId) return;
-  await Promise.all([_ptLoadAccount(), _ptLoadPositions(), _ptLoadPatterns()]);
+  await Promise.all([_ptLoadAccount(), _ptLoadPositions(), _ptLoadAgentLog()]);
+  // Start auto-poll (60s) when screen is active; cleared by showScreen on navigate away
+  if (_ptPollTimer) clearInterval(_ptPollTimer);
+  _ptPollTimer = setInterval(() => {
+    if (document.getElementById('screen-paper')?.classList.contains('active')) {
+      _ptLoadAccount();
+      _ptLoadPositions();
+      _ptLoadAgentLog();
+    } else {
+      clearInterval(_ptPollTimer);
+      _ptPollTimer = null;
+    }
+  }, 60000);
 }
 
 async function _ptLoadAccount() {
@@ -4580,7 +4538,6 @@ async function _ptLoadAccount() {
 }
 
 function _ptShowUpsell() {
-  const main = document.getElementById('main');
   const sc = document.getElementById('screen-paper');
   if (!sc) return;
   sc.innerHTML = `
@@ -4589,7 +4546,7 @@ function _ptShowUpsell() {
       <div style="font-size:20px;font-weight:700;margin-bottom:10px;">Paper Trader</div>
       <div style="color:var(--muted);font-size:13px;line-height:1.7;margin-bottom:24px;">
         Paper trading is a <strong style="color:var(--accent);">Pro / Premium</strong> feature.<br>
-        Test your conviction against real price data without risking real money.
+        The AI agent thinks, plans and places trades autonomously using live KB signals.
       </div>
       <button class="btn btn-primary" onclick="navigate('subscription')">Upgrade to Pro →</button>
     </div>`;
@@ -4608,37 +4565,61 @@ async function _ptLoadPositions() {
   } catch(e) { /* handled in account */ }
 }
 
-async function _ptLoadPatterns() {
+async function _ptLoadAgentLog() {
+  const feed = document.getElementById('pt-feed');
+  if (!feed || !state.userId) return;
   try {
-    const d = await apiFetch('/patterns/live?limit=50');
-    _ptPatterns = d?.patterns || [];
-    const sel = document.getElementById('pt-pattern-select');
-    if (!sel) return;
-    sel.innerHTML = '<option value="">Select a live pattern…</option>';
-    _ptPatterns.forEach(p => {
-      const opt = document.createElement('option');
-      opt.value = p.id;
-      opt.textContent = `${p.ticker} — ${p.pattern_type} (${p.direction}) Q:${(p.quality_score||0).toFixed(2)} [${p.kb_conviction||'?'}]`;
-      sel.appendChild(opt);
-    });
-  } catch(e) { /* patterns optional */ }
+    const d = await apiFetch(`/users/${state.userId}/paper/agent/log`);
+    const rows = d?.log || [];
+    if (!rows.length) {
+      feed.innerHTML = '<span style="color:var(--muted);">No agent activity yet — agent runs every 30 min or click ▶ Run Agent Now</span>';
+      return;
+    }
+    feed.innerHTML = rows.map(r => _ptFeedLine(r)).join('');
+  } catch(e) {
+    feed.innerHTML = `<span style="color:var(--red);">${escHtml(e.message)}</span>`;
+  }
+}
+
+function _ptFeedLine(r) {
+  const ts = r.created_at ? r.created_at.slice(0,16).replace('T',' ') : '';
+  const ticker = r.ticker ? `<span style="color:var(--accent);font-weight:700;margin:0 4px;">${escHtml(r.ticker)}</span>` : '';
+  const detail = escHtml(r.detail || '');
+  let icon, color;
+  switch(r.event_type) {
+    case 'scan_start':  icon = '🔍'; color = 'var(--muted)';   break;
+    case 'entry':       icon = '▶';  color = 'var(--green)';   break;
+    case 'skip':        icon = '—';  color = 'var(--muted)';   break;
+    case 't1_hit':      icon = '✓';  color = 'var(--green)';   break;
+    case 't2_hit':      icon = '✓✓'; color = '#22d3ee';        break;
+    case 'stopped_out': icon = '✗';  color = 'var(--red)';     break;
+    case 'monitor_run': icon = '⟳';  color = 'var(--muted)';   break;
+    default:            icon = '·';  color = 'var(--muted)';   break;
+  }
+  return `<div style="display:flex;gap:8px;align-items:baseline;border-bottom:1px solid var(--border);padding:3px 0;">
+    <span style="color:${color};width:18px;text-align:center;flex-shrink:0;">${icon}</span>
+    ${ticker}
+    <span style="color:${color};flex:1;">${detail}</span>
+    <span style="color:var(--muted);font-size:10px;flex-shrink:0;">${ts}</span>
+  </div>`;
 }
 
 function _ptRenderOpen(rows) {
   const tbody = document.getElementById('pt-open-tbody');
   if (!tbody) return;
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No open positions</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No open positions — agent runs every 30 min</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(p => {
-    const statusCls = 'pt-status-' + (p.status || 'open').replace(/[^a-z_]/g,'');
-    const dirCls    = p.direction === 'bullish' ? 'kb-dir-bullish' : 'kb-dir-bearish';
-    const t2        = p.t2 !== null && p.t2 !== undefined ? _ptFmt(p.t2) : '—';
-    const dateStr   = p.opened_at ? p.opened_at.slice(0,10) : '—';
+    const statusCls  = 'pt-status-' + (p.status || 'open').replace(/[^a-z_]/g,'');
+    const dirCls     = p.direction === 'bullish' ? 'kb-dir-bullish' : 'kb-dir-bearish';
+    const t2         = p.t2 !== null && p.t2 !== undefined ? _ptFmt(p.t2) : '—';
+    const dateStr    = p.opened_at ? p.opened_at.slice(0,10) : '—';
     const partialDot = p.partial_closed ? '<span title="T1 hit" style="color:var(--accent);margin-left:4px;">●T1</span>' : '';
+    const reasoning  = p.ai_reasoning ? `<span class="text-xs text-muted" title="${escHtml(p.ai_reasoning)}">${escHtml(p.ai_reasoning.slice(0,40))}${p.ai_reasoning.length>40?'…':''}</span>` : '<span class="text-xs text-muted">—</span>';
     return `<tr>
-      <td><span class="mono" style="font-weight:700;">${p.ticker}</span></td>
+      <td><span class="mono" style="font-weight:700;">${escHtml(p.ticker)}</span></td>
       <td><span class="${dirCls}">${p.direction === 'bullish' ? '▲' : '▼'}</span></td>
       <td class="mono">${_ptFmt(p.entry_price)}</td>
       <td class="mono mono-red">${_ptFmt(p.stop)}</td>
@@ -4646,7 +4627,7 @@ function _ptRenderOpen(rows) {
       <td class="mono mono-green">${t2}</td>
       <td><span class="${statusCls}">${(p.status||'open').toUpperCase()}${partialDot}</span></td>
       <td class="mono-muted" style="font-size:10px;">${dateStr}</td>
-      <td><button class="pt-close-btn" onclick="ptClosePosition(${p.id})">Close</button></td>
+      <td>${reasoning}</td>
     </tr>`;
   }).join('');
 }
@@ -4659,14 +4640,14 @@ function _ptRenderClosed(rows) {
     return;
   }
   tbody.innerHTML = rows.map(p => {
-    const dirCls  = p.direction === 'bullish' ? 'kb-dir-bullish' : 'kb-dir-bearish';
-    const pnr     = p.pnl_r !== null && p.pnl_r !== undefined ? p.pnl_r : null;
-    const pnlCls  = pnr !== null ? (pnr >= 0 ? 'pt-pnl-pos' : 'pt-pnl-neg') : '';
-    const pnlStr  = pnr !== null ? (pnr >= 0 ? '+' : '') + pnr + 'R' : '—';
+    const dirCls    = p.direction === 'bullish' ? 'kb-dir-bullish' : 'kb-dir-bearish';
+    const pnr       = p.pnl_r !== null && p.pnl_r !== undefined ? p.pnl_r : null;
+    const pnlCls    = pnr !== null ? (pnr >= 0 ? 'pt-pnl-pos' : 'pt-pnl-neg') : '';
+    const pnlStr    = pnr !== null ? (pnr >= 0 ? '+' : '') + pnr + 'R' : '—';
     const statusCls = 'pt-status-' + (p.status||'closed');
-    const dateStr = (p.closed_at || '').slice(0,10) || '—';
+    const dateStr   = (p.closed_at || '').slice(0,10) || '—';
     return `<tr>
-      <td><span class="mono" style="font-weight:700;">${p.ticker}</span></td>
+      <td><span class="mono" style="font-weight:700;">${escHtml(p.ticker)}</span></td>
       <td><span class="${dirCls}">${p.direction === 'bullish' ? '▲' : '▼'}</span></td>
       <td class="mono">${_ptFmt(p.entry_price)}</td>
       <td class="mono">${p.exit_price !== null && p.exit_price !== undefined ? _ptFmt(p.exit_price) : '—'}</td>
@@ -4684,88 +4665,18 @@ function _ptFmt(v) {
   return n >= 100 ? n.toFixed(2) : n.toPrecision(5).replace(/\.?0+$/, '');
 }
 
-async function ptClosePosition(id) {
-  if (!state.userId) return;
-  const exitStr = prompt('Exit price (leave blank for current entry price):');
-  if (exitStr === null) return;
-  const body = exitStr.trim() ? { exit_price: parseFloat(exitStr) } : {};
-  try {
-    const d = await apiFetch(`/users/${state.userId}/paper/positions/${id}/close`, {
-      method: 'POST', body: JSON.stringify(body)
-    });
-    if (!d) return;
-    showToast(`Closed — P&L: ${d.pnl_r >= 0 ? '+' : ''}${d.pnl_r}R`, d.pnl_r >= 0 ? 'ok' : undefined);
-    loadPaperTrader();
-  } catch(e) { showToast(e.message); }
-}
-
-document.getElementById('pt-open-btn').addEventListener('click', async function() {
-  if (!state.userId) { showToast('Sign in first'); return; }
-  const ticker  = (document.getElementById('pt-new-ticker').value || '').trim().toUpperCase();
-  const dir     = document.getElementById('pt-new-direction').value;
-  const entry   = parseFloat(document.getElementById('pt-new-entry').value);
-  const stop    = parseFloat(document.getElementById('pt-new-stop').value);
-  const t1      = parseFloat(document.getElementById('pt-new-t1').value);
-  const t2raw   = document.getElementById('pt-new-t2').value.trim();
-  const t2      = t2raw ? parseFloat(t2raw) : null;
-  const qty     = parseFloat(document.getElementById('pt-new-qty').value) || 1;
-  const note    = document.getElementById('pt-new-note').value.trim();
-  const msg     = document.getElementById('pt-open-msg');
-  if (!ticker)          { msg.style.color='var(--red)'; msg.textContent='Ticker required.'; return; }
-  if (isNaN(entry)||isNaN(stop)||isNaN(t1)) { msg.style.color='var(--red)'; msg.textContent='Entry, Stop and T1 are required.'; return; }
-  msg.style.color = 'var(--muted)'; msg.textContent = 'Opening…';
-  this.disabled = true;
-  try {
-    const d = await apiFetch(`/users/${state.userId}/paper/positions`, {
-      method: 'POST',
-      body: JSON.stringify({ ticker, direction: dir, entry_price: entry, stop, t1, t2, quantity: qty, note })
-    });
-    if (!d) return;
-    msg.style.color = 'var(--green)';
-    msg.textContent = `✓ Position opened: ${ticker} ${dir}`;
-    ['pt-new-ticker','pt-new-entry','pt-new-stop','pt-new-t1','pt-new-t2','pt-new-note'].forEach(id => {
-      document.getElementById(id).value = '';
-    });
-    document.getElementById('pt-new-qty').value = '1';
-    loadPaperTrader();
-  } catch(e) {
-    msg.style.color = 'var(--red)';
-    msg.textContent = e.message;
-  } finally { this.disabled = false; }
-});
-
-document.getElementById('pt-from-pattern-btn').addEventListener('click', function() {
-  const sel = document.getElementById('pt-pattern-select');
-  const id  = parseInt(sel.value);
-  if (!id) { showToast('Select a pattern first'); return; }
-  const p = _ptPatterns.find(x => x.id === id);
-  if (!p) return;
-  document.getElementById('pt-new-ticker').value    = p.ticker || '';
-  document.getElementById('pt-new-direction').value = p.direction || 'bullish';
-  document.getElementById('pt-new-entry').value     = p.zone_low  !== undefined ? p.zone_low  : '';
-  document.getElementById('pt-new-stop').value      = '';
-  document.getElementById('pt-new-t1').value        = p.zone_high !== undefined ? p.zone_high : '';
-  document.getElementById('pt-new-t2').value        = '';
-  document.getElementById('pt-new-note').value      = `From pattern #${p.id}: ${p.pattern_type}`;
-  showToast(`Loaded ${p.ticker} pattern fields`, 'ok');
-});
-
-document.getElementById('pt-monitor-btn').addEventListener('click', async function() {
+document.getElementById('pt-run-btn').addEventListener('click', async function() {
   if (!state.userId) return;
   this.disabled = true;
-  this.textContent = '…checking';
+  this.textContent = '…thinking';
   try {
-    const d = await apiFetch(`/users/${state.userId}/paper/monitor`, { method: 'POST' });
-    if (!d) return;
-    const u = d.updates || [];
-    if (u.length) {
-      showToast(`${u.length} position(s) updated`, 'ok');
-    } else {
-      showToast(`Checked ${d.checked} position(s) — no changes`, 'ok');
-    }
-    loadPaperTrader();
+    const d = await apiFetch(`/users/${state.userId}/paper/agent/run`, { method: 'POST' });
+    showToast(d?.message || 'Agent started', 'ok');
+    // Poll feed after short delay to pick up new log entries
+    setTimeout(() => { _ptLoadAgentLog(); _ptLoadPositions(); _ptLoadAccount(); }, 4000);
+    setTimeout(() => { _ptLoadAgentLog(); _ptLoadPositions(); _ptLoadAccount(); }, 15000);
   } catch(e) { showToast(e.message); }
-  finally { this.disabled = false; this.textContent = '↻ Check Prices'; }
+  finally { this.disabled = false; this.textContent = '▶ Run Agent Now'; }
 });
 
 document.getElementById('pt-refresh-btn').addEventListener('click', function() {
@@ -4787,7 +4698,7 @@ async function _ptLoadStats() {
   try {
     const d = await apiFetch(`/users/${state.userId}/paper/stats`);
     if (!d || !d.total_closed) {
-      el.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:20px;">No stats yet — close some trades first.</div>';
+      el.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:20px;">No stats yet — the AI agent needs to close some trades first.</div>';
       return;
     }
     let html = '';
@@ -4795,7 +4706,7 @@ async function _ptLoadStats() {
       html += '<div class="pt-stats-group"><div class="pt-stats-group-title">By Conviction Tier</div>';
       d.by_conviction.forEach(r => {
         const wrColor = r.win_rate_pct >= 50 ? 'var(--green)' : 'var(--red)';
-        html += `<div class="pt-stats-row"><span style="text-transform:uppercase;font-size:11px;">${r.label}</span><span><span class="mono" style="color:${wrColor}">${r.win_rate_pct}%</span> <span class="mono-muted">${r.wins}/${r.trades} · avg ${r.avg_r}R</span></span></div>`;
+        html += `<div class="pt-stats-row"><span style="text-transform:uppercase;font-size:11px;">${escHtml(r.label)}</span><span><span class="mono" style="color:${wrColor}">${r.win_rate_pct}%</span> <span class="mono-muted">${r.wins}/${r.trades} · avg ${r.avg_r}R</span></span></div>`;
       });
       html += '</div>';
     }
@@ -4803,7 +4714,7 @@ async function _ptLoadStats() {
       html += '<div class="pt-stats-group"><div class="pt-stats-group-title">By Pattern Type</div>';
       d.by_pattern_type.forEach(r => {
         const wrColor = r.win_rate_pct >= 50 ? 'var(--green)' : 'var(--red)';
-        html += `<div class="pt-stats-row"><span style="text-transform:uppercase;font-size:11px;">${r.label}</span><span><span class="mono" style="color:${wrColor}">${r.win_rate_pct}%</span> <span class="mono-muted">${r.wins}/${r.trades} · avg ${r.avg_r}R</span></span></div>`;
+        html += `<div class="pt-stats-row"><span style="text-transform:uppercase;font-size:11px;">${escHtml(r.label)}</span><span><span class="mono" style="color:${wrColor}">${r.win_rate_pct}%</span> <span class="mono-muted">${r.wins}/${r.trades} · avg ${r.avg_r}R</span></span></div>`;
       });
       html += '</div>';
     }
@@ -4811,17 +4722,17 @@ async function _ptLoadStats() {
       html += '<div class="pt-best-worst">';
       if (d.best_trade) {
         const b = d.best_trade;
-        html += `<div class="pt-bw-card"><div class="pt-bw-label">Best Trade</div><div class="pt-bw-ticker">${b.ticker}</div><div class="pt-bw-r pt-pnl-pos">+${b.pnl_r}R</div><div style="font-size:10px;color:var(--muted);margin-top:3px;">${(b.closed_at||'').slice(0,10)}</div></div>`;
+        html += `<div class="pt-bw-card"><div class="pt-bw-label">Best Trade</div><div class="pt-bw-ticker">${escHtml(b.ticker)}</div><div class="pt-bw-r pt-pnl-pos">+${b.pnl_r}R</div><div style="font-size:10px;color:var(--muted);margin-top:3px;">${(b.closed_at||'').slice(0,10)}</div></div>`;
       }
       if (d.worst_trade) {
         const w = d.worst_trade;
-        html += `<div class="pt-bw-card"><div class="pt-bw-label">Worst Trade</div><div class="pt-bw-ticker">${w.ticker}</div><div class="pt-bw-r pt-pnl-neg">${w.pnl_r}R</div><div style="font-size:10px;color:var(--muted);margin-top:3px;">${(w.closed_at||'').slice(0,10)}</div></div>`;
+        html += `<div class="pt-bw-card"><div class="pt-bw-label">Worst Trade</div><div class="pt-bw-ticker">${escHtml(w.ticker)}</div><div class="pt-bw-r pt-pnl-neg">${w.pnl_r}R</div><div style="font-size:10px;color:var(--muted);margin-top:3px;">${(w.closed_at||'').slice(0,10)}</div></div>`;
       }
       html += '</div>';
     }
     el.innerHTML = html || '<div style="color:var(--muted);font-size:12px;text-align:center;padding:20px;">No stats yet.</div>';
   } catch(e) {
-    el.innerHTML = `<div style="color:var(--red);font-size:12px;padding:16px;">${e.message}</div>`;
+    el.innerHTML = `<div style="color:var(--red);font-size:12px;padding:16px;">${escHtml(e.message)}</div>`;
   }
 }
 
