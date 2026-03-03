@@ -4735,10 +4735,17 @@ def _paper_ai_run(user_id: str) -> dict:
                         "UPDATE paper_positions SET status=?, exit_price=?, pnl_r=?, closed_at=? WHERE id=?",
                         (new_status, exit_p, pnl_r, now_iso, pos['id'])
                     )
+                    # Refund exit value to balance so agent can redeploy cash
+                    qty = pos['quantity'] or 1
+                    exit_value = round(exit_p * qty, 2)
+                    conn.execute(
+                        "UPDATE paper_account SET virtual_balance = virtual_balance + ? WHERE user_id=?",
+                        (exit_value, user_id)
+                    )
                     conn.execute(
                         "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
                         (user_id, new_status, ticker,
-                         f'exit={exit_p:.4f} P&L={pnl_r:+.2f}R', now_iso)
+                         f'exit={exit_p:.4f} P&L={pnl_r:+.2f}R refund=£{exit_value:,.2f}', now_iso)
                     )
                     monitor_updates.append({'id': pos['id'], 'ticker': ticker, 'event': new_status, 'pnl_r': pnl_r})
             conn.commit()
