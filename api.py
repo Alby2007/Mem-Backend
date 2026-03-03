@@ -4462,6 +4462,7 @@ def _paper_ai_run(user_id: str) -> dict:
         ).fetchone()
         balance = float(acct_row['virtual_balance']) if acct_row else 500000.0
         risk_per_trade = balance * 0.01  # risk 1% of balance per trade
+        remaining_cash = balance  # track available cash this run
 
         entries = 0
         skips   = 0
@@ -4607,8 +4608,25 @@ def _paper_ai_run(user_id: str) -> dict:
                 qty = round(risk_per_trade / risk, 4) if risk > 0 else 1.0
                 qty = max(qty, 0.0001)  # floor
                 position_value = round(entry_p * qty, 2)
-                # Insert position
+                # ── Cash constraint: skip if we can't afford it ──────────
+                if position_value > remaining_cash:
+                    skips += 1
+                    conn.row_factory = None
+                    conn.execute(
+                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                        (user_id, 'skip', ticker,
+                         f'Insufficient cash: need £{position_value:,.2f}, have £{remaining_cash:,.2f}',
+                         now_iso)
+                    )
+                    continue
+                # Deduct from balance
+                remaining_cash -= position_value
                 conn.row_factory = None
+                conn.execute(
+                    "UPDATE paper_account SET virtual_balance = virtual_balance - ? WHERE user_id=?",
+                    (position_value, user_id)
+                )
+                # Insert position
                 conn.execute(
                     """INSERT INTO paper_positions
                        (user_id, pattern_id, ticker, direction, entry_price, stop, t1, t2,
@@ -4621,7 +4639,7 @@ def _paper_ai_run(user_id: str) -> dict:
                 conn.execute(
                     "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
                     (user_id, 'entry', ticker,
-                     f'{direction} entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} qty={qty:.4f} value=£{position_value:,.2f} | {reasoning}',
+                     f'{direction} entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} qty={qty:.4f} value=£{position_value:,.2f} cash_remaining=£{remaining_cash:,.2f} | {reasoning}',
                      now_iso)
                 )
                 open_tickers.add(ticker)
@@ -4769,21 +4787,114 @@ def paper_agent_log_get(user_id):
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/users/<user_id>/paper/agent/run', methods=['POST'])
+# ── Continuous scanner state ──────────────────────────────────────────────────
+_paper_scanner_threads = {}   # user_id -> threading.Event (stop signal)
+
+def _paper_continuous_scan(user_id, stop_event, interval_sec=120):
+    """Loop: scan every interval_sec until stop_event is set."""
+    import logging as _lg
+    _lg.getLogger('paper_agent').info('Continuous scanner started for %s', user_id)
+    while not stop_event.is_set():
+        try:
+            _paper_ai_run(user_id)
+        except Exception as _e:
+            _lg.getLogger('paper_agent').error('Scanner error for %s: %s', user_id, _e)
+        stop_event.wait(interval_sec)
+    _lg.getLogger('paper_agent').info('Continuous scanner stopped for %s', user_id)
+
+
+@app.route('/users/<user_id>/paper/agent/start', methods=['POST'])
 @require_auth
-@rate_limit('paper_agent')
-def paper_agent_run(user_id):
-    """POST /users/<user_id>/paper/agent/run — trigger agent immediately."""
+def paper_agent_start(user_id):
+    """POST /users/<user_id>/paper/agent/start — start continuous scanner."""
     err = assert_self(user_id)
     if err: return err
     _, terr = _paper_tier_check(user_id)
     if terr: return terr
     import threading as _threading
-    def _bg():
-        _paper_ai_run(user_id)
-    t = _threading.Thread(target=_bg, daemon=True)
+    if user_id in _paper_scanner_threads and _paper_scanner_threads[user_id].is_set() is False:
+        return jsonify({'status': 'already_running', 'message': 'Scanner already running'})
+    stop_ev = _threading.Event()
+    _paper_scanner_threads[user_id] = stop_ev
+    t = _threading.Thread(target=_paper_continuous_scan, args=(user_id, stop_ev, 120), daemon=True)
     t.start()
-    return jsonify({'status': 'running', 'message': 'Agent started — refresh log in a few seconds'})
+    return jsonify({'status': 'started', 'message': 'Continuous scanner started — scans every 2 min'})
+
+
+@app.route('/users/<user_id>/paper/agent/stop', methods=['POST'])
+@require_auth
+def paper_agent_stop(user_id):
+    """POST /users/<user_id>/paper/agent/stop — stop continuous scanner."""
+    err = assert_self(user_id)
+    if err: return err
+    ev = _paper_scanner_threads.get(user_id)
+    if ev:
+        ev.set()
+        del _paper_scanner_threads[user_id]
+        return jsonify({'status': 'stopped', 'message': 'Scanner stopped'})
+    return jsonify({'status': 'not_running', 'message': 'Scanner was not running'})
+
+
+@app.route('/users/<user_id>/paper/agent/status', methods=['GET'])
+@require_auth
+def paper_agent_status(user_id):
+    """GET /users/<user_id>/paper/agent/status — is scanner running?"""
+    err = assert_self(user_id)
+    if err: return err
+    running = user_id in _paper_scanner_threads and not _paper_scanner_threads[user_id].is_set()
+    return jsonify({'running': running})
+
+
+@app.route('/users/<user_id>/paper/agent/log/export', methods=['GET'])
+@require_auth
+def paper_agent_log_export(user_id):
+    """GET /users/<user_id>/paper/agent/log/export — full audit log as CSV."""
+    err = assert_self(user_id)
+    if err: return err
+    _, terr = _paper_tier_check(user_id)
+    if terr: return terr
+    import sqlite3 as _sq3, csv as _csv, io as _io
+    try:
+        conn = _sq3.connect(_DB_PATH, timeout=10)
+        _ensure_paper_tables(conn)
+        conn.row_factory = _sq3.Row
+        # Agent activity log
+        log_rows = conn.execute(
+            "SELECT id, event_type, ticker, detail, created_at FROM paper_agent_log WHERE user_id=? ORDER BY created_at ASC",
+            (user_id,)
+        ).fetchall()
+        # All positions
+        pos_rows = conn.execute(
+            """SELECT id, ticker, direction, entry_price, stop, t1, t2, quantity,
+                      status, partial_closed, opened_at, closed_at, exit_price, pnl_r, ai_reasoning
+               FROM paper_positions WHERE user_id=? ORDER BY opened_at ASC""",
+            (user_id,)
+        ).fetchall()
+        conn.close()
+        buf = _io.StringIO()
+        w = _csv.writer(buf)
+        # Section 1: positions
+        w.writerow(['=== POSITIONS ==='])
+        w.writerow(['id','ticker','direction','entry_price','stop','t1','t2','quantity',
+                    'status','partial_closed','opened_at','closed_at','exit_price','pnl_r','ai_reasoning'])
+        for r in pos_rows:
+            w.writerow(list(r))
+        w.writerow([])
+        # Section 2: agent log
+        w.writerow(['=== AGENT LOG ==='])
+        w.writerow(['id','event_type','ticker','detail','created_at'])
+        for r in log_rows:
+            w.writerow(list(r))
+        from flask import Response as _Resp
+        csv_bytes = buf.getvalue().encode('utf-8')
+        fname = f'paper_trade_log_{user_id}_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}.csv'
+        return _Resp(
+            csv_bytes,
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename="{fname}"'}
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/users/<user_id>/history/screenshot', methods=['POST'])

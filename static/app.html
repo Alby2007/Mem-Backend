@@ -1721,9 +1721,10 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
       <div style="font-size:16px;font-weight:700;">Paper Trader</div>
       <span style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--accent);background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:3px;padding:2px 7px;">AI AUTONOMOUS</span>
     </div>
-    <div style="display:flex;gap:8px;">
-      <button class="btn btn-primary btn-sm" id="pt-run-btn" title="Trigger the AI agent to scan and place trades now">▶ Run Agent Now</button>
-      <button class="btn btn-ghost btn-sm" id="pt-refresh-btn">↺ Refresh</button>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <span id="pt-scanner-dot" style="width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block;"></span>
+      <button class="btn btn-primary btn-sm" id="pt-start-btn">▶ Start Agent</button>
+      <button class="btn btn-ghost btn-sm" id="pt-download-btn" title="Download full audit log as CSV">⬇ Download Log</button>
     </div>
   </div>
 
@@ -4502,19 +4503,50 @@ let _ptPollTimer = null;
 
 async function loadPaperTrader() {
   if (!state.userId) return;
-  await Promise.all([_ptLoadAccount(), _ptLoadPositions(), _ptLoadAgentLog()]);
-  // Start auto-poll (60s) when screen is active; cleared by showScreen on navigate away
+  await Promise.all([_ptLoadAccount(), _ptLoadPositions(), _ptLoadAgentLog(), _ptSyncStatus()]);
   if (_ptPollTimer) clearInterval(_ptPollTimer);
   _ptPollTimer = setInterval(() => {
     if (document.getElementById('screen-paper')?.classList.contains('active')) {
       _ptLoadAccount();
       _ptLoadPositions();
       _ptLoadAgentLog();
+      _ptSyncStatus();
     } else {
       clearInterval(_ptPollTimer);
       _ptPollTimer = null;
     }
-  }, 60000);
+  }, 15000);
+}
+
+async function _ptSyncStatus() {
+  if (!state.userId) return;
+  try {
+    const d = await apiFetch(`/users/${state.userId}/paper/agent/status`);
+    _ptSetRunning(d?.running === true);
+  } catch(e) { /* ignore */ }
+}
+
+function _ptSetRunning(running) {
+  const btn  = document.getElementById('pt-start-btn');
+  const dot  = document.getElementById('pt-scanner-dot');
+  if (!btn || !dot) return;
+  if (running) {
+    btn.textContent = '■ Stop Agent';
+    btn.className = 'btn btn-sm';
+    btn.style.background = 'var(--red)';
+    btn.style.color = '#fff';
+    btn.style.border = 'none';
+    dot.style.background = 'var(--green)';
+    dot.style.boxShadow = '0 0 6px var(--green)';
+  } else {
+    btn.textContent = '▶ Start Agent';
+    btn.className = 'btn btn-primary btn-sm';
+    btn.style.background = '';
+    btn.style.color = '';
+    btn.style.border = '';
+    dot.style.background = 'var(--muted)';
+    dot.style.boxShadow = '';
+  }
 }
 
 async function _ptLoadAccount() {
@@ -4685,22 +4717,36 @@ function _ptFmt(v) {
   return n >= 100 ? n.toFixed(2) : n.toPrecision(5).replace(/\.?0+$/, '');
 }
 
-document.getElementById('pt-run-btn').addEventListener('click', async function() {
+document.getElementById('pt-start-btn').addEventListener('click', async function() {
   if (!state.userId) return;
+  const isRunning = this.textContent.includes('Stop');
   this.disabled = true;
-  this.textContent = '…thinking';
   try {
-    const d = await apiFetch(`/users/${state.userId}/paper/agent/run`, { method: 'POST' });
-    showToast(d?.message || 'Agent started', 'ok');
-    // Poll feed after short delay to pick up new log entries
-    setTimeout(() => { _ptLoadAgentLog(); _ptLoadPositions(); _ptLoadAccount(); }, 4000);
-    setTimeout(() => { _ptLoadAgentLog(); _ptLoadPositions(); _ptLoadAccount(); }, 15000);
-  } catch(e) { showToast(e.message); }
-  finally { this.disabled = false; this.textContent = '▶ Run Agent Now'; }
+    if (isRunning) {
+      await apiFetch(`/users/${state.userId}/paper/agent/stop`, { method: 'POST' });
+      _ptSetRunning(false);
+      showToast('Scanner stopped', 'ok');
+    } else {
+      const d = await apiFetch(`/users/${state.userId}/paper/agent/start`, { method: 'POST' });
+      _ptSetRunning(true);
+      showToast(d?.message || 'Scanner started', 'ok');
+      setTimeout(() => { _ptLoadAgentLog(); _ptLoadPositions(); _ptLoadAccount(); }, 5000);
+    }
+  } catch(e) { showToast(e.message || 'Error'); }
+  finally { this.disabled = false; }
 });
 
-document.getElementById('pt-refresh-btn').addEventListener('click', function() {
-  loadPaperTrader();
+document.getElementById('pt-download-btn').addEventListener('click', function() {
+  if (!state.userId) return;
+  const token = document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith('tg_access='));
+  const url = `/users/${state.userId}/paper/agent/log/export`;
+  const a = document.createElement('a');
+  a.href = `https://api.trading-galaxy.uk${url}`;
+  a.download = '';
+  a.target = '_blank';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 });
 
 function ptSwitchLogTab(btn, tab) {
