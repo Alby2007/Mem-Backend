@@ -4462,6 +4462,7 @@ def _paper_ai_run(user_id: str) -> dict:
         ).fetchone()
         balance = float(acct_row['virtual_balance']) if acct_row else 500000.0
         risk_per_trade = balance * 0.01  # risk 1% of balance per trade
+        max_position_value = balance * 0.05  # never more than 5% of balance in one position
         remaining_cash = balance  # track available cash this run
 
         entries = 0
@@ -4627,6 +4628,10 @@ def _paper_ai_run(user_id: str) -> dict:
                 qty = round(risk_per_trade / risk, 4) if risk > 0 else 1.0
                 qty = max(qty, 0.0001)  # floor
                 position_value = round(entry_p * qty, 2)
+                # Cap: never allocate more than 5% of starting balance to one position
+                if position_value > max_position_value:
+                    qty = round(max_position_value / entry_p, 4)
+                    position_value = round(entry_p * qty, 2)
                 # ── Cash constraint: skip if we can't afford it ──────────
                 if position_value > remaining_cash:
                     skips += 1

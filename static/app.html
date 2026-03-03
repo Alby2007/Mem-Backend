@@ -4614,7 +4614,7 @@ async function _ptLoadAgentLog() {
     const d = await apiFetch(`/users/${state.userId}/paper/agent/log`);
     const rows = d?.log || [];
     if (!rows.length) {
-      feed.innerHTML = '<span style="color:var(--muted);">No agent activity yet — agent runs every 30 min or click ▶ Run Agent Now</span>';
+      feed.innerHTML = '<span style="color:var(--muted);">No agent activity yet — click ▶ Start Agent to begin</span>';
       return;
     }
     feed.innerHTML = rows.map(r => _ptFeedLine(r)).join('');
