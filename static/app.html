@@ -1730,9 +1730,9 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
   <!-- Stat cards -->
   <div class="dsh-stat-row" id="pt-stat-row">
     <div class="dsh-stat a-muted">
-      <div class="dsh-stat-label">Virtual Balance</div>
+      <div class="dsh-stat-label">Account Value</div>
       <div class="dsh-stat-value amber" id="pt-balance" style="font-size:20px;">—</div>
-      <div class="dsh-stat-sub" id="pt-currency">GBP</div>
+      <div class="dsh-stat-sub" id="pt-balance-sub">GBP</div>
     </div>
     <div class="dsh-stat a-green">
       <div class="dsh-stat-label">Open Positions</div>
@@ -1784,7 +1784,7 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
           </tr>
         </thead>
         <tbody id="pt-open-tbody">
-          <tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No open positions — agent runs every 30 min</td></tr>
+          <tr><td colspan="11" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No open positions — agent runs every 30 min</td></tr>
         </tbody>
       </table>
     </div>
@@ -4518,8 +4518,15 @@ async function _ptLoadAccount() {
   try {
     const d = await apiFetch(`/users/${state.userId}/paper/account`);
     if (!d) return;
-    document.getElementById('pt-balance').textContent = (d.virtual_balance ?? 10000).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
-    document.getElementById('pt-currency').textContent = d.currency || 'GBP';
+    const acctVal = d.account_value ?? d.virtual_balance ?? 10000;
+    document.getElementById('pt-balance').textContent = acctVal.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+    const unreal = d.unrealised_pnl ?? 0;
+    const subEl = document.getElementById('pt-balance-sub');
+    if (subEl) {
+      const sign = unreal >= 0 ? '+' : '';
+      subEl.textContent = `${d.currency || 'GBP'} · unrealised ${sign}${unreal.toFixed(2)}`;
+      subEl.style.color = unreal > 0 ? 'var(--green)' : unreal < 0 ? 'var(--red)' : '';
+    }
     document.getElementById('pt-open-count').textContent = d.open_positions ?? 0;
     const wr = d.win_rate_pct;
     const wrEl = document.getElementById('pt-win-rate');
@@ -4608,7 +4615,7 @@ function _ptRenderOpen(rows) {
   const tbody = document.getElementById('pt-open-tbody');
   if (!tbody) return;
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No open positions — agent runs every 30 min</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No open positions — agent runs every 30 min</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(p => {
@@ -4618,6 +4625,10 @@ function _ptRenderOpen(rows) {
     const dateStr    = p.opened_at ? p.opened_at.slice(0,10) : '—';
     const partialDot = p.partial_closed ? '<span title="T1 hit" style="color:var(--accent);margin-left:4px;">●T1</span>' : '';
     const reasoning  = p.ai_reasoning ? `<span class="text-xs text-muted" title="${escHtml(p.ai_reasoning)}">${escHtml(p.ai_reasoning.slice(0,40))}${p.ai_reasoning.length>40?'…':''}</span>` : '<span class="text-xs text-muted">—</span>';
+    const nowPrice   = p.current_price != null ? _ptFmt(p.current_price) : '<span style="color:var(--muted);">…</span>';
+    const unr        = p.unrealised_pnl_r;
+    const unrStr     = unr != null ? (unr >= 0 ? '+' : '') + unr + 'R' : '—';
+    const unrCls     = unr != null ? (unr >= 0 ? 'pt-pnl-pos' : 'pt-pnl-neg') : '';
     return `<tr>
       <td><span class="mono" style="font-weight:700;">${escHtml(p.ticker)}</span></td>
       <td><span class="${dirCls}">${p.direction === 'bullish' ? '▲' : '▼'}</span></td>
@@ -4625,6 +4636,8 @@ function _ptRenderOpen(rows) {
       <td class="mono mono-red">${_ptFmt(p.stop)}</td>
       <td class="mono mono-amber">${_ptFmt(p.t1)}</td>
       <td class="mono mono-green">${t2}</td>
+      <td class="mono">${nowPrice}</td>
+      <td class="${unrCls}" style="font-weight:600;">${unrStr}</td>
       <td><span class="${statusCls}">${(p.status||'open').toUpperCase()}${partialDot}</span></td>
       <td class="mono-muted" style="font-size:10px;">${dateStr}</td>
       <td>${reasoning}</td>

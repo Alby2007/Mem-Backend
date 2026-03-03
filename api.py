@@ -4060,14 +4060,53 @@ def paper_account_get(user_id):
             "SELECT pnl_r, status FROM paper_positions WHERE user_id=? AND status IN ('t1_hit','t2_hit','stopped_out','closed') AND pnl_r IS NOT NULL",
             (user_id,)
         ).fetchall()
-        conn.close()
         wins = sum(1 for r in closed_rows if r[0] > 0)
         total_closed = len(closed_rows)
         win_rate = round(wins / total_closed * 100, 1) if total_closed else None
         avg_r = round(sum(r[0] for r in closed_rows) / total_closed, 2) if total_closed else None
+        # Compute unrealised P&L on open positions for account equity
+        open_pos = conn.execute(
+            "SELECT ticker, direction, entry_price, stop, quantity FROM paper_positions WHERE user_id=? AND status='open'",
+            (user_id,)
+        ).fetchall()
+        conn.close()
+        open_tickers2 = list({r[0] for r in open_pos})
+        live2 = {}
+        if open_tickers2:
+            try:
+                import yfinance as _yf2
+                batch2 = _yf2.download(
+                    open_tickers2, period='1d', interval='1m',
+                    progress=False, auto_adjust=True, threads=False
+                )
+                for tk in open_tickers2:
+                    try:
+                        if len(open_tickers2) == 1:
+                            live2[tk] = float(batch2['Close'].dropna().iloc[-1])
+                        else:
+                            live2[tk] = float(batch2['Close'][tk].dropna().iloc[-1])
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        unrealised_cash = 0.0
+        for r in open_pos:
+            tk, direction, entry, stop_, qty = r
+            cp = live2.get(tk)
+            if cp is not None and entry and stop_:
+                risk = abs(entry - stop_)
+                if risk > 0:
+                    if direction == 'bullish':
+                        pnl_r = (cp - entry) / risk
+                    else:
+                        pnl_r = (entry - cp) / risk
+                    unrealised_cash += pnl_r * risk * qty
+        account_value = round(row[0] + unrealised_cash, 2)
         return jsonify({
             'user_id': user_id,
             'virtual_balance': row[0],
+            'account_value': account_value,
+            'unrealised_pnl': round(unrealised_cash, 2),
             'currency': row[1],
             'created_at': row[2],
             'total_trades': total,
@@ -4109,8 +4148,45 @@ def paper_positions_list(user_id):
                 "SELECT * FROM paper_positions WHERE user_id=? ORDER BY opened_at DESC",
                 (user_id,)
             ).fetchall()
+        positions = [dict(r) for r in rows]
         conn.close()
-        return jsonify({'positions': [dict(r) for r in rows], 'count': len(rows)})
+        # Enrich open positions with live price + unrealised P&L
+        open_tickers = list({p['ticker'] for p in positions if p['status'] == 'open'})
+        live_prices = {}
+        if open_tickers:
+            try:
+                import yfinance as _yf
+                data_batch = _yf.download(
+                    open_tickers, period='1d', interval='1m',
+                    progress=False, auto_adjust=True, threads=False
+                )
+                for tk in open_tickers:
+                    try:
+                        if len(open_tickers) == 1:
+                            price = float(data_batch['Close'].dropna().iloc[-1])
+                        else:
+                            price = float(data_batch['Close'][tk].dropna().iloc[-1])
+                        live_prices[tk] = round(price, 4)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        for p in positions:
+            if p['status'] == 'open' and p['ticker'] in live_prices:
+                cp = live_prices[p['ticker']]
+                p['current_price'] = cp
+                risk = abs(p['entry_price'] - p['stop'])
+                if risk > 0:
+                    if p['direction'] == 'bullish':
+                        p['unrealised_pnl_r'] = round((cp - p['entry_price']) / risk, 2)
+                    else:
+                        p['unrealised_pnl_r'] = round((p['entry_price'] - cp) / risk, 2)
+                else:
+                    p['unrealised_pnl_r'] = None
+            else:
+                p['current_price'] = None
+                p['unrealised_pnl_r'] = None
+        return jsonify({'positions': positions, 'count': len(positions)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
