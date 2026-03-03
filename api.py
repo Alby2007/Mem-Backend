@@ -3965,7 +3965,7 @@ def _ensure_paper_tables(conn):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_account (
             user_id TEXT PRIMARY KEY,
-            virtual_balance REAL NOT NULL DEFAULT 10000.0,
+            virtual_balance REAL NOT NULL DEFAULT 500000.0,
             currency TEXT NOT NULL DEFAULT 'GBP',
             created_at TEXT NOT NULL
         )
@@ -4042,7 +4042,7 @@ def paper_account_get(user_id):
         _ensure_paper_tables(conn)
         now_iso = datetime.now(timezone.utc).isoformat()
         conn.execute(
-            "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,10000.0,'GBP',?)",
+            "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,500000.0,'GBP',?)",
             (user_id, now_iso)
         )
         conn.commit()
@@ -4222,7 +4222,7 @@ def paper_position_open(user_id):
         conn = _sq3.connect(_DB_PATH, timeout=10)
         _ensure_paper_tables(conn)
         conn.execute(
-            "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,10000.0,'GBP',?)",
+            "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,500000.0,'GBP',?)",
             (user_id, now_iso)
         )
         cur = conn.execute(
@@ -4445,7 +4445,7 @@ def _paper_ai_run(user_id: str) -> dict:
 
         # Ensure account row exists
         conn.execute(
-            "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,10000.0,'GBP',?)",
+            "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,500000.0,'GBP',?)",
             (user_id, now_iso)
         )
 
