@@ -4503,6 +4503,7 @@ let _ptPollTimer = null;
 
 async function loadPaperTrader() {
   if (!state.userId) return;
+  await new Promise(r => setTimeout(r, 50)); // let showScreen finish activating the DOM
   await Promise.all([_ptLoadAccount(), _ptLoadPositions(), _ptLoadAgentLog(), _ptSyncStatus()]);
   if (_ptPollTimer) clearInterval(_ptPollTimer);
   _ptPollTimer = setInterval(() => {
