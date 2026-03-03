@@ -286,10 +286,7 @@ try:
 except ImportError:
     HAS_VALIDATORS = False
 
-try:
-    from middleware.rate_limiter import limiter, rate_limit
-    HAS_LIMITER = True
-except ImportError:
+if os.environ.get('EVAL_MODE') == '1':
     HAS_LIMITER = False
     def rate_limit(cls):      # type: ignore
         def decorator(f):
@@ -298,7 +295,24 @@ except ImportError:
     class _NoOpLimiter:
         def exempt(self, f): return f
         def init_app(self, app): pass
+        def limit(self, *a, **kw):
+            def decorator(f): return f
+            return decorator
     limiter = _NoOpLimiter()  # type: ignore
+else:
+    try:
+        from middleware.rate_limiter import limiter, rate_limit
+        HAS_LIMITER = True
+    except ImportError:
+        HAS_LIMITER = False
+        def rate_limit(cls):      # type: ignore
+            def decorator(f):
+                return f
+            return decorator
+        class _NoOpLimiter:
+            def exempt(self, f): return f
+            def init_app(self, app): pass
+        limiter = _NoOpLimiter()  # type: ignore
 
 try:
     from middleware.audit import log_audit_event, get_audit_log, ensure_audit_table
@@ -3924,6 +3938,375 @@ def user_portfolio_generate_sim(user_id):
             'count':          len(holdings),
             'model':          model,
         }), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Paper Trading endpoints ───────────────────────────────────────────────────
+
+def _ensure_paper_tables(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_account (
+            user_id TEXT PRIMARY KEY,
+            virtual_balance REAL NOT NULL DEFAULT 10000.0,
+            currency TEXT NOT NULL DEFAULT 'GBP',
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            pattern_id INTEGER,
+            ticker TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            entry_price REAL NOT NULL,
+            stop REAL NOT NULL,
+            t1 REAL NOT NULL,
+            t2 REAL,
+            quantity REAL NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'open',
+            partial_closed INTEGER NOT NULL DEFAULT 0,
+            opened_at TEXT NOT NULL,
+            closed_at TEXT,
+            exit_price REAL,
+            pnl_r REAL,
+            note TEXT
+        )
+    """)
+    conn.commit()
+
+
+def _paper_tier_check(user_id):
+    """Return (tier, error_response) — error_response is None if tier is pro/premium."""
+    import sqlite3 as _sq3
+    try:
+        conn = _sq3.connect(_DB_PATH, timeout=10)
+        row = conn.execute(
+            "SELECT tier FROM user_preferences WHERE user_id=?", (user_id,)
+        ).fetchone()
+        conn.close()
+        tier = (row[0] if row else 'basic') or 'basic'
+    except Exception:
+        tier = 'basic'
+    if tier not in ('pro', 'premium'):
+        from flask import jsonify as _jfy
+        return tier, (_jfy({'error': 'paper_trading_requires_pro', 'tier': tier}), 403)
+    return tier, None
+
+
+@app.route('/users/<user_id>/paper/account', methods=['GET'])
+@require_auth
+def paper_account_get(user_id):
+    """GET /users/<user_id>/paper/account — virtual balance + summary stats."""
+    err = assert_self(user_id)
+    if err: return err
+    _, terr = _paper_tier_check(user_id)
+    if terr: return terr
+    import sqlite3 as _sq3
+    try:
+        conn = _sq3.connect(_DB_PATH, timeout=10)
+        _ensure_paper_tables(conn)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,10000.0,'GBP',?)",
+            (user_id, now_iso)
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT virtual_balance, currency, created_at FROM paper_account WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        total = conn.execute(
+            "SELECT COUNT(*) FROM paper_positions WHERE user_id=?", (user_id,)
+        ).fetchone()[0]
+        open_c = conn.execute(
+            "SELECT COUNT(*) FROM paper_positions WHERE user_id=? AND status='open'", (user_id,)
+        ).fetchone()[0]
+        closed_rows = conn.execute(
+            "SELECT pnl_r, status FROM paper_positions WHERE user_id=? AND status IN ('t1_hit','t2_hit','stopped_out','closed') AND pnl_r IS NOT NULL",
+            (user_id,)
+        ).fetchall()
+        conn.close()
+        wins = sum(1 for r in closed_rows if r[0] > 0)
+        total_closed = len(closed_rows)
+        win_rate = round(wins / total_closed * 100, 1) if total_closed else None
+        avg_r = round(sum(r[0] for r in closed_rows) / total_closed, 2) if total_closed else None
+        return jsonify({
+            'user_id': user_id,
+            'virtual_balance': row[0],
+            'currency': row[1],
+            'created_at': row[2],
+            'total_trades': total,
+            'open_positions': open_c,
+            'closed_trades': total_closed,
+            'win_rate_pct': win_rate,
+            'avg_r': avg_r,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/paper/positions', methods=['GET'])
+@require_auth
+def paper_positions_list(user_id):
+    """GET /users/<user_id>/paper/positions?status=open|closed|all"""
+    err = assert_self(user_id)
+    if err: return err
+    _, terr = _paper_tier_check(user_id)
+    if terr: return terr
+    import sqlite3 as _sq3
+    status_filter = request.args.get('status', 'all')
+    try:
+        conn = _sq3.connect(_DB_PATH, timeout=10)
+        _ensure_paper_tables(conn)
+        conn.row_factory = _sq3.Row
+        if status_filter == 'open':
+            rows = conn.execute(
+                "SELECT * FROM paper_positions WHERE user_id=? AND status='open' ORDER BY opened_at DESC",
+                (user_id,)
+            ).fetchall()
+        elif status_filter == 'closed':
+            rows = conn.execute(
+                "SELECT * FROM paper_positions WHERE user_id=? AND status NOT IN ('open') ORDER BY closed_at DESC",
+                (user_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM paper_positions WHERE user_id=? ORDER BY opened_at DESC",
+                (user_id,)
+            ).fetchall()
+        conn.close()
+        return jsonify({'positions': [dict(r) for r in rows], 'count': len(rows)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/paper/positions', methods=['POST'])
+@require_auth
+def paper_position_open(user_id):
+    """POST /users/<user_id>/paper/positions — open a new paper position."""
+    err = assert_self(user_id)
+    if err: return err
+    _, terr = _paper_tier_check(user_id)
+    if terr: return terr
+    import sqlite3 as _sq3
+    data = request.get_json(force=True, silent=True) or {}
+    ticker    = (data.get('ticker') or '').strip().upper()
+    direction = (data.get('direction') or '').strip().lower()
+    try:
+        entry = float(data['entry_price'])
+        stop  = float(data['stop'])
+        t1    = float(data['t1'])
+        t2    = float(data['t2']) if data.get('t2') is not None else None
+        qty   = float(data.get('quantity', 1))
+    except (KeyError, ValueError, TypeError) as exc:
+        return jsonify({'error': f'missing or invalid field: {exc}'}), 400
+    if not ticker:
+        return jsonify({'error': 'ticker is required'}), 400
+    if direction not in ('bullish', 'bearish'):
+        return jsonify({'error': 'direction must be bullish or bearish'}), 400
+    pattern_id = data.get('pattern_id')
+    note       = data.get('note', '')
+    now_iso    = datetime.now(timezone.utc).isoformat()
+    try:
+        conn = _sq3.connect(_DB_PATH, timeout=10)
+        _ensure_paper_tables(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,10000.0,'GBP',?)",
+            (user_id, now_iso)
+        )
+        cur = conn.execute(
+            """INSERT INTO paper_positions
+               (user_id, pattern_id, ticker, direction, entry_price, stop, t1, t2,
+                quantity, status, partial_closed, opened_at, note)
+               VALUES (?,?,?,?,?,?,?,?,?,'open',0,?,?)""",
+            (user_id, pattern_id, ticker, direction, entry, stop, t1, t2, qty, now_iso, note)
+        )
+        pos_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return jsonify({'id': pos_id, 'ticker': ticker, 'direction': direction,
+                        'entry_price': entry, 'stop': stop, 't1': t1, 't2': t2,
+                        'quantity': qty, 'status': 'open', 'opened_at': now_iso}), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/paper/positions/<int:pos_id>/close', methods=['POST'])
+@require_auth
+def paper_position_close(user_id, pos_id):
+    """POST /users/<user_id>/paper/positions/<id>/close — manually close a position."""
+    err = assert_self(user_id)
+    if err: return err
+    _, terr = _paper_tier_check(user_id)
+    if terr: return terr
+    import sqlite3 as _sq3
+    data       = request.get_json(force=True, silent=True) or {}
+    exit_price = data.get('exit_price')
+    now_iso    = datetime.now(timezone.utc).isoformat()
+    try:
+        conn = _sq3.connect(_DB_PATH, timeout=10)
+        _ensure_paper_tables(conn)
+        conn.row_factory = _sq3.Row
+        pos = conn.execute(
+            "SELECT * FROM paper_positions WHERE id=? AND user_id=?", (pos_id, user_id)
+        ).fetchone()
+        if not pos:
+            conn.close()
+            return jsonify({'error': 'position not found'}), 404
+        if pos['status'] != 'open':
+            conn.close()
+            return jsonify({'error': 'position already closed'}), 400
+        ep = float(exit_price) if exit_price is not None else pos['entry_price']
+        risk = abs(pos['entry_price'] - pos['stop'])
+        if risk > 0:
+            if pos['direction'] == 'bullish':
+                pnl_r = round((ep - pos['entry_price']) / risk, 2)
+            else:
+                pnl_r = round((pos['entry_price'] - ep) / risk, 2)
+        else:
+            pnl_r = 0.0
+        conn.execute(
+            "UPDATE paper_positions SET status='closed', exit_price=?, pnl_r=?, closed_at=? WHERE id=?",
+            (ep, pnl_r, now_iso, pos_id)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({'id': pos_id, 'status': 'closed', 'exit_price': ep, 'pnl_r': pnl_r, 'closed_at': now_iso})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/paper/monitor', methods=['POST'])
+@require_auth
+def paper_monitor(user_id):
+    """POST /users/<user_id>/paper/monitor — check open positions vs live prices."""
+    err = assert_self(user_id)
+    if err: return err
+    _, terr = _paper_tier_check(user_id)
+    if terr: return terr
+    import sqlite3 as _sq3
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        conn = _sq3.connect(_DB_PATH, timeout=15)
+        _ensure_paper_tables(conn)
+        conn.row_factory = _sq3.Row
+        open_pos = conn.execute(
+            "SELECT * FROM paper_positions WHERE user_id=? AND status='open'", (user_id,)
+        ).fetchall()
+        updates = []
+        for pos in open_pos:
+            ticker  = pos['ticker']
+            yf_sym  = _YF_MAP.get(ticker.lower(), ticker)
+            try:
+                info  = _yf.Ticker(yf_sym).fast_info
+                price = float(info.get('last_price') or info.get('regularMarketPrice') or 0)
+            except Exception:
+                try:
+                    hist  = _yf.Ticker(yf_sym).history(period='1d', interval='1m')
+                    price = float(hist['Close'].iloc[-1]) if not hist.empty else 0
+                except Exception:
+                    price = 0
+            if price <= 0:
+                continue
+            entry = pos['entry_price']
+            stop  = pos['stop']
+            t1    = pos['t1']
+            t2    = pos['t2']
+            risk  = abs(entry - stop) if abs(entry - stop) > 0 else 1
+            direction = pos['direction']
+            new_status = None
+            exit_p = None
+            if direction == 'bullish':
+                if price <= stop:
+                    new_status = 'stopped_out'
+                    exit_p = price
+                elif t2 is not None and price >= t2:
+                    new_status = 't2_hit'
+                    exit_p = price
+                elif not pos['partial_closed'] and price >= t1:
+                    conn.execute(
+                        "UPDATE paper_positions SET partial_closed=1 WHERE id=?", (pos['id'],)
+                    )
+                    updates.append({'id': pos['id'], 'ticker': ticker, 'event': 't1_hit', 'price': price})
+            else:
+                if price >= stop:
+                    new_status = 'stopped_out'
+                    exit_p = price
+                elif t2 is not None and price <= t2:
+                    new_status = 't2_hit'
+                    exit_p = price
+                elif not pos['partial_closed'] and price <= t1:
+                    conn.execute(
+                        "UPDATE paper_positions SET partial_closed=1 WHERE id=?", (pos['id'],)
+                    )
+                    updates.append({'id': pos['id'], 'ticker': ticker, 'event': 't1_hit', 'price': price})
+            if new_status and exit_p is not None:
+                if direction == 'bullish':
+                    pnl_r = round((exit_p - entry) / risk, 2)
+                else:
+                    pnl_r = round((entry - exit_p) / risk, 2)
+                conn.execute(
+                    "UPDATE paper_positions SET status=?, exit_price=?, pnl_r=?, closed_at=? WHERE id=?",
+                    (new_status, exit_p, pnl_r, now_iso, pos['id'])
+                )
+                updates.append({'id': pos['id'], 'ticker': ticker, 'event': new_status, 'price': price, 'pnl_r': pnl_r})
+        conn.commit()
+        conn.close()
+        return jsonify({'checked': len(open_pos), 'updates': updates})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/users/<user_id>/paper/stats', methods=['GET'])
+@require_auth
+def paper_stats(user_id):
+    """GET /users/<user_id>/paper/stats — performance breakdown."""
+    err = assert_self(user_id)
+    if err: return err
+    _, terr = _paper_tier_check(user_id)
+    if terr: return terr
+    import sqlite3 as _sq3
+    try:
+        conn = _sq3.connect(_DB_PATH, timeout=10)
+        _ensure_paper_tables(conn)
+        conn.row_factory = _sq3.Row
+        closed = conn.execute(
+            """SELECT p.*, ps.kb_conviction, ps.pattern_type
+               FROM paper_positions p
+               LEFT JOIN pattern_signals ps ON p.pattern_id = ps.id
+               WHERE p.user_id=? AND p.status NOT IN ('open') AND p.pnl_r IS NOT NULL
+               ORDER BY p.closed_at DESC""",
+            (user_id,)
+        ).fetchall()
+        conn.close()
+        rows = [dict(r) for r in closed]
+        def _group_stats(items, key):
+            groups = {}
+            for r in items:
+                k = r.get(key) or 'unknown'
+                groups.setdefault(k, []).append(r['pnl_r'])
+            result = []
+            for k, pnls in groups.items():
+                wins = sum(1 for p in pnls if p > 0)
+                result.append({
+                    'label': k,
+                    'trades': len(pnls),
+                    'wins': wins,
+                    'win_rate_pct': round(wins / len(pnls) * 100, 1),
+                    'avg_r': round(sum(pnls) / len(pnls), 2),
+                })
+            return sorted(result, key=lambda x: -x['trades'])
+        best  = max(rows, key=lambda r: r['pnl_r'], default=None)
+        worst = min(rows, key=lambda r: r['pnl_r'], default=None)
+        return jsonify({
+            'total_closed': len(rows),
+            'by_conviction': _group_stats(rows, 'kb_conviction'),
+            'by_pattern_type': _group_stats(rows, 'pattern_type'),
+            'best_trade': best,
+            'worst_trade': worst,
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

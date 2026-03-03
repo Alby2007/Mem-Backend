@@ -1001,6 +1001,29 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
   .sub-tiers { grid-template-columns: 1fr; }
   .sub-faq-grid { grid-template-columns: 1fr; }
 }
+
+/* ── Paper Trader screen ── */
+.pt-main-grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; margin-bottom: 0; align-items: start; }
+.pt-log-tab.active { color: var(--accent); }
+.pt-status-open       { color: var(--green); font-weight: 700; font-family: var(--mono); font-size: 10px; }
+.pt-status-t1_hit     { color: var(--accent); font-weight: 700; font-family: var(--mono); font-size: 10px; }
+.pt-status-t2_hit     { color: var(--green); font-weight: 700; font-family: var(--mono); font-size: 10px; }
+.pt-status-stopped_out{ color: var(--red); font-weight: 700; font-family: var(--mono); font-size: 10px; }
+.pt-status-closed     { color: var(--muted); font-weight: 700; font-family: var(--mono); font-size: 10px; }
+.pt-pnl-pos { color: var(--green); font-family: var(--mono); font-weight: 700; }
+.pt-pnl-neg { color: var(--red); font-family: var(--mono); font-weight: 700; }
+.pt-close-btn { background: none; border: 1px solid rgba(239,68,68,.3); color: var(--red); font-size: 10px; padding: 2px 7px; border-radius: 3px; cursor: pointer; transition: background .15s; white-space: nowrap; }
+.pt-close-btn:hover { background: rgba(239,68,68,.1); }
+.pt-stats-group { margin-bottom: 20px; }
+.pt-stats-group-title { font-size: 10px; font-weight: 700; letter-spacing: 2px; color: var(--accent); text-transform: uppercase; margin-bottom: 8px; }
+.pt-stats-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.pt-stats-row:last-child { border-bottom: none; }
+.pt-best-worst { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+.pt-bw-card { background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 12px; }
+.pt-bw-label { font-size: 9px; font-weight: 700; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin-bottom: 6px; }
+.pt-bw-ticker { font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--text); }
+.pt-bw-r { font-family: var(--mono); font-size: 12px; margin-top: 2px; }
+@media (max-width: 900px) { .pt-main-grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -1053,6 +1076,9 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
   </div>
   <div class="nav-item" data-screen="history" id="nav-history">
     <span class="nav-icon">◷</span><span class="nav-label">History</span>
+  </div>
+  <div class="nav-item" data-screen="paper" id="nav-paper">
+    <span class="nav-icon">◫</span><span class="nav-label">Paper Trader</span>
   </div>
   <div class="nav-spacer"></div>
   <div class="nav-item" data-screen="subscription" id="nav-subscription">
@@ -1686,6 +1712,172 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
   </div>
 </div>
 
+<!-- PAPER TRADER ──────────────────────────────────────────── -->
+<div class="screen" id="screen-paper">
+
+  <!-- Header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="font-size:16px;font-weight:700;">Paper Trader</div>
+      <span style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--accent);background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:3px;padding:2px 7px;">VIRTUAL</span>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline btn-sm" id="pt-monitor-btn" title="Check live prices against all open positions">↻ Check Prices</button>
+      <button class="btn btn-ghost btn-sm" id="pt-refresh-btn">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Stat cards -->
+  <div class="dsh-stat-row" id="pt-stat-row">
+    <div class="dsh-stat a-muted">
+      <div class="dsh-stat-label">Virtual Balance</div>
+      <div class="dsh-stat-value amber" id="pt-balance" style="font-size:20px;">—</div>
+      <div class="dsh-stat-sub" id="pt-currency">GBP</div>
+    </div>
+    <div class="dsh-stat a-green">
+      <div class="dsh-stat-label">Open Positions</div>
+      <div class="dsh-stat-value green" id="pt-open-count">—</div>
+      <div class="dsh-stat-sub">live trades</div>
+    </div>
+    <div class="dsh-stat a-amber">
+      <div class="dsh-stat-label">Win Rate</div>
+      <div class="dsh-stat-value" id="pt-win-rate">—</div>
+      <div class="dsh-stat-sub" id="pt-closed-count">closed trades</div>
+    </div>
+    <div class="dsh-stat a-blue">
+      <div class="dsh-stat-label">Avg R</div>
+      <div class="dsh-stat-value blue" id="pt-avg-r" style="font-size:20px;">—</div>
+      <div class="dsh-stat-sub">R-multiple</div>
+    </div>
+  </div>
+
+  <!-- Main two-col: open positions + new position panel -->
+  <div class="pt-main-grid">
+
+    <!-- Open Positions -->
+    <div class="ptf-card">
+      <div class="ptf-card-header">
+        <div class="ptf-card-title">Open Positions</div>
+        <span id="pt-open-label" style="font-size:10px;color:var(--muted);"></span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="tbl" id="pt-open-table">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th>Dir</th>
+              <th>Entry</th>
+              <th>Stop</th>
+              <th>T1</th>
+              <th>T2</th>
+              <th>Status</th>
+              <th>Opened</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="pt-open-tbody">
+            <tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No open positions</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- New Position form -->
+    <div class="ptf-card">
+      <div class="ptf-card-header">
+        <div class="ptf-card-title">New Paper Position</div>
+      </div>
+      <div style="padding:16px;">
+        <div style="margin-bottom:14px;">
+          <div style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px;">Quick open from pattern</div>
+          <select id="pt-pattern-select" style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;padding:7px 10px;outline:none;">
+            <option value="">Select a live pattern…</option>
+          </select>
+          <button class="btn btn-outline btn-sm" id="pt-from-pattern-btn" style="width:100%;margin-top:6px;">Load Pattern Fields</button>
+        </div>
+        <div style="border-top:1px solid var(--border);margin-bottom:14px;"></div>
+        <div class="form-row">
+          <label>Ticker</label>
+          <input id="pt-new-ticker" placeholder="e.g. BARC.L" style="text-transform:uppercase;" autocomplete="off" />
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="form-row">
+            <label>Direction</label>
+            <select id="pt-new-direction">
+              <option value="bullish">Bullish ▲</option>
+              <option value="bearish">Bearish ▼</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Qty (units)</label>
+            <input id="pt-new-qty" type="number" min="0.01" step="0.01" value="1" placeholder="1" />
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="form-row">
+            <label>Entry Price</label>
+            <input id="pt-new-entry" type="number" step="0.0001" placeholder="0.00" />
+          </div>
+          <div class="form-row">
+            <label>Stop</label>
+            <input id="pt-new-stop" type="number" step="0.0001" placeholder="0.00" />
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="form-row">
+            <label>T1 Target</label>
+            <input id="pt-new-t1" type="number" step="0.0001" placeholder="0.00" />
+          </div>
+          <div class="form-row">
+            <label>T2 Target (opt)</label>
+            <input id="pt-new-t2" type="number" step="0.0001" placeholder="0.00" />
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Note (opt)</label>
+          <input id="pt-new-note" placeholder="e.g. FVG retest on FTSE open" />
+        </div>
+        <button class="btn btn-primary" id="pt-open-btn" style="width:100%;margin-top:4px;">Open Paper Position</button>
+        <div id="pt-open-msg" style="font-size:11px;margin-top:8px;min-height:14px;"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Trade Log -->
+  <div class="ptf-card" style="margin-top:16px;">
+    <div class="ptf-card-header">
+      <div class="ptf-card-title">Trade Log</div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-ghost btn-sm pt-log-tab active" data-tab="closed" onclick="ptSwitchLogTab(this,'closed')">Closed</button>
+        <button class="btn btn-ghost btn-sm pt-log-tab" data-tab="stats" onclick="ptSwitchLogTab(this,'stats')">Stats</button>
+      </div>
+    </div>
+    <div id="pt-log-closed" class="pt-log-panel" style="overflow-x:auto;">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Dir</th>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>Result</th>
+            <th>P&amp;L (R)</th>
+            <th>Closed</th>
+          </tr>
+        </thead>
+        <tbody id="pt-closed-tbody">
+          <tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No closed trades yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="pt-log-stats" class="pt-log-panel" style="display:none;padding:16px;">
+      <div id="pt-stats-body"><div style="color:var(--muted);font-size:12px;text-align:center;padding:20px;">No stats yet — close some trades first.</div></div>
+    </div>
+  </div>
+
+</div>
+
 <!-- PROFILE ───────────────────────────────────────────────────── -->
 <div class="screen" id="screen-profile">
   <h1 class="prf-page-title">Profile</h1>
@@ -2176,6 +2368,7 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
     <div class="mnav-item" data-screen="patterns" id="mnav-patterns"><span class="mnav-icon">⟁</span>Patterns</div>
     <div class="mnav-item" data-screen="network" id="mnav-network"><span class="mnav-icon">⬡</span>Network</div>
     <div class="mnav-item" data-screen="history" id="mnav-history"><span class="mnav-icon">◷</span>History</div>
+    <div class="mnav-item" data-screen="paper" id="mnav-paper"><span class="mnav-icon">◫</span>Paper Trader</div>
     <div class="mnav-item" data-screen="subscription" id="mnav-subscription"><span class="mnav-icon">◉</span>Subscription</div>
     <div class="mnav-item" data-screen="profile" id="mnav-profile"><span class="mnav-icon">⊕</span>Profile</div>
   </div>
@@ -2373,8 +2566,8 @@ function _injectAuthTgWidget() {
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
-const _SCREENS = ['dashboard','portfolio','markets','chat','tips','patterns','network','history','subscription','profile'];
-const _NEXT_RE = /^\/[a-z0-9_-]+\/(dashboard|portfolio|markets|chat|tips|patterns|network|history|subscription|profile)$/;
+const _SCREENS = ['dashboard','portfolio','markets','chat','tips','patterns','network','history','paper','subscription','profile'];
+const _NEXT_RE = /^\/[a-z0-9_-]+\/(dashboard|portfolio|markets|chat|tips|patterns|network|history|paper|subscription|profile)$/;
 
 function _screenFromPath(path) {
   // /:username/screen  → screen name
@@ -2409,6 +2602,7 @@ function showScreen(name) {
   if (name === 'tips')      { loadTipsHistory(); loadTipsAccountValue(); loadTipConfig(); }
   if (name === 'portfolio') { loadPortfolioModel(); loadPortfolioHoldings(); loadTickerList(); loadSimBannerIfSet(); }
   if (name === 'markets')   initMarketsScreen();
+  if (name === 'paper')     loadPaperTrader();
   if (name === 'auth')         _injectAuthTgWidget();
   if (name === 'profile')      loadProfile();
   if (name === 'subscription') loadSubscription();
@@ -4352,6 +4546,284 @@ document.getElementById('chat-input').addEventListener('input', function() {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 120) + 'px';
 });
+
+// ── PAPER TRADER ─────────────────────────────────────────────────────────────
+
+let _ptPatterns = [];
+
+async function loadPaperTrader() {
+  if (!state.userId) return;
+  await Promise.all([_ptLoadAccount(), _ptLoadPositions(), _ptLoadPatterns()]);
+}
+
+async function _ptLoadAccount() {
+  try {
+    const d = await apiFetch(`/users/${state.userId}/paper/account`);
+    if (!d) return;
+    document.getElementById('pt-balance').textContent = (d.virtual_balance ?? 10000).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+    document.getElementById('pt-currency').textContent = d.currency || 'GBP';
+    document.getElementById('pt-open-count').textContent = d.open_positions ?? 0;
+    const wr = d.win_rate_pct;
+    const wrEl = document.getElementById('pt-win-rate');
+    wrEl.textContent = wr !== null && wr !== undefined ? wr + '%' : '—';
+    wrEl.style.color = wr !== null ? (wr >= 50 ? 'var(--green)' : 'var(--red)') : '';
+    const ar = d.avg_r;
+    const arEl = document.getElementById('pt-avg-r');
+    arEl.textContent = ar !== null && ar !== undefined ? ar + 'R' : '—';
+    arEl.style.color = ar !== null ? (ar >= 0 ? 'var(--green)' : 'var(--red)') : '';
+    document.getElementById('pt-closed-count').textContent = (d.closed_trades ?? 0) + ' closed trades';
+  } catch(e) {
+    if (e.message && e.message.includes('paper_trading_requires_pro')) {
+      _ptShowUpsell();
+    }
+  }
+}
+
+function _ptShowUpsell() {
+  const main = document.getElementById('main');
+  const sc = document.getElementById('screen-paper');
+  if (!sc) return;
+  sc.innerHTML = `
+    <div style="max-width:520px;margin:60px auto;text-align:center;">
+      <div style="font-size:32px;margin-bottom:16px;">◫</div>
+      <div style="font-size:20px;font-weight:700;margin-bottom:10px;">Paper Trader</div>
+      <div style="color:var(--muted);font-size:13px;line-height:1.7;margin-bottom:24px;">
+        Paper trading is a <strong style="color:var(--accent);">Pro / Premium</strong> feature.<br>
+        Test your conviction against real price data without risking real money.
+      </div>
+      <button class="btn btn-primary" onclick="navigate('subscription')">Upgrade to Pro →</button>
+    </div>`;
+}
+
+async function _ptLoadPositions() {
+  try {
+    const d = await apiFetch(`/users/${state.userId}/paper/positions?status=all`);
+    if (!d) return;
+    const open   = (d.positions || []).filter(p => p.status === 'open');
+    const closed = (d.positions || []).filter(p => p.status !== 'open');
+    _ptRenderOpen(open);
+    _ptRenderClosed(closed);
+    const lbl = document.getElementById('pt-open-label');
+    if (lbl) lbl.textContent = open.length ? open.length + ' active' : '';
+  } catch(e) { /* handled in account */ }
+}
+
+async function _ptLoadPatterns() {
+  try {
+    const d = await apiFetch('/patterns/live?limit=50');
+    _ptPatterns = d?.patterns || [];
+    const sel = document.getElementById('pt-pattern-select');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Select a live pattern…</option>';
+    _ptPatterns.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `${p.ticker} — ${p.pattern_type} (${p.direction}) Q:${(p.quality_score||0).toFixed(2)} [${p.kb_conviction||'?'}]`;
+      sel.appendChild(opt);
+    });
+  } catch(e) { /* patterns optional */ }
+}
+
+function _ptRenderOpen(rows) {
+  const tbody = document.getElementById('pt-open-tbody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No open positions</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(p => {
+    const statusCls = 'pt-status-' + (p.status || 'open').replace(/[^a-z_]/g,'');
+    const dirCls    = p.direction === 'bullish' ? 'kb-dir-bullish' : 'kb-dir-bearish';
+    const t2        = p.t2 !== null && p.t2 !== undefined ? _ptFmt(p.t2) : '—';
+    const dateStr   = p.opened_at ? p.opened_at.slice(0,10) : '—';
+    const partialDot = p.partial_closed ? '<span title="T1 hit" style="color:var(--accent);margin-left:4px;">●T1</span>' : '';
+    return `<tr>
+      <td><span class="mono" style="font-weight:700;">${p.ticker}</span></td>
+      <td><span class="${dirCls}">${p.direction === 'bullish' ? '▲' : '▼'}</span></td>
+      <td class="mono">${_ptFmt(p.entry_price)}</td>
+      <td class="mono mono-red">${_ptFmt(p.stop)}</td>
+      <td class="mono mono-amber">${_ptFmt(p.t1)}</td>
+      <td class="mono mono-green">${t2}</td>
+      <td><span class="${statusCls}">${(p.status||'open').toUpperCase()}${partialDot}</span></td>
+      <td class="mono-muted" style="font-size:10px;">${dateStr}</td>
+      <td><button class="pt-close-btn" onclick="ptClosePosition(${p.id})">Close</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function _ptRenderClosed(rows) {
+  const tbody = document.getElementById('pt-closed-tbody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No closed trades yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(p => {
+    const dirCls  = p.direction === 'bullish' ? 'kb-dir-bullish' : 'kb-dir-bearish';
+    const pnr     = p.pnl_r !== null && p.pnl_r !== undefined ? p.pnl_r : null;
+    const pnlCls  = pnr !== null ? (pnr >= 0 ? 'pt-pnl-pos' : 'pt-pnl-neg') : '';
+    const pnlStr  = pnr !== null ? (pnr >= 0 ? '+' : '') + pnr + 'R' : '—';
+    const statusCls = 'pt-status-' + (p.status||'closed');
+    const dateStr = (p.closed_at || '').slice(0,10) || '—';
+    return `<tr>
+      <td><span class="mono" style="font-weight:700;">${p.ticker}</span></td>
+      <td><span class="${dirCls}">${p.direction === 'bullish' ? '▲' : '▼'}</span></td>
+      <td class="mono">${_ptFmt(p.entry_price)}</td>
+      <td class="mono">${p.exit_price !== null && p.exit_price !== undefined ? _ptFmt(p.exit_price) : '—'}</td>
+      <td><span class="${statusCls}">${(p.status||'').toUpperCase()}</span></td>
+      <td class="${pnlCls}">${pnlStr}</td>
+      <td class="mono-muted" style="font-size:10px;">${dateStr}</td>
+    </tr>`;
+  }).join('');
+}
+
+function _ptFmt(v) {
+  if (v === null || v === undefined) return '—';
+  const n = parseFloat(v);
+  if (isNaN(n)) return '—';
+  return n >= 100 ? n.toFixed(2) : n.toPrecision(5).replace(/\.?0+$/, '');
+}
+
+async function ptClosePosition(id) {
+  if (!state.userId) return;
+  const exitStr = prompt('Exit price (leave blank for current entry price):');
+  if (exitStr === null) return;
+  const body = exitStr.trim() ? { exit_price: parseFloat(exitStr) } : {};
+  try {
+    const d = await apiFetch(`/users/${state.userId}/paper/positions/${id}/close`, {
+      method: 'POST', body: JSON.stringify(body)
+    });
+    if (!d) return;
+    showToast(`Closed — P&L: ${d.pnl_r >= 0 ? '+' : ''}${d.pnl_r}R`, d.pnl_r >= 0 ? 'ok' : undefined);
+    loadPaperTrader();
+  } catch(e) { showToast(e.message); }
+}
+
+document.getElementById('pt-open-btn').addEventListener('click', async function() {
+  if (!state.userId) { showToast('Sign in first'); return; }
+  const ticker  = (document.getElementById('pt-new-ticker').value || '').trim().toUpperCase();
+  const dir     = document.getElementById('pt-new-direction').value;
+  const entry   = parseFloat(document.getElementById('pt-new-entry').value);
+  const stop    = parseFloat(document.getElementById('pt-new-stop').value);
+  const t1      = parseFloat(document.getElementById('pt-new-t1').value);
+  const t2raw   = document.getElementById('pt-new-t2').value.trim();
+  const t2      = t2raw ? parseFloat(t2raw) : null;
+  const qty     = parseFloat(document.getElementById('pt-new-qty').value) || 1;
+  const note    = document.getElementById('pt-new-note').value.trim();
+  const msg     = document.getElementById('pt-open-msg');
+  if (!ticker)          { msg.style.color='var(--red)'; msg.textContent='Ticker required.'; return; }
+  if (isNaN(entry)||isNaN(stop)||isNaN(t1)) { msg.style.color='var(--red)'; msg.textContent='Entry, Stop and T1 are required.'; return; }
+  msg.style.color = 'var(--muted)'; msg.textContent = 'Opening…';
+  this.disabled = true;
+  try {
+    const d = await apiFetch(`/users/${state.userId}/paper/positions`, {
+      method: 'POST',
+      body: JSON.stringify({ ticker, direction: dir, entry_price: entry, stop, t1, t2, quantity: qty, note })
+    });
+    if (!d) return;
+    msg.style.color = 'var(--green)';
+    msg.textContent = `✓ Position opened: ${ticker} ${dir}`;
+    ['pt-new-ticker','pt-new-entry','pt-new-stop','pt-new-t1','pt-new-t2','pt-new-note'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('pt-new-qty').value = '1';
+    loadPaperTrader();
+  } catch(e) {
+    msg.style.color = 'var(--red)';
+    msg.textContent = e.message;
+  } finally { this.disabled = false; }
+});
+
+document.getElementById('pt-from-pattern-btn').addEventListener('click', function() {
+  const sel = document.getElementById('pt-pattern-select');
+  const id  = parseInt(sel.value);
+  if (!id) { showToast('Select a pattern first'); return; }
+  const p = _ptPatterns.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('pt-new-ticker').value    = p.ticker || '';
+  document.getElementById('pt-new-direction').value = p.direction || 'bullish';
+  document.getElementById('pt-new-entry').value     = p.zone_low  !== undefined ? p.zone_low  : '';
+  document.getElementById('pt-new-stop').value      = '';
+  document.getElementById('pt-new-t1').value        = p.zone_high !== undefined ? p.zone_high : '';
+  document.getElementById('pt-new-t2').value        = '';
+  document.getElementById('pt-new-note').value      = `From pattern #${p.id}: ${p.pattern_type}`;
+  showToast(`Loaded ${p.ticker} pattern fields`, 'ok');
+});
+
+document.getElementById('pt-monitor-btn').addEventListener('click', async function() {
+  if (!state.userId) return;
+  this.disabled = true;
+  this.textContent = '…checking';
+  try {
+    const d = await apiFetch(`/users/${state.userId}/paper/monitor`, { method: 'POST' });
+    if (!d) return;
+    const u = d.updates || [];
+    if (u.length) {
+      showToast(`${u.length} position(s) updated`, 'ok');
+    } else {
+      showToast(`Checked ${d.checked} position(s) — no changes`, 'ok');
+    }
+    loadPaperTrader();
+  } catch(e) { showToast(e.message); }
+  finally { this.disabled = false; this.textContent = '↻ Check Prices'; }
+});
+
+document.getElementById('pt-refresh-btn').addEventListener('click', function() {
+  loadPaperTrader();
+});
+
+function ptSwitchLogTab(btn, tab) {
+  document.querySelectorAll('.pt-log-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('pt-log-closed').style.display = tab === 'closed' ? '' : 'none';
+  document.getElementById('pt-log-stats').style.display  = tab === 'stats'  ? '' : 'none';
+  if (tab === 'stats') _ptLoadStats();
+}
+
+async function _ptLoadStats() {
+  const el = document.getElementById('pt-stats-body');
+  if (!el || !state.userId) return;
+  el.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:20px;"><div class="spinner"></div></div>';
+  try {
+    const d = await apiFetch(`/users/${state.userId}/paper/stats`);
+    if (!d || !d.total_closed) {
+      el.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:20px;">No stats yet — close some trades first.</div>';
+      return;
+    }
+    let html = '';
+    if (d.by_conviction && d.by_conviction.length) {
+      html += '<div class="pt-stats-group"><div class="pt-stats-group-title">By Conviction Tier</div>';
+      d.by_conviction.forEach(r => {
+        const wrColor = r.win_rate_pct >= 50 ? 'var(--green)' : 'var(--red)';
+        html += `<div class="pt-stats-row"><span style="text-transform:uppercase;font-size:11px;">${r.label}</span><span><span class="mono" style="color:${wrColor}">${r.win_rate_pct}%</span> <span class="mono-muted">${r.wins}/${r.trades} · avg ${r.avg_r}R</span></span></div>`;
+      });
+      html += '</div>';
+    }
+    if (d.by_pattern_type && d.by_pattern_type.length) {
+      html += '<div class="pt-stats-group"><div class="pt-stats-group-title">By Pattern Type</div>';
+      d.by_pattern_type.forEach(r => {
+        const wrColor = r.win_rate_pct >= 50 ? 'var(--green)' : 'var(--red)';
+        html += `<div class="pt-stats-row"><span style="text-transform:uppercase;font-size:11px;">${r.label}</span><span><span class="mono" style="color:${wrColor}">${r.win_rate_pct}%</span> <span class="mono-muted">${r.wins}/${r.trades} · avg ${r.avg_r}R</span></span></div>`;
+      });
+      html += '</div>';
+    }
+    if (d.best_trade || d.worst_trade) {
+      html += '<div class="pt-best-worst">';
+      if (d.best_trade) {
+        const b = d.best_trade;
+        html += `<div class="pt-bw-card"><div class="pt-bw-label">Best Trade</div><div class="pt-bw-ticker">${b.ticker}</div><div class="pt-bw-r pt-pnl-pos">+${b.pnl_r}R</div><div style="font-size:10px;color:var(--muted);margin-top:3px;">${(b.closed_at||'').slice(0,10)}</div></div>`;
+      }
+      if (d.worst_trade) {
+        const w = d.worst_trade;
+        html += `<div class="pt-bw-card"><div class="pt-bw-label">Worst Trade</div><div class="pt-bw-ticker">${w.ticker}</div><div class="pt-bw-r pt-pnl-neg">${w.pnl_r}R</div><div style="font-size:10px;color:var(--muted);margin-top:3px;">${(w.closed_at||'').slice(0,10)}</div></div>`;
+      }
+      html += '</div>';
+    }
+    el.innerHTML = html || '<div style="color:var(--muted);font-size:12px;text-align:center;padding:20px;">No stats yet.</div>';
+  } catch(e) {
+    el.innerHTML = `<div style="color:var(--red);font-size:12px;padding:16px;">${e.message}</div>`;
+  }
+}
 
 // ── PROFILE ───────────────────────────────────────────────────────────────────
 function _prfUpdateDisplay() {
