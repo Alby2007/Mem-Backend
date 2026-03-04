@@ -2110,6 +2110,7 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
       <div class="sub-locked-title">Subscribe to unlock the full app</div>
       <div class="sub-locked-desc">Your account has no active subscription. Subscribe to a plan below to unlock Dashboard, Portfolio, Chat, Tips, Patterns, and History.</div>
     </div>
+    <button class="sub-cta-btn sub-cta-primary" id="sub-test-access-btn" onclick="devUpgradePremium()" style="white-space:nowrap;flex-shrink:0;">Get Test Access</button>
   </div>
 
   <!-- Current plan banner -->
@@ -5264,6 +5265,25 @@ async function openBillingPortal() {
   } catch(e) {
     showToast('Portal error: ' + e.message, 'error');
     if (btn) { btn.disabled = false; btn.textContent = 'Manage Billing →'; }
+  }
+}
+
+// TEMPORARY: dev/test helper — grants current user premium access instantly
+async function devUpgradePremium() {
+  const btn = document.getElementById('sub-test-access-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Activating…'; }
+  try {
+    const d = await apiFetch('/dev/upgrade-premium', { method: 'POST' });
+    if (d?.ok) {
+      showToast('Premium access activated! Reloading…', 'success');
+      setTimeout(() => { state.tier = 'premium'; navigate('subscription'); loadSubscription(); }, 1200);
+    } else {
+      showToast(d?.error || 'Upgrade failed — try again', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Get Test Access'; }
+    }
+  } catch(e) {
+    showToast('Error: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Get Test Access'; }
   }
 }
 

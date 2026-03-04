@@ -6397,6 +6397,28 @@ def admin_set_dev(target_user_id):
         return jsonify({'error': str(e)}), 500
 
 
+# ── Dev / test helpers ────────────────────────────────────────────────────
+# TEMPORARY: lets any logged-in user self-upgrade to premium for testing.
+# Remove this endpoint before going fully live.
+
+@app.route('/dev/upgrade-premium', methods=['POST'])
+@require_auth
+def dev_upgrade_premium():
+    """
+    POST /dev/upgrade-premium
+    Instantly sets the calling user's tier to 'premium' — no payment required.
+    TEMPORARY testing endpoint. Remove before production launch.
+    """
+    if not HAS_PRODUCT_LAYER:
+        return jsonify({'error': 'product layer not available'}), 503
+    try:
+        from users.user_store import set_user_tier as _set_tier
+        _set_tier(_DB_PATH, g.user_id, 'premium')
+        return jsonify({'ok': True, 'tier': 'premium'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ── Stripe ─────────────────────────────────────────────────────────────────
 
 @app.route('/stripe/checkout', methods=['POST'])
