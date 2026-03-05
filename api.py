@@ -6050,7 +6050,7 @@ def auth_telegram_verify():
             from users.user_store import ensure_user_tables
             ensure_user_tables(conn)
             conn.execute(
-                "INSERT OR IGNORE INTO user_preferences (user_id, onboarding_complete) VALUES (?, 0)",
+                "INSERT OR IGNORE INTO user_preferences (user_id, onboarding_complete, tier) VALUES (?, 0, 'free')",
                 (user_id,),
             )
             conn.execute(
@@ -6065,8 +6065,8 @@ def auth_telegram_verify():
     # Issue token
     if HAS_AUTH:
         try:
-            from middleware.auth import create_access_token
-            access_token = create_access_token(user_id)
+            from middleware.auth import _make_token
+            access_token = _make_token(user_id, f"{user_id}@telegram.local")
         except Exception:
             access_token = _b64.urlsafe_b64encode(_json.dumps(
                 {'user_id': user_id, 'sub': user_id, 'exp': int(_time.time()) + 86400 * 30}
@@ -6075,13 +6075,19 @@ def auth_telegram_verify():
         access_token = _b64.urlsafe_b64encode(_json.dumps(
             {'user_id': user_id, 'sub': user_id, 'exp': int(_time.time()) + 86400 * 30}
         ).encode()).decode()
-    return jsonify({
+    resp = jsonify({
         'access_token': access_token,
         'user_id':      user_id,
         'first_name':   tg_data.get('first_name', ''),
         'username':     tg_data.get('username', ''),
         'tg_data':      tg_data,
     })
+    if HAS_AUTH and access_token and access_token.startswith('eyJ'):
+        try:
+            _set_auth_cookies(resp, access_token, '')
+        except Exception:
+            pass
+    return resp
 
 
 @app.route('/telegram/bot', methods=['POST'])
@@ -6290,7 +6296,7 @@ def auth_telegram():
         return jsonify({'access_token': minimal, 'user_id': user_id, 'token_type': 'Bearer'})
 
     try:
-        from middleware.auth import create_access_token, create_refresh_token
+        from middleware.auth import _make_token
         import sqlite3 as _sq
 
         # Upsert user in user_preferences (onboarding = 0 if new)
@@ -6300,7 +6306,7 @@ def auth_telegram():
             ensure_user_tables(conn)
             conn.execute(
                 """INSERT OR IGNORE INTO user_preferences
-                   (user_id, onboarding_complete) VALUES (?, 0)""",
+                   (user_id, onboarding_complete, tier) VALUES (?, 0, 'free')""",
                 (user_id,),
             )
             # Store telegram_chat_id so position monitor alerts can reach them
@@ -6323,14 +6329,16 @@ def auth_telegram():
         finally:
             conn.close()
 
-        access_token  = create_access_token(user_id)
-        return jsonify({
+        access_token = _make_token(user_id, f"{user_id}@telegram.local")
+        resp = jsonify({
             'access_token': access_token,
             'user_id':      user_id,
             'token_type':   'Bearer',
             'first_name':   data.get('first_name', ''),
             'username':     data.get('username', ''),
         })
+        _set_auth_cookies(resp, access_token, '')
+        return resp
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -6413,19 +6421,37 @@ def admin_set_dev(target_user_id):
 # Remove this endpoint before going fully live.
 
 @app.route('/dev/upgrade-premium', methods=['POST'])
-@require_auth
 def dev_upgrade_premium():
     """
     POST /dev/upgrade-premium
     Instantly sets the calling user's tier to 'premium' — no payment required.
+    Accepts user_id from cookie JWT (if present) or from the request body.
     TEMPORARY testing endpoint. Remove before production launch.
     """
     if not HAS_PRODUCT_LAYER:
         return jsonify({'error': 'product layer not available'}), 503
+    # Resolve user_id: prefer JWT cookie/header, fall back to body
+    user_id = getattr(g, 'user_id', None)
+    if not user_id:
+        # Try to decode cookie manually
+        if HAS_AUTH:
+            try:
+                from middleware.auth import _decode_token
+                _tok = request.cookies.get('tg_access', '') or \
+                       request.headers.get('Authorization', '').removeprefix('Bearer ').strip()
+                if _tok:
+                    user_id = _decode_token(_tok).get('user_id')
+            except Exception:
+                pass
+    if not user_id:
+        body = request.get_json(force=True, silent=True) or {}
+        user_id = body.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'user_id required'}), 400
     try:
         from users.user_store import set_user_tier as _set_tier
-        _set_tier(_DB_PATH, g.user_id, 'premium')
-        return jsonify({'ok': True, 'tier': 'premium'})
+        _set_tier(_DB_PATH, user_id, 'premium')
+        return jsonify({'ok': True, 'tier': 'premium', 'user_id': user_id})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
