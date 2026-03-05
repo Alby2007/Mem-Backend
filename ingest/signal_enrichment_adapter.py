@@ -1377,6 +1377,59 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
             upsert     = True,
         ))
 
+        # ── Commodity cross-correlation atom ─────────────────────────────
+        # Surfaces GLD/USO vs equity and rates vs real estate cross-signal.
+        # Emitted as subject='macro' so LLM can cite it in portfolio responses.
+        try:
+            gld_sig = ticker_atoms.get('gld', {}).get('signal_direction', '')
+            uso_sig = ticker_atoms.get('uso', {}).get('signal_direction', '')
+            tlt_sig_cc = macro_signals.get(_RATES_PROXY, '')
+            spy_sig_cc = macro_signals.get(_MARKET_PROXY, '')
+            xlre_sig   = ticker_atoms.get('xlre', {}).get('signal_direction', '')
+
+            _bull = _BULLISH_SIGNALS
+            _bear = _BEARISH_SIGNALS
+
+            parts = []
+            # Gold vs equity divergence
+            if gld_sig in _bull and spy_sig_cc in _bear:
+                parts.append('gold_equity_divergence:risk_off_hedge_active')
+            elif gld_sig in _bear and spy_sig_cc in _bull:
+                parts.append('gold_equity_convergence:risk_on_rotation')
+            elif gld_sig in _bull and spy_sig_cc in _bull:
+                parts.append('gold_equity_both_bid:inflation_hedge_with_growth')
+
+            # Rates vs real estate: TLT inverse to yields; falling TLT = rising rates = REIT headwind
+            if tlt_sig_cc in _bear and xlre_sig in _bear:
+                parts.append('rates_rising:real_estate_headwind_confirmed')
+            elif tlt_sig_cc in _bull and xlre_sig in _bull:
+                parts.append('rates_falling:real_estate_tailwind_confirmed')
+            elif tlt_sig_cc in _bear and xlre_sig in _bull:
+                parts.append('rates_rising:real_estate_resilient_divergence')
+
+            # Energy cross-signal
+            if uso_sig in _bull and gld_sig in _bull:
+                parts.append('commodities_broadly_bid:inflation_pressure')
+            elif uso_sig in _bull and spy_sig_cc in _bear:
+                parts.append('energy_bid_equity_weak:stagflation_signal')
+
+            if parts:
+                atoms.append(RawAtom(
+                    subject    = 'macro',
+                    predicate  = 'commodity_cross_correlation',
+                    object     = ' | '.join(parts),
+                    confidence = 0.65,
+                    source     = 'derived_signal_commodity_xasset',
+                    metadata   = {
+                        'as_of': now_iso,
+                        'gld': gld_sig, 'uso': uso_sig,
+                        'tlt': tlt_sig_cc, 'spy': spy_sig_cc, 'xlre': xlre_sig,
+                    },
+                    upsert     = True,
+                ))
+        except Exception as _cx:
+            _logger.debug('[signal_enrichment] commodity cross-correlation failed: %s', _cx)
+
         # ── Geopolitical risk exposure pass ───────────────────────────────
         # Reads gdelt_tension and ucdp_conflict atoms from KB and emits
         # geopolitical_risk_exposure per ticker using geo_exposure.py config.

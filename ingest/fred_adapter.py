@@ -42,12 +42,15 @@ _logger = logging.getLogger(__name__)
 
 # FRED series IDs for key macro indicators
 _SERIES = {
-    'fed_funds':   'FEDFUNDS',      # Effective Federal Funds Rate
-    'cpi_yoy':     'CPIAUCSL',      # CPI All Urban Consumers (need to compute YoY)
-    'gdp_growth':  'A191RL1Q225SBEA',  # Real GDP growth (annualized quarterly)
-    'unemployment':'UNRATE',        # Unemployment Rate
-    'yield_10y':   'DGS10',         # 10-Year Treasury Yield
-    'yield_2y':    'DGS2',          # 2-Year Treasury Yield
+    'fed_funds':         'FEDFUNDS',        # Effective Federal Funds Rate
+    'cpi_yoy':           'CPIAUCSL',        # CPI All Urban Consumers (index)
+    'gdp_growth':        'A191RL1Q225SBEA', # Real GDP growth (annualized quarterly)
+    'unemployment':      'UNRATE',          # Unemployment Rate
+    'yield_10y':         'DGS10',           # 10-Year Treasury Yield
+    'yield_2y':          'DGS2',            # 2-Year Treasury Yield
+    'tips_10y':          'DFII10',          # 10-Year TIPS (real yield)
+    'breakeven_10y':     'T10YIE',          # 10-Year Breakeven Inflation Rate
+    'breakeven_5y':      'T5YIE',           # 5-Year Breakeven Inflation Rate
 }
 
 
@@ -254,6 +257,71 @@ class FREDAdapter(BaseIngestAdapter):
                     'yield_10y': y10, 'yield_2y': y2,
                     'spread_bps': spread_bps, 'as_of': now_iso,
                 },
+            ))
+
+        # ── TIPS real yield + breakeven inflation ─────────────────────────
+        tips_10y = _get_latest_value(fred, _SERIES['tips_10y'])
+        breakeven_10y = _get_latest_value(fred, _SERIES['breakeven_10y'])
+        breakeven_5y  = _get_latest_value(fred, _SERIES['breakeven_5y'])
+
+        if tips_10y is not None:
+            real_yield_regime = (
+                'positive_real_yield' if tips_10y > 0.5
+                else 'near_zero_real_yield' if tips_10y > -0.25
+                else 'negative_real_yield'
+            )
+            atoms.append(RawAtom(
+                subject='us_yields',
+                predicate='tips_real_yield',
+                object=f'{tips_10y:.2f}%  ({real_yield_regime})',
+                confidence=0.90,
+                source=source,
+                metadata={'series': _SERIES['tips_10y'], 'real_yield_regime': real_yield_regime, 'as_of': now_iso},
+                upsert=True,
+            ))
+
+        if breakeven_10y is not None:
+            inflation_expectations = (
+                'anchored' if breakeven_10y < 2.5
+                else 'elevated_expectations' if breakeven_10y < 3.2
+                else 'unanchored'
+            )
+            atoms.append(RawAtom(
+                subject='us_yields',
+                predicate='breakeven_inflation_10y',
+                object=f'{breakeven_10y:.2f}%  ({inflation_expectations})',
+                confidence=0.90,
+                source=source,
+                metadata={'series': _SERIES['breakeven_10y'], 'inflation_expectations': inflation_expectations, 'as_of': now_iso},
+                upsert=True,
+            ))
+
+        if breakeven_5y is not None:
+            atoms.append(RawAtom(
+                subject='us_yields',
+                predicate='breakeven_inflation_5y',
+                object=f'{breakeven_5y:.2f}%',
+                confidence=0.88,
+                source=source,
+                metadata={'series': _SERIES['breakeven_5y'], 'as_of': now_iso},
+                upsert=True,
+            ))
+
+        # Real yield vs breakeven spread (measures inflation risk premium)
+        if tips_10y is not None and breakeven_10y is not None and y10 is not None:
+            implied_nominal = tips_10y + breakeven_10y
+            risk_premium_bps = round((y10 - implied_nominal) * 100)
+            atoms.append(RawAtom(
+                subject='us_yields',
+                predicate='rate_environment',
+                object=(
+                    f'nominal_10y={y10:.2f}%  real_10y={tips_10y:.2f}%  '
+                    f'breakeven={breakeven_10y:.2f}%  risk_premium={risk_premium_bps:+d}bps'
+                ),
+                confidence=0.88,
+                source=source,
+                metadata={'as_of': now_iso},
+                upsert=True,
             ))
 
         # ── Composite regime label ────────────────────────────────────────

@@ -78,9 +78,13 @@ _DEFAULT_TICKERS = [
     'SPY', 'HYG', 'TLT',
     # User portfolio holdings — ensure live price + signal enrichment every cycle
     'ARKK', 'COIN', 'HOOD', 'MSTR', 'PLTR', 'NVDA',
-    'XYZ',      # Block Inc. (SQ rebranded)
+    'XYZ',      # Block Inc. (NYSE: XYZ — rebranded from SQ in 2022)
     # High-conviction watchlist — US mega-cap with strong KB coverage
     'AMZN', 'META', 'GOOGL', 'AAPL', 'MSFT', 'MA',
+    # Additional FTSE names common in UK ISA portfolios
+    'STAN.L', 'HL.L', 'IAG.L', 'PRU.L', 'EXPN.L',
+    'DGE.L', 'FRES.L', 'SMT.L', 'ABDN.L', 'MNG.L',
+    'IMB.L', 'SSE.L', 'SVT.L', 'SGRO.L', 'LAND.L',
 ]
 
 # Parallel workers for per-ticker info() calls
@@ -400,10 +404,12 @@ class YFinanceAdapter(BaseIngestAdapter):
         # ── Sector (static — no upsert needed) ───────────────────────────
         sector = info.get('sector')
         if sector:
+            # Normalise: 'Real Estate' → 'real_estate', 'Communication Services' → 'communication_services'
+            sector_norm = sector.lower().strip().replace(' ', '_').replace('-', '_')
             atoms.append(RawAtom(
-                subject=symbol, predicate='sector', object=sector,
+                subject=symbol, predicate='sector', object=sector_norm,
                 confidence=0.95, source=src,
-                metadata={'industry': info.get('industry')},
+                metadata={'industry': info.get('industry'), 'sector_raw': sector},
             ))
 
         # ── Market cap tier (static) ──────────────────────────────────────
@@ -426,6 +432,27 @@ class YFinanceAdapter(BaseIngestAdapter):
                     confidence=0.80, source=src, metadata={'beta': beta},
                     upsert=True,
                 ))
+
+        # ── Price regime from 52-week position (equities) ─────────────────
+        # ETFs get price_regime in _etf_atoms(); equities need it here.
+        high_52 = info.get('fiftyTwoWeekHigh')
+        low_52  = info.get('fiftyTwoWeekLow')
+        if high_52 and low_52 and current_price:
+            try:
+                h, l, p = float(high_52), float(low_52), float(current_price)
+                if h > l:
+                    ratio = (p - l) / (h - l)
+                    pr = ('near_52w_high' if ratio >= 0.85
+                          else 'near_52w_low' if ratio <= 0.15
+                          else 'mid_range')
+                    atoms.append(RawAtom(
+                        subject=symbol, predicate='price_regime', object=pr,
+                        confidence=0.85, source=src,
+                        metadata={'ratio': round(ratio, 3), 'as_of': now_iso},
+                        upsert=True,
+                    ))
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
 
         # ── Next earnings date (upsert — date changes each quarter) ───────
         try:

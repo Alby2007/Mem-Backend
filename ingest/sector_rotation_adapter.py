@@ -124,10 +124,12 @@ def _read_ticker_sector(db_path: str, ticker: str) -> Optional[str]:
         ).fetchone()
         conn.close()
         if row:
-            val = row[0].lower()
+            val = row[0].lower().strip()
             # Normalise: 'etf:technology' → 'technology'
             if ':' in val:
                 val = val.split(':', 1)[1].strip()
+            # Normalise spaces/hyphens to underscores: 'real estate' → 'real_estate'
+            val = val.replace(' ', '_').replace('-', '_')
             return val
     except Exception:
         pass
