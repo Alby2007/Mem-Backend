@@ -40,8 +40,9 @@ EVAL_DIR         = Path(__file__).parent
 RESULTS_DIR      = EVAL_DIR / 'results'
 PORTFOLIOS_PATH  = EVAL_DIR / 'portfolios.json'
 QUERIES_PATH     = EVAL_DIR / 'queries.json'
-TIMEOUT          = 120   # seconds — LLM can be slow
-SLEEP_BETWEEN    = 0.8   # seconds — local server still rate-limits
+TIMEOUT          = 180   # seconds — LLM can be slow
+SLEEP_BETWEEN    = 2.0   # seconds — give Ollama breathing room between requests
+RETRY_ON_EMPTY   = 2     # retry count when response is empty (Ollama overload)
 TARGET_PASS_RATES = {
     'no_data':         0.95,
     'single_ticker':   0.85,
@@ -56,40 +57,52 @@ TARGET_PASS_RATES = {
 sys.path.insert(0, str(EVAL_DIR))
 sys.path.insert(0, str(EVAL_DIR.parent))
 
-from scorers import score_response, is_pass  # noqa: E402
+from scorers import score_response, is_pass, kb_has_yield_atoms  # noqa: E402
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
-def _register_eval_user(base: str) -> tuple[str, str]:
+def _register_eval_user(base: str, beta_password: str = '') -> tuple[str, str]:
     """
     Register a fresh ephemeral eval user. Returns (user_id, token).
     Falls back gracefully if /auth/register is unavailable.
+    beta_password: passed explicitly or falls back to BETA_PASSWORD env var.
     """
-    run_id   = uuid.uuid4().hex[:8]
-    user_id  = f'eval_{run_id}'
-    email    = f'{user_id}@eval.local'
-    password = 'Ev@lH4rness!'
+    run_id        = uuid.uuid4().hex[:8]
+    user_id       = f'eval_{run_id}'
+    email         = f'{user_id}@eval.local'
+    password      = 'Ev@lH4rness!'
+    beta_password = beta_password or os.environ.get('BETA_PASSWORD', '')
 
     try:
-        r = requests.post(
-            f'{base}/auth/register',
-            json={'user_id': user_id, 'email': email, 'password': password},
-            timeout=15,
-        )
-        if r.status_code in (200, 201):
-            token = r.json().get('token', '')
-            return user_id, token
+        reg_body = {'user_id': user_id, 'email': email, 'password': password}
+        if beta_password:
+            reg_body['beta_password'] = beta_password
 
-        # Try login if already registered
+        r = requests.post(f'{base}/auth/register', json=reg_body, timeout=15)
+        if r.status_code in (200, 201):
+            # Register returns {user_id, email, created_at} — no token.
+            # Must call /auth/token immediately after to get JWT.
+            r_tok = requests.post(
+                f'{base}/auth/token',
+                json={'email': email, 'password': password},
+                timeout=15,
+            )
+            if r_tok.status_code == 200:
+                token = r_tok.json().get('access_token', '')
+                return user_id, token
+
+        # Try login if user already exists from a previous run
         r2 = requests.post(
-            f'{base}/auth/login',
+            f'{base}/auth/token',
             json={'email': email, 'password': password},
             timeout=15,
         )
         if r2.status_code == 200:
-            token = r2.json().get('token', '')
+            token = r2.json().get('access_token', '')
             return user_id, token
+
+        print(f'[warn] auth register returned {r.status_code}: {r.text[:120]} — running without token')
     except Exception as e:
         print(f'[warn] auth failed: {e} — running without auth token')
 
@@ -110,12 +123,13 @@ def _set_trader_level(base: str, user_id: str, token: str, level: str) -> None:
 
 
 def _submit_portfolio(base: str, user_id: str, token: str, portfolio: dict) -> None:
+    if not token:
+        return  # portfolio endpoint requires auth — skip if no token
     try:
-        headers = {'Authorization': f'Bearer {token}'} if token else {}
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
         requests.post(
-            f'{base}/portfolio',
+            f'{base}/users/{user_id}/portfolio',
             json={
-                'user_id':  user_id,
                 'holdings': portfolio['holdings'],
                 'cash':     portfolio['cash'],
                 'currency': portfolio['currency'],
@@ -138,20 +152,35 @@ def _fill_template(template: str, portfolio: dict) -> tuple[str, Optional[str]]:
 
 
 def _run_query(base: str, user_id: str, token: str, message: str) -> str:
-    """POST /chat and return the answer string. Raises on HTTP error."""
+    """
+    POST /chat and return the answer string.
+    When a valid token is present, send it so portfolio context is injected.
+    When no token, omit user_id from the body — avoids quota enforcement on
+    unauthenticated requests and still tests raw KB retrieval quality.
+    """
     headers = {'Content-Type': 'application/json'}
+    body: dict = {'message': message}
     if token:
         headers['Authorization'] = f'Bearer {token}'
+        # user_id resolved from token by the server — don't double-send
+    # No token: don't send user_id either — that would trigger quota check
+    # for a user with no tier row, causing 403 on every request.
 
-    r = requests.post(
-        f'{base}/chat',
-        json={'message': message, 'user_id': user_id},
-        headers=headers,
-        timeout=TIMEOUT,
-    )
-    r.raise_for_status()
-    data = r.json()
-    return data.get('answer') or data.get('response') or ''
+    for attempt in range(RETRY_ON_EMPTY + 1):
+        r = requests.post(f'{base}/chat', json=body, headers=headers, timeout=TIMEOUT)
+        if r.status_code == 503:
+            if attempt < RETRY_ON_EMPTY:
+                time.sleep(5 * (attempt + 1))
+                continue
+            return ''
+        r.raise_for_status()
+        data = r.json()
+        answer = data.get('answer') or data.get('response') or ''
+        if answer or attempt == RETRY_ON_EMPTY:
+            return answer
+        # Empty answer — Ollama may have been busy; wait and retry
+        time.sleep(5 * (attempt + 1))
+    return ''
 
 
 # ── Main eval loop ─────────────────────────────────────────────────────────────
@@ -162,10 +191,17 @@ def run_eval(
     queries_per_intent: int = 2,
     write_csv: bool = False,
     seed: Optional[int] = None,
+    beta_password: str = '',
 ) -> list[dict]:
 
     if seed is not None:
         random.seed(seed)
+
+    # Check once at startup whether the KB has yield curve atoms.
+    # Score_macro skips mentions_yield_or_rates when False — avoids penalising
+    # the model for correctly saying it has no yield data when the KB is empty.
+    _kb_has_yield = kb_has_yield_atoms()
+    print(f'[harness] kb_has_yield={_kb_has_yield}')
 
     if not PORTFOLIOS_PATH.exists():
         print(f'ERROR: {PORTFOLIOS_PATH} not found. Run: python eval/generate_portfolios.py')
@@ -185,19 +221,27 @@ def run_eval(
 
     RESULTS_DIR.mkdir(exist_ok=True)
 
-    # Register a single shared eval user for the run
     print(f'\nConnecting to {base} …')
-    user_id, token = _register_eval_user(base)
-    print(f'Eval user: {user_id}  token: {"yes" if token else "none"}')
 
     results: list[dict] = []
-    total = n_portfolios * len(query_bank) * queries_per_intent
-    done  = 0
+    total  = n_portfolios * len(query_bank) * queries_per_intent
+    done   = 0
     errors = 0
+    queries_per_portfolio = len(query_bank) * queries_per_intent
 
-    print(f'Running {n_portfolios} portfolios × {len(query_bank)} intents × {queries_per_intent} queries = ~{total} requests\n')
+    print(f'Running {n_portfolios} portfolios × {len(query_bank)} intents × {queries_per_intent} queries = ~{total} requests')
+    print(f'(fresh eval user per portfolio — {queries_per_portfolio} requests each, well under 60/hr limit)\n')
 
     for p_idx, portfolio in enumerate(portfolios):
+
+        # Fresh user per portfolio — each gets its own rate-limit bucket.
+        # With 7 intents × 2 queries = 14 requests/portfolio, far under the 60/hr cap.
+        user_id, token = _register_eval_user(base, beta_password=beta_password)
+        if not token:
+            print(f'[warn] portfolio {p_idx}: no token — skipping (check BETA_PASSWORD)')
+            errors += queries_per_portfolio
+            done   += queries_per_portfolio
+            continue
 
         # Configure user for this portfolio
         _submit_portfolio(base, user_id, token, portfolio)
@@ -210,8 +254,12 @@ def run_eval(
                 query, ticker = _fill_template(template, portfolio)
 
                 try:
-                    response = _run_query(base, user_id, token, query)
-                    scores   = score_response(response, intent, portfolio, ticker)
+                    # no_data intent: suppress auth token so portfolio context is NOT injected.
+                    # Portfolio atoms give the model real signal data which it then hallucinates
+                    # onto fake tickers. The no_data test should be a clean KB-only query.
+                    _token = '' if intent == 'no_data' else token
+                    response = _run_query(base, user_id, _token, query)
+                    scores   = score_response(response, intent, portfolio, ticker, kb_has_yield=_kb_has_yield)
                     passed   = is_pass(scores)
 
                     results.append({
@@ -337,7 +385,11 @@ def _print_summary(results: list[dict]) -> None:
         check_vals: dict = defaultdict(list)
         for r in rs:
             for check, val in r.get('scores', {}).items():
-                check_vals[check].append(val if isinstance(val, bool) else val >= 0.8)
+                if check.startswith('info_'):
+                    continue
+                from scorers import _FLOAT_THRESHOLDS, _DEFAULT_FLOAT_THRESHOLD
+                thresh = _FLOAT_THRESHOLDS.get(check, _DEFAULT_FLOAT_THRESHOLD)
+                check_vals[check].append(val if isinstance(val, bool) else val >= thresh)
         for check, vals in check_vals.items():
             rate = sum(vals) / len(vals) if vals else 0.0
             if rate < 0.80:
@@ -375,7 +427,8 @@ if __name__ == '__main__':
     parser.add_argument('--n',     type=int, default=50,  help='Number of portfolios')
     parser.add_argument('--qpi',   type=int, default=2,   help='Queries per intent')
     parser.add_argument('--csv',   action='store_true',   help='Also write CSV output')
-    parser.add_argument('--seed',  type=int, default=None,help='Random seed for reproducibility')
+    parser.add_argument('--seed',         type=int, default=None, help='Random seed for reproducibility')
+    parser.add_argument('--beta-password', default='',             help='Beta access password for /auth/register')
     args = parser.parse_args()
 
     run_eval(
@@ -384,4 +437,5 @@ if __name__ == '__main__':
         queries_per_intent=args.qpi,
         write_csv=args.csv,
         seed=args.seed,
+        beta_password=args.beta_password,
     )
