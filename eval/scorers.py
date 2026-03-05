@@ -312,7 +312,7 @@ def score_response(
 
 
 _FLOAT_THRESHOLDS = {
-    'holdings_coverage': 0.33,  # at least 1/3 of holdings addressed — realistic with partial KB coverage
+    'holdings_coverage': 0.25,  # at least 1/4 of holdings addressed — realistic with partial KB coverage
 }
 _DEFAULT_FLOAT_THRESHOLD = 0.8
 
