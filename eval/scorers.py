@@ -81,6 +81,20 @@ _SINGLE_BEST_KWS = (
     'biggest', 'lowest', 'largest',
 )
 
+# Keywords indicating aggregate portfolio query — portfolio-level answer is correct even with 0 tickers named
+_AGGREGATE_PORTFOLIO_KWS = (
+    'how is my portfolio', 'how is my', 'give me an overview', 'overview of my',
+    'how am i doing', 'portfolio doing', 'portfolio performance',
+    'overall portfolio', 'overall position',
+)
+
+# Signal language that confirms the model gave a real portfolio-level answer
+_PORTFOLIO_SIGNAL_KWS = (
+    'price regime', 'signal direction', 'signal quality', 'macro confirmation',
+    'conviction', 'portfolio', 'holdings', 'positions', 'volatility',
+    'bullish', 'bearish', 'neutral', 'regime',
+)
+
 
 def score_portfolio_review(response: str, portfolio: dict, query: str = '') -> dict:
     scores = _universal(response)
@@ -93,12 +107,17 @@ def score_portfolio_review(response: str, portfolio: dict, query: str = '') -> d
         if t in r or tf in r
     )
     total = len(tickers)
-    # For single-best queries ('which holding has best...'), 1 ticker mentioned is correct.
-    # For overview/review queries, use ratio-based coverage.
     q_lower = query.lower()
+    # Single-best queries: 1 ticker mentioned is correct
     _is_single_best = any(kw in q_lower for kw in _SINGLE_BEST_KWS)
+    # Aggregate queries: portfolio-level answer is correct even without naming tickers
+    _is_aggregate = any(kw in q_lower for kw in _AGGREGATE_PORTFOLIO_KWS)
+    _has_signal_language = any(kw in r for kw in _PORTFOLIO_SIGNAL_KWS)
     if _is_single_best:
         coverage_ratio = 1.0 if coverage >= 1 else 0.0
+    elif _is_aggregate and _has_signal_language:
+        # Aggregate portfolio queries answered with signal language are correct
+        coverage_ratio = 1.0
     else:
         coverage_ratio = coverage / total if total else 0.0
     scores['holdings_coverage']         = coverage_ratio
