@@ -257,6 +257,18 @@ def score_no_data(response: str) -> dict:
             "no relevant",
             "not available for",
             "no answer",
+            # Model describes invalid/conflicting atoms — borderline refusal
+            "signal direction is listed as invalid",
+            "signal direction of invalid",
+            "signal_direction is listed as invalid",
+            "conflicting or contradictory information",
+            "conflicting information",
+            "not part of the actual knowledge base",
+            "marked as \"fakeco\"",
+            "marked as fakeco",
+            "no reliable",
+            "no reliable data",
+            "no reliable information",
         )
     )
     scores['no_invented_data'] = not any(
