@@ -109,6 +109,20 @@ def _register_eval_user(base: str, beta_password: str = '') -> tuple[str, str]:
     return user_id, ''
 
 
+def _upgrade_eval_user(base: str, user_id: str, token: str) -> None:
+    """Upgrade eval user to premium so they pass the chat quota gate."""
+    try:
+        headers = {'Authorization': f'Bearer {token}'} if token else {}
+        requests.post(
+            f'{base}/dev/upgrade-premium',
+            json={'user_id': user_id},
+            headers=headers,
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
 def _set_trader_level(base: str, user_id: str, token: str, level: str) -> None:
     try:
         headers = {'Authorization': f'Bearer {token}'} if token else {}
@@ -242,6 +256,9 @@ def run_eval(
             errors += queries_per_portfolio
             done   += queries_per_portfolio
             continue
+
+        # Upgrade to premium so chat quota gate is bypassed
+        _upgrade_eval_user(base, user_id, token)
 
         # Configure user for this portfolio
         _submit_portfolio(base, user_id, token, portfolio)
