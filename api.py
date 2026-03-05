@@ -2386,7 +2386,18 @@ def chat_endpoint():
         try:
             _chat_tier = _get_user_tier_for_request(chat_user_id)
             _quota = _get_tier(_chat_tier).get('chat_queries_per_day')
-            if _quota is not None:
+            # quota=None means unlimited (pro/premium); quota=0 means no chat access (free tier)
+            if _quota is not None and _quota == 0:
+                return jsonify({
+                    'error':        'upgrade_required',
+                    'feature':      'chat_queries_per_day',
+                    'current_tier': _chat_tier,
+                    'upgrade_to':   _next_tier_name(_chat_tier),
+                    'queries_used': 0,
+                    'queries_limit': 0,
+                    'message':      'Chat is not available on the free plan. Subscribe to unlock.',
+                }), 403
+            if _quota is not None and _quota > 0:
                 _used = get_today_chat_count(_DB_PATH, chat_user_id)
                 if _used >= _quota:
                     return jsonify({
