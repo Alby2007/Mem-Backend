@@ -75,7 +75,14 @@ def score_single_ticker(
     return scores
 
 
-def score_portfolio_review(response: str, portfolio: dict) -> dict:
+# Keywords that indicate a single-best query — correct response is 1 ticker, not all
+_SINGLE_BEST_KWS = (
+    'which', 'best', 'top', 'strongest', 'highest', 'most', 'worst',
+    'biggest', 'lowest', 'largest',
+)
+
+
+def score_portfolio_review(response: str, portfolio: dict, query: str = '') -> dict:
     scores = _universal(response)
     r = response.lower()
     tickers = [h['ticker'].lower().replace('.l', '') for h in portfolio['holdings']]
@@ -86,8 +93,15 @@ def score_portfolio_review(response: str, portfolio: dict) -> dict:
         if t in r or tf in r
     )
     total = len(tickers)
-    coverage_ratio = coverage / total if total else 0.0
-    scores['holdings_coverage']         = coverage_ratio         # pass if >= 0.5
+    # For single-best queries ('which holding has best...'), 1 ticker mentioned is correct.
+    # For overview/review queries, use ratio-based coverage.
+    q_lower = query.lower()
+    _is_single_best = any(kw in q_lower for kw in _SINGLE_BEST_KWS)
+    if _is_single_best:
+        coverage_ratio = 1.0 if coverage >= 1 else 0.0
+    else:
+        coverage_ratio = coverage / total if total else 0.0
+    scores['holdings_coverage']         = coverage_ratio
     scores['info_full_coverage']        = coverage == total      # informational only — not in pass gate
     scores['no_placeholders_per_holding'] = '?' not in response
     return scores
@@ -288,6 +302,7 @@ def score_response(
     portfolio: dict,
     ticker: Optional[str] = None,
     kb_has_yield: bool = True,
+    query: str = '',
 ) -> dict:
     """
     Dispatch to the correct per-intent scorer.
@@ -296,7 +311,7 @@ def score_response(
     if intent == 'single_ticker':
         return score_single_ticker(response, portfolio, ticker)
     elif intent == 'portfolio_review':
-        return score_portfolio_review(response, portfolio)
+        return score_portfolio_review(response, portfolio, query=query)
     elif intent == 'opportunity':
         return score_opportunity(response, portfolio)
     elif intent == 'geo':

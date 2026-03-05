@@ -276,7 +276,7 @@ def run_eval(
                     # onto fake tickers. The no_data test should be a clean KB-only query.
                     _token = '' if intent == 'no_data' else token
                     response = _run_query(base, user_id, _token, query)
-                    scores   = score_response(response, intent, portfolio, ticker, kb_has_yield=_kb_has_yield)
+                    scores   = score_response(response, intent, portfolio, ticker, kb_has_yield=_kb_has_yield, query=query)
                     passed   = is_pass(scores)
 
                     results.append({
