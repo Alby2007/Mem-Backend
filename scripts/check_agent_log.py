@@ -76,6 +76,8 @@ for row in sample:
     print(f'  {row[0]:8s} q={row[1]:.2f} conv={row[2]!r:12s} dir={row[5]:8s} zone={row[3]:.4f}-{row[4]:.4f}')
 
 open_set = tuple(p['ticker'] for p in positions)
+acct = c.execute("SELECT virtual_balance FROM paper_account WHERE user_id=?", (USER_ID,)).fetchone()
+print(f'Virtual balance: {acct[0] if acct else "no account row"}')
 print(f'\nOpen tickers: {open_set}')
 
 placeholders = ','.join('?' * len(open_set))
