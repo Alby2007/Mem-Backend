@@ -4506,6 +4506,16 @@ def _paper_ai_run(user_id: str) -> dict:
         ).fetchall()
         open_tickers = {r['ticker'] for r in open_rows}
 
+        # --- 24h cooldown: skip tickers stopped out in the last 24 hours ---
+        from datetime import timedelta as _timedelta
+        _cooldown_cutoff = (datetime.now(timezone.utc) - _timedelta(hours=24)).isoformat()
+        _cooldown_rows = conn.execute(
+            """SELECT DISTINCT ticker FROM paper_positions
+               WHERE user_id=? AND status='stopped_out' AND closed_at > ?""",
+            (user_id, _cooldown_cutoff)
+        ).fetchall()
+        cooled_tickers = {r['ticker'] for r in _cooldown_rows}
+
         # Hard cap: do not open any new positions if already at max
         if len(open_tickers) >= _PAPER_MAX_OPEN_POSITIONS:
             conn.execute(
@@ -4544,7 +4554,7 @@ def _paper_ai_run(user_id: str) -> dict:
         conn.execute(
             "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
             (user_id, 'scan_start', None,
-             f'Scanning open patterns for {user_id} ({len(open_tickers)}/{_PAPER_MAX_OPEN_POSITIONS} slots used)', now_iso)
+             f'Scanning open patterns for {user_id} ({len(open_tickers)}/{_PAPER_MAX_OPEN_POSITIONS} slots used, {len(cooled_tickers)} on 24h cooldown)', now_iso)
         )
         conn.commit()
 
@@ -4609,6 +4619,11 @@ def _paper_ai_run(user_id: str) -> dict:
 
             # Hard rule: skip already-open tickers
             if ticker in open_tickers:
+                skips += 1
+                continue
+
+            # 24h cooldown: skip tickers stopped out in the last 24 hours
+            if ticker in cooled_tickers:
                 skips += 1
                 continue
 
