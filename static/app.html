@@ -4626,10 +4626,45 @@ async function _ptLoadAgentLog() {
   }
 }
 
+function _ptParseDetail(event_type, raw) {
+  if (!raw) return { main: '', sub: '' };
+  // Parse key=value pairs out of the raw detail string
+  const kv = {};
+  raw.replace(/(\w+)=([^\s|]+)/g, (_, k, v) => { kv[k] = v; });
+  // Split reasoning after " | "
+  const pipeIdx = raw.indexOf(' | ');
+  const reasoning = pipeIdx >= 0 ? raw.slice(pipeIdx + 3) : '';
+  if (event_type === 'entry') {
+    const entry = kv.entry ? parseFloat(kv.entry).toFixed(2) : '?';
+    const stop  = kv.stop  ? parseFloat(kv.stop).toFixed(2)  : '?';
+    const t1    = kv.t1    ? parseFloat(kv.t1).toFixed(2)    : '?';
+    const val   = kv.value ? kv.value.replace('£','') : (kv['value='] || '?');
+    const valStr = kv.value || (raw.match(/value=(£[\d,\.]+)/) || [])[1] || '';
+    return {
+      main: `entry ${entry} → T1 ${t1}  stop ${stop}  ${valStr}`,
+      sub:  reasoning,
+    };
+  }
+  if (event_type === 'stopped_out') {
+    const exit = kv.exit ? parseFloat(kv.exit).toFixed(2) : '?';
+    const pnl  = kv['P&L'] || kv.pnl || '';
+    return { main: `stopped out at ${exit}  ${pnl ? pnl + 'R' : ''}`, sub: '' };
+  }
+  if (event_type === 't1_hit') {
+    const exit = kv.exit ? parseFloat(kv.exit).toFixed(2) : '?';
+    return { main: `T1 hit at ${exit}`, sub: '' };
+  }
+  if (event_type === 't2_hit') {
+    const exit = kv.exit ? parseFloat(kv.exit).toFixed(2) : '?';
+    const pnl  = kv['P&L'] || '';
+    return { main: `T2 hit at ${exit}  ${pnl ? pnl + 'R' : ''}`, sub: '' };
+  }
+  return { main: raw, sub: '' };
+}
+
 function _ptFeedLine(r) {
   const ts = r.created_at ? r.created_at.slice(0,16).replace('T',' ') : '';
   const ticker = r.ticker ? `<span style="color:var(--accent);font-weight:700;margin:0 4px;">${escHtml(r.ticker)}</span>` : '';
-  const detail = escHtml(r.detail || '');
   let icon, color;
   switch(r.event_type) {
     case 'scan_start':  icon = '🔍'; color = 'var(--muted)';   break;
@@ -4641,11 +4676,16 @@ function _ptFeedLine(r) {
     case 'monitor_run': icon = '⟳';  color = 'var(--muted)';   break;
     default:            icon = '·';  color = 'var(--muted)';   break;
   }
-  return `<div style="display:flex;gap:8px;align-items:baseline;border-bottom:1px solid var(--border);padding:3px 0;">
-    <span style="color:${color};width:18px;text-align:center;flex-shrink:0;">${icon}</span>
-    ${ticker}
-    <span style="color:${color};flex:1;">${detail}</span>
-    <span style="color:var(--muted);font-size:10px;flex-shrink:0;">${ts}</span>
+  const parsed = _ptParseDetail(r.event_type, r.detail || '');
+  const mainText = escHtml(parsed.main);
+  const subText  = parsed.sub ? `<div style="color:var(--muted);font-size:10px;margin-top:1px;padding-left:26px;">${escHtml(parsed.sub)}</div>` : '';
+  return `<div style="border-bottom:1px solid var(--border);padding:4px 0;">
+    <div style="display:flex;gap:8px;align-items:baseline;">
+      <span style="color:${color};width:18px;text-align:center;flex-shrink:0;">${icon}</span>
+      ${ticker}
+      <span style="color:${color};flex:1;">${mainText}</span>
+      <span style="color:var(--muted);font-size:10px;flex-shrink:0;">${ts}</span>
+    </div>${subText}
   </div>`;
 }
 
@@ -4701,8 +4741,9 @@ function _ptRenderClosed(rows) {
     const pnlStr    = pnr !== null ? (pnr >= 0 ? '+' : '') + pnr + 'R' : '—';
     const statusCls = 'pt-status-' + (p.status||'closed');
     const dateStr   = (p.closed_at || '').slice(0,10) || '—';
+    const tickerLabel = p.ticker ? escHtml(p.ticker) : '<span style="color:var(--muted)">—</span>';
     return `<tr>
-      <td><span class="mono" style="font-weight:700;">${escHtml(p.ticker)}</span></td>
+      <td><span class="mono" style="font-weight:700;">${tickerLabel}</span></td>
       <td><span class="${dirCls}">${p.direction === 'bullish' ? '▲' : '▼'}</span></td>
       <td class="mono">${_ptFmt(p.entry_price)}</td>
       <td class="mono">${p.exit_price !== null && p.exit_price !== undefined ? _ptFmt(p.exit_price) : '—'}</td>

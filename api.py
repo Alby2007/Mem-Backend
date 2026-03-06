@@ -3960,7 +3960,7 @@ _PAPER_AGENT_SYSTEM = """You are an autonomous paper trading agent. You have no 
 Your only goal is to evaluate KB signals and decide ENTER or SKIP.
 
 Rules:
-- ENTER only if: quality >= 0.75, conviction = HIGH or CONFIRMED, no conflicting signals
+- ENTER only if: quality >= 0.80, conviction = HIGH or CONFIRMED, no conflicting signals
 - SKIP if: put_call_ratio > 1.3 on bullish, long_end_stress = true, bear_steepen regime
 - SKIP if: ticker already has an open paper position
 - Entry = midpoint of zone_low/zone_high
@@ -3968,8 +3968,12 @@ Rules:
 - T1 = entry + (entry - stop) * 2
 - T2 = entry + (entry - stop) * 3
 
+In the reasoning field you MUST cite actual signal data — pattern type, direction, conviction tier, regime, signal direction, and any warning atoms present.
+Example good reasoning: "FVG bullish 4H, quality=0.91 HIGH conviction, risk_on regime, signal_dir=bullish, PCR=0.72 — clean entry"
+Example bad reasoning: "Quality and conviction meet the ENTER criteria" (DO NOT do this)
+
 Respond ONLY with valid JSON. No explanation outside the JSON.
-{"action": "ENTER"|"SKIP", "entry": float, "stop": float, "t1": float, "t2": float, "reasoning": "one sentence max"}"""
+{"action": "ENTER"|"SKIP", "entry": float, "stop": float, "t1": float, "t2": float, "reasoning": "cite signal data, max 120 chars"}"""
 
 
 def _ensure_paper_tables(conn):
@@ -4431,6 +4435,10 @@ def paper_stats(user_id):
         return jsonify({'error': str(e)}), 500
 
 
+_PAPER_MAX_OPEN_POSITIONS  = 8   # never hold more than this many concurrent positions
+_PAPER_MAX_NEW_PER_SCAN    = 3   # max new entries opened in a single scan run
+
+
 def _paper_ai_run(user_id: str) -> dict:
     """
     Core autonomous paper trading agent for one user.
@@ -4467,6 +4475,17 @@ def _paper_ai_run(user_id: str) -> dict:
         ).fetchall()
         open_tickers = {r['ticker'] for r in open_rows}
 
+        # Hard cap: do not open any new positions if already at max
+        if len(open_tickers) >= _PAPER_MAX_OPEN_POSITIONS:
+            conn.execute(
+                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                (user_id, 'scan_start', None,
+                 f'Scan skipped — already at max {_PAPER_MAX_OPEN_POSITIONS} open positions', now_iso)
+            )
+            conn.commit()
+            conn.close()
+            return {'entries': 0, 'skips': 0, 'monitor_updates': []}
+
         # Fetch current balance for position sizing
         acct_row = conn.execute(
             "SELECT virtual_balance FROM paper_account WHERE user_id=?", (user_id,)
@@ -4482,7 +4501,8 @@ def _paper_ai_run(user_id: str) -> dict:
         # Log scan start
         conn.execute(
             "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-            (user_id, 'scan_start', None, f'Scanning open patterns for {user_id}', now_iso)
+            (user_id, 'scan_start', None,
+             f'Scanning open patterns for {user_id} ({len(open_tickers)}/{_PAPER_MAX_OPEN_POSITIONS} slots used)', now_iso)
         )
         conn.commit()
 
@@ -4505,7 +4525,7 @@ def _paper_ai_run(user_id: str) -> dict:
                      LIMIT 1
                  )
                ORDER BY RANDOM()
-               LIMIT 200"""
+               LIMIT 100"""
         ).fetchall()
         import random as _random
         # Sort into quality bands then shuffle within each band for diversity
@@ -4591,7 +4611,12 @@ def _paper_ai_run(user_id: str) -> dict:
                 continue
 
             action    = 'SKIP' if skip_reason else 'ENTER'
-            reasoning = skip_reason or f'Quality {quality:.2f} {conviction} — zone entry'
+            pattern_type = c.get('pattern_type', '?')
+            kb_signal_dir = (c.get('kb_signal_dir') or '').lower() or '?'
+            reasoning = skip_reason or (
+                f'{pattern_type} {direction} | q={quality:.2f} {conviction} '
+                f'regime={regime or "?"} signal_dir={kb_signal_dir}'
+            )
 
             # ── LLM decision (overrides rule-based) ───────────────────
             if not skip_reason:
@@ -4633,6 +4658,11 @@ def _paper_ai_run(user_id: str) -> dict:
                     # Fall through with rule-based result
 
             evaluated.append({'ticker': ticker, 'action': action, 'reasoning': reasoning})
+
+            # Per-scan entry cap — prefer highest quality, don't bulk-enter everything
+            if action == 'ENTER' and entries >= _PAPER_MAX_NEW_PER_SCAN:
+                skips += 1
+                continue
 
             if action == 'ENTER' and risk > 0:
                 # Size quantity: risk_per_trade / risk_per_unit gives shares/units
