@@ -189,7 +189,7 @@ select option { background: var(--surface); }
 
 /* ── Auth pages (login + register) ── */
 .auth-page {
-  position: fixed; inset: 0; background: #0d0d0d; overflow-y: auto; z-index: 200;
+  position: relative; min-height: 100vh; background: #0d0d0d; overflow-y: auto; z-index: 200;
   display: flex; flex-direction: column; align-items: center;
 }
 .auth-grid-bg {
