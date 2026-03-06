@@ -324,13 +324,14 @@ select option { background: var(--surface); }
 .auth-progress-step.active .auth-progress-label { color: var(--accent); }
 .auth-progress-line { flex: 1; height: 1px; background: var(--border); margin: 0 6px; min-width: 12px; }
 
-/* Auth pages: auth screens sit outside #main so position:fixed works vs viewport */
-/* Topbar/sidebar/nav hidden via inline CSS bootstrap + auth-mode class */
+/* Auth pages: screens live outside #main; body overflow must be visible */
+body.auth-mode { overflow: auto; }
 body.auth-mode #topbar { display: none; }
 body.auth-mode #sidebar { display: none; }
 body.auth-mode #main { display: none; }
 body.auth-mode #mobile-nav { display: none !important; }
-/* Also hide via data-auth attribute set synchronously before extensions run */
+/* data-auth: synchronous CSS fallback set before any JS/extensions run */
+html[data-auth] body { overflow: auto; }
 html[data-auth] #topbar { display: none !important; }
 html[data-auth] #sidebar { display: none !important; }
 html[data-auth] #main { display: none !important; }
