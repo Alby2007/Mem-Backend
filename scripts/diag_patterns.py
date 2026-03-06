@@ -55,4 +55,15 @@ print(f'Active (not filled/broken): {active}')
 sample = c.execute(f"SELECT ticker, quality_score, kb_conviction, status FROM {pat_table} WHERE status NOT IN ('filled','broken') ORDER BY quality_score DESC LIMIT 5").fetchall()
 print(f'Top 5 active by quality: {sample}')
 
+print('\n--- Facts table ---')
+fact_count = c.execute('SELECT COUNT(*) FROM facts').fetchone()[0]
+print(f'Total facts: {fact_count}')
+if fact_count > 0:
+    top_subjects = c.execute('SELECT subject, COUNT(*) as n FROM facts GROUP BY subject ORDER BY n DESC LIMIT 10').fetchall()
+    print(f'Top subjects: {top_subjects}')
+    has_price = c.execute("SELECT COUNT(DISTINCT subject) FROM facts WHERE predicate='last_price'").fetchone()[0]
+    print(f'Subjects with last_price atom: {has_price}')
+    top_predicates = c.execute('SELECT predicate, COUNT(*) as n FROM facts GROUP BY predicate ORDER BY n DESC LIMIT 10').fetchall()
+    print(f'Top predicates: {top_predicates}')
+
 c.close()
