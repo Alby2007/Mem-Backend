@@ -607,7 +607,6 @@ if HAS_INGEST:
         _ingest_scheduler.register(UCDPAdapter(),                              interval_sec=86400)  # 24 hours UCDP conflict baseline
         _ingest_scheduler.register(ACLEDAdapter(),                             interval_sec=21600)  # 6 hours ACLED protest/unrest
         _ingest_scheduler.register(USGSAdapter(),                              interval_sec=3600)   # 1 hour USGS earthquakes
-        _ingest_scheduler.register(PaperAgentAdapter(),                        interval_sec=1800)   # 30 min autonomous paper trading agent
         _ingest_scheduler.start()
     except Exception as _e:
         import logging as _logging
@@ -4877,6 +4876,15 @@ class PaperAgentAdapter:
 
     def run(self) -> None:
         _paper_ai_global_run()
+
+
+# Register paper agent adapter now that the class is defined
+if _ingest_scheduler is not None:
+    try:
+        _ingest_scheduler.register(PaperAgentAdapter(), interval_sec=1800)  # 30 min autonomous paper trading
+    except Exception as _pae:
+        import logging as _logging
+        _logging.getLogger(__name__).error('Failed to register PaperAgentAdapter: %s', _pae)
 
 
 @app.route('/users/<user_id>/paper/agent/log', methods=['GET'])
