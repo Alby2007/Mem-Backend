@@ -26,11 +26,10 @@
 </script>
 <style>
   /* CSS-driven initial auth screen — no JS dependency */
-  html[data-auth] body { }
   html[data-auth] #topbar { display:none!important; }
   html[data-auth] #sidebar { display:none!important; }
   html[data-auth] #mobile-nav { display:none!important; }
-  html[data-auth] #main { position:static!important;left:0!important;top:0!important;overflow:visible!important;padding:0!important; }
+  html[data-auth] #main { display:none!important; }
   html[data-auth="login"] #screen-login { display:block!important; }
   html[data-auth="register"] #screen-register { display:block!important; }
 </style>
