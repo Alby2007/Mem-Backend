@@ -33,13 +33,11 @@ function applySubscriptionGating() {
       else        el.classList.remove('locked');
     }
   });
-  // Show Subscription nav item only when user has no paid tier (free users need to find it)
-  // Hide it once they have a subscription — they don't need to see it constantly
+  // Always show Subscription nav item — users need to manage/cancel active subscriptions
   const navSub  = document.getElementById('nav-subscription');
   const mnavSub = document.getElementById('mnav-subscription');
-  const showSub = !_hasSubscription();
-  if (navSub)  navSub.style.display  = showSub ? '' : 'none';
-  if (mnavSub) mnavSub.style.display = showSub ? '' : 'none';
+  if (navSub)  navSub.style.display  = '';
+  if (mnavSub) mnavSub.style.display = '';
 }
 
 function checkFeature(feature) {
