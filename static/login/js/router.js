@@ -61,12 +61,10 @@ function showScreen(name) {
 
 function navigate(name, { replace = false } = {}) {
   if (!_AUTH_SCREENS.has(name) && !state.userId) {
-    // Auth guard — redirect to /login?next=/<username>/<screen>
+    // Auth guard — hard redirect to standalone /login page
     const intended = _pathForScreen(name);
     const next = _NEXT_RE.test(intended) ? encodeURIComponent(intended) : '';
-    const target = '/login' + (next ? `?next=${next}` : '');
-    window.history.replaceState(null, '', target);
-    showScreen('login');
+    window.location.replace('/login' + (next ? `?next=${next}` : ''));
     return;
   }
   // Subscription guard — redirect to /subscription for gated screens

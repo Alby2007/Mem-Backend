@@ -1,13 +1,12 @@
 // ── Boot ──────────────────────────────────────────────────────────────────────
 function _showLoginFallback() {
   const p = _screenFromPath(window.location.pathname);
-  if (p === 'register') { showScreen('register'); return; }
+  if (p === 'register') { window.location.replace('/register'); return; }
   if (p && !_AUTH_SCREENS.has(p)) {
-    window.history.replaceState(null, '', '/login?next=' + encodeURIComponent(window.location.pathname));
-  } else if (window.location.pathname !== '/login' && window.location.pathname !== '/register') {
-    window.history.replaceState(null, '', '/login');
+    window.location.replace('/login?next=' + encodeURIComponent(window.location.pathname));
+  } else {
+    window.location.replace('/login');
   }
-  showScreen('login');
 }
 
 // Show login immediately (sync) — overridden below if session is valid
