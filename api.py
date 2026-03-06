@@ -4543,8 +4543,9 @@ def _paper_ai_run(user_id: str) -> dict:
         except Exception:
             pass
         risk_pct = float((_pref_row[0] if _pref_row and _pref_row[0] else None) or 1.0)
+        risk_pct = min(risk_pct, 2.0)  # safety cap: never risk more than 2% per trade regardless of prefs
         risk_per_trade = balance * risk_pct / 100.0
-        max_position_value = balance * 0.15  # hard cap: no single position > 15% of account
+        max_position_value = balance * 0.10  # hard cap: no single position > 10% of account
         remaining_cash = balance  # track available cash this run
 
         entries = 0
@@ -4972,9 +4973,9 @@ def paper_agent_start(user_id):
         return jsonify({'status': 'already_running', 'message': 'Scanner already running'})
     stop_ev = _threading.Event()
     _paper_scanner_threads[user_id] = stop_ev
-    t = _threading.Thread(target=_paper_continuous_scan, args=(user_id, stop_ev, 120), daemon=True)
+    t = _threading.Thread(target=_paper_continuous_scan, args=(user_id, stop_ev, 1800), daemon=True)
     t.start()
-    return jsonify({'status': 'started', 'message': 'Continuous scanner started — scans every 2 min'})
+    return jsonify({'status': 'started', 'message': 'Continuous scanner started — scans every 30 min'})
 
 
 @app.route('/users/<user_id>/paper/agent/stop', methods=['POST'])
