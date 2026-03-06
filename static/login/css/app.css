@@ -193,10 +193,10 @@ select option { background: var(--surface); }
   display: flex; flex-direction: column; align-items: center;
 }
 .auth-grid-bg {
-  position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0.12;
+  position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0.22;
   background-image:
-    linear-gradient(rgba(245,158,11,.3) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(245,158,11,.3) 1px, transparent 1px);
+    linear-gradient(rgba(245,158,11,.4) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(245,158,11,.4) 1px, transparent 1px);
   background-size: 60px 60px;
   animation: authGridDrift 20s linear infinite;
 }
@@ -216,6 +216,13 @@ select option { background: var(--surface); }
 }
 /* Left panel */
 .auth-left { display: flex; flex-direction: column; justify-content: center; }
+.auth-left-headline {
+  font-size: 22px; font-weight: 700; color: var(--text); line-height: 1.3;
+  margin-bottom: 8px;
+}
+.auth-left-sub {
+  font-size: 13px; color: var(--muted); margin-bottom: 36px; line-height: 1.5;
+}
 .auth-stats { display: flex; flex-direction: column; gap: 32px; }
 .auth-stat-value {
   font-family: var(--mono); font-size: 42px; font-weight: 700;
