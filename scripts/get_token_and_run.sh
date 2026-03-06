@@ -1,23 +1,22 @@
 #!/bin/bash
 # Run on OCI: bash scripts/get_token_and_run.sh
-set -e
 
 BASE="https://api.trading-galaxy.uk"
 USER_ID="albertjemmettwaite_uggwq"
 EMAIL="albertjemmettwaite@gmail.com"
-PASS="ScoobyDoo2016!"
+# Use single-quoted JSON body so ! is not interpreted by bash
+JSON_BODY='{"email":"albertjemmettwaite@gmail.com","password":"ScoobyDoo2016!"}'
 
 echo "=== Getting token ==="
 TOKEN=$(curl -s -X POST "$BASE/auth/token" \
   -H "Content-Type: application/json" \
-  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" \
+  -d "$JSON_BODY" \
   | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token','ERROR: '+str(d)))")
 
-echo "Token: ${TOKEN:0:30}..."
+echo "Token: ${TOKEN:0:40}..."
 
 if [[ "$TOKEN" == ERROR* ]]; then
-  echo "Auth failed — trying beta password"
-  PASS="ScoobyDoo2016!"
+  echo "Auth failed: $TOKEN"
   exit 1
 fi
 
