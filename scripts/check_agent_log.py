@@ -42,23 +42,26 @@ print('\n--- Pattern filter diagnosis ---')
 conviction_dist = c.execute(
     "SELECT kb_conviction, COUNT(*) n FROM pattern_signals WHERE status NOT IN ('filled','broken') GROUP BY kb_conviction ORDER BY n DESC LIMIT 10"
 ).fetchall()
-print(f'Conviction distribution (active): {list(conviction_dist)}')
+for row in conviction_dist:
+    print(f'  kb_conviction={row[0]!r:25s}  count={row[1]}')
 
 passing = c.execute(
     "SELECT COUNT(*) FROM pattern_signals WHERE status NOT IN ('filled','broken') AND quality_score >= 0.70 AND LOWER(kb_conviction) IN ('high','confirmed','strong')"
 ).fetchone()[0]
 print(f'Pass filter (quality>=0.70, conviction high/confirmed/strong): {passing}')
 
-# Looser check
 passing_any = c.execute(
     "SELECT COUNT(*) FROM pattern_signals WHERE status NOT IN ('filled','broken') AND quality_score >= 0.70"
 ).fetchone()[0]
 print(f'Pass quality filter only (quality>=0.70, any conviction): {passing_any}')
 
-# Sample 5 to see actual values
+# Sample with zone values to check for zero zones
+print('\nTop 5 active patterns (with zones):')
 sample = c.execute(
-    "SELECT ticker, quality_score, kb_conviction, kb_regime, status FROM pattern_signals WHERE status NOT IN ('filled','broken') ORDER BY quality_score DESC LIMIT 5"
+    "SELECT ticker, quality_score, kb_conviction, zone_low, zone_high, direction FROM pattern_signals"
+    " WHERE status NOT IN ('filled','broken') ORDER BY quality_score DESC LIMIT 5"
 ).fetchall()
-print(f'Top 5 active patterns: {list(sample)}')
+for row in sample:
+    print(f'  {row[0]:8s} q={row[1]:.2f} conv={row[2]!r:12s} dir={row[5]:8s} zone={row[3]:.4f}-{row[4]:.4f}')
 
 c.close()
