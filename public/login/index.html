@@ -1772,8 +1772,10 @@ function _saveSession(token, userId, tgData) {
   state.userId = userId;
   // Tokens are now stored in HttpOnly cookies set by the backend.
   // Only non-sensitive display data goes in localStorage.
-  if (tgData) localStorage.setItem('tg_user_data', JSON.stringify(tgData));
-  localStorage.setItem('tg_user_id', userId);  // display only — not a secret
+  try {
+    if (tgData) localStorage.setItem('tg_user_data', JSON.stringify(tgData));
+    localStorage.setItem('tg_user_id', userId);
+  } catch { /* storage blocked in some contexts */ }
   _renderTgChip(tgData || null, userId);
 }
 
@@ -1807,8 +1809,7 @@ async function signOut() {
   try { await fetch(API + '/auth/logout', { method: 'POST', credentials: 'include',
     headers: { 'Content-Type': 'application/json' } }); } catch { /* ignore */ }
   state.token = null; state.userId = null; state.holdings = [];
-  localStorage.removeItem('tg_user_id');
-  localStorage.removeItem('tg_user_data');
+  try { localStorage.removeItem('tg_user_id'); localStorage.removeItem('tg_user_data'); } catch { /* storage blocked */ }
   _renderTgChip(null, null);
   window.history.replaceState(null, '', '/login');
   showScreen('auth');
@@ -3480,8 +3481,8 @@ document.getElementById('hist-atoms-overlay').addEventListener('click', e => {
     if (me && me.user_id) {
       state.userId = me.user_id;
       state.token  = '__cookie__'; // sentinel — actual token is in HttpOnly cookie
-      const storedTgData = localStorage.getItem('tg_user_data');
-      const tgData = storedTgData ? JSON.parse(storedTgData) : null;
+      let tgData = null;
+      try { const s = localStorage.getItem('tg_user_data'); tgData = s ? JSON.parse(s) : null; } catch { /* storage blocked */ }
       _renderTgChip(tgData, me.user_id);
 
       // Route to the screen from the URL if valid, else dashboard
