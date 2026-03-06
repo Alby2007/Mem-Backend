@@ -4709,7 +4709,7 @@ def _paper_ai_run(user_id: str) -> dict:
                 qty = round(risk_per_trade / risk, 4) if risk > 0 else 1.0
                 qty = max(qty, 0.0001)  # floor
                 position_value = round(entry_p * qty, 2)
-                # Cap: never allocate more than 5% of starting balance to one position
+                # Cap: never allocate more than 15% of account to one position
                 if position_value > max_position_value:
                     qty = round(max_position_value / entry_p, 4)
                     position_value = round(entry_p * qty, 2)
