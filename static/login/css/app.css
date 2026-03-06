@@ -190,11 +190,15 @@ select option { background: var(--surface); }
 /* ── Auth pages (login + register) ── */
 #screen-login, #screen-register {
   position: fixed; inset: 0; z-index: 500; overflow-y: auto;
-  background: #080A06;
+  background: #080A06; display: block;
 }
 .auth-page {
-  min-height: 100vh; display: flex; align-items: center;
-  position: relative;
+  position: relative; z-index: 1;
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 520px 1fr;
+  grid-template-rows: 1fr;
+  align-items: center;
 }
 
 /* ── Shared background layers (body-level, hidden when not on auth) ── */
@@ -225,16 +229,9 @@ html[data-auth] .auth-candles {
   50%      { opacity: 1;   transform: translate(-50%,-50%) scale(1.08); }
 }
 
-/* ── 3-column layout ── */
-.auth-3col {
-  position: relative; z-index: 1;
-  width: 100%; min-height: 100vh;
-  display: grid; grid-template-columns: 1fr 520px 1fr;
-  align-items: center;
-}
-
 /* ── Brand column (left) ── */
 .auth-brand-col {
+  grid-column: 1;
   padding: 0 0 0 64px;
   animation: authFadeUp 0.8s ease both;
 }
@@ -269,6 +266,7 @@ html[data-auth] .auth-candles {
 
 /* ── Card column (centre) ── */
 .auth-card-col {
+  grid-column: 2;
   padding: 0 32px;
   animation: authFadeUp 0.8s 0.1s ease both;
 }
@@ -340,9 +338,10 @@ html[data-auth] .auth-candles {
 
 /* ── Deco column (right) ── */
 .auth-deco-col {
+  grid-column: 3;
   padding: 0 64px 0 0;
   display: flex; justify-content: flex-end;
-  animation: authFadeUp 0.8s 0.2s ease both; opacity: 0.6; /* start hidden, fadeUp fills it */
+  animation: authFadeUp 0.8s 0.2s ease both; opacity: 0.6;
 }
 
 /* Ticker feed (login right) */
@@ -429,11 +428,11 @@ html[data-auth] .auth-candles {
 
 /* Responsive */
 @media (max-width: 900px) {
-  .auth-3col { grid-template-columns: 1fr; padding: 40px 24px; }
-  .auth-brand-col { padding: 0; margin-bottom: 32px; }
+  .auth-page { grid-template-columns: 1fr; padding: 40px 24px; }
+  .auth-brand-col { grid-column: 1; padding: 0; margin-bottom: 32px; }
+  .auth-card-col  { grid-column: 1; padding: 0; }
+  .auth-deco-col  { display: none; }
   .auth-brand-headline { font-size: 26px; }
-  .auth-deco-col { display: none; }
-  .auth-card-col { padding: 0; }
   .auth-card { padding: 32px 24px; }
 }
 
