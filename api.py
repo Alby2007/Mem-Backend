@@ -4435,7 +4435,7 @@ def paper_stats(user_id):
         return jsonify({'error': str(e)}), 500
 
 
-_PAPER_MAX_OPEN_POSITIONS  = 8   # never hold more than this many concurrent positions
+_PAPER_MAX_OPEN_POSITIONS  = 12  # never hold more than this many concurrent positions
 _PAPER_MAX_NEW_PER_SCAN    = 3   # max new entries opened in a single scan run
 
 
