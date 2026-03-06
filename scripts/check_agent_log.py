@@ -38,4 +38,27 @@ for r in rows:
     ticker = (r['ticker'] or '').ljust(8)
     print(f"[{ts}] {r['event_type']:12s} {ticker} {r['detail']}")
 
+print('\n--- Pattern filter diagnosis ---')
+conviction_dist = c.execute(
+    "SELECT kb_conviction, COUNT(*) n FROM pattern_signals WHERE status NOT IN ('filled','broken') GROUP BY kb_conviction ORDER BY n DESC LIMIT 10"
+).fetchall()
+print(f'Conviction distribution (active): {list(conviction_dist)}')
+
+passing = c.execute(
+    "SELECT COUNT(*) FROM pattern_signals WHERE status NOT IN ('filled','broken') AND quality_score >= 0.70 AND LOWER(kb_conviction) IN ('high','confirmed','strong')"
+).fetchone()[0]
+print(f'Pass filter (quality>=0.70, conviction high/confirmed/strong): {passing}')
+
+# Looser check
+passing_any = c.execute(
+    "SELECT COUNT(*) FROM pattern_signals WHERE status NOT IN ('filled','broken') AND quality_score >= 0.70"
+).fetchone()[0]
+print(f'Pass quality filter only (quality>=0.70, any conviction): {passing_any}')
+
+# Sample 5 to see actual values
+sample = c.execute(
+    "SELECT ticker, quality_score, kb_conviction, kb_regime, status FROM pattern_signals WHERE status NOT IN ('filled','broken') ORDER BY quality_score DESC LIMIT 5"
+).fetchall()
+print(f'Top 5 active patterns: {list(sample)}')
+
 c.close()
