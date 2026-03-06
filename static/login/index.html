@@ -35,11 +35,10 @@ html[data-auth="register"] #screen-register { display: block !important; }
 
 #screen-login .auth-page,
 #screen-register .auth-page {
-  box-sizing: border-box !important;
   width: 100% !important;
   height: 100vh !important;
   display: grid !important;
-  grid-template-columns: 240px minmax(320px,400px) 200px !important;
+  grid-template-columns: 1fr 380px 1fr !important;
   grid-template-areas: "brand card deco" !important;
   grid-template-rows: 100vh !important;
   align-items: center !important;
@@ -47,29 +46,147 @@ html[data-auth="register"] #screen-register { display: block !important; }
   z-index: 1 !important;
 }
 #screen-login .auth-brand-col,
-#screen-register .auth-brand-col { grid-area: brand !important; min-width: 0 !important; }
+#screen-register .auth-brand-col {
+  grid-area: brand !important;
+  min-width: 0 !important;
+  padding: 0 16px 0 32px !important;
+}
 #screen-login .auth-card-col,
-#screen-register .auth-card-col  { grid-area: card !important; min-width: 0 !important; }
+#screen-register .auth-card-col  {
+  grid-area: card !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+}
 #screen-login .auth-deco-col,
-#screen-register .auth-deco-col  { grid-area: deco !important; min-width: 0 !important; }
+#screen-register .auth-deco-col  {
+  grid-area: deco !important;
+  min-width: 0 !important;
+  padding: 0 16px !important;
+}
+#screen-login .auth-brand-headline,
+#screen-register .auth-brand-headline {
+  font-size: 24px !important;
+}
+#screen-login .auth-brand-sub,
+#screen-register .auth-brand-sub {
+  margin-bottom: 24px !important;
+}
+#screen-login .auth-brand-mark,
+#screen-register .auth-brand-mark {
+  margin-bottom: 24px !important;
+}
 
-@media (max-width: 760px) {
-  #screen-login .auth-page,
-  #screen-register .auth-page {
-    grid-template-columns: 1fr !important;
-    grid-template-areas: "brand" "card" !important;
-    grid-template-rows: auto !important;
-    height: auto !important;
-    min-height: 100vh !important;
-    padding: 40px 24px !important;
-    overflow-y: auto !important;
-  }
-  #screen-login .auth-deco-col,
-  #screen-register .auth-deco-col { display: none !important; }
-  #screen-login .auth-brand-col,
-  #screen-register .auth-brand-col { padding-left: 0 !important; }
-  #screen-login .auth-card-col,
-  #screen-register .auth-card-col { padding: 0 !important; }
+/* Card: visible background + border */
+#screen-login .auth-card,
+#screen-register .auth-card {
+  background: #111410 !important;
+  border: 1px solid rgba(232,160,32,0.25) !important;
+  border-radius: 14px !important;
+  padding: 36px 32px !important;
+  box-shadow: 0 0 0 1px rgba(232,160,32,0.05) inset,
+              0 24px 64px rgba(0,0,0,0.8),
+              0 0 40px rgba(232,160,32,0.06) !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+#screen-login .auth-card::before,
+#screen-register .auth-card::before {
+  content: '' !important;
+  position: absolute !important;
+  top: 0 !important; left: 24px !important; right: 24px !important; height: 1px !important;
+  background: linear-gradient(90deg, transparent, #E8A020, transparent) !important;
+  opacity: 0.6 !important;
+}
+#screen-login .auth-field input,
+#screen-register .auth-field input {
+  background: rgba(255,255,255,0.05) !important;
+  border: 1px solid rgba(232,160,32,0.18) !important;
+  color: #E8E4DC !important;
+  border-radius: 8px !important;
+  padding: 12px 14px !important;
+  width: 100% !important;
+  font-family: 'DM Mono', monospace !important;
+  font-size: 13px !important;
+  outline: none !important;
+  box-sizing: border-box !important;
+}
+#screen-login .auth-field input:focus,
+#screen-register .auth-field input:focus {
+  border-color: rgba(232,160,32,0.45) !important;
+  background: rgba(232,160,32,0.04) !important;
+}
+#screen-login .auth-field input::placeholder,
+#screen-register .auth-field input::placeholder {
+  color: #4a4a42 !important;
+}
+#screen-login .auth-btn-primary,
+#screen-register .auth-btn-primary {
+  background: #E8A020 !important;
+  color: #0A0C08 !important;
+  border: none !important;
+  border-radius: 8px !important;
+  padding: 13px !important;
+  width: 100% !important;
+  font-family: 'Syne', sans-serif !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  cursor: pointer !important;
+  margin-top: 6px !important;
+}
+#screen-login .auth-btn-primary:hover,
+#screen-register .auth-btn-primary:hover {
+  background: #F0AA28 !important;
+  box-shadow: 0 0 28px rgba(232,160,32,0.45) !important;
+}
+#screen-login .auth-card-title,
+#screen-register .auth-card-title {
+  font-family: 'Syne', sans-serif !important;
+  font-size: 22px !important;
+  font-weight: 700 !important;
+  color: #E8E4DC !important;
+  margin-bottom: 4px !important;
+}
+#screen-login .auth-card-sub,
+#screen-register .auth-card-sub {
+  font-size: 11px !important;
+  color: #6B6860 !important;
+  margin-bottom: 28px !important;
+  font-family: 'DM Mono', monospace !important;
+}
+#screen-login .auth-field label,
+#screen-register .auth-field label {
+  font-size: 9px !important;
+  letter-spacing: 0.12em !important;
+  text-transform: uppercase !important;
+  color: #6B6860 !important;
+  display: block !important;
+  margin-bottom: 6px !important;
+  font-family: 'DM Mono', monospace !important;
+}
+#screen-login .auth-card-footer,
+#screen-register .auth-card-footer {
+  margin-top: 24px !important;
+  text-align: center !important;
+  font-size: 11px !important;
+  color: #6B6860 !important;
+  font-family: 'DM Mono', monospace !important;
+}
+#screen-login .auth-card-footer a,
+#screen-register .auth-card-footer a {
+  color: #E8A020 !important;
+  text-decoration: none !important;
+}
+#screen-login .auth-divider-line,
+#screen-register .auth-divider-line {
+  background: rgba(232,160,32,0.15) !important;
+}
+#screen-login .auth-divider-text,
+#screen-register .auth-divider-text {
+  color: #6B6860 !important;
+  font-size: 10px !important;
+  font-family: 'DM Mono', monospace !important;
 }
 </style>
 <script>
