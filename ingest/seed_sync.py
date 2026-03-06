@@ -86,6 +86,10 @@ class SeedSyncClient:
             self._check_and_apply()
         except Exception as exc:
             _log.warning('SeedSync check failed: %s', exc)
+        # Always purge fake atoms — runs even if no new seed was applied.
+        # This closes the window where a previous-session seed re-injected
+        # test atoms before the manual cleanup script could run.
+        self._purge_fake_atoms()
 
     # ── Core logic ────────────────────────────────────────────────────────────
 
@@ -197,6 +201,40 @@ class SeedSyncClient:
         self._last_tag = tag
         _log.info('SeedSync: applied %s — %d statements, facts now %d',
                   tag, len(allowed_statements), after_count)
+        self._purge_fake_atoms()
+
+    # ── Fake-atom guard ───────────────────────────────────────────────────────
+
+    def _purge_fake_atoms(self) -> None:
+        """Delete known fake/eval ticker atoms from the KB after seed application.
+        Prevents test data baked into a seed from persisting in production."""
+        _FAKE_SUBJECTS = (
+            'notreal99', 'fakeco', 'madeupticker', 'randomticker123',
+            'xyz corp', 'xyzco', 'fakecorp', 'testco', 'badticker',
+            'blobcorp99',
+        )
+        _FAKE_OBJECT_LIKE = (
+            '%notreal99%', '%madeupticker%', '%fakeco%', '%randomticker123%', '%blobcorp99%',
+        )
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=5)
+            total = 0
+            for subj in _FAKE_SUBJECTS:
+                cur = conn.execute(
+                    'DELETE FROM facts WHERE LOWER(subject) = ?', (subj,)
+                )
+                total += cur.rowcount
+            for pat in _FAKE_OBJECT_LIKE:
+                cur = conn.execute(
+                    'DELETE FROM facts WHERE LOWER(object) LIKE ?', (pat,)
+                )
+                total += cur.rowcount
+            conn.commit()
+            conn.close()
+            if total:
+                _log.info('SeedSync: purged %d fake-ticker atoms after seed apply', total)
+        except Exception as exc:
+            _log.warning('SeedSync: fake-atom purge failed: %s', exc)
 
     # ── kb_meta persistence ───────────────────────────────────────────────────
 

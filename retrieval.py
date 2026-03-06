@@ -424,10 +424,20 @@ def retrieve(
         except Exception:
             return None
 
+    _RETRIEVAL_FAKE_SUBJECTS = frozenset([
+        'notreal99', 'fakeco', 'madeupticker', 'randomticker123',
+        'xyz corp', 'xyzco', 'fakecorp', 'testco', 'badticker', 'blobcorp99',
+        # Malformed on-demand fetch atoms stored with 'kb' as subject instead
+        # of the real ticker — these cause hallucinations for unknown tickers.
+        'kb',
+    ])
+
     def _add(rows):
         for r in rows:
             atom = _normalise(r)
             if not atom:
+                continue
+            if atom['subject'].lower() in _RETRIEVAL_FAKE_SUBJECTS:
                 continue
             key = (atom['subject'][:60], atom['predicate'], atom['object'][:60])
             if key not in seen and atom['predicate'] not in _NOISE_PREDICATES \
@@ -440,6 +450,8 @@ def retrieve(
         for r in rows:
             atom = _normalise(r)
             if not atom:
+                continue
+            if atom['subject'].lower() in _RETRIEVAL_FAKE_SUBJECTS:
                 continue
             key = (atom['subject'][:60], atom['predicate'], atom['object'][:60])
             if atom['predicate'] not in _NOISE_PREDICATES \
@@ -1048,6 +1060,48 @@ def retrieve(
     _effective_limit = 60 if (_is_geo_query and _asked_entities) else limit
     results = results[:_effective_limit]
 
+    # ── Pin macro regime atoms for macro/regime/yield queries ─────────────────
+    # These predicates are always relevant to macro queries but have lower
+    # confidence than ticker atoms and get squeezed out of results[:limit].
+    # When the query contains macro keywords, fetch them explicitly and pin
+    # them at the front of results so the LLM always sees regime context.
+    _ALWAYS_PINNED = frozenset([
+        'market_regime',
+        'yield_curve_regime',
+        'yield_curve_slope',
+        'central_bank_stance',
+        'fed_funds_rate',
+    ])
+    _MACRO_KWS = (
+        'macro', 'regime', 'yield', 'rate', 'fed', 'fomc', 'bond',
+        'curve', 'steepen', 'flatten', 'market', 'economy', 'inflation',
+        'interest rate', 'monetary', 'what should', 'positioning',
+    )
+    _is_macro_query = any(kw in msg_lower for kw in _MACRO_KWS)
+    if _is_macro_query:
+        try:
+            pin_ph = ','.join('?' * len(_ALWAYS_PINNED))
+            c.execute(f"""
+                SELECT subject, predicate, object, source, confidence, metadata, timestamp
+                FROM facts
+                WHERE predicate IN ({pin_ph})
+                ORDER BY confidence DESC LIMIT 10
+            """, tuple(_ALWAYS_PINNED))
+            _pinned_macro = []
+            for r in c.fetchall():
+                atom = _normalise(r)
+                if not atom:
+                    continue
+                key = (atom['subject'][:60], atom['predicate'], atom['object'][:60])
+                if key not in seen:
+                    seen.add(key)
+                    _pinned_macro.append(atom)
+            if _pinned_macro:
+                results = _pinned_macro + results
+        except Exception:
+            pass
+
+
     # ── Apply adaptation nudges ────────────────────────────────────────────────
     if nudges is not None:
         # Recency bias: sort by timestamp DESC (prefer freshest atoms)
@@ -1115,11 +1169,21 @@ def retrieve(
     # Unrelated atoms (different subject) are kept only if space remains.
     if tickers:
         ticker_set_lower = {t.lower() for t in tickers}
+        _ALWAYS_KEEP_PREDICATES = frozenset([
+            'market_regime', 'yield_curve_regime', 'yield_curve_slope',
+            'central_bank_stance', 'fed_funds_rate',
+        ])
         primary   = [r for r in results if r['subject'].lower() in ticker_set_lower]
-        secondary = [r for r in results if r['subject'].lower() not in ticker_set_lower]
-        # Only include secondary (unrelated) atoms if primary set is thin
+        # Macro regime atoms are always kept — never capped by ticker prioritisation
+        macro_pinned = [r for r in results
+                        if r['subject'].lower() not in ticker_set_lower
+                        and r['predicate'] in _ALWAYS_KEEP_PREDICATES]
+        secondary = [r for r in results
+                     if r['subject'].lower() not in ticker_set_lower
+                     and r['predicate'] not in _ALWAYS_KEEP_PREDICATES]
+        # Only include other secondary (unrelated) atoms if primary set is thin
         secondary_cap = max(0, 8 - len(primary))
-        results = primary + secondary[:secondary_cap]
+        results = primary + macro_pinned + secondary[:secondary_cap]
 
     # ── Format output ──────────────────────────────────────────────────────────
     lines = ['=== TRADING KNOWLEDGE CONTEXT ===']
@@ -1198,8 +1262,10 @@ def retrieve(
         elif pred in ('premise', 'supporting_evidence', 'contradicting_evidence',
                       'risk_reward_ratio', 'position_sizing_note'):
             theses.append(r)
-        elif src.startswith('macro_data') or pred in ('regime_label', 'dominant_driver',
-                                                       'central_bank_stance', 'risk_on_off'):
+        elif src.startswith('macro_data') or pred in (
+                'regime_label', 'dominant_driver', 'central_bank_stance', 'risk_on_off',
+                'market_regime', 'fed_funds_rate', 'yield_curve_regime', 'yield_curve_slope',
+            ):
             macro.append(r)
         elif pred in _HIST_PREDICATES:
             historical.append(r)

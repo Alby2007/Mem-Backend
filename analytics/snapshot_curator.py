@@ -486,7 +486,7 @@ def curate_snapshot(user_id: str, db_path: str, tier: str = 'basic') -> CuratedS
 
         # Sort by score desc; cap by tier batch_size
         try:
-            from notifications.tip_formatter import TIER_LIMITS as _TL
+            from core.tiers import TIER_CONFIG as _TL
             _max_opps = _TL.get(tier, _TL['basic']).get('batch_size', 3)
         except Exception:
             _max_opps = 3

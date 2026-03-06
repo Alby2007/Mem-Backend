@@ -26,13 +26,22 @@ else:
     except ImportError:
         pass
     from ingest.yield_curve_adapter import YieldCurveAdapter
-    from knowledge import KnowledgeGraph
-    kg = KnowledgeGraph(db_path=DB)
     adapter = YieldCurveAdapter()
     atoms = adapter.fetch()
     print(f"  Adapter returned {len(atoms)} atoms")
-    for a in atoms:
-        kg.add(a.subject, a.predicate, a.object_, source=a.source,
-               confidence=a.authority, upsert=True)
-        print(f"  -> {a.predicate:30s} | {a.object_}")
+    if atoms:
+        import sqlite3 as _sq
+        _c = _sq.connect(DB, timeout=10)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        for a in atoms:
+            _c.execute(
+                "INSERT OR REPLACE INTO facts"
+                " (subject, predicate, object, source, confidence, timestamp)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (a.subject, a.predicate, a.object, a.source, a.confidence, now)
+            )
+            print(f"  -> {a.predicate:30s} | {a.object}")
+        _c.commit()
+        _c.close()
     print("[DONE]")

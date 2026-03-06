@@ -28,10 +28,13 @@ The system runs fully locally on-device (KB, LLM inference via Ollama). In produ
 │                         ingest/ package                              │
 │                                                                      │
 │  YFinanceAdapter   FREDAdapter     EDGARAdapter    RSSAdapter        │
-│  OptionsAdapter    HistoricalBackfillAdapter       PatternAdapter    │
+│  OptionsAdapter    PolygonOptionsAdapter           PatternAdapter    │
 │  LLMExtractionAdapter  SignalEnrichmentAdapter  EDGARRealtimeAdapter │
-│  BoEAdapter  FCAShortInterestAdapter  LSEFlowAdapter                │
-│  EarningsCalendarAdapter  GDELTAdapter  UCDPAdapter (GDELT proxy)   │
+│  HistoricalBackfillAdapter  BoEAdapter  FCAShortInterestAdapter      │
+│  LSEFlowAdapter  InsiderAdapter  SectorRotationAdapter               │
+│  EarningsCalendarAdapter  EconomicCalendarAdapter  EIAAdapter        │
+│  YieldCurveAdapter  FINRAShortInterestAdapter                        │
+│  GDELTAdapter  UCDPAdapter  ACLEDAdapter  USGSAdapter               │
 │  DynamicWatchlistManager  SeedSyncClient                            │
 │         └──────────────────┬─────────────────────────┘              │
 │                      BaseIngestAdapter                              │
@@ -228,19 +231,30 @@ POST /kb/traverse { topic }
 | Adapter | Interval | Rationale |
 |---|---|---|
 | `YFinanceAdapter` | 5 min | Price + signals near-real-time |
-| `OptionsAdapter` | 15 min | Options chains update intraday |
+| `SignalEnrichmentAdapter` | 5 min | Derived signals from price + options data |
 | `RSSAdapter` | 15 min | Headlines cycle every 15–30 min |
-| `SignalEnrichmentAdapter` | 30 min | Derived signals from historical + options data |
+| `LLMExtractionAdapter` | 5 min | LLM-based entity and signal extraction from RSS |
+| `EDGARRealtimeAdapter` | 3 min | 8-K real-time filings via EDGAR full-text search |
+| `OptionsAdapter` | 30 min | Yahoo Finance options chains |
+| `PolygonOptionsAdapter` | 30 min | Real Greeks/IV/GEX from Polygon (requires `POLYGON_API_KEY`) |
+| `GDELTAdapter` | 60 min | Geopolitical tension tone scores (country pairs) |
+| `USGSAdapter` | 60 min | Significant earthquakes near key regions |
+| `InsiderAdapter` | 60 min | SEC Form 4 insider transactions |
+| `SectorRotationAdapter` | 60 min | Sector ETF relative performance regime |
 | `PatternAdapter` | 60 min | Pattern detection over rolling windows |
-| `LLMExtractionAdapter` | 60 min | LLM-based entity and signal extraction from RSS |
-| `EDGARAdapter` | 6 hours | Filings are rare; daily is sufficient |
-| `EDGARRealtimeAdapter` | 30 min | 8-K real-time filings via EDGAR full-text search |
-| `HistoricalBackfillAdapter` | On-demand | One-shot via `POST /ingest/historical` |
+| `LSEFlowAdapter` | 60 min | Institutional microstructure flow for LSE equities |
+| `EarningsCalendarAdapter` | 60 min | Earnings proximity + implied move |
+| `ACLEDAdapter` | 6 hours | Protest/unrest intensity via GDELT artlist proxy |
+| `EDGARAdapter` | 6 hours | All SEC filing types (10-K, 10-Q, Form 4) |
 | `FREDAdapter` | 24 hours | FRED macro series update daily at most |
 | `BoEAdapter` | 24 hours | Bank of England macro indicators |
-| `FCAShortInterestAdapter` | 24 hours | FCA daily short position disclosures |
-| `GDELTAdapter` | 12 hours | Geopolitical tension tone scores (country pairs) |
-| `UCDPAdapter` | 12 hours | Country conflict intensity (GDELT artlist proxy) |
+| `YieldCurveAdapter` | 24 hours | Yield curve regime from TLT/IEF/SHY ETFs (requires `POLYGON_API_KEY`) |
+| `FINRAShortInterestAdapter` | 24 hours | US short interest from FINRA CDN (free, no key) |
+| `FCAShortInterestAdapter` | 24 hours | FCA daily short position disclosures (UK) |
+| `EconomicCalendarAdapter` | 24 hours | Upcoming FOMC/CPI/NFP event risk flags |
+| `EIAAdapter` | 24 hours | EIA crude oil inventory + production |
+| `UCDPAdapter` | 24 hours | Country conflict intensity (GDELT artlist proxy) |
+| `HistoricalBackfillAdapter` | On-demand | One-shot via `POST /ingest/historical` |
 
 `SeedSyncClient` runs every hour (independent of the scheduler) to check for a newer KB seed on GitHub Releases and apply it if found.
 
@@ -327,19 +341,29 @@ The system is configured for UK/LSE-first operation:
 
 ---
 
-## Frontend (Internal Tool)
+## Frontend
 
-`static/index.html` — single-page Bloomberg-terminal-style SPA. Served from **Cloudflare Pages** (`mem-backend2` project) at `https://trading-galaxy.uk`. Zero build step.
+Two SPAs, both zero-build vanilla JS, served from a single publish dir (`static/`):
 
-The `API` constant in the script block is environment-aware:
+| File | Served at | Purpose |
+|---|---|---|
+| `static/index.html` | `https://trading-galaxy.uk/` | Marketing landing page |
+| `static/login/index.html` | `https://trading-galaxy.uk/login` (+ all SPA routes via `_redirects`) | Main app — auth + all screens |
+| `static/login/css/app.css` | External stylesheet for the app | Extracted from inline `<style>` |
+| `static/login/js/*.js` | 17 JS files loaded in order | Extracted from inline `<script>` |
+
+**Screens:** Auth · Dashboard · Portfolio · Chat · Tips · Patterns · Network · History · Paper Trader · Subscription · Profile
+
+**Session restore:** on boot the SPA calls `GET /auth/me` via the `tg_access` HttpOnly cookie. If 401, it silently attempts `POST /auth/refresh` once. If that fails too, it shows the auth screen in-place (no page redirect).
+
+The `API` constant is environment-aware:
 ```js
 const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? ''
+    ? 'http://localhost:5050'
     : 'https://api.trading-galaxy.uk';
 ```
-This means the same file works for both local development (same-origin Flask) and production (cross-origin HTTPS API).
 
-**Screens:** Auth · Dashboard · Portfolio · Chat · Tips · Patterns · Network
+All fetch calls use `credentials: 'include'` to send HttpOnly cookies cross-origin.
 
 **Portfolio screen — three entry paths:**
 1. **Screenshot upload** — drop/click broker screenshot → `POST /users/{id}/history/screenshot` → `llava` vision model extracts holdings JSON → auto-populates rows
@@ -463,7 +487,7 @@ Allowed origins (configured in `api.py` via `flask-cors`):
 | `http://localhost:3000` | Local dev |
 | `http://localhost:5050` | Local dev |
 
-Allowed methods: `GET POST OPTIONS`. Allowed headers: `Authorization Content-Type`.
+Allowed methods: `GET POST PATCH OPTIONS`. Allowed headers: `Authorization Content-Type`.
 
 ---
 
@@ -478,6 +502,82 @@ Allowed methods: `GET POST OPTIONS`. Allowed headers: `Authorization Content-Typ
 | `ingest/seed_sync.py` | Background hourly poll — downloads newer seed from GitHub Releases and applies shared tables only; never touches `user_*` tables |
 
 Seed allowlist (tables synced): `facts`, `fact_conflicts`, `causal_edges`, `pattern_signals`, `signal_calibration`, and governance tables. Personal KB (`user_*`) is structurally protected.
+
+---
+
+## Paper Trading System
+
+The autonomous paper trader is a self-contained agent that runs on the ingest scheduler alongside data adapters. It uses the KB signal pipeline as its signal source and virtual accounts as its execution layer.
+
+### Components
+
+| Component | Location | Role |
+|---|---|---|
+| `_paper_ai_run(user_id)` | `api.py` | Single scan — fetches top patterns, filters, LLM decision, opens/monitors positions |
+| `_paper_continuous_scan(user_id, stop_event, interval_sec)` | `api.py` | Loop: calls `_paper_ai_run` every `interval_sec` seconds |
+| `PaperAgentAdapter` | `api.py` | Wraps `_paper_ai_run` as an `IngestAdapter` for the scheduler — fires every 30 min |
+| `_ensure_paper_tables()` | `api.py` | Creates `paper_account`, `paper_positions`, `paper_agent_log` on startup |
+
+### Scan flow
+
+```
+PaperAgentAdapter.run() / POST /paper/agent/run
+    → _paper_ai_run(user_id)
+        → open_tickers = SELECT ticker FROM paper_positions WHERE status='open'
+        → cooled_tickers = SELECT ticker FROM paper_positions
+                           WHERE status='stopped_out' AND closed_at > (now - 24h)
+        → balance = SELECT virtual_balance FROM paper_account
+        → candidates = top pattern_signals ordered by quality_score DESC LIMIT 20
+        → for each candidate:
+            if ticker in open_tickers → skip (already open)
+            if ticker in cooled_tickers → skip (24h cooldown)
+            if open_positions >= 12 → break (max slots)
+            if new_entries_this_scan >= 3 → break (per-scan cap)
+            → LLM decision: ENTER / SKIP / WAIT
+            if ENTER:
+                risk_pct = min(user_prefs.max_risk_per_trade_pct or 1.0, 2.0)
+                risk_per_trade = balance × risk_pct / 100
+                qty = risk_per_trade / (entry - stop)
+                position_value = qty × entry
+                if position_value > balance × 0.10:
+                    qty = (balance × 0.10) / entry
+                → INSERT paper_positions (status='open')
+                → UPDATE paper_account (virtual_balance -= position_value)
+                → INSERT paper_agent_log (event='entry')
+        → monitor open positions:
+            for each open position:
+                fetch current_price from KB (last_price atom)
+                if bullish AND current_price <= stop → stopped_out
+                if bullish AND current_price >= t2  → t2_hit
+                if bullish AND current_price >= t1 AND NOT partial_closed → t1_hit
+            → UPDATE paper_positions, paper_account
+            → INSERT paper_agent_log
+```
+
+### Sizing rules
+
+| Rule | Value |
+|---|---|
+| Starting balance | £500,000 virtual GBP (per user, created on first scan) |
+| Risk per trade | `max_risk_per_trade_pct` from `user_preferences` (default 1.0%) |
+| Risk hard cap | 2.0% regardless of user preference |
+| Max position value | 10% of current virtual balance |
+| Max open positions | 12 |
+| Max new entries per scan | 3 |
+| Stopped-out cooldown | 24 hours per ticker |
+| Pattern quality threshold | ≥ 0.70 |
+| Conviction requirement | `high` / `confirmed` / `strong` |
+
+### LLM decision gate
+
+Before entering, the agent calls the LLM with:
+- Pattern signal details (ticker, direction, entry, stop, T1, T2, quality score, conviction)
+- Current KB context for the ticker (signal atoms, regime, macro)
+- Account state (slots used, balance)
+
+The LLM returns `ENTER`, `SKIP`, or `WAIT` with reasoning. `SKIP` and `WAIT` are logged. Only `ENTER` triggers position sizing and order insertion.
+
+Groq (`llama-3.3-70b-versatile`) is used when `GROQ_API_KEY` is set; Ollama local model is the fallback.
 
 ---
 

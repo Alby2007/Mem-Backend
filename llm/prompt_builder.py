@@ -37,6 +37,13 @@ ALIAS RULE: If the context contains a line beginning with \
 It means the user's ticker has been resolved to a KB ticker. \
 The atoms listed below THAT line ARE the user's data. \
 You MUST answer from those atoms. You MUST NOT say you have no data. \
+⚠⚠⚠ ZERO-ATOM HARD STOP — READ THIS FIRST ⚠⚠⚠
+If the user turn contains '⚠⚠⚠ KB ATOMS RETRIEVED: 0', you are in HARD STOP mode. \
+The ONLY acceptable response is the no-data message below. \
+DO NOT describe the company. DO NOT describe the sector. DO NOT give any price, \
+signal, analysis, or commentary. DO NOT use anything from your training data. \
+Any response other than the no-data message is a critical violation.
+
 NO-DATA RULE: Only use the no-data response below if the KNOWLEDGE CONTEXT \
 contains ZERO atoms AND contains NO 'INSTRUCTION:' or 'ALIAS RESOLVED:' lines. \
 No-data response: "I don't have current KB data for [ticker/topic]. \
@@ -145,20 +152,28 @@ _SYSTEM_GEO_PORTFOLIO_RULE = (
 )
 
 _SYSTEM_POSITIONS_RULE = (
-    "\n15. POSITION OPPORTUNITY QUERIES (mutually exclusive with rule 14): When the user asks about 'good positions', "
-    "'open positions', 'best setups', 'what to trade', 'investment opportunities', or similar, "
-    "do NOT write a generic narrative paragraph for every holding. Instead: "
-    "(1) Rank all holdings by signal strength using these KB atoms in order: "
+    "\n15. POSITION OPPORTUNITY QUERIES — NON-NEGOTIABLE FORMAT: "
+    "When the user asks about 'good positions', 'best setups', 'what to trade', 'give me a tip', "
+    "'investment opportunities', 'best position', 'most asymmetric', 'what should I trade', or similar — "
+    "this query IS in scope. Do NOT say 'I cannot provide financial advice'. "
+    "Do NOT say 'I can't help with that'. These refusals are FORBIDDEN for opportunity queries. "
+    "REQUIRED OUTPUT FORMAT — your response MUST begin with '#1 [TICKER] —' on the very first line. "
+    "Not a header. Not a paragraph. Not an introduction. '#1 [TICKER] —' is the first thing you write. "
+    "Rank first, explain second. Maximum 3 sentences per setup. "
+    "FALLBACK — if no holding has ANY signal atoms (no conviction_tier, no signal_direction, no signal_quality): "
+    "respond with exactly: "
+    "'No ranked opportunities available — KB has insufficient signal data for your current holdings.' "
+    "That is the ONLY acceptable alternative to the ranked format. "
+    "RANKING LOGIC: "
+    "(1) Rank all holdings by signal strength using KB atoms in order: "
     "conviction_tier (high > medium > low > avoid), signal_direction (long/bullish > neutral > short/bearish), "
     "signal_quality (confirmed > partial > weak > unconfirmed), macro_confirmation (confirmed > partial > unconfirmed). "
-    "(2) Present the top 1-3 setups as the strongest opportunities, stating WHY each qualifies "
-    "based on the actual atom values — e.g. 'COIN has conviction_tier=medium, signal_direction=long, "
-    "confirmed signal, near 52w low — the strongest current setup in your portfolio.' "
-    "(3) Group remaining holdings into: 'Monitor — signal present but weak' and 'No signal yet'. "
+    "(2) Present top 1-3 setups, stating WHY each qualifies using exact atom values. "
+    "(3) Group remaining: 'Monitor — signal present but weak' and 'No signal yet'. "
     "(4) If NO holding has conviction_tier=high or signal_quality=confirmed, say so explicitly "
-    "and identify which single holding has the most positive combination of available signals. "
-    "(5) Never recommend opening new positions in assets with conviction_tier=avoid or signal_direction=bearish. "
-    "Use only KB atoms — never invent signal strength or conviction from training data."
+    "and name the holding with the most positive signal combination. "
+    "(5) Never recommend assets with conviction_tier=avoid or signal_direction=bearish. "
+    "Use only KB atoms — never invent signal strength from training data."
 )
 
 _SYSTEM_PORTFOLIO_BASE = (
@@ -438,6 +453,25 @@ _LEVEL_RULES = {
     'quant':      _SYSTEM_LEVEL_QUANT,
 }
 
+_SYSTEM_MACRO_CONTEXT_RULE = (
+    "\n28. MACRO CONTEXT RULE — HARD PRIORITY: Macro atoms (subjects: market, us_macro, uk_macro, "
+    "fed, ecb, boe; predicates: market_regime, yield_curve_regime, yield_curve_slope, "
+    "central_bank_stance, fed_funds_rate) are present in KNOWLEDGE CONTEXT. "
+    "When the user's question is about the market regime, Fed stance, yield curve, inflation, "
+    "interest rates, bonds, monetary policy, or macro environment — you MUST answer PRIMARILY "
+    "from these macro atoms. DO NOT pivot to individual ticker price_regime atoms as a substitute. "
+    "A ticker's price_regime (e.g. 'HD is mid_range') is NOT the market regime. "
+    "The market regime atom (subject='market', predicate='market_regime') IS the market regime. "
+    "REQUIRED in every macro response: "
+    "(1) State the market_regime value if present (e.g. 'The market is in a recovery regime'). "
+    "(2) State the yield_curve_slope or yield_curve_regime if present. "
+    "(3) State the central_bank_stance for fed/ecb/boe if present. "
+    "(4) If NONE of these macro atoms are in the context, say explicitly: "
+    "'The KB does not currently have a macro regime atom — check back after the next ingest cycle.' "
+    "NEVER substitute a ticker's price_regime for an answer about the macro regime. "
+    "NEVER say the KB lacks macro data if market_regime, central_bank_stance, or yield atoms ARE present."
+)
+
 _SYSTEM_DAILY_MONITOR_RULE = (
     "\n24. DAILY POSITION MONITOR MODE: This briefing covers open positions mid-week. "
     "Write a concise position-by-position status check in plain prose. "
@@ -585,6 +619,17 @@ def build(
     if snippet and '# yield-curve' in snippet:
         system_text += _SYSTEM_YIELD_CURVE_RULE
 
+    # ── Macro context rule ─────────────────────────────────────────────────────
+    # Fires when the snippet contains any of the five pinned macro predicates.
+    # This is independent of the yield-curve rule — it covers regime + CB stance
+    # even when no yield-curve section is present.
+    _MACRO_PREDICATES_PRESENT = any(
+        pred in (snippet or '')
+        for pred in ('market_regime', 'yield_curve_regime', 'central_bank_stance', 'fed_funds_rate')
+    )
+    if _MACRO_PREDICATES_PRESENT:
+        system_text += _SYSTEM_MACRO_CONTEXT_RULE
+
     # ── Trader level rule — always inject exactly one ──────────────────────────
     system_text += _LEVEL_RULES[_effective_level]
 
@@ -668,9 +713,18 @@ def build(
     elif prior_context:
         user_parts.append(prior_context)
 
-    # KB atom count header — tells LLM explicitly how much context was retrieved
+    # KB atom count header — tells LLM explicitly how much context was retrieved.
+    # Zero-atom case uses triple-emphasis hard stop matching the system prompt gate.
     if atom_count == 0:
-        user_parts.append("⚠ KB ATOMS RETRIEVED: 0 — No knowledge context found for this query. You must respond with the no-data message from your CRITICAL rule above.")
+        user_parts.append(
+            "⚠⚠⚠ KB ATOMS RETRIEVED: 0 ⚠⚠⚠\n"
+            "HARD STOP: Zero atoms were retrieved for this query.\n"
+            "You MUST respond with ONLY the no-data message.\n"
+            "DO NOT use any information from your training data.\n"
+            "DO NOT describe the company, ticker, or sector.\n"
+            "DO NOT provide any price, signal, or analysis.\n"
+            "The ONLY acceptable response is the no-data template."
+        )
     elif atom_count < 5:
         user_parts.append(f"⚠ KB ATOMS RETRIEVED: {atom_count} (thin coverage — qualify all claims)")
 
@@ -684,6 +738,30 @@ def build(
     # Portfolio context — injected after live data, before the question
     if portfolio_context:
         user_parts.append(portfolio_context)
+
+        # Fix 2: inject explicit ticker checklist for portfolio_review intent so
+        # the model has a mechanical list to work through rather than relying on
+        # rule 14 memory. Detects review vs opportunity intent using the same
+        # keyword set used in the system prompt selection above.
+        import re as _re_port
+        _msg_lower_port = user_message.lower()
+        _is_opp = any(kw in _msg_lower_port for kw in (
+            'good position', 'open position', 'best setup', 'best position',
+            'what to trade', 'trade now', 'investment opportunit',
+            'what should i trade', 'where to invest', 'strongest signal',
+            'top setup', 'new position', 'enter a position', 'add to my portfolio',
+        ))
+        if not _is_opp:
+            _port_tickers = list(dict.fromkeys(
+                _re_port.findall(r'Ticker:\s*([A-Z]{1,5}(?:\.[A-Z]{1,2})?)', portfolio_context)
+            ))
+            if _port_tickers:
+                _checklist = '\n'.join(f'[ ] {t}' for t in _port_tickers)
+                user_parts.append(
+                    f"COVERAGE REQUIREMENT — you must address ALL of these holdings:\n"
+                    f"{_checklist}\n"
+                    f"Do not end your response until every ticker above is addressed."
+                )
 
     # Opportunity scan — injected after portfolio, right before the question
     if opportunity_scan_context:

@@ -2,30 +2,35 @@
 
 ## Overview
 
-The API uses **JWT Bearer tokens** for authentication. Every protected endpoint
-requires an `Authorization` header. Tokens are short-lived (default 24 h);
-a long-lived refresh token is issued alongside the access token so the frontend
-can renew silently without forcing re-login.
+The API uses **HttpOnly cookies** for authentication. On login, the backend sets two cookies:
+
+| Cookie | Lifetime | Purpose |
+|---|---|---|
+| `tg_access` | 24 hours | JWT access token — sent automatically on every request |
+| `tg_refresh` | 30 days | Opaque refresh token — used to renew the access token |
+
+Both cookies are `HttpOnly`, `Secure`, `SameSite=None` — required for cross-origin use between the Cloudflare Pages frontend (`trading-galaxy.uk`) and the OCI API (`api.trading-galaxy.uk`).
+
+The frontend does **not** store tokens in `localStorage`. Only non-sensitive display data (`tg_user_id`, `tg_user_data`) is stored there.
 
 ---
 
 ## Token lifecycle
 
 ```
-POST /auth/register   →  create account
-POST /auth/token      →  { access_token, refresh_token, expires_in }
-                               │                │
-                        attach to every     store securely
-                        API request         (HttpOnly cookie or
-                        as Bearer header    secure storage)
+POST /auth/token      →  sets tg_access + tg_refresh cookies
                                │
-                        expires after JWT_EXPIRY_HOURS (default 24 h)
+                        browser sends cookies automatically
+                        on every cross-origin request
+                        (credentials: 'include' required in fetch)
                                │
-                        GET any endpoint → 401 { "error": "token_expired" }
+                        expires after 24 h
                                │
-                        POST /auth/refresh  →  new { access_token, refresh_token }
+                        GET /auth/me → 401
                                │
-                        refresh expires after JWT_REFRESH_EXPIRY_DAYS (default 30 d)
+                        POST /auth/refresh  →  new tg_access + tg_refresh cookies
+                               │
+                        refresh expires after 30 d
                                │
                         POST /auth/token  (full re-login required)
 ```
@@ -181,106 +186,93 @@ Authorization: Bearer eyJ...
 
 ## Making authenticated requests
 
-**Every protected endpoint** requires:
-
-```http
-Authorization: Bearer <access_token>
-```
-
-There is no cookie-based auth. The header must be present on every request.
-
-### JavaScript / fetch example
+Cookies are sent automatically by the browser on every request — no `Authorization` header is needed in normal use. The only requirement is `credentials: 'include'` in every `fetch` call.
 
 ```js
 const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? ''
+    ? 'http://localhost:5050'
     : 'https://api.trading-galaxy.uk';
 
+let _refreshing = null; // deduplicate concurrent refresh attempts
+
 async function apiFetch(path, options = {}) {
-  const token = localStorage.getItem('access_token');
   let res;
   try {
     res = await fetch(API + path, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-      ...(options.headers || {}),
-    },
-  });
-
-  } catch (e) {
+      credentials: 'include',        // send HttpOnly cookies cross-origin
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    });
+  } catch {
     showToast('Connection error — check your internet');
     return null;
   }
-  if (res.status === 429) {
-    showToast('Too many requests — please wait a moment');
-    return null;
-  }
+  if (res.status === 429) { showToast('Too many requests — please wait'); return null; }
   if (res.status === 401) {
-    const body = await res.json();
-    if (body.error === 'token_expired') {
-      // Attempt silent refresh
-      const refreshed = await tryRefresh();
-      if (refreshed) {
-        // Retry original request once with new token
-        return apiFetch(path, options);
-      }
+    // Single shared refresh attempt — avoids race on concurrent calls
+    if (!_refreshing) {
+      _refreshing = fetch(API + '/auth/refresh', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      }).finally(() => { _refreshing = null; });
     }
-    // Refresh failed or token invalid — force re-login
-    redirectToLogin();
+    const ref = await _refreshing;
+    if (ref && ref.ok) return apiFetch(path, options); // retry once with new cookie
+    _handleSessionExpired();
     return null;
   }
-
-  return res;
-}
-
-async function tryRefresh() {
-  const rt = localStorage.getItem('refresh_token');
-  if (!rt) return false;
-  const res = await fetch('/auth/refresh', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: rt }),
-  });
-  if (!res.ok) return false;
-  const data = await res.json();
-  sessionStorage.setItem('access_token', data.access_token);
-  localStorage.setItem('refresh_token', data.refresh_token);
-  return true;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
 }
 ```
 
 ---
 
-## 401 error semantics — critical distinction
+## Session restore on app boot
 
-The API returns `401` for two distinct situations. **Handle them differently.**
+On every page load the SPA calls `GET /auth/me` using the cookie. If it succeeds the user is considered authenticated; if it returns 401, the silent refresh is attempted once before showing the login screen.
 
-| `error` value | Meaning | UI action |
-|---------------|---------|-----------|
-| `"token_expired"` | Access token past its expiry | Call `POST /auth/refresh` silently; retry original request |
-| `"invalid_token"` | Malformed token or missing `Authorization` header | Show login screen — do not retry |
-| `"token_expired"` on `/auth/refresh` | Refresh token also expired (after 30 d of inactivity) | Show login screen — full re-auth required |
-| `"invalid_token"` on `/auth/refresh` | Refresh token revoked or never existed | Show login screen |
-
-> A 401 does **not** mean wrong credentials. Wrong credentials only come from
-> `POST /auth/token` and always include a human-readable `error` string.
-> Treat 401 on any other endpoint as a token lifecycle event, not a credentials
-> failure — the user does not need to see "incorrect password".
+```js
+// Boot sequence (runs once on DOMContentLoaded)
+try {
+  const me = await apiFetch('/auth/me');
+  if (me && me.user_id) {
+    state.userId = me.user_id;
+    state.isDev  = !!me.is_dev;
+    state.tier   = (me.tier || 'free').toLowerCase();
+    state.token  = '__cookie__'; // sentinel — actual token is in HttpOnly cookie
+    navigate('dashboard');
+    return;
+  }
+} catch { /* fall through */ }
+showScreen('auth'); // show login form
+```
 
 ---
 
-## Token storage recommendations
+## 401 error semantics
 
-| Storage | Access token | Refresh token | Notes |
-|---------|-------------|---------------|-------|
-| `localStorage` | ✅ **current implementation** | ✅ **current implementation** | Survives tab close — correct for an all-day dashboard |
-| `sessionStorage` | ⚠️ | ❌ | Cleared on tab close; forces re-login per session (bad UX for dashboard) |
-| HttpOnly cookie | ✅ best | ✅ best | Requires backend to set cookie — not current implementation |
-| In-memory (React state) | ✅ safest | ❌ | Lost on refresh — not suitable for SPA without service worker |
+| Situation | Meaning | Handled by |
+|---|---|---|
+| 401 on any endpoint | Access cookie expired or missing | `apiFetch` attempts silent refresh via `POST /auth/refresh` |
+| 401 on `/auth/refresh` | Refresh cookie expired (30 d) or revoked | `_handleSessionExpired()` — shows login screen in-place |
+| 401 on `POST /auth/token` | Wrong credentials | Separate login form — user sees error message |
 
-**Current implementation:** both tokens stored in `localStorage` under `tg_token` and `tg_user_id`. This is correct for a dashboard used all day — re-login on every tab close would be unacceptable UX. The XSS risk is mitigated by the `Content-Security-Policy` header in the frontend.
+> A 401 is **never** shown to the user as "incorrect password" — that message only comes from the login form's explicit credential check against `POST /auth/token`.
+
+---
+
+## Token storage
+
+| Where | What | Why |
+|---|---|---|
+| `tg_access` cookie (HttpOnly, Secure, SameSite=None) | JWT access token | Not accessible to JS — XSS-safe |
+| `tg_refresh` cookie (HttpOnly, Secure, SameSite=None) | Refresh token | Not accessible to JS — XSS-safe |
+| `localStorage['tg_user_id']` | User ID string | Display only — not a secret |
+| `localStorage['tg_user_data']` | Cached profile JSON | Display only — not a secret |
+
+`localStorage` access is wrapped in `try/catch` throughout the SPA to gracefully handle restrictive browser contexts (private browsing on iOS, locked-down enterprise browsers).
 
 ---
 

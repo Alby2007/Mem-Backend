@@ -36,6 +36,44 @@ _COMMIT_THRESHOLD = 0.70
 # Max on-demand fetches per chat request (latency guard)
 MAX_ON_DEMAND_TICKERS = 6
 
+# Tickers that must never be fetched on-demand or committed to KB.
+# These are known fake/test tickers used in eval queries.
+FAKE_TICKER_BLOCKLIST: frozenset = frozenset([
+    'notreal99', 'fakeco', 'madeupticker', 'randomticker123',
+    'xyz corp', 'xyzco', 'fakecorp', 'testco', 'badticker',
+    'blobcorp99',
+])
+
+# ── KB-presence gate ──────────────────────────────────────────────────────────
+# Cache of known KB subjects — refreshed every _KNOWN_SUBJECTS_TTL seconds.
+# Only tickers already in the KB are eligible for on-demand enrichment.
+# TTL refresh ensures newly-ingested tickers (e.g. STAN.L after first yfinance
+# cycle) become eligible within one cache window, while still blocking unknown
+# fake tickers between refreshes.
+_KNOWN_SUBJECTS: frozenset | None = None
+_KNOWN_SUBJECTS_TTL   = 300   # seconds — refresh every 5 minutes
+_KNOWN_SUBJECTS_TS: float = 0.0  # epoch seconds of last refresh
+
+
+def _is_known_ticker(ticker: str, db_path: str) -> bool:
+    """Return True only if ticker already has atoms in the KB.
+    Cache is refreshed every _KNOWN_SUBJECTS_TTL seconds so newly-ingested
+    tickers become eligible after the first ingest cycle."""
+    global _KNOWN_SUBJECTS, _KNOWN_SUBJECTS_TS
+    now = time.monotonic()
+    if _KNOWN_SUBJECTS is None or (now - _KNOWN_SUBJECTS_TS) > _KNOWN_SUBJECTS_TTL:
+        try:
+            with sqlite3.connect(db_path, timeout=3) as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT LOWER(subject) FROM facts WHERE LENGTH(subject) <= 12"
+                ).fetchall()
+                _KNOWN_SUBJECTS = frozenset(r[0] for r in rows)
+                _KNOWN_SUBJECTS_TS = now
+        except Exception as e:
+            _logger.warning('_is_known_ticker: DB read failed — allowing fetch: %s', e)
+            return True  # fail open so legitimate tickers still work
+    return ticker.lower() in _KNOWN_SUBJECTS
+
 # ── LLM-initiated fetch support ───────────────────────────────────────────────
 
 DATA_REQUEST_SYSTEM_PROMPT = """\
@@ -248,6 +286,12 @@ class WorkingMemory:
         Atoms are stored in the session only — not written to KB yet.
         Returns the list of new atoms fetched.
         """
+        if ticker.lower() in FAKE_TICKER_BLOCKLIST:
+            _logger.debug('fetch_on_demand: %s is in FAKE_TICKER_BLOCKLIST — skipped', ticker)
+            return []
+        if not _is_known_ticker(ticker, db_path):
+            _logger.info('fetch_on_demand: %s not in KB — skipping on-demand fetch', ticker)
+            return []
         try:
             import yfinance as yf
         except ImportError:
@@ -541,6 +585,10 @@ class WorkingMemory:
 
         for atom in session.atoms:
             if not _should_commit(atom):
+                result.discarded += 1
+                continue
+            # Never commit atoms for fake/eval tickers back to the persistent KB
+            if atom.get('subject', '').lower() in FAKE_TICKER_BLOCKLIST:
                 result.discarded += 1
                 continue
             try:

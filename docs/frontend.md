@@ -1,8 +1,8 @@
 # Frontend — Comprehensive Reference
 
-**File:** `static/index.html`  
-**Served at:** `https://trading-galaxy.uk` (Cloudflare Pages — project `mem-backend2`)  
-**Architecture:** Single-file SPA — zero build step, zero dependencies, zero bundler.
+**File:** `static/login/index.html` (CSS: `static/login/css/app.css`, JS: `static/login/js/*.js`)  
+**Served at:** `https://trading-galaxy.uk/login` + all SPA routes (Cloudflare Pages — project `mem-backend2`, publish dir `static/`)  
+**Architecture:** Zero build step, zero dependencies, zero bundler. CSS and JS extracted into separate files, loaded via `<link>` and `<script src>` tags.
 
 ---
 
@@ -22,6 +22,8 @@
 12. [Local storage](#12-local-storage)
 13. [Adding a new screen](#13-adding-a-new-screen)
 
+**Screens:** Auth · Dashboard · Portfolio · Chat · Tips · Patterns · Network · History · **Paper Trader** · Subscription · Profile
+
 ---
 
 ## 1. Overview
@@ -33,7 +35,9 @@ Trading Galaxy's frontend is a **Bloomberg-terminal-style SPA** — dark, mono-h
 - No bundler — the file is served as-is from Netlify CDN
 - No separate CSS file — all styles are inline `<style>` in `<head>`
 - No external JS libraries — TradingView iframe and Telegram widget are the only external scripts
-- Token stored in `localStorage` — correct for an all-day dashboard (re-login on tab close is unacceptable UX)
+- Tokens stored in **HttpOnly cookies** (`tg_access`, `tg_refresh`) set by the backend — not accessible to JS
+- Only non-sensitive display data (`tg_user_id`, `tg_user_data`) in `localStorage`
+- All `localStorage` calls wrapped in `try/catch` for restrictive browser contexts
 
 ---
 
@@ -206,7 +210,7 @@ Shown on boot if no token in `localStorage`. Hidden sidebar (`body.auth-mode`).
 - **Login panel** — email, password → `POST /auth/token` → `_saveSession()` → navigates to Dashboard
 - **Telegram login** — widget injected lazily into `#tg-widget-auth` on first show; callback `window.onTelegramAuth(user)` → `POST /auth/telegram`
 
-Session restore on page load: reads `tg_token` + `tg_user_id` from `localStorage` → sets `state.token` / `state.userId` → skips auth screen.
+Session restore on page load: calls `GET /auth/me` using the `tg_access` HttpOnly cookie. If 401, attempts silent refresh via `POST /auth/refresh`. If that also fails, shows the auth screen in-place (`showScreen('auth')`) — no page redirect.
 
 ---
 

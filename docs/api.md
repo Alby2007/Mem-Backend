@@ -2,7 +2,7 @@
 
 Base URL: `https://api.trading-galaxy.uk` (production) · `http://localhost:5050` (local dev)
 
-**CORS:** Cross-origin requests are accepted from `https://trading-galaxy.uk`, `https://app.trading-galaxy.uk`, `https://*.netlify.app`, and `http://localhost:3000` / `http://localhost:5050`. The `Authorization` and `Content-Type` headers are allowed.
+**CORS:** Cross-origin requests are accepted from `https://trading-galaxy.uk`, `https://www.trading-galaxy.uk`, `https://*.pages.dev`, and `http://localhost:3000` / `http://localhost:5050`. Allowed methods: `GET POST PATCH OPTIONS`. The `Authorization` and `Content-Type` headers are allowed.
 
 All request/response bodies are JSON. All endpoints return `Content-Type: application/json`.
 
@@ -326,7 +326,7 @@ A Telegram notification is sent to the operator on every new signup.
 
 All open followups for a user — both auto-created `watching` (tip sent, user has not yet acted) and `active` (user accepted via 'taking it').
 
-Requires `Authorization: Bearer <token>`. Users can only query their own positions.
+Requires authentication (HttpOnly cookie). Users can only query their own positions.
 
 **Response**
 ```json
@@ -403,6 +403,41 @@ Requires `Authorization: Bearer <token>`.
 
 ---
 
+## `POST /users/{id}/trader-level`
+
+Set the authenticated user's trader level — controls LLM communication style and tip formatting.
+
+Requires authentication (HttpOnly cookie). Users can only update their own level.
+
+**Request**
+```json
+{ "level": "experienced" }
+```
+
+**Valid values:** `beginner` · `developing` · `experienced` · `quant`
+
+| Level | Effect |
+|---|---|
+| `beginner` | Plain-English explanations, no jargon, no raw atom values |
+| `developing` | Standard format with brief explanations (default) |
+| `experienced` | Full signal detail including Greeks when present |
+| `quant` | Raw atom dump, no prose, all values shown |
+
+**Response 200**
+```json
+{ "trader_level": "experienced" }
+```
+
+**Error responses**
+
+| Status | `error` value | Meaning |
+|---|---|---|
+| 400 | `"Invalid level"` | Value not in the allowed set |
+| 401 | — | Not authenticated |
+| 403 | — | Attempting to modify another user's level |
+
+---
+
 ## `GET /waitlist/count`
 
 Public signup counter for landing page social proof. No authentication required.
@@ -430,3 +465,191 @@ All errors return a JSON body with an `error` key:
 ```
 
 Handle `429` in your client — show a user-facing message and do not retry immediately.
+
+---
+
+## `POST /chat`
+
+KB-grounded conversational endpoint. Retrieves relevant atoms, builds a context-aware prompt, and calls the LLM (Groq preferred, Ollama fallback). Requires authentication.
+
+**Request**
+```json
+{
+  "message":    "Is NVDA a good entry here?",
+  "session_id": "user-abc-session-1",
+  "turn_count": 2
+}
+```
+
+Only `message` is required.
+
+**Response**
+```json
+{
+  "answer": "NVDA currently shows a bullish signal with high conviction...",
+  "atoms_used": 12,
+  "kb_depth": "deep",
+  "quota_remaining": 45
+}
+```
+
+**Notes:**
+- Chat quota is enforced per user per day (varies by tier)
+- `kb_depth`: `thin` (<5 atoms) · `shallow` (5–14) · `deep` (≥15)
+- Returns `{"error": "quota_exceeded"}` with HTTP 429 when limit reached
+
+---
+
+## Paper Trader Endpoints
+
+All paper trader endpoints require authentication and `pro` or `premium` tier. Users can only access their own paper account.
+
+### `GET /users/{id}/paper/account`
+
+Virtual account balance and summary.
+
+**Response**
+```json
+{
+  "user_id": "a1_svao9",
+  "virtual_balance": 487234.50,
+  "currency": "GBP",
+  "open_positions": 3,
+  "created_at": "2026-03-01T00:00:00+00:00"
+}
+```
+
+---
+
+### `GET /users/{id}/paper/positions`
+
+All open paper positions.
+
+**Response**
+```json
+{
+  "positions": [
+    {
+      "id": 42,
+      "ticker": "AAPL",
+      "direction": "bullish",
+      "entry_price": 227.50,
+      "stop": 224.80,
+      "t1": 232.90,
+      "t2": 235.60,
+      "quantity": 18.5185,
+      "status": "open",
+      "partial_closed": 0,
+      "opened_at": "2026-03-06T10:00:00+00:00",
+      "ai_reasoning": "supply_demand bullish | q=0.88 HIGH regime=risk_on | kb_depth=deep (18 atoms)"
+    }
+  ]
+}
+```
+
+**Position statuses:** `open` · `stopped_out` · `t2_hit` · `t1_partial`
+
+---
+
+### `GET /users/{id}/paper/history`
+
+Closed paper positions (stopped out or target hit).
+
+**Query params:** `limit` (default 50), `since` (ISO date)
+
+**Response** — same shape as `/paper/positions` with `exit_price`, `pnl_r`, `closed_at` fields populated.
+
+---
+
+### `GET /users/{id}/paper/log`
+
+Agent activity log — scan starts, entries, skips, stops.
+
+**Query params:** `limit` (default 50)
+
+**Response**
+```json
+{
+  "log": [
+    {
+      "event_type": "scan_start",
+      "ticker": null,
+      "detail": "Scanning open patterns for a1_svao9 (3/12 slots used, 2 on 24h cooldown)",
+      "created_at": "2026-03-06T10:00:00+00:00"
+    },
+    {
+      "event_type": "entry",
+      "ticker": "AAPL",
+      "detail": "bullish entry=227.5000 stop=224.8000 t1=232.9000 qty=18.5185 value=£4,210.71 cash_remaining=£483,023.79",
+      "created_at": "2026-03-06T10:00:01+00:00"
+    },
+    {
+      "event_type": "stopped_out",
+      "ticker": "KB",
+      "detail": "exit=112.80 P&L=-1.00R refund=£2,086.08",
+      "created_at": "2026-03-06T10:02:00+00:00"
+    }
+  ]
+}
+```
+
+**Event types:** `scan_start` · `entry` · `skip` · `stopped_out` · `t2_hit` · `t1_hit` · `monitor_run`
+
+---
+
+### `POST /users/{id}/paper/agent/run`
+
+Trigger a one-shot agent scan synchronously. Returns the scan result immediately.
+
+**Response**
+```json
+{ "status": "ok", "result": { "entries": 2, "skips": 14, "monitor_updates": [] } }
+```
+
+---
+
+### `POST /users/{id}/paper/agent/start`
+
+Start the continuous 30-minute background scanner for this user.
+
+**Response**
+```json
+{ "status": "started", "message": "Continuous scanner started — scans every 30 min" }
+```
+
+Returns `{"status": "already_running"}` if scanner is already active.
+
+---
+
+### `POST /users/{id}/paper/agent/stop`
+
+Stop the continuous scanner.
+
+**Response**
+```json
+{ "status": "stopped", "message": "Scanner stopped" }
+```
+
+---
+
+### `GET /users/{id}/paper/agent/status`
+
+**Response**
+```json
+{ "running": true }
+```
+
+---
+
+### Agent sizing rules
+
+| Rule | Value |
+|---|---|
+| Starting balance | £500,000 virtual GBP |
+| Risk per trade | `max_risk_per_trade_pct` from `user_preferences` (default 1%, hard cap 2%) |
+| Max position value | 10% of current balance |
+| Max open positions | 12 |
+| Max new entries per scan | 3 |
+| Stopped-out cooldown | 24 hours per ticker |
+| Scan interval (scheduler) | 30 minutes |
+| Pattern quality threshold | ≥ 0.70, conviction `high`/`confirmed`/`strong` |

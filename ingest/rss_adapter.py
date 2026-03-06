@@ -59,6 +59,11 @@ _DEFAULT_FEEDS: Dict[str, str] = {
     'al_jazeera':           'https://www.aljazeera.com/xml/rss/all.xml',
     'defense_news':         'https://www.defensenews.com/arc/outboundfeeds/rss/',
     'energy_monitor':       'https://www.energymonitor.ai/feed/',
+    # UK-specific sources — FTSE 100 coverage
+    'sky_business':         'https://feeds.skynews.com/feeds/rss/business.xml',
+    'proactive_investors':  'https://www.proactiveinvestors.co.uk/rss.php',
+    'thisismoney':          'https://www.thisismoney.co.uk/money/investing/index.rss',
+    'investegate':          'https://www.investegate.co.uk/rss.aspx',  # RNS regulatory filings
 }
 
 # Max parallel workers for feed fetching
@@ -82,9 +87,18 @@ _UPPERCASE_STOPWORDS: Set[str] = {
 
 
 def _extract_tickers(text: str) -> List[str]:
-    """Extract likely ticker symbols from text."""
-    candidates = re.findall(r'\b[A-Z]{2,5}\b', text)
-    return [t for t in candidates if t not in _UPPERCASE_STOPWORDS]
+    """Extract likely ticker symbols from text, including LSE .L suffix (e.g. BARC.L)."""
+    # Match standard tickers (2-5 caps) AND LSE .L format
+    candidates = re.findall(r'\b([A-Z]{2,5}\.L|[A-Z]{2,5})\b', text)
+    result = []
+    seen = set()
+    for t in candidates:
+        # For .L tickers, check the base symbol isn't a stopword
+        base = t[:-2] if t.endswith('.L') else t
+        if base not in _UPPERCASE_STOPWORDS and t not in seen:
+            seen.add(t)
+            result.append(t)
+    return result
 
 
 # ── Negative sentiment keywords (simple heuristic) ───────────────────────────

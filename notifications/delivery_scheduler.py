@@ -72,7 +72,7 @@ def _should_deliver(
         return False
 
     # Tier weekday gate
-    from notifications.tip_formatter import TIER_LIMITS
+    from core.tiers import TIER_CONFIG as TIER_LIMITS
     limits        = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
     delivery_days = limits.get('delivery_days', ['monday'])
     if delivery_days != 'daily':

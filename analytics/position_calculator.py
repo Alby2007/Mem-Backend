@@ -124,6 +124,13 @@ def calculate_position(
         position_size_units = 0.0
 
     position_value = position_size_units * entry
+
+    # Sanity cap — position must never exceed 20% of portfolio
+    max_position = account_size * 0.20
+    if position_value > max_position:
+        position_size_units = max_position / entry if entry > 0 else 0.0
+        position_value      = position_size_units * entry
+
     position_pct   = (position_value / account_size * 100.0
                       if account_size > 0 else 0.0)
 

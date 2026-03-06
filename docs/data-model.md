@@ -105,6 +105,95 @@ CREATE TABLE signal_calibration (
 
 ---
 
+## Paper Trading Tables
+
+Three tables store autonomous paper trader state. Created at startup by `_ensure_paper_tables()`.
+
+### `paper_account`
+
+One row per user. Tracks virtual balance.
+
+```sql
+CREATE TABLE IF NOT EXISTS paper_account (
+    user_id          TEXT PRIMARY KEY,
+    virtual_balance  REAL NOT NULL DEFAULT 500000.0,
+    currency         TEXT NOT NULL DEFAULT 'GBP',
+    created_at       TEXT
+);
+```
+
+Starting balance: £500,000. Balance is debited when a position opens (`position_value = entry_price × qty`) and credited when it closes (`exit_price × qty`).
+
+---
+
+### `paper_positions`
+
+One row per paper trade (open or closed).
+
+```sql
+CREATE TABLE IF NOT EXISTS paper_positions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id        TEXT NOT NULL,
+    pattern_id     INTEGER,
+    ticker         TEXT NOT NULL,
+    direction      TEXT NOT NULL,        -- 'bullish' | 'bearish'
+    entry_price    REAL,
+    stop           REAL,
+    t1             REAL,
+    t2             REAL,
+    quantity       REAL,
+    status         TEXT DEFAULT 'open',  -- 'open' | 'stopped_out' | 't2_hit'
+    partial_closed INTEGER DEFAULT 0,    -- 1 = T1 hit, half position exited
+    exit_price     REAL,
+    pnl_r          REAL,                 -- P&L in R multiples
+    opened_at      TEXT,
+    closed_at      TEXT,
+    note           TEXT,
+    ai_reasoning   TEXT
+);
+```
+
+**`status` values:**
+
+| Status | Meaning |
+|---|---|
+| `open` | Position active, being monitored every scan |
+| `stopped_out` | Price hit the stop level — 24h cooldown applied to ticker |
+| `t2_hit` | Price reached T2 target — full exit |
+
+**`pnl_r`** is P&L expressed in R-multiples: `(exit - entry) / risk` for bullish, `(entry - exit) / risk` for bearish. A value of `+2.0` means the trade made 2× the initial risk.
+
+---
+
+### `paper_agent_log`
+
+Activity log for every agent scan. One row per event.
+
+```sql
+CREATE TABLE IF NOT EXISTS paper_agent_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT NOT NULL,
+    event_type  TEXT NOT NULL,
+    ticker      TEXT,
+    detail      TEXT,
+    created_at  TEXT
+);
+```
+
+**`event_type` values:**
+
+| Type | When logged |
+|---|---|
+| `scan_start` | Beginning of every `_paper_ai_run` call — includes slot count and cooldown count |
+| `entry` | Position opened — includes entry/stop/T1/qty/value/cash_remaining |
+| `skip` | Summary of all skips in a scan (one entry per scan, not per ticker) |
+| `stopped_out` | Position closed at stop — includes exit price and P&L in R |
+| `t2_hit` | Position closed at T2 — includes exit price and P&L in R |
+| `t1_hit` | T1 reached, `partial_closed` flag set (position still open) |
+| `monitor_run` | Summary of price monitor pass — includes number of updates |
+
+---
+
 ## Predicate Vocabulary
 
 Predicates are defined in `knowledge/kb_domain_schemas.py`. The active predicates used by the ingest pipeline are:
@@ -367,6 +456,74 @@ Stored lowercase without suffix. Included as cross-asset context for global macr
 | `financial_news` | `RSSAdapter` | Headline `key_finding` atoms with ticker mentions |
 
 `global_macro_regime` holds 52 months of classified macro history at launch.
+
+---
+
+### Options Greeks (US tickers, Polygon)
+
+Written by `PolygonOptionsAdapter`. Present only for tickers in the Polygon watchlist with `POLYGON_API_KEY` set.
+
+| Predicate | Example value | Source |
+|---|---|---|
+| `delta_atm` | `0.52` | `polygon_options_*` |
+| `gamma_atm` | `0.08` | `polygon_options_*` |
+| `theta_atm` | `-0.14` | `polygon_options_*` |
+| `vega_atm` | `0.32` | `polygon_options_*` |
+| `iv_true` | `28.4` | `polygon_options_*` |
+| `put_call_oi_ratio` | `1.15` | `polygon_options_*` |
+| `gamma_exposure` | `-2340000` | `polygon_options_*` |
+
+---
+
+### Yield Curve (subject = `macro`)
+
+Written by `YieldCurveAdapter` daily from TLT/IEF/SHY ETF prices via Polygon.
+
+| Predicate | Example value | Notes |
+|---|---|---|
+| `tlt_close` | `90.82` | TLT (20+ yr bond ETF) last close |
+| `ief_close` | `97.99` | IEF (7-10 yr bond ETF) last close |
+| `shy_close` | `83.18` | SHY (1-3 yr bond ETF) last close |
+| `tlt_1d_change_pct` | `0.609` | 1-day % change in TLT. Negative = long-end yields rising |
+| `ief_1d_change_pct` | `0.40` | 1-day % change in IEF |
+| `shy_1d_change_pct` | `0.132` | 1-day % change in SHY |
+| `yield_curve_slope` | `steepening` | `steepening` / `flattening` / `neutral` |
+| `yield_curve_regime` | `bull_flatten` | One of: `bull_steepen` / `bear_steepen` / `bull_flatten` / `bear_flatten` |
+| `yield_curve_tlt_shy` | `1.0918` | TLT/SHY price ratio — 20Y/2Y curve slope proxy |
+| `long_end_stress` | `false` | `true` when TLT fell >0.5% in a day |
+| `long_end_stress_level` | `none` | `severe` (TLT <-1%) / `elevated` (TLT <-0.5%) / `none` |
+
+Source prefix: `yield_curve` (authority 0.78)
+
+---
+
+### US Short Interest (per equity ticker)
+
+Written by `FINRAShortInterestAdapter` from FINRA biweekly CDN files. Lagging ~3 business days.
+
+| Predicate | Example value | Notes |
+|---|---|---|
+| `short_interest` | `52340000` | Shares sold short |
+| `days_to_cover` | `3.20` | Short interest / avg daily volume |
+| `short_squeeze_risk` | `high` | `high` (DTC≥5) / `moderate` (≥2.5) / `low` (≥1) / `minimal` |
+| `short_vs_signal` | `tension` | `tension` = heavy short vs bullish signal; `aligned` = short vs bearish; `neutral` |
+
+Source prefix: `finra_short_interest` (authority 0.65)
+
+---
+
+### Trader Level (user preference)
+
+Stored in `user_preferences.trader_level`, not in the `facts` table. Controls LLM communication style and tip formatting.
+
+| Value | Meaning |
+|---|---|
+| `beginner` | Plain-English explanations, no jargon, no raw atom values |
+| `developing` | Standard format with brief explanations (default) |
+| `experienced` | Full signal detail including Greeks when present |
+| `quant` | Raw atom dump format, no prose, all values shown |
+
+Set via `POST /users/{id}/trader-level { "level": "experienced" }`. Stored in `user_preferences` table.
 
 ---
 
