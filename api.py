@@ -4439,6 +4439,36 @@ _PAPER_MAX_OPEN_POSITIONS  = 8   # never hold more than this many concurrent pos
 _PAPER_MAX_NEW_PER_SCAN    = 3   # max new entries opened in a single scan run
 
 
+def _paper_kb_chat(ticker: str, question: str, kg_conn) -> str | None:
+    """
+    Route a paper-agent decision through the same KB-aware pipeline as /chat:
+      retrieve(ticker query) → build_prompt(system_override) → _llm_chat
+    Returns the raw LLM text, or None on failure.
+    """
+    if not HAS_LLM:
+        return None
+    try:
+        snippet, atoms = retrieve(question, kg_conn, limit=30)
+        messages = build_prompt(
+            user_message=question,
+            snippet=snippet,
+            atom_count=len(atoms),
+            trader_level='developing',
+        )
+        # Replace the system message with the paper-agent system prompt so the
+        # LLM responds with JSON and cites KB signal data in its reasoning.
+        if messages and messages[0]['role'] == 'system':
+            messages[0]['content'] = (
+                _PAPER_AGENT_SYSTEM + '\n\n'
+                + messages[0]['content']
+            )
+        return _llm_chat(messages)
+    except Exception as _e:
+        import logging as _lg
+        _lg.getLogger('paper_agent').warning('_paper_kb_chat error for %s: %s', ticker, _e)
+        return None
+
+
 def _paper_ai_run(user_id: str) -> dict:
     """
     Core autonomous paper trading agent for one user.
@@ -4491,8 +4521,19 @@ def _paper_ai_run(user_id: str) -> dict:
             "SELECT virtual_balance FROM paper_account WHERE user_id=?", (user_id,)
         ).fetchone()
         balance = float(acct_row['virtual_balance']) if acct_row else 500000.0
-        risk_per_trade = balance * 0.01  # risk 1% of balance per trade
-        max_position_value = balance * 0.05  # never more than 5% of balance in one position
+
+        # Pull risk % from user preferences (default 1% if not set)
+        _pref_row = None
+        try:
+            _pref_row = conn.execute(
+                "SELECT max_risk_per_trade_pct FROM user_preferences WHERE user_id=?",
+                (user_id,)
+            ).fetchone()
+        except Exception:
+            pass
+        risk_pct = float((_pref_row[0] if _pref_row and _pref_row[0] else None) or 1.0)
+        risk_per_trade = balance * risk_pct / 100.0
+        max_position_value = balance * 0.15  # hard cap: no single position > 15% of account
         remaining_cash = balance  # track available cash this run
 
         entries = 0
@@ -4618,35 +4659,34 @@ def _paper_ai_run(user_id: str) -> dict:
                 f'regime={regime or "?"} signal_dir={kb_signal_dir}'
             )
 
-            # ── LLM decision (overrides rule-based) ───────────────────
+            # ── KB-aware LLM decision (routes through retrieve + build_prompt) ──
             if not skip_reason:
-                signal_ctx = (
-                    f"Ticker: {ticker}\n"
-                    f"Pattern: {c.get('pattern_type','?')}\n"
-                    f"Direction: {direction}\n"
-                    f"Quality: {quality:.3f}\n"
-                    f"Conviction: {conviction}\n"
-                    f"Regime: {c.get('kb_regime','?')}\n"
-                    f"Signal Dir: {c.get('kb_signal_dir','?')}\n"
-                    f"Zone: {zone_low} – {zone_high}\n"
-                    f"Rule-based entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} t2={t2_p:.4f}\n"
-                    f"Warning atoms: {_ticker_atoms or 'none'}"
+                # Build a natural-language question so retrieve() pulls the right KB atoms
+                kb_question = (
+                    f"Paper trading decision for {ticker}: should I enter a {direction} position? "
+                    f"Pattern type: {c.get('pattern_type','?')}. "
+                    f"Quality score: {quality:.2f}. Conviction: {conviction}. "
+                    f"Regime: {regime or '?'}. Signal direction: {c.get('kb_signal_dir','?')}. "
+                    f"Zone: {zone_low}–{zone_high}. "
+                    f"Rule-based levels — entry: {entry_p:.4f}, stop: {stop_p:.4f}, "
+                    f"t1: {t1_p:.4f}, t2: {t2_p:.4f}. "
+                    f"Warning atoms present: {_ticker_atoms or 'none'}. "
+                    f"Reply with JSON only: {{\"action\":\"ENTER\"|\"SKIP\", "
+                    f"\"entry\":float, \"stop\":float, \"t1\":float, \"t2\":float, "
+                    f"\"reasoning\":\"cite specific KB signals, max 150 chars\"}}"
                 )
                 try:
-                    messages = [
-                        {'role': 'system', 'content': _PAPER_AGENT_SYSTEM},
-                        {'role': 'user',   'content': signal_ctx},
-                    ]
-                    raw = _llm_chat(messages)
+                    kg_conn = _kg.thread_local_conn()
+                    raw = _paper_kb_chat(ticker, kb_question, kg_conn)
                     if raw:
                         raw = raw.strip()
-                        # Extract JSON even if LLM adds surrounding text
+                        # Extract JSON even if LLM wraps it in prose
                         start = raw.find('{')
                         end   = raw.rfind('}') + 1
                         if start >= 0 and end > start:
                             parsed = _json.loads(raw[start:end])
                             action = parsed.get('action', 'SKIP').upper()
-                            reasoning = parsed.get('reasoning', reasoning)[:200]
+                            reasoning = parsed.get('reasoning', reasoning)[:250]
                             if action == 'ENTER':
                                 entry_p = float(parsed.get('entry', entry_p))
                                 stop_p  = float(parsed.get('stop',  stop_p))
@@ -4654,7 +4694,7 @@ def _paper_ai_run(user_id: str) -> dict:
                                 t2_p    = float(parsed.get('t2',    t2_p))
                                 risk    = abs(entry_p - stop_p)
                 except Exception as llm_err:
-                    _log.warning('LLM paper agent error for %s: %s', ticker, llm_err)
+                    _log.warning('KB-chat paper agent error for %s: %s', ticker, llm_err)
                     # Fall through with rule-based result
 
             evaluated.append({'ticker': ticker, 'action': action, 'reasoning': reasoning})
