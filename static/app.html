@@ -2472,6 +2472,7 @@ const API = (window.location.hostname === 'localhost' || window.location.hostnam
 
 // ── apiFetch ─────────────────────────────────────────────────────────────────
 // credentials:'include' sends HttpOnly cookies cross-origin to api.trading-galaxy.uk
+let _refreshing = null; // deduplicate concurrent refresh attempts
 async function apiFetch(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   let res;
@@ -2481,12 +2482,45 @@ async function apiFetch(path, opts = {}) {
     showToast('Connection error — check your internet');
     return null;
   }
-  if (res.status === 401) { signOut(); showToast('Session expired — please sign in again'); return null; }
+  if (res.status === 401) {
+    // Don't try to refresh if this IS the refresh call (avoid infinite loop)
+    if (path === '/auth/refresh') { _handleSessionExpired(); return null; }
+    // Attempt silent token refresh using the tg_refresh HttpOnly cookie
+    if (!_refreshing) {
+      _refreshing = fetch(API + '/auth/refresh', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      }).finally(() => { _refreshing = null; });
+    }
+    try {
+      const ref = await _refreshing;
+      if (ref && ref.ok) {
+        // New tg_access cookie is now set — retry original request once
+        res = await fetch(API + path, { ...opts, headers, credentials: 'include' });
+        if (res.ok) {
+          return await res.json().catch(() => ({}));
+        }
+      }
+    } catch { /* refresh failed */ }
+    // Refresh failed — redirect to login preserving current path as ?next=
+    _handleSessionExpired();
+    return null;
+  }
   if (res.status === 429) { showToast('Too many requests — please wait a moment'); return null; }
   const data = await res.json().catch(() => ({}));
   if (res.status === 403 && data.error === 'upgrade_required') { handleUpgradeRequired(data); return null; }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
+}
+
+function _handleSessionExpired() {
+  state.token = null; state.userId = null;
+  try { localStorage.removeItem('tg_user_id'); localStorage.removeItem('tg_user_data'); } catch { /* blocked */ }
+  _renderTgChip(null, null);
+  const next = window.location.pathname !== '/login' ? '?next=' + encodeURIComponent(window.location.pathname) : '';
+  window.history.replaceState(null, '', '/login' + next);
+  showScreen('auth');
+  showToast('Session expired — signing you back in');
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
