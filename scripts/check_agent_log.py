@@ -64,4 +64,29 @@ sample = c.execute(
 for row in sample:
     print(f'  {row[0]:8s} q={row[1]:.2f} conv={row[2]!r:12s} dir={row[5]:8s} zone={row[3]:.4f}-{row[4]:.4f}')
 
+open_set = tuple(p['ticker'] for p in positions)
+print(f'\nOpen tickers: {open_set}')
+
+placeholders = ','.join('?' * len(open_set))
+if open_set:
+    new_tickers = c.execute(
+        f"SELECT COUNT(DISTINCT ticker) FROM pattern_signals"
+        f" WHERE status NOT IN ('filled','broken') AND quality_score >= 0.70"
+        f" AND LOWER(kb_conviction) IN ('high','confirmed','strong')"
+        f" AND ticker NOT IN ({placeholders})",
+        open_set
+    ).fetchone()[0]
+    print(f'Passing patterns for NEW (not-open) tickers: {new_tickers}')
+    top_new = c.execute(
+        f"SELECT ticker, quality_score, kb_conviction, zone_low, zone_high, direction FROM pattern_signals"
+        f" WHERE status NOT IN ('filled','broken') AND quality_score >= 0.70"
+        f" AND LOWER(kb_conviction) IN ('high','confirmed','strong')"
+        f" AND ticker NOT IN ({placeholders})"
+        f" ORDER BY quality_score DESC LIMIT 5",
+        open_set
+    ).fetchall()
+    print('Top new-ticker candidates:')
+    for row in top_new:
+        print(f'  {row[0]:8s} q={row[1]:.2f} conv={row[2]!r:12s} dir={row[5]:8s} zone={row[3]:.4f}-{row[4]:.4f}')
+
 c.close()
