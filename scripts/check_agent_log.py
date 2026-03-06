@@ -38,6 +38,17 @@ for r in rows:
     ticker = (r['ticker'] or '').ljust(8)
     print(f"[{ts}] {r['event_type']:12s} {ticker} {r['detail']}")
 
+non_scan = c.execute(
+    "SELECT event_type, ticker, detail, created_at FROM paper_agent_log "
+    "WHERE user_id=? AND event_type != 'scan_start' ORDER BY id DESC LIMIT 15",
+    (USER_ID,)
+).fetchall()
+print(f'\n--- Last {len(non_scan)} non-scan_start entries ---')
+for r in non_scan:
+    ts = str(r['created_at'])[:19]
+    ticker = (r['ticker'] or '').ljust(8)
+    print(f"[{ts}] {r['event_type']:12s} {ticker} {r['detail']}")
+
 print('\n--- Pattern filter diagnosis ---')
 conviction_dist = c.execute(
     "SELECT kb_conviction, COUNT(*) n FROM pattern_signals WHERE status NOT IN ('filled','broken') GROUP BY kb_conviction ORDER BY n DESC LIMIT 10"
