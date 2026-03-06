@@ -356,24 +356,24 @@ html, body {
     </div>
 
     <div class="deco-col">
-      <div class="ticker-feed">
-        <div class="ticker-item">
-          <div class="ticker-row"><span class="ticker-sym">AAPL</span><span class="ticker-up">+1.24%</span></div>
+      <div class="ticker-feed" id="ticker-feed">
+        <div class="ticker-item" id="tick-AAPL">
+          <div class="ticker-row"><span class="ticker-sym">AAPL</span><span class="ticker-chg">—</span></div>
           <div class="tick-bar"><span style="height:60%"></span><span style="height:80%"></span><span style="height:50%"></span><span style="height:90%"></span><span style="height:70%"></span></div>
         </div>
-        <div class="ticker-item">
-          <div class="ticker-row"><span class="ticker-sym">TSLA</span><span class="ticker-down">−2.11%</span></div>
+        <div class="ticker-item" id="tick-TSLA">
+          <div class="ticker-row"><span class="ticker-sym">TSLA</span><span class="ticker-chg">—</span></div>
           <div class="tick-bar"><span style="height:90%"></span><span style="height:60%"></span><span style="height:40%"></span><span style="height:55%"></span><span style="height:30%"></span></div>
         </div>
-        <div class="ticker-item">
-          <div class="ticker-row"><span class="ticker-sym">BARC.L</span><span class="ticker-up">+0.87%</span></div>
+        <div class="ticker-item" id="tick-BARC.L">
+          <div class="ticker-row"><span class="ticker-sym">BARC.L</span><span class="ticker-chg">—</span></div>
           <div class="tick-bar"><span style="height:40%"></span><span style="height:55%"></span><span style="height:70%"></span><span style="height:65%"></span><span style="height:80%"></span></div>
         </div>
-        <div class="ticker-item">
-          <div class="ticker-row"><span class="ticker-sym">SPY</span><span class="ticker-up">+0.43%</span></div>
+        <div class="ticker-item" id="tick-SPY">
+          <div class="ticker-row"><span class="ticker-sym">SPY</span><span class="ticker-chg">—</span></div>
           <div class="tick-bar"><span style="height:50%"></span><span style="height:60%"></span><span style="height:55%"></span><span style="height:70%"></span><span style="height:75%"></span></div>
         </div>
-        <div class="iv-row"><span class="iv-label">IV Rank</span><span class="iv-val">68th pct</span></div>
+        <div class="iv-row"><span class="iv-label">VIX</span><span class="iv-val" id="tick-VIX">—</span></div>
       </div>
     </div>
 
@@ -626,6 +626,54 @@ window.onTelegramAuth = async function(user) {
     wick.style.cssText = `position:absolute;left:50%;transform:translateX(-50%);width:1px;height:${h*0.4}px;background:${color};top:-${h*0.4}px;opacity:0.5;`;
     c.appendChild(wick);
     container.appendChild(c);
+  }
+})();
+
+// ── Live ticker prices ──
+(async function loadTickers() {
+  const tickers = ['AAPL', 'TSLA', 'BARC.L', 'SPY', '^VIX'];
+  const symbols = tickers.join(',');
+  const yhUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}&fields=regularMarketChangePercent,regularMarketPrice,regularMarketChange`;
+  const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(yhUrl);
+  try {
+    const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) throw new Error('proxy ' + res.status);
+    const json = await res.json();
+    const quotes = json?.quoteResponse?.result || [];
+    quotes.forEach(q => {
+      const sym = q.symbol;
+      const pct = q.regularMarketChangePercent;
+      if (pct === undefined || pct === null) return;
+      const isUp = pct >= 0;
+      const label = (isUp ? '+' : '') + pct.toFixed(2) + '%';
+
+      if (sym === '^VIX') {
+        const el = document.getElementById('tick-VIX');
+        if (el) el.textContent = (q.regularMarketPrice || '—').toFixed ? q.regularMarketPrice.toFixed(1) : q.regularMarketPrice;
+        return;
+      }
+
+      const row = document.getElementById('tick-' + sym);
+      if (!row) return;
+      const chgEl = row.querySelector('.ticker-chg');
+      if (chgEl) {
+        chgEl.textContent = label;
+        chgEl.className = 'ticker-chg ' + (isUp ? 'ticker-up' : 'ticker-down');
+      }
+
+      // Animate bars based on magnitude
+      const bars = row.querySelectorAll('.tick-bar span');
+      const mag = Math.min(Math.abs(pct) / 3, 1); // normalise 0-3% → 0-1
+      bars.forEach((b, i) => {
+        const h = isUp
+          ? 20 + (i / (bars.length - 1)) * 70 * mag + Math.random() * 10
+          : 90 - (i / (bars.length - 1)) * 70 * mag - Math.random() * 10;
+        b.style.height = Math.max(10, Math.min(95, h)) + '%';
+        b.style.background = isUp ? 'rgba(76,175,80,0.4)' : 'rgba(239,83,80,0.4)';
+      });
+    });
+  } catch {
+    // Silently fall back — static values already shown
   }
 })();
 </script>
