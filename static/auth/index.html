@@ -498,7 +498,7 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   const btn = document.getElementById('login-btn');
   btn.disabled = true; btn.textContent = 'Signing in…';
   try {
-    const res = await fetch(API + '/auth/login', {
+    const res = await fetch(API + '/auth/token', {
       method: 'POST', credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password: pw })
@@ -506,7 +506,8 @@ document.getElementById('login-btn').addEventListener('click', async () => {
     const data = await res.json().catch(() => ({}));
     if (res.ok && data.user_id) {
       try { localStorage.setItem('tg_user_id', data.user_id); } catch {}
-      location.href = '/' + data.user_id + '/dashboard';
+      const next = new URLSearchParams(location.search).get('next') || '';
+      location.href = next && next.startsWith('/') ? next : '/' + data.user_id + '/dashboard';
     } else {
       msg.textContent = data.error || 'Login failed. Check your credentials.';
       msg.className = 'msg err';
@@ -553,10 +554,12 @@ document.getElementById('reg-btn').addEventListener('click', async () => {
   const btn = document.getElementById('reg-btn');
   btn.disabled = true; btn.textContent = 'Creating account…';
   try {
+    const uid = email.split('@')[0].toLowerCase().replace(/[^a-z0-9_-]/g,'_').slice(0,32)
+               + '_' + Math.random().toString(36).slice(2,7);
     const res = await fetch(API + '/auth/register', {
       method: 'POST', credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password: pw, beta_password: beta })
+      body: JSON.stringify({ user_id: uid, email, password: pw, beta_password: beta })
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok && data.user_id) {
