@@ -2517,10 +2517,8 @@ function _handleSessionExpired() {
   state.token = null; state.userId = null;
   try { localStorage.removeItem('tg_user_id'); localStorage.removeItem('tg_user_data'); } catch { /* blocked */ }
   _renderTgChip(null, null);
-  const next = window.location.pathname !== '/login' ? '?next=' + encodeURIComponent(window.location.pathname) : '';
-  window.history.replaceState(null, '', '/login' + next);
   showScreen('auth');
-  showToast('Session expired — signing you back in');
+  showToast('Session expired — please sign in again');
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
