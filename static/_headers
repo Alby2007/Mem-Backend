@@ -2,3 +2,13 @@
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+
+/*.html
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/login
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/register
+  Cache-Control: no-cache, no-store, must-revalidate
+
