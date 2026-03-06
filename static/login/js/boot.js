@@ -9,9 +9,6 @@ function _showLoginFallback() {
   }
 }
 
-// Show login immediately (sync) — overridden below if session is valid
-_showLoginFallback();
-
 (async () => {
   try {
     pingConnection();
@@ -44,7 +41,8 @@ _showLoginFallback();
       const fromPath = _screenFromPath(window.location.pathname);
       const targetScreen = (fromPath && !_AUTH_SCREENS.has(fromPath)) ? fromPath : 'dashboard';
       navigate(targetScreen, { replace: true });
+    } else {
+      _showLoginFallback();
     }
-    // else: already showing login from _showLoginFallback() above
-  } catch { /* extension crash or network — stay on login */ }
+  } catch { _showLoginFallback(); }
 })();
