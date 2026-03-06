@@ -52,8 +52,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 }
 #sidebar:hover { width: 180px; }
 #sidebar .nav-label { opacity: 1; }
-body.auth-mode #sidebar { display: none; }
-body.auth-mode #main { left: 0; }
+/* auth-mode rules moved to auth pages section below */
 .nav-item {
   display: flex; align-items: center; gap: 12px; padding: 12px 20px; cursor: pointer;
   color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
