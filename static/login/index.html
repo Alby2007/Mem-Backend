@@ -14,19 +14,26 @@
 </head>
 <body>
 <script>
-// Immediately apply auth-mode and show correct screen to prevent flash
+// Immediately apply auth-mode and show correct auth screen — runs before any JS loads
 (function(){
   var p=window.location.pathname;
-  if(p==='/login'||p==='/register'||p==='/login/'||p==='/register/'){
-    document.body.classList.add('auth-mode');
-    document.addEventListener('DOMContentLoaded',function(){
-      var id=p.indexOf('register')!==-1?'screen-register':'screen-login';
-      var el=document.getElementById(id);
-      if(el)el.classList.add('active');
-    });
+  var isReg=p.indexOf('register')!==-1;
+  var isLogin=p.indexOf('login')!==-1||p==='/';
+  if(isReg||isLogin){
+    document.documentElement.setAttribute('data-auth',isReg?'register':'login');
   }
 })();
 </script>
+<style>
+  /* CSS-driven initial auth screen — no JS dependency */
+  html[data-auth] body { }
+  html[data-auth] #topbar { display:none!important; }
+  html[data-auth] #sidebar { display:none!important; }
+  html[data-auth] #mobile-nav { display:none!important; }
+  html[data-auth] #main { position:static!important;left:0!important;top:0!important;overflow:visible!important;padding:0!important; }
+  html[data-auth="login"] #screen-login { display:block!important; }
+  html[data-auth="register"] #screen-register { display:block!important; }
+</style>
 
 <!-- ── Top bar ──────────────────────────────────────────────────────── -->
 <div id="topbar">
@@ -88,9 +95,6 @@
     <span class="nav-icon">⊕</span><span class="nav-label">Profile</span>
   </div>
 </nav>
-
-<!-- ── Main ────────────────────────────────────────────────────────── -->
-<main id="main">
 
 <!-- LOGIN ─────────────────────────────────────────────────────────── -->
 <div class="screen" id="screen-login">
@@ -232,6 +236,9 @@
     </div>
   </div>
 </div>
+
+<!-- ── Main ────────────────────────────────────────────────────────── -->
+<main id="main">
 
 <!-- DASHBOARD ─────────────────────────────────────────────────────── -->
 <div class="screen" id="screen-dashboard">

@@ -324,11 +324,19 @@ select option { background: var(--surface); }
 .auth-progress-step.active .auth-progress-label { color: var(--accent); }
 .auth-progress-line { flex: 1; height: 1px; background: var(--border); margin: 0 6px; min-width: 12px; }
 
-/* Auth pages: hide topbar + sidebar + main layout */
+/* Auth pages: auth screens sit outside #main so position:fixed works vs viewport */
+/* Topbar/sidebar/nav hidden via inline CSS bootstrap + auth-mode class */
 body.auth-mode #topbar { display: none; }
 body.auth-mode #sidebar { display: none; }
-body.auth-mode #main { position: static; left: 0; top: 0; overflow: visible; padding: 0; }
+body.auth-mode #main { display: none; }
 body.auth-mode #mobile-nav { display: none !important; }
+/* Also hide via data-auth attribute set synchronously before extensions run */
+html[data-auth] #topbar { display: none !important; }
+html[data-auth] #sidebar { display: none !important; }
+html[data-auth] #main { display: none !important; }
+html[data-auth] #mobile-nav { display: none !important; }
+html[data-auth="login"] #screen-login { display: block !important; }
+html[data-auth="register"] #screen-register { display: block !important; }
 
 /* Auth responsive */
 @media (max-width: 768px) {

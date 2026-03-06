@@ -17,7 +17,7 @@ async function apiFetch(path, opts = {}) {
   }
   if (res.status === 401) {
     // Don't try to refresh if this IS the refresh call (avoid infinite loop)
-    if (path === '/auth/refresh') { _handleSessionExpired(); return null; }
+    if (path === '/auth/refresh') { return null; }
     // Attempt silent token refresh using the tg_refresh HttpOnly cookie
     if (!_refreshing) {
       _refreshing = fetch(API + '/auth/refresh', {
@@ -35,8 +35,7 @@ async function apiFetch(path, opts = {}) {
         }
       }
     } catch { /* refresh failed */ }
-    // Refresh failed — redirect to login preserving current path as ?next=
-    _handleSessionExpired();
+    // Refresh failed — caller handles no-session state
     return null;
   }
   if (res.status === 429) { showToast('Too many requests — please wait a moment'); return null; }
