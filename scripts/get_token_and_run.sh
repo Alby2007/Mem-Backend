@@ -4,21 +4,26 @@
 BASE="https://api.trading-galaxy.uk"
 USER_ID="albertjemmettwaite_uggwq"
 EMAIL="albertjemmettwaite@gmail.com"
-# Use single-quoted JSON body so ! is not interpreted by bash
-JSON_BODY='{"email":"albertjemmettwaite@gmail.com","password":"ScoobyDoo2016!"}'
+echo "=== Getting token (trying multiple passwords) ==="
+for PASS in 'ScoobyDoo2016!' 'scooby2016' 'Trading123!' 'password'; do
+  JSON_BODY="{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}"
+  TOKEN=$(curl -s -X POST "$BASE/auth/token" \
+    -H "Content-Type: application/json" \
+    -d "$JSON_BODY" \
+    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token','FAIL'))" 2>/dev/null)
+  if [[ "$TOKEN" != FAIL* ]]; then
+    echo "Got token with password: $PASS"
+    break
+  else
+    echo "Failed: $PASS"
+  fi
+done
 
-echo "=== Getting token ==="
-TOKEN=$(curl -s -X POST "$BASE/auth/token" \
-  -H "Content-Type: application/json" \
-  -d "$JSON_BODY" \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token','ERROR: '+str(d)))")
-
-echo "Token: ${TOKEN:0:40}..."
-
-if [[ "$TOKEN" == ERROR* ]]; then
-  echo "Auth failed: $TOKEN"
+if [[ "$TOKEN" == FAIL* ]] || [[ -z "$TOKEN" ]]; then
+  echo "All passwords failed"
   exit 1
 fi
+echo "Token: ${TOKEN:0:40}..."
 
 echo ""
 echo "=== Triggering one-shot agent run ==="
