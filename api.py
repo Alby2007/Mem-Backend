@@ -4548,23 +4548,22 @@ def _paper_ai_run(user_id: str) -> dict:
         conn.commit()
 
         # --- Fetch candidate patterns ---
-        # Best pattern per unique ticker (deduped), large pool, shuffled within bands
+        # Best pattern per unique ticker via GROUP BY (fast, avoids correlated subquery on 16k rows)
         candidate_rows = conn.execute(
-            """SELECT id, ticker, pattern_type, direction, zone_high, zone_low,
-                      quality_score, kb_conviction, kb_regime, kb_signal_dir
+            """SELECT p.id, p.ticker, p.pattern_type, p.direction, p.zone_high, p.zone_low,
+                      p.quality_score, p.kb_conviction, p.kb_regime, p.kb_signal_dir
                FROM pattern_signals p
-               WHERE status NOT IN ('filled','broken')
-                 AND quality_score >= 0.70
-                 AND LOWER(kb_conviction) IN ('high','confirmed','strong')
-                 AND id = (
-                     SELECT id FROM pattern_signals p2
-                     WHERE p2.ticker = p.ticker
-                       AND p2.status NOT IN ('filled','broken')
-                       AND p2.quality_score >= 0.70
-                       AND LOWER(p2.kb_conviction) IN ('high','confirmed','strong')
-                     ORDER BY p2.quality_score DESC
-                     LIMIT 1
-                 )
+               INNER JOIN (
+                   SELECT ticker, MAX(quality_score) AS best_q
+                   FROM pattern_signals
+                   WHERE status NOT IN ('filled','broken')
+                     AND quality_score >= 0.70
+                     AND LOWER(kb_conviction) IN ('high','confirmed','strong')
+                   GROUP BY ticker
+               ) best ON best.ticker = p.ticker AND best.best_q = p.quality_score
+               WHERE p.status NOT IN ('filled','broken')
+                 AND p.quality_score >= 0.70
+                 AND LOWER(p.kb_conviction) IN ('high','confirmed','strong')
                ORDER BY RANDOM()
                LIMIT 100"""
         ).fetchall()
