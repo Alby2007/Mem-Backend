@@ -4915,6 +4915,21 @@ def _paper_continuous_scan(user_id, stop_event, interval_sec=120):
     _lg.getLogger('paper_agent').info('Continuous scanner stopped for %s', user_id)
 
 
+@app.route('/users/<user_id>/paper/agent/run', methods=['POST'])
+@require_auth
+def paper_agent_run_once(user_id):
+    """POST /users/<user_id>/paper/agent/run — one-shot scan, returns result synchronously."""
+    err = assert_self(user_id)
+    if err: return err
+    _, terr = _paper_tier_check(user_id)
+    if terr: return terr
+    try:
+        result = _paper_ai_run(user_id)
+        return jsonify({'status': 'ok', 'result': result})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/users/<user_id>/paper/agent/start', methods=['POST'])
 @require_auth
 def paper_agent_start(user_id):
