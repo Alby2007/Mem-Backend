@@ -50,7 +50,7 @@ function _handleSessionExpired() {
   state.token = null; state.userId = null;
   try { localStorage.removeItem('tg_user_id'); localStorage.removeItem('tg_user_data'); } catch { /* blocked */ }
   _renderTgChip(null, null);
-  showScreen('auth');
+  showScreen('login');
   showToast('Session expired — please sign in again');
 }
 

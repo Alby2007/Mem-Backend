@@ -1,5 +1,6 @@
 # SPA routes — all served by /login/index.html (the Trading Galaxy app)
 /login                      /login/index.html   200
+/register                   /login/index.html   200
 /dashboard                  /login/index.html   200
 /portfolio                  /login/index.html   200
 /chat                       /login/index.html   200

@@ -31,7 +31,7 @@
 
       // Route to the screen from the URL if valid, else dashboard
       const fromPath = _screenFromPath(window.location.pathname);
-      const targetScreen = (fromPath && fromPath !== 'auth') ? fromPath : 'dashboard';
+      const targetScreen = (fromPath && !_AUTH_SCREENS.has(fromPath)) ? fromPath : 'dashboard';
       navigate(targetScreen, { replace: true });
       return;
     }
@@ -39,11 +39,11 @@
 
   // No valid session — if URL had a protected path, preserve as ?next=
   const fromPath = _screenFromPath(window.location.pathname);
-  if (fromPath && fromPath !== 'auth') {
+  if (fromPath && !_AUTH_SCREENS.has(fromPath)) {
     const nextPath = window.location.pathname;
     window.history.replaceState(null, '', '/login?next=' + encodeURIComponent(nextPath));
   } else {
     window.history.replaceState(null, '', '/login');
   }
-  showScreen('auth');
+  showScreen('login');
 })();

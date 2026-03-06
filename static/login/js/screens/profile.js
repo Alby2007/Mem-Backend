@@ -328,7 +328,7 @@ document.getElementById('profile-delete-btn').addEventListener('click', async ()
     if (!d) return;
     state.token = null; state.userId = null; state.holdings = [];
     try { localStorage.clear(); } catch { /* storage blocked */ }
-    navigate('auth', { replace: true });
+    navigate('login', { replace: true });
     showToast('Account deleted.', 'ok');
   } catch(e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
 });

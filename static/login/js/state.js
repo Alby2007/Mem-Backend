@@ -16,7 +16,7 @@ const TIER_CONFIG = {
   premium: { opportunity_scan: true,  chat_queries_per_day: null,  t3_targets: true,  live_price_fetch: true  },
 };
 
-const _SUBSCRIPTION_FREE_SCREENS = new Set(['profile', 'subscription', 'auth']);
+const _SUBSCRIPTION_FREE_SCREENS = new Set(['profile', 'subscription', 'login', 'register']);
 
 function _hasSubscription() {
   return state.tier === 'basic' || state.tier === 'pro' || state.tier === 'premium';

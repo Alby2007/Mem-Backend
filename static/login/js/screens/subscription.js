@@ -88,7 +88,7 @@ async function loadSubscription() {
 }
 
 async function startCheckout(tier) {
-  if (!state.userId) { navigate('auth'); return; }
+  if (!state.userId) { navigate('login'); return; }
   const annual = document.getElementById('sub-tog-annual')?.classList.contains('active') || false;
   const btn = document.getElementById(`sub-cta-${tier}`);
   if (btn) { btn.disabled = true; btn.textContent = 'Redirecting…'; }

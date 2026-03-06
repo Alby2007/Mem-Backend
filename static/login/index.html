@@ -78,38 +78,143 @@
 <!-- ── Main ────────────────────────────────────────────────────────── -->
 <main id="main">
 
-<!-- AUTH ──────────────────────────────────────────────────────────── -->
-<div class="screen active" id="screen-auth">
-    <div style="margin-bottom:24px;">
-    <div style="font-size:24px;font-weight:700;margin-bottom:6px;">Sign in to Trading Galaxy</div>
-    <div class="text-muted text-sm">Session persists across refreshes. Sign out to clear.</div>
-  </div>
-  <div style="margin-bottom:24px;display:flex;flex-direction:column;align-items:flex-start;gap:10px;">
-    <div style="font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:2px;">Quick Sign-in</div>
-    <div id="tg-widget-auth"></div>
-    <div id="tg-widget-auth-msg" style="font-size:12px;color:var(--muted);"></div>
-  </div>
-  <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
-    <div style="flex:1;height:1px;background:var(--border);"></div>
-    <span style="font-size:11px;color:var(--muted);letter-spacing:0.08em;">OR USE EMAIL</span>
-    <div style="flex:1;height:1px;background:var(--border);"></div>
-  </div>
-  <div class="auth-panels">
-    <div class="card">
-      <div class="auth-title">Register</div>
-      <div class="form-row"><label>Email</label><input id="reg-email" type="email" placeholder="alice@example.com" /></div>
-      <div class="form-row"><label>Password</label><input id="reg-pw" type="password" placeholder="min 8 characters" /></div>
-      <div class="form-row"><label>Confirm</label><input id="reg-pw2" type="password" placeholder="••••••••" /></div>
-      <div class="form-row" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--border);"><label style="color:var(--accent);">Beta Access Password</label><input id="reg-beta" type="password" placeholder="Required for beta access" autocomplete="off" /></div>
-      <button class="btn btn-outline w-full" id="reg-btn">Create Account</button>
-      <div id="reg-msg" class="text-sm mt-8 text-muted"></div>
+<!-- LOGIN ─────────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-login">
+  <div class="auth-page">
+    <div class="auth-grid-bg"></div>
+    <div class="auth-logo">TRADING GALAXY</div>
+    <div class="auth-split">
+      <!-- Left: live stats -->
+      <div class="auth-left">
+        <div class="auth-stats">
+          <div class="auth-stat">
+            <div class="auth-stat-value" id="login-stat-facts">—</div>
+            <div class="auth-stat-label">Knowledge Base Facts</div>
+          </div>
+          <div class="auth-stat">
+            <div class="auth-stat-value" id="login-stat-signals">—</div>
+            <div class="auth-stat-label">Active Signals</div>
+          </div>
+          <div class="auth-stat">
+            <div class="auth-stat-value" id="login-stat-ticker">—</div>
+            <div class="auth-stat-label">Top Conviction</div>
+          </div>
+        </div>
+        <div class="auth-live-badge"><span class="auth-live-dot"></span> Live data — updated every 30 min</div>
+      </div>
+      <!-- Right: login form -->
+      <div class="auth-right">
+        <div class="auth-card">
+          <div class="auth-card-title">Sign in</div>
+          <div class="auth-card-sub">Access your trading intelligence dashboard</div>
+          <div class="auth-field">
+            <label for="login-email">Email</label>
+            <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email" />
+          </div>
+          <div class="auth-field">
+            <label for="login-pw">Password</label>
+            <input id="login-pw" type="password" placeholder="••••••••" autocomplete="current-password" />
+          </div>
+          <button class="auth-btn auth-btn-primary" id="login-btn">Sign In</button>
+          <div id="login-msg" class="auth-msg"></div>
+          <div class="auth-divider"><span>or</span></div>
+          <div id="tg-widget-auth" class="auth-tg-widget"></div>
+          <div class="auth-switch">Don't have an account? <a href="/register" onclick="navigate('register');return false;">Start free trial →</a></div>
+        </div>
+      </div>
     </div>
-    <div class="card">
-      <div class="auth-title">Login</div>
-      <div class="form-row"><label>Email</label><input id="login-email" type="email" placeholder="alice@example.com" /></div>
-      <div class="form-row"><label>Password</label><input id="login-pw" type="password" placeholder="••••••••" /></div>
-      <button class="btn btn-primary w-full" id="login-btn">Sign In</button>
-      <div id="login-msg" class="text-sm mt-8 text-muted"></div>
+  </div>
+</div>
+
+<!-- REGISTER ──────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-register">
+  <div class="auth-page">
+    <div class="auth-grid-bg"></div>
+    <div class="auth-logo">TRADING GALAXY</div>
+    <div class="auth-split">
+      <!-- Left: value proposition -->
+      <div class="auth-left">
+        <div class="auth-value-prop">
+          <h2 class="auth-value-title">Epistemic trading intelligence</h2>
+          <p class="auth-value-sub">Signals grounded in evidence, not vibes.</p>
+          <div class="auth-features">
+            <div class="auth-feature">
+              <span class="auth-feature-icon">◎</span>
+              <div>
+                <div class="auth-feature-title">Daily AI Briefings</div>
+                <div class="auth-feature-desc">Monday + Wednesday market intelligence delivered to Telegram</div>
+              </div>
+            </div>
+            <div class="auth-feature">
+              <span class="auth-feature-icon">⚛</span>
+              <div>
+                <div class="auth-feature-title">16,000+ KB Facts</div>
+                <div class="auth-feature-desc">Every signal carries a source, confidence score, and audit trail</div>
+              </div>
+            </div>
+            <div class="auth-feature">
+              <span class="auth-feature-icon">◫</span>
+              <div>
+                <div class="auth-feature-title">Autonomous Paper Trader</div>
+                <div class="auth-feature-desc">AI agent executes paper trades based on live pattern detection</div>
+              </div>
+            </div>
+          </div>
+          <div class="auth-social-proof" id="reg-social-proof">Join traders already on the platform</div>
+          <div class="auth-guarantee">
+            <span class="auth-guarantee-icon">✓</span>
+            7-day money-back guarantee · No questions asked
+          </div>
+        </div>
+      </div>
+      <!-- Right: register form -->
+      <div class="auth-right">
+        <div class="auth-card">
+          <!-- Progress indicator -->
+          <div class="auth-progress">
+            <div class="auth-progress-step active">
+              <div class="auth-progress-num">1</div>
+              <div class="auth-progress-label">Create account</div>
+            </div>
+            <div class="auth-progress-line"></div>
+            <div class="auth-progress-step">
+              <div class="auth-progress-num">2</div>
+              <div class="auth-progress-label">Set up portfolio</div>
+            </div>
+            <div class="auth-progress-line"></div>
+            <div class="auth-progress-step">
+              <div class="auth-progress-num">3</div>
+              <div class="auth-progress-label">Configure tips</div>
+            </div>
+            <div class="auth-progress-line"></div>
+            <div class="auth-progress-step">
+              <div class="auth-progress-num">4</div>
+              <div class="auth-progress-label">Start trading</div>
+            </div>
+          </div>
+          <div class="auth-card-title">Create your account</div>
+          <div class="auth-card-sub">Start your free trial in 60 seconds</div>
+          <div class="auth-field">
+            <label for="reg-email">Email</label>
+            <input id="reg-email" type="email" placeholder="you@example.com" autocomplete="email" />
+          </div>
+          <div class="auth-field">
+            <label for="reg-pw">Password</label>
+            <input id="reg-pw" type="password" placeholder="min 8 characters" autocomplete="new-password" />
+          </div>
+          <div class="auth-field">
+            <label for="reg-pw2">Confirm password</label>
+            <input id="reg-pw2" type="password" placeholder="••••••••" autocomplete="new-password" />
+          </div>
+          <div class="auth-field auth-field-beta">
+            <label for="reg-beta">Beta access password</label>
+            <input id="reg-beta" type="password" placeholder="Required for early access" autocomplete="off" />
+          </div>
+          <button class="auth-btn auth-btn-primary" id="reg-btn">Create Account</button>
+          <div id="reg-msg" class="auth-msg"></div>
+          <div class="auth-switch">Already have an account? <a href="/login" onclick="navigate('login');return false;">Sign in →</a></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>

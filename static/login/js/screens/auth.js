@@ -11,6 +11,46 @@ async function pingConnection() {
 }
 
 // ── AUTH ──────────────────────────────────────────────────────────────────────
+
+// Animated number counter for login stats
+function _animateValue(el, target, duration) {
+  if (!el || isNaN(target)) { if (el) el.textContent = target; return; }
+  const start = 0;
+  const startTime = performance.now();
+  function tick(now) {
+    const elapsed = now - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+    el.textContent = Math.round(start + (target - start) * eased).toLocaleString();
+    if (progress < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+// Fetch live stats for login page left panel
+async function _loadLoginStats() {
+  try {
+    const health = await fetch(API + '/health').then(r => r.json()).catch(() => null);
+    if (health && health.kb_facts) {
+      _animateValue(document.getElementById('login-stat-facts'), health.kb_facts, 1200);
+    }
+  } catch { /* ignore */ }
+  try {
+    const patterns = await fetch(API + '/patterns/live?limit=1').then(r => r.json()).catch(() => null);
+    if (patterns) {
+      const total = patterns.total || patterns.count || (patterns.patterns ? patterns.patterns.length : 0);
+      if (total) _animateValue(document.getElementById('login-stat-signals'), total, 1000);
+      // Top conviction ticker
+      const top = patterns.patterns && patterns.patterns[0];
+      if (top) {
+        const el = document.getElementById('login-stat-ticker');
+        if (el) el.textContent = top.ticker || '—';
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+// Register form
 document.getElementById('reg-btn').addEventListener('click', async () => {
   const email = document.getElementById('reg-email').value.trim();
   const pw    = document.getElementById('reg-pw').value;
@@ -21,19 +61,23 @@ document.getElementById('reg-btn').addEventListener('click', async () => {
   if (pw !== pw2)    { msg.textContent = 'Passwords do not match.'; return; }
   if (pw.length < 8) { msg.textContent = 'Password must be at least 8 characters.'; return; }
   if (!beta)         { msg.style.color = 'var(--red)'; msg.textContent = 'Beta access password is required.'; return; }
-  // Derive a stable user_id from the email local part + random suffix
   const uid = email.split('@')[0].toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 32)
               + '_' + Math.random().toString(36).slice(2, 7);
   msg.innerHTML = '<span class="spinner"></span>';
   try {
     const d = await apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ user_id: uid, email, password: pw, beta_password: beta }) });
-    if (!d) { msg.textContent = 'Failed.'; return; }
+    if (!d) { msg.textContent = 'Registration failed.'; return; }
     msg.style.color = 'var(--green)';
-    msg.textContent = `Account created — sign in as ${email}`;
-    document.getElementById('login-email').value = email;
+    msg.textContent = 'Account created — redirecting to sign in…';
+    // Pre-fill login email and switch to login screen
+    setTimeout(() => {
+      document.getElementById('login-email').value = email;
+      navigate('login');
+    }, 1200);
   } catch (e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
 });
 
+// Login form
 document.getElementById('login-btn').addEventListener('click', async () => {
   const email = document.getElementById('login-email').value.trim();
   const pw    = document.getElementById('login-pw').value;
@@ -42,15 +86,22 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   msg.innerHTML = '<span class="spinner"></span>';
   try {
     const d = await apiFetch('/auth/token', { method: 'POST', body: JSON.stringify({ email, password: pw }) });
-    if (!d) { msg.textContent = 'Failed.'; return; }
+    if (!d) { msg.textContent = 'Sign in failed.'; return; }
     await _saveSession(d.access_token || d.token, d.user_id);
-    // Honour ?next= param if it passes the allowlist, else go to dashboard
     const _nextRaw = new URLSearchParams(window.location.search).get('next') || '';
     const _nextScreen = _nextRaw && _NEXT_RE.test(_nextRaw)
       ? _screenFromPath(_nextRaw)
       : 'dashboard';
     navigate(_nextScreen || 'dashboard', { replace: true });
   } catch (e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
+});
+
+// Enter key submits forms
+document.getElementById('login-pw').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('login-btn').click();
+});
+document.getElementById('reg-beta').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('reg-btn').click();
 });
 
 async function _saveSession(token, userId, tgData) {
@@ -107,7 +158,7 @@ async function signOut() {
   try { localStorage.removeItem('tg_user_id'); localStorage.removeItem('tg_user_data'); } catch { /* storage blocked */ }
   _renderTgChip(null, null);
   window.history.replaceState(null, '', '/login');
-  showScreen('auth');
+  showScreen('login');
 }
 
 // ── Telegram Login Widget callback ────────────────────────────────────────

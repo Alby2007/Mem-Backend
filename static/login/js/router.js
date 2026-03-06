@@ -1,17 +1,20 @@
 // ── Router ────────────────────────────────────────────────────────────────────
 const _SCREENS = ['dashboard','portfolio','markets','chat','tips','patterns','network','history','paper','subscription','profile'];
+const _AUTH_SCREENS = new Set(['login', 'register']);
 const _NEXT_RE = /^\/[a-z0-9_-]+\/(dashboard|portfolio|markets|chat|tips|patterns|network|history|paper|subscription|profile)$/;
 
 function _screenFromPath(path) {
   // /:username/screen  → screen name
   const parts = path.replace(/^\//, '').split('/');
   if (parts.length === 2 && _SCREENS.includes(parts[1])) return parts[1];
-  if (parts[0] === 'login' || path === '/login') return 'auth';
+  if (parts[0] === 'login' || path === '/login') return 'login';
+  if (parts[0] === 'register' || path === '/register') return 'register';
   return null;
 }
 
 function _pathForScreen(name) {
-  if (name === 'auth') return '/login';
+  if (name === 'login') return '/login';
+  if (name === 'register') return '/register';
   if (name === 'profile') return `/${state.userId || '_'}/profile`;
   return `/${state.userId || '_'}/${name}`;
 }
@@ -26,8 +29,9 @@ function showScreen(name) {
   if (sc) sc.classList.add('active');
   if (nv) nv.classList.add('active');
   if (mn) mn.classList.add('active');
-  document.getElementById('mobile-nav').style.display = name === 'auth' ? 'none' : '';
-  document.body.classList.toggle('auth-mode', name === 'auth');
+  const isAuth = _AUTH_SCREENS.has(name);
+  document.getElementById('mobile-nav').style.display = isAuth ? 'none' : '';
+  document.body.classList.toggle('auth-mode', isAuth);
   if (name === 'dashboard') loadDashboard();
   if (name === 'patterns')  loadPatterns();
   if (name === 'network')   loadNetwork();
@@ -36,19 +40,20 @@ function showScreen(name) {
   if (name === 'portfolio') { loadPortfolioModel(); loadPortfolioHoldings(); loadTickerList(); loadSimBannerIfSet(); }
   if (name === 'markets')   initMarketsScreen();
   if (name === 'paper')     loadPaperTrader();
-  if (name === 'auth')         _injectAuthTgWidget();
+  if (name === 'login')         { _injectAuthTgWidget(); _loadLoginStats(); }
+  if (name === 'register')      {}
   if (name === 'profile')      loadProfile();
   if (name === 'subscription') loadSubscription();
 }
 
 function navigate(name, { replace = false } = {}) {
-  if (name !== 'auth' && !state.userId) {
+  if (!_AUTH_SCREENS.has(name) && !state.userId) {
     // Auth guard — redirect to /login?next=/<username>/<screen>
     const intended = _pathForScreen(name);
     const next = _NEXT_RE.test(intended) ? encodeURIComponent(intended) : '';
     const target = '/login' + (next ? `?next=${next}` : '');
     window.history.replaceState(null, '', target);
-    showScreen('auth');
+    showScreen('login');
     return;
   }
   // Subscription guard — redirect to /subscription for gated screens
@@ -67,8 +72,8 @@ function navigate(name, { replace = false } = {}) {
 
 window.addEventListener('popstate', () => {
   const name = _screenFromPath(window.location.pathname);
-  if (!name || (name !== 'auth' && !state.userId)) {
-    showScreen('auth');
+  if (!name || (!_AUTH_SCREENS.has(name) && !state.userId)) {
+    showScreen('login');
     return;
   }
   if (!_SUBSCRIPTION_FREE_SCREENS.has(name) && !_hasSubscription() && state.userId) {
@@ -81,7 +86,7 @@ window.addEventListener('popstate', () => {
 document.querySelectorAll('.nav-item, .mnav-item').forEach(el => {
   el.addEventListener('click', () => {
     const s = el.dataset.screen;
-    if (s !== 'auth' && !state.userId) { navigate('auth'); return; }
+    if (!_AUTH_SCREENS.has(s) && !state.userId) { navigate('login'); return; }
     if (!_SUBSCRIPTION_FREE_SCREENS.has(s) && !_hasSubscription()) {
       navigate('subscription');
       return;
