@@ -108,16 +108,17 @@ html, body {
   max-width: 260px; margin-bottom: 40px; letter-spacing: 0.01em;
 }
 
-.brand-stats { display: flex; flex-direction: column; gap: 14px; }
-.stat-row { display: flex; align-items: center; gap: 12px; }
+.brand-stats { display: flex; flex-direction: column; gap: 12px; max-width: 280px; }
+.stat-row { display: flex; align-items: center; gap: 8px; }
 .stat-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--gold); flex-shrink: 0; }
-.stat-label { font-size: 10px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
-.stat-val { font-size: 10px; color: var(--gold); margin-left: auto; font-weight: 500; }
+.stat-label { font-size: 9px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; flex-shrink: 0; }
+.stat-connector { flex: 1; height: 1px; background: repeating-linear-gradient(90deg, rgba(232,160,32,0.2) 0px, rgba(232,160,32,0.2) 2px, transparent 2px, transparent 6px); margin: 0 4px; }
+.stat-val { font-size: 9px; color: var(--gold); font-weight: 500; white-space: nowrap; flex-shrink: 0; }
 
 /* ── Card column ── */
 .card-col {
   grid-area: card;
-  padding: 0 16px;
+  padding: 0 8px;
   animation: fadeUp 0.8s 0.1s ease both;
 }
 
@@ -125,7 +126,7 @@ html, body {
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 44px 40px;
+  padding: 48px 44px;
   position: relative; overflow: hidden;
   box-shadow: 0 0 0 1px rgba(255,255,255,0.02) inset,
               0 32px 80px rgba(0,0,0,0.7),
@@ -328,10 +329,10 @@ html, body {
       <h1 class="brand-headline">Epistemic<br>trading<br><em>intelligence.</em></h1>
       <p class="brand-sub">Signals grounded in evidence, not vibes. AI-powered analysis built for serious traders.</p>
       <div class="brand-stats">
-        <div class="stat-row"><div class="stat-dot"></div><span class="stat-label">Coverage</span><span class="stat-val">FTSE + US Markets</span></div>
-        <div class="stat-row"><div class="stat-dot"></div><span class="stat-label">Signal latency</span><span class="stat-val">&lt; 30 min</span></div>
-        <div class="stat-row"><div class="stat-dot"></div><span class="stat-label">Greeks data</span><span class="stat-val">Live Options Flow</span></div>
-        <div class="stat-row"><div class="stat-dot"></div><span class="stat-label">AI layer</span><span class="stat-val">Tiered Intelligence</span></div>
+        <div class="stat-row"><div class="stat-dot"></div><span class="stat-label">Coverage</span><div class="stat-connector"></div><span class="stat-val">FTSE + US Markets</span></div>
+        <div class="stat-row"><div class="stat-dot"></div><span class="stat-label">Signal latency</span><div class="stat-connector"></div><span class="stat-val">&lt; 30 min</span></div>
+        <div class="stat-row"><div class="stat-dot"></div><span class="stat-label">Greeks data</span><div class="stat-connector"></div><span class="stat-val">Live Options Flow</span></div>
+        <div class="stat-row"><div class="stat-dot"></div><span class="stat-label">AI layer</span><div class="stat-connector"></div><span class="stat-val">Tiered Intelligence</span></div>
       </div>
     </div>
 
