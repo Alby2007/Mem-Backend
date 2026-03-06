@@ -11,6 +11,54 @@
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 <noscript><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
 <link rel="stylesheet" href="css/app.css">
+<style>
+/* ── Auth layout override — loaded after app.css, wins cascade ── */
+html, body { height: 100%; }
+
+#screen-login, #screen-register {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 500 !important;
+  background: #080A06 !important;
+  overflow-y: auto !important;
+  display: none;
+}
+html[data-auth="login"]    #screen-login    { display: block !important; }
+html[data-auth="register"] #screen-register { display: block !important; }
+
+#screen-login .auth-page,
+#screen-register .auth-page {
+  width: 100% !important;
+  height: 100vh !important;
+  min-height: 100vh !important;
+  display: grid !important;
+  grid-template-columns: 1fr 480px 1fr !important;
+  grid-template-areas: "brand card deco" !important;
+  grid-template-rows: 1fr !important;
+  align-items: center !important;
+  position: relative !important;
+  z-index: 1 !important;
+}
+#screen-login .auth-brand-col,
+#screen-register .auth-brand-col { grid-area: brand !important; }
+#screen-login .auth-card-col,
+#screen-register .auth-card-col  { grid-area: card !important; }
+#screen-login .auth-deco-col,
+#screen-register .auth-deco-col  { grid-area: deco !important; }
+
+@media (max-width: 960px) {
+  #screen-login .auth-page,
+  #screen-register .auth-page {
+    grid-template-columns: 1fr !important;
+    grid-template-areas: "brand" "card" !important;
+    grid-template-rows: auto !important;
+    height: auto !important;
+    padding: 40px 24px !important;
+  }
+  #screen-login .auth-deco-col,
+  #screen-register .auth-deco-col { display: none !important; }
+}
+</style>
 <script>
 try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_p.indexOf('register')!==-1?'register':'login');}catch(e){}
 </script>
