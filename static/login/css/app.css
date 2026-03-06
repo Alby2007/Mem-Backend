@@ -61,6 +61,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .nav-item:hover { color: var(--text); background: var(--card); }
 .nav-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(245,158,11,.06); }
 .nav-item.locked { opacity: 0.32; cursor: not-allowed; pointer-events: none; }
+#nav-signout { color: var(--muted); }
+#nav-signout:hover { color: #f87171; background: rgba(248,113,113,0.06); }
 .mnav-item.locked { opacity: 0.32; cursor: not-allowed; pointer-events: none; }
 .nav-icon { font-size: 16px; flex-shrink: 0; width: 24px; text-align: center; }
 .nav-label { opacity: 1; font-family: var(--sans); }

@@ -1,4 +1,9 @@
 // ── Boot ──────────────────────────────────────────────────────────────────────
+async function doSignOut() {
+  try { await apiFetch('/auth/logout', { method: 'POST' }); } catch {}
+  window.location.replace('/');
+}
+
 function _showLoginFallback() {
   const p = _screenFromPath(window.location.pathname);
   if (p === 'register') { window.location.replace('/register'); return; }
