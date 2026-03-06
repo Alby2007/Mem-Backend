@@ -8,7 +8,7 @@
 <title>Trading Galaxy — Sign In</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 <noscript><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
 <link rel="stylesheet" href="css/app.css">
 <script>
@@ -78,34 +78,86 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
   </div>
 </nav>
 
-<canvas class="auth-particles" id="auth-particles"></canvas>
+<!-- bg layers (shared, body-level) -->
+<div class="auth-bg-grid" id="auth-bg-grid"></div>
+<div class="auth-bg-glow" id="auth-bg-glow"></div>
+<div class="auth-candles" id="auth-candles"></div>
 
 <!-- LOGIN ─────────────────────────────────────────────────────────── -->
 <div class="screen" id="screen-login">
   <div class="auth-page">
-    <div class="auth-grid-bg"></div>
-    <div class="auth-logo">TRADING GALAXY</div>
-    <div class="auth-center">
-      <div class="auth-center-headline">Epistemic trading intelligence</div>
-      <div class="auth-center-sub">Signals grounded in evidence, not vibes.</div>
-      <div class="auth-card">
-        <div class="auth-card-title">Sign in</div>
-        <div class="auth-card-sub">Access your trading intelligence dashboard</div>
-        <div class="auth-field">
-          <label for="login-email">Email</label>
-          <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email" />
+    <div class="auth-3col">
+
+      <!-- Left: brand -->
+      <div class="auth-brand-col">
+        <div class="auth-brand-mark">
+          <div class="auth-brand-icon">
+            <svg viewBox="0 0 32 32" fill="none" width="32" height="32">
+              <polygon points="16,2 20,12 30,12 22,19 25,30 16,24 7,30 10,19 2,12 12,12" fill="none" stroke="#E8A020" stroke-width="1.5"/>
+              <circle cx="16" cy="16" r="3" fill="#E8A020" opacity="0.8"/>
+            </svg>
+          </div>
+          <span class="auth-brand-name">Trading Galaxy</span>
         </div>
-        <div class="auth-field">
-          <label for="login-pw">Password</label>
-          <input id="login-pw" type="password" placeholder="••••••••" autocomplete="current-password" />
+        <h1 class="auth-brand-headline">Epistemic<br>trading<br><em>intelligence.</em></h1>
+        <p class="auth-brand-sub">Signals grounded in evidence, not vibes. AI-powered analysis built for serious traders.</p>
+        <div class="auth-brand-stats">
+          <div class="auth-stat-row"><div class="auth-stat-dot"></div><span class="auth-stat-label">Coverage</span><span class="auth-stat-val">FTSE + US Markets</span></div>
+          <div class="auth-stat-row"><div class="auth-stat-dot"></div><span class="auth-stat-label">Signal latency</span><span class="auth-stat-val">&lt; 30 min</span></div>
+          <div class="auth-stat-row"><div class="auth-stat-dot"></div><span class="auth-stat-label">Greeks data</span><span class="auth-stat-val">Live Options Flow</span></div>
+          <div class="auth-stat-row"><div class="auth-stat-dot"></div><span class="auth-stat-label">AI layer</span><span class="auth-stat-val">Tiered Intelligence</span></div>
         </div>
-        <button class="auth-btn auth-btn-primary" id="login-btn">Sign In</button>
-        <div id="login-msg" class="auth-msg"></div>
-        <div class="auth-divider"><span>or</span></div>
-        <div id="tg-widget-auth" class="auth-tg-widget"></div>
-        <div class="auth-switch">Don't have an account?</div>
-        <a href="/register" class="auth-btn-trial" onclick="navigate('register');return false;">Start free trial →</a>
       </div>
+
+      <!-- Centre: card -->
+      <div class="auth-card-col">
+        <div class="auth-card">
+          <div class="auth-card-title">Sign in</div>
+          <div class="auth-card-sub">Access your trading intelligence dashboard</div>
+          <div class="auth-field">
+            <label for="login-email">Email</label>
+            <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email" />
+          </div>
+          <div class="auth-field">
+            <div class="auth-field-row">
+              <label for="login-pw">Password</label>
+            </div>
+            <input id="login-pw" type="password" placeholder="••••••••••" autocomplete="current-password" />
+          </div>
+          <button class="auth-btn auth-btn-primary" id="login-btn">Sign In →</button>
+          <div id="login-msg" class="auth-msg"></div>
+          <div class="auth-divider"><div class="auth-divider-line"></div><span class="auth-divider-text">or</span><div class="auth-divider-line"></div></div>
+          <div id="tg-widget-auth" class="auth-tg-widget"></div>
+          <div class="auth-card-footer">Don't have an account? <a href="/register" onclick="navigate('register');return false;">Start free trial →</a></div>
+        </div>
+      </div>
+
+      <!-- Right: ticker deco -->
+      <div class="auth-deco-col">
+        <div class="auth-ticker-feed">
+          <div class="auth-ticker-item auth-ticker-col">
+            <div class="auth-ticker-top"><span class="auth-ticker-sym">AAPL</span><span class="auth-ticker-up">+1.24%</span></div>
+            <div class="auth-tick-bar"><span style="height:60%"></span><span style="height:80%"></span><span style="height:50%"></span><span style="height:90%"></span><span style="height:70%"></span></div>
+          </div>
+          <div class="auth-ticker-item auth-ticker-col">
+            <div class="auth-ticker-top"><span class="auth-ticker-sym">TSLA</span><span class="auth-ticker-down">−2.11%</span></div>
+            <div class="auth-tick-bar"><span style="height:90%"></span><span style="height:60%"></span><span style="height:40%"></span><span style="height:55%"></span><span style="height:30%"></span></div>
+          </div>
+          <div class="auth-ticker-item auth-ticker-col">
+            <div class="auth-ticker-top"><span class="auth-ticker-sym">BARC.L</span><span class="auth-ticker-up">+0.87%</span></div>
+            <div class="auth-tick-bar"><span style="height:40%"></span><span style="height:55%"></span><span style="height:70%"></span><span style="height:65%"></span><span style="height:80%"></span></div>
+          </div>
+          <div class="auth-ticker-item auth-ticker-col">
+            <div class="auth-ticker-top"><span class="auth-ticker-sym">SPY</span><span class="auth-ticker-up">+0.43%</span></div>
+            <div class="auth-tick-bar"><span style="height:50%"></span><span style="height:60%"></span><span style="height:55%"></span><span style="height:70%"></span><span style="height:75%"></span></div>
+          </div>
+          <div class="auth-ticker-item">
+            <span class="auth-ticker-sym" style="font-size:10px;color:#6B6860">IV RANK</span>
+            <span style="font-size:11px;color:#E8A020">68th pct</span>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -113,78 +165,63 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
 <!-- REGISTER ──────────────────────────────────────────────────────── -->
 <div class="screen" id="screen-register">
   <div class="auth-page">
-    <div class="auth-grid-bg"></div>
-    <div class="auth-logo">TRADING GALAXY</div>
-    <div class="auth-split">
-      <!-- Left: value proposition -->
-      <div class="auth-left">
-        <div class="auth-value-prop">
-          <h2 class="auth-value-title">Epistemic trading intelligence</h2>
-          <p class="auth-value-sub">Signals grounded in evidence, not vibes.</p>
-          <div class="auth-features">
-            <div class="auth-feature">
-              <span class="auth-feature-icon">◎</span>
-              <div>
-                <div class="auth-feature-title">Daily AI Briefings</div>
-                <div class="auth-feature-desc">Monday + Wednesday market intelligence delivered to Telegram</div>
-              </div>
-            </div>
-            <div class="auth-feature">
-              <span class="auth-feature-icon">⚛</span>
-              <div>
-                <div class="auth-feature-title">16,000+ KB Facts</div>
-                <div class="auth-feature-desc">Every signal carries a source, confidence score, and audit trail</div>
-              </div>
-            </div>
-            <div class="auth-feature">
-              <span class="auth-feature-icon">◫</span>
-              <div>
-                <div class="auth-feature-title">Autonomous Paper Trader</div>
-                <div class="auth-feature-desc">AI agent executes paper trades based on live pattern detection</div>
-              </div>
-            </div>
+    <div class="auth-3col">
+
+      <!-- Left: brand + tiers -->
+      <div class="auth-brand-col">
+        <div class="auth-brand-mark">
+          <div class="auth-brand-icon">
+            <svg viewBox="0 0 32 32" fill="none" width="28" height="28">
+              <polygon points="16,2 20,12 30,12 22,19 25,30 16,24 7,30 10,19 2,12 12,12" fill="none" stroke="#E8A020" stroke-width="1.5"/>
+              <circle cx="16" cy="16" r="3" fill="#E8A020" opacity="0.8"/>
+            </svg>
           </div>
-          <div class="auth-social-proof" id="reg-social-proof">Join traders already on the platform</div>
-          <div class="auth-guarantee">
-            <span class="auth-guarantee-icon">✓</span>
-            7-day money-back guarantee · No questions asked
+          <span class="auth-brand-name">Trading Galaxy</span>
+        </div>
+        <h1 class="auth-brand-headline">Join the <em>edge.</em></h1>
+        <p class="auth-brand-sub">Start free, upgrade when you're ready. Every tier includes AI-grounded signals.</p>
+        <div class="auth-tier-list">
+          <div class="auth-tier-card auth-tier-active">
+            <div class="auth-tier-dot" style="background:#6B6860"></div>
+            <div class="auth-tier-info"><div class="auth-tier-name">Free</div><div class="auth-tier-desc">3 tips/day · Basic signals</div></div>
+            <span class="auth-tier-free">£0</span>
+          </div>
+          <div class="auth-tier-card">
+            <div class="auth-tier-dot" style="background:#E8A020"></div>
+            <div class="auth-tier-info"><div class="auth-tier-name">Basic</div><div class="auth-tier-desc">10 tips/day · Daily briefing</div></div>
+            <span class="auth-tier-price">£9/mo</span>
+          </div>
+          <div class="auth-tier-card">
+            <div class="auth-tier-dot" style="background:#F0AA28"></div>
+            <div class="auth-tier-info"><div class="auth-tier-name">Pro</div><div class="auth-tier-desc">25 tips/day · Greeks data</div></div>
+            <span class="auth-tier-price">£29/mo</span>
+          </div>
+          <div class="auth-tier-card">
+            <div class="auth-tier-dot" style="background:#FFD166"></div>
+            <div class="auth-tier-info"><div class="auth-tier-name">Premium</div><div class="auth-tier-desc">Unlimited · Full intelligence</div></div>
+            <span class="auth-tier-price">£79/mo</span>
           </div>
         </div>
       </div>
-      <!-- Right: register form -->
-      <div class="auth-right">
+
+      <!-- Centre: register card -->
+      <div class="auth-card-col">
         <div class="auth-card">
-          <!-- Progress indicator -->
-          <div class="auth-progress">
-            <div class="auth-progress-step active">
-              <div class="auth-progress-num">1</div>
-              <div class="auth-progress-label">Create account</div>
-            </div>
-            <div class="auth-progress-line"></div>
-            <div class="auth-progress-step">
-              <div class="auth-progress-num">2</div>
-              <div class="auth-progress-label">Set up portfolio</div>
-            </div>
-            <div class="auth-progress-line"></div>
-            <div class="auth-progress-step">
-              <div class="auth-progress-num">3</div>
-              <div class="auth-progress-label">Configure tips</div>
-            </div>
-            <div class="auth-progress-line"></div>
-            <div class="auth-progress-step">
-              <div class="auth-progress-num">4</div>
-              <div class="auth-progress-label">Start trading</div>
-            </div>
-          </div>
-          <div class="auth-card-title">Create your account</div>
-          <div class="auth-card-sub">Start your free trial in 60 seconds</div>
+          <div class="auth-card-title">Create account</div>
+          <div class="auth-card-sub">Start your free trial — no card required</div>
           <div class="auth-field">
             <label for="reg-email">Email</label>
             <input id="reg-email" type="email" placeholder="you@example.com" autocomplete="email" />
           </div>
           <div class="auth-field">
             <label for="reg-pw">Password</label>
-            <input id="reg-pw" type="password" placeholder="min 8 characters" autocomplete="new-password" />
+            <input id="reg-pw" type="password" placeholder="Min. 8 characters" autocomplete="new-password" />
+            <div class="auth-pw-strength">
+              <div class="auth-pw-bar" id="reg-bar1"></div>
+              <div class="auth-pw-bar" id="reg-bar2"></div>
+              <div class="auth-pw-bar" id="reg-bar3"></div>
+              <div class="auth-pw-bar" id="reg-bar4"></div>
+            </div>
           </div>
           <div class="auth-field">
             <label for="reg-pw2">Confirm password</label>
@@ -194,11 +231,25 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
             <label for="reg-beta">Beta access password</label>
             <input id="reg-beta" type="password" placeholder="Required for early access" autocomplete="off" />
           </div>
-          <button class="auth-btn auth-btn-primary" id="reg-btn">Create Account</button>
+          <button class="auth-btn auth-btn-primary" id="reg-btn">Create Free Account →</button>
           <div id="reg-msg" class="auth-msg"></div>
-          <div class="auth-switch">Already have an account? <a href="/login" onclick="navigate('login');return false;">Sign in →</a></div>
+          <div class="auth-card-footer">Already have an account? <a href="/login" onclick="navigate('login');return false;">Sign in →</a></div>
         </div>
       </div>
+
+      <!-- Right: features -->
+      <div class="auth-deco-col">
+        <div class="auth-features-list">
+          <div class="auth-feature-label">Free tier includes</div>
+          <div class="auth-feature-item"><div class="auth-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>3 AI tips per day</div>
+          <div class="auth-feature-item"><div class="auth-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>FTSE + US signals</div>
+          <div class="auth-feature-item"><div class="auth-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>Telegram alerts</div>
+          <div class="auth-feature-item"><div class="auth-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>News sentiment</div>
+          <div class="auth-feature-item"><div class="auth-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>Macro regime data</div>
+          <div class="auth-free-badge"><strong>No card required</strong>Upgrade anytime from £9/mo</div>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -1422,77 +1473,37 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
 <script src="js/boot.js"></script>
 <script>
 (function() {
-  var canvas = document.getElementById('auth-particles');
-  if (!canvas) return;
-  var ctx = canvas.getContext('2d');
-  var W, H, particles = [];
-  var ACCENT = 'rgba(245,158,11,';
-  var N = 55;
-
-  function resize() {
-    W = canvas.width  = window.innerWidth;
-    H = canvas.height = window.innerHeight;
+  var container = document.getElementById('auth-candles');
+  if (!container) return;
+  var colors = ['#E8A020','#4CAF50','#EF5350'];
+  for (var i = 0; i < 18; i++) {
+    var c = document.createElement('div');
+    c.className = 'auth-candle';
+    var h = 20 + Math.random() * 60;
+    var color = colors[Math.floor(Math.random() * colors.length)];
+    c.style.cssText = 'left:' + (Math.random()*100) + '%;height:' + h + 'px;background:' + color + ';animation-duration:' + (12+Math.random()*20) + 's;animation-delay:' + (Math.random()*15) + 's;opacity:0;';
+    var wick = document.createElement('div');
+    wick.style.cssText = 'position:absolute;left:50%;transform:translateX(-50%);width:1px;height:' + (h*0.4) + 'px;background:' + color + ';top:-' + (h*0.4) + 'px;opacity:0.5;';
+    c.appendChild(wick);
+    container.appendChild(c);
   }
 
-  function mkParticle() {
-    return {
-      x: Math.random() * W,
-      y: Math.random() * H,
-      r: Math.random() * 1.4 + 0.3,
-      vx: (Math.random() - 0.5) * 0.18,
-      vy: (Math.random() - 0.5) * 0.18,
-      a: Math.random() * 0.35 + 0.05,
-      pa: Math.random() * Math.PI * 2,
-      ps: Math.random() * 0.008 + 0.003
-    };
+  // Password strength on register page
+  var pwInput = document.getElementById('reg-pw');
+  var bars = ['reg-bar1','reg-bar2','reg-bar3','reg-bar4'].map(function(id){ return document.getElementById(id); });
+  var strengthColors = ['#EF5350','#FF9800','#E8A020','#4CAF50'];
+  if (pwInput) {
+    pwInput.addEventListener('input', function() {
+      var pw = pwInput.value, score = 0;
+      if (pw.length >= 8) score++;
+      if (pw.length >= 12) score++;
+      if (/[A-Z]/.test(pw) && /[0-9]/.test(pw)) score++;
+      if (/[^A-Za-z0-9]/.test(pw)) score++;
+      bars.forEach(function(bar, i) {
+        if (bar) bar.style.background = i < score ? strengthColors[score-1] : 'rgba(255,255,255,0.06)';
+      });
+    });
   }
-
-  function init() {
-    resize();
-    particles = [];
-    for (var i = 0; i < N; i++) particles.push(mkParticle());
-  }
-
-  function draw() {
-    ctx.clearRect(0, 0, W, H);
-    var now = Date.now() * 0.001;
-    for (var i = 0; i < particles.length; i++) {
-      var p = particles[i];
-      p.x += p.vx;
-      p.y += p.vy;
-      p.pa += p.ps;
-      var alpha = p.a * (0.55 + 0.45 * Math.sin(p.pa));
-      if (p.x < -10) p.x = W + 10;
-      if (p.x > W + 10) p.x = -10;
-      if (p.y < -10) p.y = H + 10;
-      if (p.y > H + 10) p.y = -10;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = ACCENT + alpha.toFixed(3) + ')';
-      ctx.fill();
-    }
-    // Draw faint connecting lines between nearby particles
-    for (var i = 0; i < particles.length; i++) {
-      for (var j = i + 1; j < particles.length; j++) {
-        var dx = particles[i].x - particles[j].x;
-        var dy = particles[i].y - particles[j].y;
-        var dist = Math.sqrt(dx*dx + dy*dy);
-        if (dist < 110) {
-          ctx.beginPath();
-          ctx.moveTo(particles[i].x, particles[i].y);
-          ctx.lineTo(particles[j].x, particles[j].y);
-          ctx.strokeStyle = ACCENT + (0.06 * (1 - dist / 110)).toFixed(3) + ')';
-          ctx.lineWidth = 0.5;
-          ctx.stroke();
-        }
-      }
-    }
-    requestAnimationFrame(draw);
-  }
-
-  window.addEventListener('resize', function() { resize(); });
-  init();
-  draw();
 })();
 </script>
 </body>
