@@ -101,21 +101,21 @@ function applyTierGating() {
 function applyDevGating() {
   const dev = state.isDev;
   const subscribed = _hasSubscription();
-  // Nav: show Network, Patterns, History for any subscribed user (or dev)
-  const showNavScreens = dev || subscribed;
+  // Network: dev-only always
   const navNetwork = document.getElementById('nav-network');
-  if (navNetwork) navNetwork.style.display = showNavScreens ? '' : 'none';
-  const navPatterns = document.getElementById('nav-patterns');
-  if (navPatterns) navPatterns.style.display = showNavScreens ? '' : 'none';
-  const navHistory = document.getElementById('nav-history');
-  if (navHistory) navHistory.style.display = showNavScreens ? '' : 'none';
-  // Mobile nav
+  if (navNetwork) navNetwork.style.display = dev ? '' : 'none';
   const mnavNetwork = document.getElementById('mnav-network');
-  if (mnavNetwork) mnavNetwork.style.display = showNavScreens ? '' : 'none';
+  if (mnavNetwork) mnavNetwork.style.display = dev ? '' : 'none';
+  // Patterns + History: visible to any subscribed user (or dev)
+  const showPH = dev || subscribed;
+  const navPatterns = document.getElementById('nav-patterns');
+  if (navPatterns) navPatterns.style.display = showPH ? '' : 'none';
+  const navHistory = document.getElementById('nav-history');
+  if (navHistory) navHistory.style.display = showPH ? '' : 'none';
   const mnavPatterns = document.getElementById('mnav-patterns');
-  if (mnavPatterns) mnavPatterns.style.display = showNavScreens ? '' : 'none';
+  if (mnavPatterns) mnavPatterns.style.display = showPH ? '' : 'none';
   const mnavHistory = document.getElementById('mnav-history');
-  if (mnavHistory) mnavHistory.style.display = showNavScreens ? '' : 'none';
+  if (mnavHistory) mnavHistory.style.display = showPH ? '' : 'none';
   // Topbar KB count
   const kbCount = document.getElementById('kb-count');
   if (kbCount) kbCount.style.display = dev ? '' : 'none';
