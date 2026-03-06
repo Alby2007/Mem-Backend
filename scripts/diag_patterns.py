@@ -2,7 +2,10 @@
 """Diagnose why paper agent finds no candidate patterns."""
 import sqlite3, os
 
-DB = '/home/ubuntu/trading-galaxy/knowledge.db'
+import glob
+db_files = glob.glob('/home/ubuntu/trading-galaxy/*.db')
+print(f'DB files found: {db_files}')
+DB = next((f for f in db_files if 'trading' in f), db_files[0] if db_files else '/home/ubuntu/trading-galaxy/trading_knowledge.db')
 c = sqlite3.connect(DB)
 
 # List all tables
