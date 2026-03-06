@@ -45,7 +45,10 @@ async function apiFetch(path, opts = {}) {
   return data;
 }
 
+let _sessionExpired = false;
 function _handleSessionExpired() {
+  if (_sessionExpired) return;
+  _sessionExpired = true;
   state.token = null; state.userId = null;
   try { localStorage.removeItem('tg_user_id'); localStorage.removeItem('tg_user_data'); } catch { /* blocked */ }
   _renderTgChip(null, null);

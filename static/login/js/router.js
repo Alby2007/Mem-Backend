@@ -30,7 +30,15 @@ function showScreen(name) {
   if (nv) nv.classList.add('active');
   if (mn) mn.classList.add('active');
   const isAuth = _AUTH_SCREENS.has(name);
-  document.getElementById('mobile-nav').style.display = isAuth ? 'none' : '';
+  // Explicitly set display to override any inline styles set by applyDevGating/pingConnection
+  const topbar   = document.getElementById('topbar');
+  const sidebar  = document.getElementById('sidebar');
+  const mobileNav = document.getElementById('mobile-nav');
+  const main     = document.getElementById('main');
+  if (topbar)    topbar.style.display    = isAuth ? 'none' : '';
+  if (sidebar)   sidebar.style.display   = isAuth ? 'none' : '';
+  if (mobileNav) mobileNav.style.display = isAuth ? 'none' : '';
+  if (main)      main.style.display      = isAuth ? 'none' : '';
   document.body.classList.toggle('auth-mode', isAuth);
   if (isAuth) {
     document.documentElement.setAttribute('data-auth', name);
