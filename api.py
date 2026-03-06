@@ -4439,20 +4439,22 @@ _PAPER_MAX_OPEN_POSITIONS  = 12  # never hold more than this many concurrent pos
 _PAPER_MAX_NEW_PER_SCAN    = 3   # max new entries opened in a single scan run
 
 
-def _paper_kb_chat(ticker: str, question: str, kg_conn) -> str | None:
+def _paper_kb_chat(ticker: str, question: str, kg_conn) -> tuple[str, int] | tuple[None, int]:
     """
     Route a paper-agent decision through the same KB-aware pipeline as /chat:
       retrieve(ticker query) → build_prompt(system_override) → _llm_chat
-    Returns the raw LLM text, or None on failure.
+    Returns (raw_llm_text, atom_count), or (None, 0) on failure.
+    atom_count is the number of KB atoms retrieved — used to compute kb_depth.
     """
     if not HAS_LLM:
-        return None
+        return None, 0
     try:
         snippet, atoms = retrieve(question, kg_conn, limit=30)
+        atom_count = len(atoms)
         messages = build_prompt(
             user_message=question,
             snippet=snippet,
-            atom_count=len(atoms),
+            atom_count=atom_count,
             trader_level='developing',
         )
         # Replace the system message with the paper-agent system prompt so the
@@ -4462,11 +4464,11 @@ def _paper_kb_chat(ticker: str, question: str, kg_conn) -> str | None:
                 _PAPER_AGENT_SYSTEM + '\n\n'
                 + messages[0]['content']
             )
-        return _llm_chat(messages)
+        return _llm_chat(messages), atom_count
     except Exception as _e:
         import logging as _lg
         _lg.getLogger('paper_agent').warning('_paper_kb_chat error for %s: %s', ticker, _e)
-        return None
+        return None, 0
 
 
 def _paper_ai_run(user_id: str) -> dict:
@@ -4676,7 +4678,8 @@ def _paper_ai_run(user_id: str) -> dict:
                 )
                 try:
                     kg_conn = _kg.thread_local_conn()
-                    raw = _paper_kb_chat(ticker, kb_question, kg_conn)
+                    raw, atom_count = _paper_kb_chat(ticker, kb_question, kg_conn)
+                    kb_depth = 'deep' if atom_count >= 15 else 'shallow' if atom_count >= 5 else 'thin'
                     if raw:
                         raw = raw.strip()
                         # Extract JSON even if LLM wraps it in prose
@@ -4685,13 +4688,17 @@ def _paper_ai_run(user_id: str) -> dict:
                         if start >= 0 and end > start:
                             parsed = _json.loads(raw[start:end])
                             action = parsed.get('action', 'SKIP').upper()
-                            reasoning = parsed.get('reasoning', reasoning)[:250]
+                            llm_reasoning = parsed.get('reasoning', reasoning)[:200]
+                            reasoning = f'{llm_reasoning} | kb_depth={kb_depth} ({atom_count} atoms)'
                             if action == 'ENTER':
                                 entry_p = float(parsed.get('entry', entry_p))
                                 stop_p  = float(parsed.get('stop',  stop_p))
                                 t1_p    = float(parsed.get('t1',    t1_p))
                                 t2_p    = float(parsed.get('t2',    t2_p))
                                 risk    = abs(entry_p - stop_p)
+                    else:
+                        # LLM unavailable — append kb_depth to rule-based reasoning
+                        reasoning = f'{reasoning} | kb_depth={kb_depth} ({atom_count} atoms)'
                 except Exception as llm_err:
                     _log.warning('KB-chat paper agent error for %s: %s', ticker, llm_err)
                     # Fall through with rule-based result
