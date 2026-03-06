@@ -83,46 +83,25 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
   <div class="auth-page">
     <div class="auth-grid-bg"></div>
     <div class="auth-logo">TRADING GALAXY</div>
-    <div class="auth-split">
-      <!-- Left: live stats -->
-      <div class="auth-left">
-        <div class="auth-left-headline">Epistemic trading intelligence</div>
-        <div class="auth-left-sub">Signals grounded in evidence, not vibes.</div>
-        <div class="auth-stats">
-          <div class="auth-stat">
-            <div class="auth-stat-value" id="login-stat-facts">—</div>
-            <div class="auth-stat-label">Knowledge Base Facts</div>
-          </div>
-          <div class="auth-stat">
-            <div class="auth-stat-value" id="login-stat-signals">—</div>
-            <div class="auth-stat-label">Active Signals</div>
-          </div>
-          <div class="auth-stat">
-            <div class="auth-stat-value" id="login-stat-ticker">—</div>
-            <div class="auth-stat-label">Top Conviction</div>
-          </div>
+    <div class="auth-center">
+      <div class="auth-center-headline">Epistemic trading intelligence</div>
+      <div class="auth-center-sub">Signals grounded in evidence, not vibes.</div>
+      <div class="auth-card">
+        <div class="auth-card-title">Sign in</div>
+        <div class="auth-card-sub">Access your trading intelligence dashboard</div>
+        <div class="auth-field">
+          <label for="login-email">Email</label>
+          <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email" />
         </div>
-        <div class="auth-live-badge"><span class="auth-live-dot"></span> Live data — updated every 30 min</div>
-      </div>
-      <!-- Right: login form -->
-      <div class="auth-right">
-        <div class="auth-card">
-          <div class="auth-card-title">Sign in</div>
-          <div class="auth-card-sub">Access your trading intelligence dashboard</div>
-          <div class="auth-field">
-            <label for="login-email">Email</label>
-            <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email" />
-          </div>
-          <div class="auth-field">
-            <label for="login-pw">Password</label>
-            <input id="login-pw" type="password" placeholder="••••••••" autocomplete="current-password" />
-          </div>
-          <button class="auth-btn auth-btn-primary" id="login-btn">Sign In</button>
-          <div id="login-msg" class="auth-msg"></div>
-          <div class="auth-divider"><span>or</span></div>
-          <div id="tg-widget-auth" class="auth-tg-widget"></div>
-          <div class="auth-switch">Don't have an account? <a href="/register" onclick="navigate('register');return false;">Start free trial →</a></div>
+        <div class="auth-field">
+          <label for="login-pw">Password</label>
+          <input id="login-pw" type="password" placeholder="••••••••" autocomplete="current-password" />
         </div>
+        <button class="auth-btn auth-btn-primary" id="login-btn">Sign In</button>
+        <div id="login-msg" class="auth-msg"></div>
+        <div class="auth-divider"><span>or</span></div>
+        <div id="tg-widget-auth" class="auth-tg-widget"></div>
+        <div class="auth-switch">Don't have an account? <a href="/register" onclick="navigate('register');return false;">Start free trial →</a></div>
       </div>
     </div>
   </div>
