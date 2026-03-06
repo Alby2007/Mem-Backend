@@ -190,16 +190,20 @@ select option { background: var(--surface); }
 /* ── Auth pages (login + register) ── */
 #screen-login, #screen-register {
   position: fixed; inset: 0; z-index: 500; overflow-y: auto;
-  background: #080A06; display: block;
+  background: #080A06;
 }
+#screen-login.active, #screen-register.active { display: block; }
 .auth-page {
   position: relative; z-index: 1;
-  min-height: 100vh;
+  width: 100%; height: 100vh;
   display: grid;
-  grid-template-columns: 1fr 520px 1fr;
-  grid-template-rows: 1fr;
+  grid-template-columns: 1fr 480px 1fr;
+  grid-template-areas: "brand card deco";
   align-items: center;
 }
+.auth-brand-col { grid-area: brand; }
+.auth-card-col  { grid-area: card; }
+.auth-deco-col  { grid-area: deco; }
 
 /* ── Shared background layers (body-level, hidden when not on auth) ── */
 .auth-bg-grid, .auth-bg-glow, .auth-candles {
@@ -231,7 +235,6 @@ html[data-auth] .auth-candles {
 
 /* ── Brand column (left) ── */
 .auth-brand-col {
-  grid-column: 1;
   padding: 0 0 0 64px;
   animation: authFadeUp 0.8s ease both;
 }
@@ -266,7 +269,6 @@ html[data-auth] .auth-candles {
 
 /* ── Card column (centre) ── */
 .auth-card-col {
-  grid-column: 2;
   padding: 0 32px;
   animation: authFadeUp 0.8s 0.1s ease both;
 }
@@ -338,7 +340,6 @@ html[data-auth] .auth-candles {
 
 /* ── Deco column (right) ── */
 .auth-deco-col {
-  grid-column: 3;
   padding: 0 64px 0 0;
   display: flex; justify-content: flex-end;
   animation: authFadeUp 0.8s 0.2s ease both; opacity: 0.6;
@@ -428,9 +429,13 @@ html[data-auth] .auth-candles {
 
 /* Responsive */
 @media (max-width: 900px) {
-  .auth-page { grid-template-columns: 1fr; padding: 40px 24px; }
-  .auth-brand-col { grid-column: 1; padding: 0; margin-bottom: 32px; }
-  .auth-card-col  { grid-column: 1; padding: 0; }
+  .auth-page {
+    grid-template-columns: 1fr;
+    grid-template-areas: "brand" "card";
+    height: auto; min-height: 100vh; padding: 40px 24px;
+  }
+  .auth-brand-col { padding: 0; margin-bottom: 32px; }
+  .auth-card-col  { padding: 0; }
   .auth-deco-col  { display: none; }
   .auth-brand-headline { font-size: 26px; }
   .auth-card { padding: 32px 24px; }
@@ -443,25 +448,12 @@ body.auth-mode #sidebar { display: none; }
 body.auth-mode #main { display: none; }
 body.auth-mode #mobile-nav { display: none !important; }
 /* data-auth: synchronous CSS fallback (runs before JS/extensions) */
-html[data-auth] { height: auto; overflow: auto; }
-html[data-auth] body { overflow: auto; height: auto; }
 html[data-auth] #topbar { display: none !important; }
 html[data-auth] #sidebar { display: none !important; }
 html[data-auth] #main { display: none !important; }
 html[data-auth] #mobile-nav { display: none !important; }
 html[data-auth="login"] #screen-login { display: block !important; }
 html[data-auth="register"] #screen-register { display: block !important; }
-
-/* Auth responsive */
-@media (max-width: 768px) {
-  .auth-split { grid-template-columns: 1fr; gap: 24px; padding: 24px 20px; }
-  .auth-left { display: none; }
-  .auth-logo { padding: 20px 20px 0; }
-  .auth-card { max-width: 100%; }
-  .auth-progress-label { display: none; }
-  .auth-progress-line { min-width: 8px; }
-  .auth-stat-value { font-size: 28px; }
-}
 
 /* ── Profile screen ── */
 #screen-profile { max-width: 1020px; }
