@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trading Galaxy — Sign In</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --gold: #E8A020;
+  --gold-dim: #B87D18;
+  --bg: #080A06;
+  --surface: rgba(255,255,255,0.03);
+  --border: rgba(232,160,32,0.14);
+  --border-hover: rgba(232,160,32,0.4);
+  --text: #E8E4DC;
+  --muted: #6B6860;
+  --input-bg: rgba(255,255,255,0.05);
+  --card-bg: #0E1009;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+  overflow: hidden;
+}
+
+/* ── Animated grid ── */
+.bg-grid {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(232,160,32,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(232,160,32,0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+  animation: gridDrift 40s linear infinite;
+}
+@keyframes gridDrift { 0% { background-position: 0 0; } 100% { background-position: 48px 48px; } }
+
+/* ── Radial glow ── */
+.bg-glow {
+  position: fixed; z-index: 0; pointer-events: none;
+  width: 700px; height: 700px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(232,160,32,0.07) 0%, transparent 70%);
+  top: 50%; left: 50%; transform: translate(-50%,-50%);
+  animation: glowPulse 6s ease-in-out infinite;
+}
+@keyframes glowPulse {
+  0%,100% { opacity: 0.6; transform: translate(-50%,-50%) scale(1); }
+  50%      { opacity: 1;   transform: translate(-50%,-50%) scale(1.08); }
+}
+
+/* ── Candles ── */
+.candles { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.candle {
+  position: absolute; bottom: -60px; width: 2px; border-radius: 1px;
+  animation: rise linear infinite; opacity: 0;
+}
+@keyframes rise {
+  0%   { opacity: 0;    transform: translateY(0); }
+  10%  { opacity: 0.35; }
+  90%  { opacity: 0.12; }
+  100% { opacity: 0;    transform: translateY(-110vh); }
+}
+
+/* ── 3-col page layout ── */
+.page {
+  position: relative; z-index: 1;
+  width: 100%; height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 420px 1fr;
+  grid-template-rows: 100vh;
+  grid-template-areas: "brand card deco";
+  align-items: center;
+}
+
+/* ── Brand column ── */
+.brand-col {
+  grid-area: brand;
+  padding: 0 24px 0 56px;
+  animation: fadeUp 0.8s ease both;
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.brand-mark { display: flex; align-items: center; gap: 10px; margin-bottom: 40px; }
+.brand-icon { width: 30px; height: 30px; flex-shrink: 0; }
+.brand-icon svg { width: 100%; height: 100%; }
+.brand-name {
+  font-family: 'Syne', sans-serif; font-weight: 800; font-size: 12px;
+  letter-spacing: 0.25em; color: var(--gold); text-transform: uppercase;
+}
+
+.brand-headline {
+  font-family: 'Syne', sans-serif; font-weight: 700; font-size: 32px;
+  line-height: 1.15; color: var(--text); margin-bottom: 14px; max-width: 300px;
+}
+.brand-headline em { font-style: normal; color: var(--gold); }
+
+.brand-sub {
+  font-size: 12px; color: var(--muted); line-height: 1.65;
+  max-width: 260px; margin-bottom: 40px; letter-spacing: 0.01em;
+}
+
+.brand-stats { display: flex; flex-direction: column; gap: 14px; }
+.stat-row { display: flex; align-items: center; gap: 12px; }
+.stat-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--gold); flex-shrink: 0; }
+.stat-label { font-size: 10px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+.stat-val { font-size: 10px; color: var(--gold); margin-left: auto; font-weight: 500; }
+
+/* ── Card column ── */
+.card-col {
+  grid-area: card;
+  padding: 0 16px;
+  animation: fadeUp 0.8s 0.1s ease both;
+}
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 44px 40px;
+  position: relative; overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.02) inset,
+              0 32px 80px rgba(0,0,0,0.7),
+              0 0 60px rgba(232,160,32,0.05);
+}
+.card::before {
+  content: '';
+  position: absolute; top: 0; left: 28px; right: 28px; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--gold), transparent);
+  opacity: 0.55;
+}
+
+.card-title {
+  font-family: 'Syne', sans-serif; font-weight: 700; font-size: 24px;
+  color: var(--text); margin-bottom: 5px;
+}
+.card-sub { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; margin-bottom: 32px; }
+
+/* ── Form ── */
+.field { margin-bottom: 18px; }
+.field label {
+  display: block; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 7px; font-weight: 500;
+}
+.field input {
+  width: 100%; background: var(--input-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 15px;
+  font-family: 'DM Mono', monospace; font-size: 13px; color: var(--text);
+  outline: none; transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+  letter-spacing: 0.02em;
+}
+.field input::placeholder { color: #3a3a32; }
+.field input:focus {
+  border-color: var(--border-hover);
+  background: rgba(232,160,32,0.04);
+  box-shadow: 0 0 0 3px rgba(232,160,32,0.08);
+}
+
+.btn-primary {
+  width: 100%; background: var(--gold); color: #0A0C08;
+  border: none; border-radius: 8px; padding: 14px;
+  font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px;
+  letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
+  margin-top: 6px; transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+  position: relative; overflow: hidden;
+}
+.btn-primary::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.12) 0%, transparent 100%);
+  pointer-events: none;
+}
+.btn-primary:hover { background: #F0AA28; box-shadow: 0 0 32px rgba(232,160,32,0.45); transform: translateY(-1px); }
+.btn-primary:active { transform: translateY(0); }
+
+.msg { min-height: 18px; margin-top: 10px; font-size: 11px; color: var(--muted); text-align: center; }
+.msg.err { color: #EF5350; }
+.msg.ok  { color: #4CAF50; }
+
+.divider { display: flex; align-items: center; gap: 14px; margin: 22px 0; }
+.divider-line { flex: 1; height: 1px; background: var(--border); }
+.divider-text { font-size: 9px; color: var(--muted); letter-spacing: 0.14em; text-transform: uppercase; }
+
+.tg-widget { display: flex; justify-content: center; min-height: 36px; }
+
+.card-footer {
+  margin-top: 26px; text-align: center; font-size: 11px; color: var(--muted);
+}
+.card-footer a { color: var(--gold); text-decoration: none; font-weight: 500; transition: opacity 0.2s; }
+.card-footer a:hover { opacity: 0.7; }
+
+/* ── PW strength ── */
+.pw-strength { display: flex; gap: 4px; margin-top: 6px; }
+.pw-bar { flex: 1; height: 2px; border-radius: 2px; background: rgba(255,255,255,0.06); transition: background 0.3s; }
+
+/* ── Deco column ── */
+.deco-col {
+  grid-area: deco;
+  padding: 0 48px 0 16px;
+  display: flex; justify-content: flex-end; align-items: center;
+  animation: fadeUp 0.8s 0.2s ease both; opacity: 0.65;
+}
+
+/* ── Ticker feed (login) ── */
+.ticker-feed { display: flex; flex-direction: column; gap: 8px; width: 170px; }
+.ticker-item {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 13px; background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(232,160,32,0.07); border-radius: 8px; font-size: 11px;
+}
+.ticker-row { display: flex; justify-content: space-between; width: 100%; }
+.ticker-sym { color: var(--text); font-weight: 500; letter-spacing: 0.04em; }
+.ticker-up   { color: #4CAF50; }
+.ticker-down { color: #EF5350; }
+.tick-bar { width: 100%; height: 22px; display: flex; align-items: flex-end; gap: 2px; }
+.tick-bar span {
+  flex: 1; border-radius: 1px; background: rgba(232,160,32,0.22);
+  animation: barAnim 3s ease-in-out infinite;
+}
+.tick-bar span:nth-child(2) { animation-delay: 0.2s; }
+.tick-bar span:nth-child(3) { animation-delay: 0.4s; }
+.tick-bar span:nth-child(4) { animation-delay: 0.6s; }
+.tick-bar span:nth-child(5) { animation-delay: 0.8s; }
+@keyframes barAnim {
+  0%,100% { opacity: 0.3; transform: scaleY(0.5); }
+  50%      { opacity: 1;   transform: scaleY(1); }
+}
+.iv-row {
+  padding: 10px 13px; background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(232,160,32,0.07); border-radius: 8px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.iv-label { font-size: 9px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
+.iv-val { font-size: 11px; color: var(--gold); font-weight: 500; }
+
+/* ── Tier list (register brand col) ── */
+.tier-list { display: flex; flex-direction: column; gap: 7px; }
+.tier-card {
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: rgba(255,255,255,0.02); display: flex; align-items: center; gap: 12px;
+  transition: border-color 0.2s, background 0.2s; max-width: 270px;
+}
+.tier-card:hover { border-color: rgba(232,160,32,0.28); background: rgba(232,160,32,0.03); }
+.tier-card.active { border-color: rgba(232,160,32,0.45); background: rgba(232,160,32,0.07); }
+.tier-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.tier-info { flex: 1; }
+.tier-name { font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 700; color: var(--text); letter-spacing: 0.06em; text-transform: uppercase; }
+.tier-desc { font-size: 10px; color: var(--muted); margin-top: 1px; }
+.tier-price { font-size: 11px; color: var(--gold); font-weight: 500; white-space: nowrap; }
+.tier-free  { font-size: 11px; color: var(--muted); }
+
+/* ── Features list (register deco col) ── */
+.features-list { display: flex; flex-direction: column; gap: 6px; width: 190px; }
+.feat-label {
+  font-size: 8px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted);
+  margin-bottom: 4px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.feat-item {
+  display: flex; align-items: center; gap: 9px; padding: 8px 11px;
+  border: 1px solid rgba(232,160,32,0.07); border-radius: 8px;
+  background: rgba(255,255,255,0.015); font-size: 10px; color: var(--muted);
+}
+.feat-check {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: rgba(76,175,80,0.15); border: 1px solid rgba(76,175,80,0.3);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.feat-check svg { width: 8px; height: 8px; }
+.feat-badge {
+  margin-top: 10px; padding: 9px 11px; border: 1px solid rgba(232,160,32,0.22);
+  border-radius: 8px; background: rgba(232,160,32,0.05);
+  font-size: 9px; color: var(--gold); text-align: center; letter-spacing: 0.06em; line-height: 1.5;
+}
+.feat-badge strong { display: block; font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700; margin-bottom: 1px; }
+
+/* ── Screen toggle ── */
+.screen { display: none; width: 100%; height: 100vh; }
+.screen.active { display: block; }
+
+/* ── Responsive ── */
+@media (max-width: 800px) {
+  .page {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    grid-template-areas: "brand" "card";
+    height: auto; min-height: 100vh;
+    overflow-y: auto;
+    padding: 36px 20px;
+  }
+  html, body { overflow: auto; }
+  .screen { height: auto; }
+  .screen.active { display: block; }
+  .deco-col { display: none; }
+  .brand-col { padding: 0 0 28px 0; }
+  .brand-headline { font-size: 26px; }
+  .card-col { padding: 0; }
+  .card { padding: 32px 24px; }
+}
+</style>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+<div class="bg-glow"></div>
+<div class="candles" id="candles"></div>
+
+<!-- ── LOGIN ── -->
+<div class="screen active" id="screen-login">
+  <div class="page">
+
+    <div class="brand-col">
+      <div class="brand-mark">
+        <div class="brand-icon">
+          <svg viewBox="0 0 32 32" fill="none">
+            <polygon points="16,2 20,12 30,12 22,19 25,30 16,24 7,30 10,19 2,12 12,12" fill="none" stroke="#E8A020" stroke-width="1.5"/>
+            <circle cx="16" cy="16" r="3" fill="#E8A020" opacity="0.8"/>
+          </svg>
+        </div>
+        <span class="brand-name">Trading Galaxy</span>
+      </div>
+      <h1 class="brand-headline">Epistemic<br>trading<br><em>intelligence.</em></h1>
+      <p class="brand-sub">Signals grounded in evidence, not vibes. AI-powered analysis built for serious traders.</p>
+      <div class="brand-stats">
+        <div class="stat-row"><div class="stat-dot"></div><span class="stat-label">Coverage</span><span class="stat-val">FTSE + US Markets</span></div>
+        <div class="stat-row"><div class="stat-dot"></div><span class="stat-label">Signal latency</span><span class="stat-val">&lt; 30 min</span></div>
+        <div class="stat-row"><div class="stat-dot"></div><span class="stat-label">Greeks data</span><span class="stat-val">Live Options Flow</span></div>
+        <div class="stat-row"><div class="stat-dot"></div><span class="stat-label">AI layer</span><span class="stat-val">Tiered Intelligence</span></div>
+      </div>
+    </div>
+
+    <div class="card-col">
+      <div class="card">
+        <div class="card-title">Sign in</div>
+        <div class="card-sub">Access your trading intelligence dashboard</div>
+        <div class="field">
+          <label for="login-email">Email</label>
+          <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email">
+        </div>
+        <div class="field">
+          <label for="login-pw">Password</label>
+          <input id="login-pw" type="password" placeholder="••••••••••" autocomplete="current-password">
+        </div>
+        <button class="btn-primary" id="login-btn">Sign In →</button>
+        <div class="msg" id="login-msg"></div>
+        <div class="divider"><div class="divider-line"></div><span class="divider-text">or</span><div class="divider-line"></div></div>
+        <div class="tg-widget" id="tg-widget"></div>
+        <div class="card-footer">Don't have an account? <a href="#" id="go-register">Start free trial →</a></div>
+      </div>
+    </div>
+
+    <div class="deco-col">
+      <div class="ticker-feed">
+        <div class="ticker-item">
+          <div class="ticker-row"><span class="ticker-sym">AAPL</span><span class="ticker-up">+1.24%</span></div>
+          <div class="tick-bar"><span style="height:60%"></span><span style="height:80%"></span><span style="height:50%"></span><span style="height:90%"></span><span style="height:70%"></span></div>
+        </div>
+        <div class="ticker-item">
+          <div class="ticker-row"><span class="ticker-sym">TSLA</span><span class="ticker-down">−2.11%</span></div>
+          <div class="tick-bar"><span style="height:90%"></span><span style="height:60%"></span><span style="height:40%"></span><span style="height:55%"></span><span style="height:30%"></span></div>
+        </div>
+        <div class="ticker-item">
+          <div class="ticker-row"><span class="ticker-sym">BARC.L</span><span class="ticker-up">+0.87%</span></div>
+          <div class="tick-bar"><span style="height:40%"></span><span style="height:55%"></span><span style="height:70%"></span><span style="height:65%"></span><span style="height:80%"></span></div>
+        </div>
+        <div class="ticker-item">
+          <div class="ticker-row"><span class="ticker-sym">SPY</span><span class="ticker-up">+0.43%</span></div>
+          <div class="tick-bar"><span style="height:50%"></span><span style="height:60%"></span><span style="height:55%"></span><span style="height:70%"></span><span style="height:75%"></span></div>
+        </div>
+        <div class="iv-row"><span class="iv-label">IV Rank</span><span class="iv-val">68th pct</span></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── REGISTER ── -->
+<div class="screen" id="screen-register">
+  <div class="page">
+
+    <div class="brand-col">
+      <div class="brand-mark">
+        <div class="brand-icon">
+          <svg viewBox="0 0 32 32" fill="none">
+            <polygon points="16,2 20,12 30,12 22,19 25,30 16,24 7,30 10,19 2,12 12,12" fill="none" stroke="#E8A020" stroke-width="1.5"/>
+            <circle cx="16" cy="16" r="3" fill="#E8A020" opacity="0.8"/>
+          </svg>
+        </div>
+        <span class="brand-name">Trading Galaxy</span>
+      </div>
+      <h1 class="brand-headline">Join the <em>edge.</em></h1>
+      <p class="brand-sub">Start free, upgrade when you're ready. Every tier includes AI-grounded signals.</p>
+      <div class="tier-list">
+        <div class="tier-card active">
+          <div class="tier-dot" style="background:#6B6860"></div>
+          <div class="tier-info"><div class="tier-name">Free</div><div class="tier-desc">3 tips/day · Basic signals</div></div>
+          <span class="tier-free">£0</span>
+        </div>
+        <div class="tier-card">
+          <div class="tier-dot" style="background:#E8A020"></div>
+          <div class="tier-info"><div class="tier-name">Basic</div><div class="tier-desc">10 tips/day · Daily briefing</div></div>
+          <span class="tier-price">£9/mo</span>
+        </div>
+        <div class="tier-card">
+          <div class="tier-dot" style="background:#F0AA28"></div>
+          <div class="tier-info"><div class="tier-name">Pro</div><div class="tier-desc">25 tips/day · Greeks data</div></div>
+          <span class="tier-price">£29/mo</span>
+        </div>
+        <div class="tier-card">
+          <div class="tier-dot" style="background:#FFD166"></div>
+          <div class="tier-info"><div class="tier-name">Premium</div><div class="tier-desc">Unlimited · Full intelligence</div></div>
+          <span class="tier-price">£79/mo</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card-col">
+      <div class="card">
+        <div class="card-title">Create account</div>
+        <div class="card-sub">Start your free trial — no card required</div>
+        <div class="field">
+          <label for="reg-email">Email</label>
+          <input id="reg-email" type="email" placeholder="you@example.com" autocomplete="email">
+        </div>
+        <div class="field">
+          <label for="reg-pw">Password</label>
+          <input id="reg-pw" type="password" placeholder="Min. 8 characters" autocomplete="new-password">
+          <div class="pw-strength">
+            <div class="pw-bar" id="bar1"></div>
+            <div class="pw-bar" id="bar2"></div>
+            <div class="pw-bar" id="bar3"></div>
+            <div class="pw-bar" id="bar4"></div>
+          </div>
+        </div>
+        <div class="field">
+          <label for="reg-pw2">Confirm password</label>
+          <input id="reg-pw2" type="password" placeholder="••••••••" autocomplete="new-password">
+        </div>
+        <div class="field" style="padding-top:14px;border-top:1px solid rgba(232,160,32,0.1);margin-top:4px;">
+          <label for="reg-beta">Beta access password</label>
+          <input id="reg-beta" type="password" placeholder="Required for early access" autocomplete="off">
+        </div>
+        <button class="btn-primary" id="reg-btn">Create Free Account →</button>
+        <div class="msg" id="reg-msg"></div>
+        <div class="card-footer">Already have an account? <a href="#" id="go-login">Sign in →</a></div>
+      </div>
+    </div>
+
+    <div class="deco-col">
+      <div class="features-list">
+        <div class="feat-label">Free tier includes</div>
+        <div class="feat-item"><div class="feat-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>3 AI tips per day</div>
+        <div class="feat-item"><div class="feat-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>FTSE + US signals</div>
+        <div class="feat-item"><div class="feat-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>Telegram alerts</div>
+        <div class="feat-item"><div class="feat-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>News sentiment</div>
+        <div class="feat-item"><div class="feat-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>Macro regime data</div>
+        <div class="feat-badge"><strong>No card required</strong>Upgrade anytime from £9/mo</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const API = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+  ? 'http://localhost:5050' : 'https://api.trading-galaxy.uk';
+
+// ── Screen toggle ──
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  const s = document.getElementById('screen-' + name);
+  if (s) s.classList.add('active');
+  document.title = name === 'register'
+    ? 'Trading Galaxy — Create Account'
+    : 'Trading Galaxy — Sign In';
+  history.replaceState(null, '', '/' + name);
+}
+
+document.getElementById('go-register').addEventListener('click', e => { e.preventDefault(); showScreen('register'); });
+document.getElementById('go-login').addEventListener('click',    e => { e.preventDefault(); showScreen('login'); });
+
+// Detect /register path on load
+if (location.pathname.indexOf('register') !== -1) showScreen('register');
+
+// ── Login ──
+document.getElementById('login-btn').addEventListener('click', async () => {
+  const email = document.getElementById('login-email').value.trim();
+  const pw    = document.getElementById('login-pw').value;
+  const msg   = document.getElementById('login-msg');
+  msg.textContent = ''; msg.className = 'msg';
+  if (!email || !pw) { msg.textContent = 'Please fill in all fields.'; msg.className = 'msg err'; return; }
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  try {
+    const res = await fetch(API + '/auth/login', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: pw })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.user_id) {
+      try { localStorage.setItem('tg_user_id', data.user_id); } catch {}
+      location.href = '/' + data.user_id + '/dashboard';
+    } else {
+      msg.textContent = data.error || 'Login failed. Check your credentials.';
+      msg.className = 'msg err';
+      btn.disabled = false; btn.textContent = 'Sign In →';
+    }
+  } catch {
+    msg.textContent = 'Connection error — try again.';
+    msg.className = 'msg err';
+    btn.disabled = false; btn.textContent = 'Sign In →';
+  }
+});
+
+// Enter key on login
+['login-email','login-pw'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('login-btn').click();
+  });
+});
+
+// ── Register ──
+const pwBars = ['bar1','bar2','bar3','bar4'].map(id => document.getElementById(id));
+const strengthColors = ['#EF5350','#FF9800','#E8A020','#4CAF50'];
+document.getElementById('reg-pw').addEventListener('input', function() {
+  const pw = this.value; let score = 0;
+  if (pw.length >= 8) score++;
+  if (pw.length >= 12) score++;
+  if (/[A-Z]/.test(pw) && /[0-9]/.test(pw)) score++;
+  if (/[^A-Za-z0-9]/.test(pw)) score++;
+  pwBars.forEach((bar, i) => {
+    bar.style.background = i < score ? strengthColors[score - 1] : 'rgba(255,255,255,0.06)';
+  });
+});
+
+document.getElementById('reg-btn').addEventListener('click', async () => {
+  const email = document.getElementById('reg-email').value.trim();
+  const pw    = document.getElementById('reg-pw').value;
+  const pw2   = document.getElementById('reg-pw2').value;
+  const beta  = document.getElementById('reg-beta').value;
+  const msg   = document.getElementById('reg-msg');
+  msg.textContent = ''; msg.className = 'msg';
+  if (!email || !pw) { msg.textContent = 'Please fill in all fields.'; msg.className = 'msg err'; return; }
+  if (pw !== pw2)    { msg.textContent = 'Passwords do not match.';    msg.className = 'msg err'; return; }
+  if (pw.length < 8) { msg.textContent = 'Password must be 8+ characters.'; msg.className = 'msg err'; return; }
+  const btn = document.getElementById('reg-btn');
+  btn.disabled = true; btn.textContent = 'Creating account…';
+  try {
+    const res = await fetch(API + '/auth/register', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: pw, beta_password: beta })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.user_id) {
+      try { localStorage.setItem('tg_user_id', data.user_id); } catch {}
+      location.href = '/' + data.user_id + '/dashboard';
+    } else {
+      msg.textContent = data.error || 'Registration failed. Try again.';
+      msg.className = 'msg err';
+      btn.disabled = false; btn.textContent = 'Create Free Account →';
+    }
+  } catch {
+    msg.textContent = 'Connection error — try again.';
+    msg.className = 'msg err';
+    btn.disabled = false; btn.textContent = 'Create Free Account →';
+  }
+});
+
+// ── Telegram widget ──
+(function() {
+  const c = document.getElementById('tg-widget');
+  if (!c) return;
+  const s = document.createElement('script');
+  s.src = 'https://telegram.org/js/telegram-widget.js?22';
+  s.setAttribute('data-telegram-login', 'TheTelescopeBot');
+  s.setAttribute('data-size', 'large');
+  s.setAttribute('data-radius', '5');
+  s.setAttribute('data-onauth', 'onTelegramAuth(user)');
+  s.setAttribute('data-request-access', 'write');
+  c.appendChild(s);
+})();
+
+window.onTelegramAuth = async function(user) {
+  const msg = document.getElementById('login-msg');
+  try {
+    const res = await fetch(API + '/auth/telegram', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(user)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.user_id) {
+      try { localStorage.setItem('tg_user_id', data.user_id); } catch {}
+      location.href = '/' + data.user_id + '/dashboard';
+    } else {
+      msg.textContent = data.error || 'Telegram auth failed.';
+      msg.className = 'msg err';
+    }
+  } catch {
+    msg.textContent = 'Connection error.'; msg.className = 'msg err';
+  }
+};
+
+// ── Floating candles ──
+(function() {
+  const container = document.getElementById('candles');
+  const colors = ['#E8A020','#4CAF50','#EF5350'];
+  for (let i = 0; i < 18; i++) {
+    const c = document.createElement('div');
+    c.className = 'candle';
+    const h = 20 + Math.random() * 60;
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    c.style.cssText = `left:${Math.random()*100}%;height:${h}px;background:${color};animation-duration:${12+Math.random()*20}s;animation-delay:${Math.random()*15}s;`;
+    const wick = document.createElement('div');
+    wick.style.cssText = `position:absolute;left:50%;transform:translateX(-50%);width:1px;height:${h*0.4}px;background:${color};top:-${h*0.4}px;opacity:0.5;`;
+    c.appendChild(wick);
+    container.appendChild(c);
+  }
+})();
+</script>
+</body>
+</html>
