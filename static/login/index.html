@@ -11,10 +11,8 @@
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 <noscript><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
 <link rel="stylesheet" href="css/app.css">
-</head>
-<body>
 <script>
-// Immediately apply auth-mode and show correct auth screen — runs before any JS loads
+// Set data-auth before body renders — no JS dependency on boot
 (function(){
   var p=window.location.pathname;
   var isReg=p.indexOf('register')!==-1;
@@ -24,15 +22,8 @@
   }
 })();
 </script>
-<style>
-  /* CSS-driven initial auth screen — no JS dependency */
-  html[data-auth] #topbar { display:none!important; }
-  html[data-auth] #sidebar { display:none!important; }
-  html[data-auth] #mobile-nav { display:none!important; }
-  html[data-auth] #main { display:none!important; }
-  html[data-auth="login"] #screen-login { display:block!important; }
-  html[data-auth="register"] #screen-register { display:block!important; }
-</style>
+</head>
+<body>
 
 <!-- ── Top bar ──────────────────────────────────────────────────────── -->
 <div id="topbar">
