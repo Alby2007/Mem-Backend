@@ -32,6 +32,11 @@ function showScreen(name) {
   const isAuth = _AUTH_SCREENS.has(name);
   document.getElementById('mobile-nav').style.display = isAuth ? 'none' : '';
   document.body.classList.toggle('auth-mode', isAuth);
+  if (isAuth) {
+    document.documentElement.setAttribute('data-auth', name);
+  } else {
+    document.documentElement.removeAttribute('data-auth');
+  }
   if (name === 'dashboard') loadDashboard();
   if (name === 'patterns')  loadPatterns();
   if (name === 'network')   loadNetwork();
