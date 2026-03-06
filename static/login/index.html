@@ -13,7 +13,14 @@
 <link rel="stylesheet" href="css/app.css">
 <style>
 /* ── Auth layout override — loaded after app.css, wins cascade ── */
-html, body { height: 100%; }
+html[data-auth], html[data-auth] body {
+  height: 100% !important;
+  overflow: hidden !important;
+}
+html[data-auth] #topbar  { display: none !important; }
+html[data-auth] #sidebar { display: none !important; }
+html[data-auth] #main    { display: none !important; }
+html[data-auth] nav      { display: none !important; }
 
 #screen-login, #screen-register {
   position: fixed !important;
