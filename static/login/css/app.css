@@ -324,14 +324,15 @@ select option { background: var(--surface); }
 .auth-progress-step.active .auth-progress-label { color: var(--accent); }
 .auth-progress-line { flex: 1; height: 1px; background: var(--border); margin: 0 6px; min-width: 12px; }
 
-/* Auth pages: screens live outside #main; body overflow must be visible */
-body.auth-mode { overflow: auto; }
+/* Auth pages: screens live outside #main; override height/overflow constraints */
+body.auth-mode { overflow: auto; height: auto; }
 body.auth-mode #topbar { display: none; }
 body.auth-mode #sidebar { display: none; }
 body.auth-mode #main { display: none; }
 body.auth-mode #mobile-nav { display: none !important; }
-/* data-auth: synchronous CSS fallback set before any JS/extensions run */
-html[data-auth] body { overflow: auto; }
+/* data-auth: synchronous CSS fallback (runs before JS/extensions) */
+html[data-auth] { height: auto; overflow: auto; }
+html[data-auth] body { overflow: auto; height: auto; }
 html[data-auth] #topbar { display: none !important; }
 html[data-auth] #sidebar { display: none !important; }
 html[data-auth] #main { display: none !important; }
