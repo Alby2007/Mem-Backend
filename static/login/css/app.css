@@ -198,7 +198,11 @@ select option { background: var(--surface); }
   position: relative;
 }
 .auth-particles {
-  position: fixed; inset: 0; z-index: 1; pointer-events: none; width: 100%; height: 100%;
+  position: fixed; inset: 0; z-index: 499; pointer-events: none; width: 100%; height: 100%;
+  display: none;
+}
+html[data-auth] .auth-particles {
+  display: block;
 }
 .auth-grid-bg {
   position: fixed; inset: 0; z-index: 2; pointer-events: none; opacity: 0.18;
