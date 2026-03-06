@@ -25,5 +25,3 @@
 /:username/paper            /login/index.html           200
 /:username/subscription     /login/index.html           200
 
-# Catch-all: any unmatched path goes to the app, not the marketing page
-/*                          /login/index.html           200
