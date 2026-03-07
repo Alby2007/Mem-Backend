@@ -842,11 +842,34 @@ _PREDICATE_LABELS = {
 }
 
 
-def _format_open_position_line(pos: dict, current_price: Optional[float] = None) -> str:
+_ALERT_TYPE_LABEL = {
+    'stop_loss_zone_reached':  '⚠️ Stop hit mid\\-week',
+    'pattern_invalidated':     '❌ Pattern invalidated',
+    'earnings_within_2_days':  '📅 Earnings imminent',
+    't1_zone_reached':         '🎯 T1 reached mid\\-week',
+    't2_zone_reached':         '🎯 T2 reached mid\\-week',
+    'conviction_tier_dropped': '📉 Conviction dropped',
+    'regime_shift_detected':   '🔀 Regime shift',
+    'sector_tailwind_reversed':'🌧 Sector tailwind reversed',
+    'short_squeeze_developing':'📈 Short squeeze developing',
+    't1_profit_lock':          '💰 T1 profit lock triggered',
+    't2_profit_lock':          '💰 T2 profit lock triggered',
+    'trailing_pullback':       '📉 Trailing pullback alert',
+}
+
+
+def _format_open_position_line(
+    pos: dict,
+    current_price: Optional[float] = None,
+    mid_week_alert: Optional[tuple] = None,
+) -> str:
     """
     Render one open position as a single MarkdownV2 line.
     watching → 📍 On radar
     active   → 🔓 In position
+
+    mid_week_alert: optional (alert_type, priority) tuple from position_alerts
+                    fired since last Monday — appended as a context note.
     """
     _e = _escape_mdv2
     ticker    = pos.get('ticker', '?')
@@ -882,7 +905,12 @@ def _format_open_position_line(pos: dict, current_price: Optional[float] = None)
         if stop:
             parts.append(f'Stop {_e(_fmt_price(stop))}')
 
-    return ' \\| '.join(parts)
+    line = ' \\| '.join(parts)
+    if mid_week_alert:
+        alert_type, priority = mid_week_alert
+        note = _ALERT_TYPE_LABEL.get(alert_type, _e(alert_type.replace('_', ' ').title()))
+        line += f'\n  _↳ {note} \\({_e(priority)}\\)_'
+    return line
 
 
 def _format_closed_position_line(pos: dict) -> str:
@@ -920,6 +948,7 @@ def format_monday_briefing(
     closed_last_week: list,
     tier: str,
     get_price_fn=None,
+    recent_alerts: Optional[dict] = None,
 ) -> str:
     """
     Render the Monday "Your Week Ahead" living portfolio briefing.
@@ -931,6 +960,11 @@ def format_monday_briefing(
     closed_last_week List of tip_followups dicts closed since last Monday.
     tier             User's tier string.
     get_price_fn     Optional callable(ticker) -> float | None for current prices.
+    recent_alerts    Optional dict mapping followup_id -> (alert_type, priority)
+                     for the highest-priority alert fired since last Monday.
+                     When provided, each open position is annotated with any
+                     mid-week alert that fired, so the user has context without
+                     seeing the same position twice without explanation.
     """
     from datetime import datetime, timezone as _tz
     _e = _escape_mdv2
@@ -948,7 +982,8 @@ def format_monday_briefing(
                     price = get_price_fn(pos['ticker'])
                 except Exception:
                     pass
-            lines.append(_format_open_position_line(pos, price))
+            mid_week = (recent_alerts or {}).get(pos.get('id'))
+            lines.append(_format_open_position_line(pos, price, mid_week_alert=mid_week))
         lines.append('')
 
     # ── New setups this week ──────────────────────────────────────────────────

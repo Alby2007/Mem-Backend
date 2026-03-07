@@ -116,7 +116,12 @@ def _pnl_pct(current: float, entry: float, direction: str) -> float:
     return raw if direction != 'bearish' else -raw
 
 
-_CONFIDENCE_PREDICATES = ('conviction_tier', 'signal_direction', 'sector_tailwind', 'macro_signal')
+_CONFIDENCE_PREDICATES = (
+    'conviction_tier', 'signal_direction', 'sector_tailwind', 'macro_signal',
+    'price_regime', 'macro_regime', 'market_regime', 'volatility_regime',
+    'uk_market_regime', 'flow_conviction', 'smart_money_signal',
+    'macro_event_risk', 'regime_label',
+)
 
 
 def _compute_confidence(db_path: str, ticker: str, direction: str) -> Optional[float]:
@@ -164,9 +169,9 @@ def _is_market_hours() -> bool:
 
 def _is_actionable_hours() -> bool:
     """
-    Return True if it is a reasonable time to fire ANY alert, including CRITICAL.
+    Return True if it is a reasonable time to fire HIGH/MEDIUM alerts.
     Window: Mon-Fri 06:30-18:30 UTC (covers pre-market + 2h after close).
-    Outside this window alerts are suppressed entirely — nothing is actionable at 3am.
+    CRITICAL alerts bypass this gate and fire any time Mon-Fri.
     """
     now = datetime.now(timezone.utc)
     return now.weekday() < 5 and (6, 30) <= (now.hour, now.minute) <= (18, 30)
@@ -177,7 +182,7 @@ def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
     Evaluate trigger conditions for a position.
     Returns (alert_type, priority) or None.
     Priority: CRITICAL > HIGH > MEDIUM
-    CRITICAL fires any time; HIGH/MEDIUM suppressed outside market hours.
+    CRITICAL fires any time Mon-Fri; HIGH/MEDIUM gated to actionable hours.
     """
     ticker     = pos['ticker']
     direction  = pos.get('direction', 'bullish')
@@ -193,8 +198,9 @@ def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
     alert_level = pos.get('alert_level', '')
     bullish    = direction != 'bearish'
 
-    # ── CRITICAL (fires during actionable hours: Mon-Fri 06:30-18:30 UTC) ──────
-    if not _is_actionable_hours():
+    # ── CRITICAL — fires any time Mon-Fri (no actionable hours gate) ──────────
+    now = datetime.now(timezone.utc)
+    if now.weekday() >= 5:  # weekend: suppress everything
         return None
 
     # ── CRITICAL ─────────────────────────────────────────────────────────────
@@ -225,8 +231,8 @@ def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
     if earnings_flag == 'imminent':
         return ('earnings_within_2_days', 'CRITICAL')
 
-    # ── HIGH/MEDIUM — only during market hours ────────────────────────────────
-    if not _is_market_hours():
+    # ── HIGH/MEDIUM — only during actionable hours ───────────────────────────
+    if not _is_actionable_hours():
         return None
 
     # ── HIGH ─────────────────────────────────────────────────────────────────

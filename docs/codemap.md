@@ -546,11 +546,17 @@ Detects conviction, momentum, and composite patterns over KB atoms. Writes `Patt
 ---
 
 ### `analytics/snapshot_curator.py`
-Curates personalised daily snapshot from KB atoms for a user. Selects top signals, macro context, and pattern alerts. Called by `GET /users/<id>/snapshot/preview` and `delivery_scheduler.py`.
+Zero-LLM snapshot assembly. Produces a `CuratedSnapshot` dataclass from two paths:
+- **Portfolio path** — uses `user_models` + `user_portfolios` for sector affinity and risk tolerance
+- **Fallback path** — uses `user_preferences` (`selected_sectors` + `selected_risk`)
 
 **Signature:** `curate_snapshot(user_id, db_path, tier='basic') → CuratedSnapshot`
 
-Opportunity count is capped by `TIER_LIMITS[tier]['batch_size']` — not hardcoded.
+Called by `delivery_scheduler.py` (daily briefing) and `GET /users/{id}/snapshot/preview`.
+
+**Signal atoms read:** `conviction_tier`, `upside_pct`, `invalidation_distance`, `position_size_pct`, `signal_quality`, `thesis_risk_level`, `macro_confirmation`, `sector`, `options_regime`, `catalyst`, `last_price`, `price_target` — plus macro atoms (`market_regime`, `central_bank_stance`, `yield_curve_spread`).
+
+Opportunity scoring: tier match (+1.0/0.5) + sector affinity (+0.30) + options regime (+0.05–0.15) + macro confirmation (+0.05–0.10) + calibration hit_rate_t2 adjustment (±0.20). Result capped at `TIER_LIMITS[tier]['batch_size']`.
 
 ---
 
@@ -726,17 +732,18 @@ Living portfolio briefing scheduler. Replaces the single daily tip with a full p
 1. `expire_stale_followups()` — DB-only, no Telegram
 2. `get_user_open_positions()` + `get_recently_closed_positions(7 days)`
 3. `_pick_batch(N)` — new pattern setups eligible for user's tier/timeframes
-4. `format_monday_briefing()` — open positions + new setups + closed last week
-5. Auto-create `status='watching'` followup for every new setup sent
-6. Skip send if all three sections empty
+4. Fetch `position_alerts` since last Monday → `recent_alerts` dict (followup_id → highest-priority alert)
+5. `format_monday_briefing(..., recent_alerts=...)` — open positions annotated with mid-week alerts + new setups + closed last week
+6. Auto-create `status='watching'` followup for every new setup sent
+7. Skip send if all three sections empty
 
-**Wednesday cycle** (fires at `tip_delivery_time` on Wednesdays):
+**Position monitor cycle** (Tue/Wed/Thu → `position_monitor`, Fri → `week_close`, Sat → `weekend_summary`):
 1. `expire_stale_followups()`
 2. `get_user_open_positions()` + `get_kb_changes_since(monday_00:00, tickers=open_tickers)`
-3. `format_wednesday_update()` — open positions + KB changes + expired this cycle
+3. `format_position_monitor_briefing(briefing_mode=...)` — open positions + KB changes + expired
 4. Skip send if nothing to report
 
-**Other days:** standard single-tip delivery (unchanged for non-briefing days).
+**Other days (premium):** single-tip delivery via `_deliver_tip_to_user()`.
 
 ---
 
@@ -753,12 +760,13 @@ Formats all tip and briefing messages into Telegram MarkdownV2. Source of truth 
 
 | Function | Purpose |
 |---|---|
-| `format_tip(pattern, position, tier)` | Single pattern tip — entry zone, stop, targets, tier-gated T3 |
-| `format_monday_briefing(open, new_setups, closed, tier, get_price_fn)` | Full week-ahead briefing: 📍 In Position / 🔓 On Radar · new setups · closed last week |
-| `format_wednesday_update(open, kb_changes, expired, tier, get_price_fn)` | Compound update: all open positions + significant KB atom changes since Monday |
+| `format_tip(pattern, position, tier, greeks=...)` | Single pattern tip — entry zone, stop, targets, tier-gated T3, pre-fetched greeks |
+| `fetch_greeks(db_path, ticker)` | Fetch greeks atoms from KB; result passed to `format_tip` as `greeks=` |
+| `format_monday_briefing(open, new_setups, closed, tier, get_price_fn, recent_alerts=...)` | Full week-ahead briefing: open positions annotated with mid-week alerts + new setups + closed last week |
+| `format_position_monitor_briefing(open, kb_changes, expired, tier, get_price_fn, briefing_mode=...)` | Position update (Tue–Thu), week close (Fri), weekend summary (Sat) |
 | `format_emergency_alert_with_confidence(alert_type, pos, price, confidence)` | Real-time alert with optional `█████░░░░░ 50%` confidence bar (shown only if ≥2 KB atoms found) |
 
-**Helper functions:** `_format_open_position_line(pos, price)` — renders zone status (in-zone ✅ / approaching / away); `_format_closed_position_line(pos)` — renders outcome with P&L.
+**Helper functions:** `_format_open_position_line(pos, price, mid_week_alert=...)` — renders zone status + optional mid-week alert annotation; `_format_closed_position_line(pos)` — renders outcome with P&L.
 
 ---
 

@@ -781,12 +781,36 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
                 _log.info('TipScheduler: nothing to brief user %s on Monday', user_id)
                 return
 
+            # Fetch highest-priority mid-week alert per open position (since last Monday)
+            recent_alerts: dict = {}
+            try:
+                import sqlite3 as _sq3
+                _PRIORITY_ORDER = {'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1}
+                _conn = _sq3.connect(db_path, timeout=5)
+                _rows = _conn.execute(
+                    """SELECT followup_id, alert_type, priority
+                       FROM position_alerts
+                       WHERE user_id = ?
+                         AND created_at >= ?
+                         AND priority IN ('CRITICAL','HIGH','MEDIUM')
+                       ORDER BY created_at DESC""",
+                    (user_id, monday_str),
+                ).fetchall()
+                _conn.close()
+                for _fid, _atype, _pri in _rows:
+                    existing = recent_alerts.get(_fid)
+                    if existing is None or _PRIORITY_ORDER.get(_pri, 0) > _PRIORITY_ORDER.get(existing[1], 0):
+                        recent_alerts[_fid] = (_atype, _pri)
+            except Exception as _ae:
+                _log.debug('TipScheduler: mid-week alert fetch failed: %s', _ae)
+
             message = format_monday_briefing(
                 open_positions   = open_positions,
                 new_setups       = pairs,
                 closed_last_week = closed_last_week + expired_this_cycle,
                 tier             = tier,
                 get_price_fn     = _price_fn,
+                recent_alerts    = recent_alerts or None,
             )
 
             notifier = TelegramNotifier()
