@@ -82,18 +82,43 @@ def create_checkout_session(
 # Customer portal
 # ---------------------------------------------------------------------------
 
-def create_portal_session(user_id: str, return_url: str) -> str:
+def create_portal_session(user_id: str, return_url: str, db_path: str = '') -> str:
     """
     Create a Stripe Customer Portal session for an existing customer.
-    Looks up the customer by metadata user_id.
+    Looks up stripe_customer_id from DB first; falls back to Customer.search
+    for legacy users created before the metadata field was added.
     """
     stripe.api_key = _sk()
 
-    customers = stripe.Customer.search(query=f'metadata["user_id"]:"{user_id}"')
-    if not customers.data:
-        raise ValueError(f'No Stripe customer found for user_id={user_id}')
+    customer_id: str | None = None
 
-    customer_id = customers.data[0].id
+    # Fast path: look up stored customer ID from DB
+    if db_path:
+        import sqlite3 as _sq
+        try:
+            conn = _sq.connect(db_path, timeout=5)
+            try:
+                row = conn.execute(
+                    'SELECT stripe_customer_id FROM user_preferences WHERE user_id=?',
+                    (user_id,),
+                ).fetchone()
+                if row and row[0]:
+                    customer_id = row[0]
+            finally:
+                conn.close()
+        except Exception:
+            pass
+
+    # Fallback: search Stripe by metadata (covers early registrations)
+    if not customer_id:
+        customers = stripe.Customer.search(query=f'metadata["user_id"]:"{ user_id}"')
+        if not customers.data:
+            raise ValueError(f'No Stripe customer found for user_id={user_id}')
+        customer_id = customers.data[0].id
+        # Backfill DB so next call uses fast path
+        if db_path:
+            _store_stripe_customer_id(db_path, user_id, customer_id)
+
     portal = stripe.billing_portal.Session.create(
         customer=customer_id,
         return_url=return_url,
@@ -159,9 +184,37 @@ def _set_user_tier(db_path: str, user_id: str, tier: str) -> None:
     log.info('Set tier=%s for user_id=%s', tier, user_id)
 
 
+def _store_stripe_customer_id(db_path: str, user_id: str, customer_id: str) -> None:
+    """Persist stripe_customer_id on user_preferences for fast portal lookup."""
+    import sqlite3 as _sq
+    try:
+        conn = _sq.connect(db_path, timeout=10)
+        try:
+            # Add column if it doesn't exist yet (idempotent one-shot migration)
+            try:
+                conn.execute(
+                    'ALTER TABLE user_preferences ADD COLUMN stripe_customer_id TEXT'
+                )
+                conn.commit()
+            except Exception:
+                pass
+            conn.execute(
+                'UPDATE user_preferences SET stripe_customer_id=? WHERE user_id=?',
+                (customer_id, user_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.warning('Failed to store stripe_customer_id for %s: %s', user_id, exc)
+
+
 def _handle_checkout_completed(session, db_path: str) -> None:
-    user_id = _user_id_from_event(session)
-    tier    = _tier_from_event(session)
+    user_id     = _user_id_from_event(session)
+    tier        = _tier_from_event(session)
+    customer_id = getattr(session, 'customer', None) or session.get('customer')
+    if user_id and customer_id:
+        _store_stripe_customer_id(db_path, user_id, customer_id)
     if user_id and tier:
         _set_user_tier(db_path, user_id, tier)
 

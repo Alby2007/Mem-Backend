@@ -62,11 +62,16 @@ def _get_user_or_ip() -> str:
 try:
     from flask_limiter import Limiter
     from flask_limiter.util import get_remote_address
+    import os as _os
+
+    # Use SQLite so rate limit buckets are shared across all Gunicorn workers.
+    # memory:// would give each worker its own bucket, allowing 2× the limit with 2 workers.
+    _db_path = _os.environ.get('TRADING_KB_DB', 'trading_knowledge.db')
 
     limiter = Limiter(
         key_func=_get_user_or_ip,
         default_limits=[RATE_LIMITS['default'], '200 per hour'],
-        storage_uri='memory://',
+        storage_uri=f'sqlite:///{_db_path}',
     )
 
     def rate_limit(cls: str):

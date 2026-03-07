@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Optional
 
+# TODO(FastAPI migration): replace g.user_id with dependency injection; require_auth becomes a Depends()
 from flask import g, jsonify, request
 
 _log = logging.getLogger(__name__)
@@ -50,6 +51,10 @@ try:
 except ImportError:
     _bcrypt = None  # type: ignore
     HAS_BCRYPT = False
+
+# Precomputed dummy hash used for constant-time blind when email is not found.
+# Prevents user enumeration via timing (invalid email returns in ~0ms vs ~100ms).
+_DUMMY_HASH: str = ''
 
 
 _DDL_REFRESH_TOKENS = """
@@ -195,6 +200,15 @@ def _hash_password(password: str) -> str:
     return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
 
 
+def _init_dummy_hash() -> None:
+    global _DUMMY_HASH
+    if HAS_BCRYPT and not _DUMMY_HASH:
+        _DUMMY_HASH = _hash_password('__timing_blind_dummy__')
+
+
+_init_dummy_hash()
+
+
 def _check_password(password: str, hashed: str) -> bool:
     if not HAS_BCRYPT:
         return False
@@ -310,6 +324,9 @@ def authenticate_user(
         ).fetchone()
 
         if row is None:
+            # Constant-time blind: run bcrypt so timing matches a wrong-password path
+            if _DUMMY_HASH:
+                _check_password(password, _DUMMY_HASH)
             raise ValueError('invalid email or password')
 
         user_id, password_hash, failed_attempts, locked_until = row
