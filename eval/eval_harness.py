@@ -117,7 +117,12 @@ def _register_eval_user(base: str, beta_password: str = '') -> tuple[str, str]:
 def _upgrade_eval_user(base: str, user_id: str, token: str) -> None:
     """Upgrade eval user to premium so they pass the chat quota gate."""
     try:
-        headers = {'Authorization': f'Bearer {token}'} if token else {}
+        headers = {}
+        if token:
+            headers['Authorization'] = f'Bearer {token}'
+        dev_key = os.environ.get('DEV_UPGRADE_KEY', '')
+        if dev_key:
+            headers['X-Dev-Key'] = dev_key
         requests.post(
             f'{base}/dev/upgrade-premium',
             json={'user_id': user_id},

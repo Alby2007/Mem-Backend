@@ -420,6 +420,49 @@ async def change_password(
     return {"ok": True}
 
 
+@router.post("/dev/upgrade-premium")
+async def dev_upgrade_premium(request: Request):
+    """
+    POST /dev/upgrade-premium — upgrade a user to premium tier.
+
+    ONLY active when DEV_UPGRADE_KEY is set in the environment.
+    Without that env var this endpoint returns 404, making it a no-op in prod.
+    Used exclusively by the eval harness so quota enforcement doesn't block test users.
+    """
+    dev_key = os.environ.get("DEV_UPGRADE_KEY", "")
+    if not dev_key:
+        raise HTTPException(404)
+
+    provided = request.headers.get("X-Dev-Key", "")
+    if not provided or provided != dev_key:
+        raise HTTPException(403, detail="forbidden")
+
+    data = await request.json()
+    user_id = (data.get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(400, detail="user_id required")
+
+    if not ext.HAS_PRODUCT_LAYER:
+        return {"ok": True, "skipped": True, "reason": "product layer not available"}
+
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        conn.execute(
+            "INSERT OR IGNORE INTO user_preferences (user_id, tier) VALUES (?, 'premium')",
+            (user_id,),
+        )
+        conn.execute(
+            "UPDATE user_preferences SET tier='premium' WHERE user_id=?",
+            (user_id,),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    return {"ok": True, "user_id": user_id, "tier": "premium"}
+
+
 @router.post("/admin/users/{target_user_id}/set-dev")
 async def admin_set_dev(
     target_user_id: str,
