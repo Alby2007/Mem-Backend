@@ -39,12 +39,19 @@ def create_fastapi_app() -> FastAPI:
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-    # ── Routers (registered as phases complete) ───────────────────────────────
-    from routes_v2 import health, auth, chat, billing
-    app.include_router(health.router)
-    app.include_router(auth.router)
-    app.include_router(chat.router)
-    app.include_router(billing.router)
+    # ── Routers (all 15 blueprints) ────────────────────────────────────────────
+    from routes_v2 import (
+        health, auth, chat, billing, paper,
+        markets, analytics_, patterns, network, waitlist, thesis,
+        ingest_routes, kb, users, telegram,
+    )
+    for _router in [
+        health.router, auth.router, chat.router, billing.router, paper.router,
+        markets.router, analytics_.router, patterns.router, network.router,
+        waitlist.router, thesis.router, ingest_routes.router, kb.router,
+        users.router, telegram.router,
+    ]:
+        app.include_router(_router)
 
     return app
 
