@@ -101,19 +101,33 @@ class TelegramNotifier:
             'parse_mode': parse_mode,
         }
 
-        try:
-            resp = _requests.post(url, json=payload, timeout=10)
-            if resp.status_code == 200:
-                return True
-            _log.warning(
-                'TelegramNotifier: API returned %d — %s',
-                resp.status_code,
-                resp.text[:200],
-            )
-            return False
-        except Exception as exc:
-            _log.error('TelegramNotifier: request failed — %s', exc)
-            return False
+        import time as _time
+        last_exc: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                resp = _requests.post(url, json=payload, timeout=10)
+                if resp.status_code == 200:
+                    return True
+                retryable = resp.status_code == 429 or resp.status_code >= 500
+                if not retryable or attempt == 1:
+                    _log.warning(
+                        'TelegramNotifier: API returned %d — %s',
+                        resp.status_code,
+                        resp.text[:200],
+                    )
+                    return False
+                _log.warning(
+                    'TelegramNotifier: transient %d — retrying in 2s', resp.status_code
+                )
+                _time.sleep(2)
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 0:
+                    _log.warning('TelegramNotifier: request failed (%s) — retrying in 2s', exc)
+                    _time.sleep(2)
+                else:
+                    _log.error('TelegramNotifier: request failed — %s', exc)
+        return False
 
     def send_test(self, chat_id: str) -> bool:
         """

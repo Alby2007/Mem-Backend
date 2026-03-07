@@ -674,8 +674,8 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
     from analytics.position_calculator import calculate_position
     from core.tiers import TIER_CONFIG as TIER_LIMITS
     from notifications.tip_formatter import (
-        format_tip, format_monday_briefing, format_wednesday_update,
-        pattern_allowed_for_tier, timeframe_allowed_for_tier,
+        format_tip, format_monday_briefing, format_position_monitor_briefing,
+        pattern_allowed_for_tier, timeframe_allowed_for_tier, fetch_greeks,
     )
     from notifications.telegram_notifier import TelegramNotifier
     from users.user_store import (
@@ -704,9 +704,11 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
     local_date = local_now.strftime('%Y-%m-%d')
     monday_str = _week_monday(local_now.date())
 
+    # Always initialise — week_close/weekend_summary paths reference this too
+    expired_this_cycle: List[dict] = []
+
     if is_weekly:
         # ── Expire stale followups first — results included in message ────────
-        expired_this_cycle: List[dict] = []
         try:
             expired_this_cycle = expire_stale_followups(db_path)
             # Only include this user's expired positions
@@ -865,12 +867,13 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
                 _log.info('TipScheduler: nothing for %s briefing for user %s', briefing_mode, user_id)
                 return
 
-            message = format_wednesday_update(
+            message = format_position_monitor_briefing(
                 open_positions      = open_positions,
                 kb_changes          = kb_changes,
                 expired_this_cycle  = expired_this_cycle,
                 tier                = tier,
                 get_price_fn        = _price_fn,
+                briefing_mode       = briefing_mode,
             )
 
             notifier = TelegramNotifier()
@@ -951,9 +954,11 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
                 _log.debug('TipScheduler: forecast failed for %s: %s', sig.ticker, _fe)
 
         tip_source = pattern_row.get('tip_source')
+        tip_greeks = fetch_greeks(db_path, sig.ticker)
         message  = format_tip(
             sig, position, tier=tier, calibration=calibration,
             tip_source=tip_source, trader_level=trader_level,
+            greeks=tip_greeks or None,
         )
 
         notifier = TelegramNotifier()
@@ -1091,7 +1096,17 @@ def _run_tip_cycle(db_path: str) -> None:
                 prefs[json_col] = None
 
         try:
-            should_send, weekday = _should_send_batch(db_path, user_id, tier, delivery_time, timezone_str)
+            from notifications.notify_gate import should_notify
+            from users.user_store import already_tipped_today
+            should_send, weekday = should_notify(
+                db_path             = db_path,
+                user_id             = user_id,
+                tier                = tier,
+                delivery_time       = delivery_time,
+                timezone_str        = timezone_str,
+                dedup_fn            = already_tipped_today,
+                check_briefing_days = True,
+            )
             if should_send:
                 _deliver_tip_to_user(db_path, user_id, prefs, weekday=weekday)
         except Exception as exc:

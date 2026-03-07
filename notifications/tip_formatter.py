@@ -124,6 +124,41 @@ def timeframe_allowed_for_tier(timeframe: str, tier: str) -> bool:
     return timeframe in limits['timeframes']
 
 
+# ── Greeks fetcher (caller's responsibility — formatters stay pure) ─────────
+
+_GREEKS_PREDICATES = ['delta_atm', 'iv_true', 'put_call_oi_ratio', 'gamma_exposure']
+
+
+def fetch_greeks(db_path: str, ticker: str) -> dict:
+    """
+    Fetch options greeks atoms from the KB for *ticker*.
+    Returns a dict with any of the keys in _GREEKS_PREDICATES that exist.
+    Returns {} on any error or if none found.
+    Callers pass the result to format_tip / _format_tip_raw as ``greeks``.
+    """
+    result: dict = {}
+    if not db_path or not ticker:
+        return result
+    try:
+        import sqlite3 as _sq
+        conn = _sq.connect(db_path, timeout=5)
+        try:
+            for pred in _GREEKS_PREDICATES:
+                row = conn.execute(
+                    "SELECT object FROM facts"
+                    " WHERE subject=? AND predicate=?"
+                    " ORDER BY timestamp DESC LIMIT 1",
+                    (ticker.lower(), pred),
+                ).fetchone()
+                if row:
+                    result[pred] = row[0]
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return result
+
+
 # ── Formatter ──────────────────────────────────────────────────────────────────
 
 def _parse_skew_filter(skew_filter: Optional[dict]) -> Optional[dict]:
@@ -295,7 +330,7 @@ def _format_tip_raw(
     pattern:    PatternSignal,
     position:   Optional[PositionRecommendation],
     tier:       str,
-    db_path:    Optional[str] = None,
+    greeks:     Optional[dict] = None,
 ) -> str:
     """
     Quant/dense tip: maximum information density, raw atom values, greeks inline.
@@ -334,40 +369,24 @@ def _format_tip_raw(
     else:
         lines.append('_No position sizing — set account size in Settings → Tips_')
 
-    # Inline greeks from DB if available
-    if db_path:
-        try:
-            import sqlite3 as _sq
-            _gc = _sq.connect(db_path, timeout=5)
-            _greek_preds = ['delta_atm', 'iv_true', 'put_call_oi_ratio', 'gamma_exposure']
-            _greek_vals = {}
-            for _p in _greek_preds:
-                _row = _gc.execute(
-                    "SELECT object FROM facts WHERE subject=? AND predicate=? ORDER BY timestamp DESC LIMIT 1",
-                    (pattern.ticker.lower(), _p)
-                ).fetchone()
-                if _row:
-                    _greek_vals[_p] = _row[0]
-            _gc.close()
-            if _greek_vals:
-                _g_parts = []
-                if 'delta_atm' in _greek_vals:
-                    _g_parts.append(f'Δ:{_e(_greek_vals["delta_atm"])}')
-                if 'iv_true' in _greek_vals:
-                    _g_parts.append(f'IV:{_e(_greek_vals["iv_true"])}%')
-                if 'put_call_oi_ratio' in _greek_vals:
-                    _g_parts.append(f'PCR:{_e(_greek_vals["put_call_oi_ratio"])}')
-                if 'gamma_exposure' in _greek_vals:
-                    try:
-                        _gex = float(_greek_vals['gamma_exposure'])
-                        _gex_dir = 'long\u03b3' if _gex >= 0 else 'short\u03b3'
-                        _g_parts.append(f'GEX:{_e(f"{_gex:,.0f}")} \\({_e(_gex_dir)}\\)')
-                    except Exception:
-                        pass
-                if _g_parts:
-                    lines.append('Greeks: ' + ' \\| '.join(_g_parts))
-        except Exception:
-            pass
+    # Inline greeks — pre-fetched by caller via fetch_greeks()
+    if greeks:
+        _g_parts = []
+        if 'delta_atm' in greeks:
+            _g_parts.append(f'Δ:{_e(greeks["delta_atm"])}')
+        if 'iv_true' in greeks:
+            _g_parts.append(f'IV:{_e(greeks["iv_true"])}%')
+        if 'put_call_oi_ratio' in greeks:
+            _g_parts.append(f'PCR:{_e(greeks["put_call_oi_ratio"])}')
+        if 'gamma_exposure' in greeks:
+            try:
+                _gex = float(greeks['gamma_exposure'])
+                _gex_dir = 'long\u03b3' if _gex >= 0 else 'short\u03b3'
+                _g_parts.append(f'GEX:{_e(f"{_gex:,.0f}")} \\({_e(_gex_dir)}\\)')
+            except Exception:
+                pass
+        if _g_parts:
+            lines.append('Greeks: ' + ' \\| '.join(_g_parts))
 
     return '\n'.join(lines)
 
@@ -380,7 +399,7 @@ def format_tip(
     calibration:  Optional[object] = None,
     tip_source:   Optional[str] = None,
     trader_level: str = 'developing',
-    db_path:      Optional[str] = None,
+    greeks:       Optional[dict] = None,
 ) -> str:
     """
     Render a complete Telegram MarkdownV2 tip message.
@@ -396,6 +415,8 @@ def format_tip(
                  sized down.  Accepts pipe-encoded KB string or plain dict.
     tip_source   One of 'watchlist', 'portfolio', 'connected', 'market-wide',
                  or None (silent — All Markets mode).
+    greeks       Pre-fetched greeks dict from fetch_greeks(db_path, ticker).
+                 Passed to the formatter — no DB access inside the formatter.
 
     Returns
     -------
@@ -406,7 +427,7 @@ def format_tip(
     if _level == 'beginner':
         return _format_tip_narrative(pattern, position)
     if _level == 'quant':
-        return _format_tip_raw(pattern, position, tier, db_path=db_path)
+        return _format_tip_raw(pattern, position, tier, greeks=greeks)
 
     limits       = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
     show_t3      = limits['targets'] >= 3
@@ -506,43 +527,25 @@ def format_tip(
         currency = position.account_currency
         lines += _forecast_block(position.forecast, currency)
 
-    # ── Greeks block for experienced level — gated on level AND atom presence ──
-    # Only shown when: (a) level is experienced or quant, AND
-    # (b) at least one greeks atom actually exists in the DB for this ticker.
-    # Never show empty/placeholder greeks fields.
-    if _level in ('experienced',) and db_path:
-        try:
-            import sqlite3 as _sq2
-            _gc2 = _sq2.connect(db_path, timeout=5)
-            _greeks_found = {}
-            for _gp in ['delta_atm', 'iv_true', 'put_call_oi_ratio', 'gamma_exposure']:
-                _gr = _gc2.execute(
-                    "SELECT object FROM facts WHERE subject=? AND predicate=?"
-                    " ORDER BY timestamp DESC LIMIT 1",
-                    (pattern.ticker.lower(), _gp)
-                ).fetchone()
-                if _gr:
-                    _greeks_found[_gp] = _gr[0]
-            _gc2.close()
-            if _greeks_found:
-                _g2_parts = []
-                if 'delta_atm' in _greeks_found:
-                    _g2_parts.append(f'\u0394:{_escape_mdv2(_greeks_found["delta_atm"])}')
-                if 'iv_true' in _greeks_found:
-                    _g2_parts.append(f'IV:{_escape_mdv2(_greeks_found["iv_true"])}%')
-                if 'put_call_oi_ratio' in _greeks_found:
-                    _g2_parts.append(f'PCR:{_escape_mdv2(_greeks_found["put_call_oi_ratio"])}')
-                if 'gamma_exposure' in _greeks_found:
-                    try:
-                        _gex2 = float(_greeks_found['gamma_exposure'])
-                        _gex2_dir = 'long\u03b3' if _gex2 >= 0 else 'short\u03b3'
-                        _g2_parts.append(f'GEX:{_escape_mdv2(f"{_gex2:,.0f}")} \\({_escape_mdv2(_gex2_dir)}\\)')
-                    except Exception:
-                        pass
-                if _g2_parts:
-                    lines += ['', 'Greeks: ' + ' \\| '.join(_g2_parts)]
-        except Exception:
-            pass
+    # ── Greeks block for experienced level — pre-fetched by caller ────────────
+    # Only shown when at least one greeks atom was found.
+    if _level in ('experienced',) and greeks:
+        _g2_parts = []
+        if 'delta_atm' in greeks:
+            _g2_parts.append(f'\u0394:{_escape_mdv2(greeks["delta_atm"])}')
+        if 'iv_true' in greeks:
+            _g2_parts.append(f'IV:{_escape_mdv2(greeks["iv_true"])}%')
+        if 'put_call_oi_ratio' in greeks:
+            _g2_parts.append(f'PCR:{_escape_mdv2(greeks["put_call_oi_ratio"])}')
+        if 'gamma_exposure' in greeks:
+            try:
+                _gex2 = float(greeks['gamma_exposure'])
+                _gex2_dir = 'long\u03b3' if _gex2 >= 0 else 'short\u03b3'
+                _g2_parts.append(f'GEX:{_escape_mdv2(f"{_gex2:,.0f}")} \\({_escape_mdv2(_gex2_dir)}\\)')
+            except Exception:
+                pass
+        if _g2_parts:
+            lines += ['', 'Greeks: ' + ' \\| '.join(_g2_parts)]
 
     lines += kb_lines
 
@@ -975,16 +978,25 @@ def format_monday_briefing(
     return '\n'.join(lines)
 
 
-def format_wednesday_update(
+_BRIEFING_HEADERS = {
+    'position_monitor': '📊 *POSITION UPDATE',
+    'week_close':       '📋 *WEEK IN REVIEW',
+    'weekend_summary':  '🗓 *WEEKEND SUMMARY',
+}
+
+
+def format_position_monitor_briefing(
     open_positions: list,
     kb_changes: list,
     expired_this_cycle: list,
     tier: str,
     get_price_fn=None,
+    briefing_mode: str = 'position_monitor',
 ) -> str:
     """
-    Render the Wednesday compound update — status of all open positions +
-    notable KB changes since Monday. No new setups unless caller passes them.
+    Render a position-monitor compound update — status of all open positions +
+    notable KB changes since Monday. Covers position_monitor, week_close, and
+    weekend_summary briefing modes.
 
     Parameters
     ----------
@@ -993,12 +1005,14 @@ def format_wednesday_update(
     expired_this_cycle   Positions just expired (from expire_stale_followups).
     tier                 User's tier.
     get_price_fn         Optional callable(ticker) -> float | None.
+    briefing_mode        One of 'position_monitor', 'week_close', 'weekend_summary'.
     """
     from datetime import datetime, timezone as _tz
     _e = _escape_mdv2
     now      = datetime.now(_tz.utc)
     date_str = _e(now.strftime('%a %d %b'))
-    lines    = [f'📊 *MIDWEEK UPDATE \\— {date_str}*', '']
+    _header  = _BRIEFING_HEADERS.get(briefing_mode, '📊 *POSITION UPDATE')
+    lines    = [f'{_header} \\— {date_str}*', '']
 
     # ── All open positions ────────────────────────────────────────────────────
     if open_positions:

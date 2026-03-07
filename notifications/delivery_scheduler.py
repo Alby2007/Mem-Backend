@@ -59,30 +59,21 @@ def _should_deliver(
     tier: str = 'basic',
 ) -> bool:
     """
-    Return True if delivery should fire now for this user:
-      - current local HH:MM matches delivery_time
-      - correct weekday for the user's tier (basic=monday, pro=mon+wed, premium=daily)
-      - no successful delivery recorded on today's local date
+    Return True if delivery should fire now for this user.
+    Delegates to notify_gate.should_notify — single source of truth.
     """
-    local_now  = _get_local_now(timezone_str)
-    local_time = local_now.strftime('%H:%M')
-    local_date = local_now.strftime('%Y-%m-%d')
-
-    if local_time != delivery_time:
-        return False
-
-    # Tier weekday gate
-    from core.tiers import TIER_CONFIG as TIER_LIMITS
-    limits        = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
-    delivery_days = limits.get('delivery_days', ['monday'])
-    if delivery_days != 'daily':
-        _WEEKDAY_NAMES = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
-        today_name = _WEEKDAY_NAMES[local_now.date().weekday()]
-        if today_name not in delivery_days:
-            return False
-
+    from notifications.notify_gate import should_notify
     from users.user_store import already_delivered_today
-    return not already_delivered_today(db_path, user_id, local_date)
+    fire, _ = should_notify(
+        db_path        = db_path,
+        user_id        = user_id,
+        tier           = tier,
+        delivery_time  = delivery_time,
+        timezone_str   = timezone_str,
+        dedup_fn       = already_delivered_today,
+        check_briefing_days = False,
+    )
+    return fire
 
 
 def _deliver_to_user(db_path: str, user_id: str, user_prefs: dict) -> None:
@@ -199,7 +190,8 @@ class DeliveryScheduler:
             conn = sqlite3.connect(self._db_path, timeout=10)
             ensure_user_tables(conn)
             rows = conn.execute(
-                """SELECT user_id, telegram_chat_id, delivery_time, timezone
+                """SELECT user_id, telegram_chat_id, delivery_time, timezone,
+                          COALESCE(tier, 'basic')
                    FROM user_preferences
                    WHERE onboarding_complete = 1
                      AND telegram_chat_id IS NOT NULL"""
@@ -209,23 +201,8 @@ class DeliveryScheduler:
             _log.error('DeliveryScheduler: failed to load users — %s', exc)
             return
 
-        for user_id, chat_id, delivery_time, tz_str in rows:
+        for user_id, chat_id, delivery_time, tz_str, _tier in rows:
             try:
-                # Load tier for this user (needed for weekday gate)
-                _tier = 'basic'
-                try:
-                    import sqlite3 as _sq
-                    _tc = _sq.connect(self._db_path, timeout=5)
-                    _tr = _tc.execute(
-                        "SELECT tier FROM user_preferences WHERE user_id=? LIMIT 1",
-                        (user_id,)
-                    ).fetchone()
-                    _tc.close()
-                    if _tr and _tr[0]:
-                        _tier = _tr[0]
-                except Exception:
-                    pass
-
                 if _should_deliver(self._db_path, user_id, delivery_time, tz_str or 'UTC', tier=_tier):
                     prefs = {
                         'user_id':          user_id,
