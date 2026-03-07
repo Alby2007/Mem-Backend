@@ -107,6 +107,46 @@ async def ingest_status():
     return {"scheduler": "running", "adapters": adapter_status}
 
 
+@router.get("/ingest/scheduler/status")
+async def ingest_scheduler_status(request: Request):
+    from fastapi import Request as _Req
+    scheduler = getattr(getattr(request, 'app', None), 'state', None)
+    scheduler = getattr(scheduler, 'scheduler', None)
+
+    adapter_status: dict = {}
+    if scheduler is not None:
+        try:
+            adapter_status = scheduler.get_status()
+        except Exception:
+            pass
+
+    queue_pending = 0
+    queue_total = 0
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM extraction_queue WHERE processed = 0"
+            ).fetchone()
+            queue_pending = row[0] if row else 0
+            row2 = conn.execute("SELECT COUNT(*) FROM extraction_queue").fetchone()
+            queue_total = row2[0] if row2 else 0
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+    return {
+        "scheduler": "running" if scheduler is not None else "not_running",
+        "adapters": adapter_status,
+        "extraction_queue": {
+            "pending": queue_pending,
+            "total": queue_total,
+            "processed": queue_total - queue_pending,
+        },
+    }
+
+
 @router.post("/ingest/run-all")
 async def ingest_run_all(data: RunAllRequest, _: str = Depends(get_current_user)):
     if not ext.ingest_scheduler:

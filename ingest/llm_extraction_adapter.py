@@ -34,7 +34,7 @@ _logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-BATCH_SIZE   = int(os.environ.get('LLM_EXTRACTION_BATCH', '20'))
+BATCH_SIZE   = int(os.environ.get('LLM_EXTRACTION_BATCH', os.environ.get('INGEST_BATCH_SIZE', '20')))
 MAX_FAILURES = 3
 
 _VALID_PREDICATES = {
@@ -223,18 +223,32 @@ class LLMExtractionAdapter(BaseIngestAdapter):
         super().__init__(name='llm_extraction')
         self._db_path = db_path or os.environ.get('TRADING_KB_DB', 'trading_knowledge.db')
 
-    def fetch(self) -> List[RawAtom]:
+    def _llm_call(self, messages: List[dict]) -> Optional[str]:
+        """Try Ollama first, fall back to Groq if unavailable."""
         try:
             from llm.ollama_client import chat as ollama_chat, is_available, EXTRACTION_MODEL
-        except ImportError:
-            self._logger.warning('llm.ollama_client not available — skipping extraction')
-            return []
+            if is_available():
+                return ollama_chat(messages, model=EXTRACTION_MODEL, stream=False, timeout=60)
+        except Exception as e:
+            self._logger.debug('Ollama unavailable: %s', e)
 
-        if not is_available():
-            self._logger.info('Ollama not reachable — skipping extraction run')
-            return []
+        try:
+            from llm.groq_client import chat as groq_chat, is_available as groq_available
+            if groq_available():
+                self._logger.debug('Falling back to Groq for LLM extraction')
+                return groq_chat(messages, stream=False)
+        except Exception as e:
+            self._logger.debug('Groq unavailable: %s', e)
+
+        return None
+
+    def fetch(self) -> List[RawAtom]:
 
         now_iso = datetime.now(timezone.utc).isoformat()
+
+        if self._llm_call([{'role': 'user', 'content': 'ping'}]) is None:
+            self._logger.info('No LLM backend reachable (Ollama + Groq) — skipping extraction run')
+            return []
 
         try:
             conn = sqlite3.connect(self._db_path)
@@ -251,7 +265,7 @@ class LLMExtractionAdapter(BaseIngestAdapter):
                 FROM extraction_queue
                 WHERE processed = 0
                   AND failed_attempts < ?
-                ORDER BY id ASC
+                ORDER BY id DESC
                 LIMIT ?
                 """,
                 (MAX_FAILURES, BATCH_SIZE),
@@ -275,15 +289,10 @@ class LLMExtractionAdapter(BaseIngestAdapter):
             fallback_conf = _confidence_from_language(text or '')
 
             try:
-                messages  = _build_prompt(text or '')
-                response  = ollama_chat(
-                    messages,
-                    model=EXTRACTION_MODEL,
-                    stream=False,
-                    timeout=60,
-                )
+                messages = _build_prompt(text or '')
+                response = self._llm_call(messages)
             except Exception as e:
-                self._logger.warning('Ollama call failed for row %d: %s', row_id, e)
+                self._logger.warning('LLM call failed for row %d: %s', row_id, e)
                 conn.execute(
                     'UPDATE extraction_queue SET failed_attempts = failed_attempts + 1 WHERE id = ?',
                     (row_id,),
