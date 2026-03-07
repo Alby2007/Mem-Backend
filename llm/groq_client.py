@@ -66,6 +66,14 @@ def chat(
     except _requests.exceptions.Timeout:
         _logger.warning("Groq request timed out after %ds", timeout)
         return None
+    except _requests.exceptions.HTTPError as e:
+        body = ""
+        try:
+            body = e.response.text[:200]
+        except Exception:
+            pass
+        _logger.error("Groq HTTP error: %s — %s", e, body)
+        return None
     except Exception as e:
         _logger.error("Groq chat error: %s", e)
         return None
