@@ -25,6 +25,9 @@ _PORTFOLIO_INTENT_KWS = (
     'discuss my', 'analyse my', 'analyze my', 'review my',
     'affect my', 'impact my', 'affect portfolio', 'impact portfolio',
     'portfolio', 'holdings', 'positions',
+    'my cash', 'my balance', 'my account', 'how much cash', 'how much do i have',
+    'how much money', 'buying power', 'available funds', 'virtual balance',
+    'paper account', 'paper balance', 'paper cash',
 )
 
 _LIVE_PRICE_KEYWORDS = (
@@ -388,7 +391,25 @@ def _build_portfolio_context(user_id: Optional[str], conn) -> Optional[str]:
     try:
         holdings = ext.get_portfolio(ext.DB_PATH, user_id)
         model = ext.get_user_model(ext.DB_PATH, user_id)
+        # Always inject paper account balance if available
+        paper_balance_line = None
+        try:
+            from services.paper_trading import get_account as _get_paper_account
+            _pa = _get_paper_account(user_id)
+            if _pa:
+                _cur = _pa.get('currency', 'GBP')
+                _sym = '£' if _cur == 'GBP' else '$'
+                paper_balance_line = (
+                    f"Paper account cash balance: {_sym}{_pa['virtual_balance']:,.2f} {_cur}"
+                    + (f" | Account value (incl. unrealised P&L): {_sym}{_pa['account_value']:,.2f}" if _pa.get('unrealised_pnl') else '')
+                    + (f" | Open positions: {_pa['open_positions']}" if _pa.get('open_positions') else '')
+                    + (f" | Win rate: {_pa['win_rate_pct']}%" if _pa.get('win_rate_pct') is not None else '')
+                )
+        except Exception:
+            pass
         if not holdings:
+            if paper_balance_line:
+                return f"=== USER ACCOUNT ===\n{paper_balance_line}"
             return None
         h_parts = [f"{h['ticker']} ×{int(h['quantity'])}" for h in holdings[:20]]
         pos_values = [
@@ -400,8 +421,10 @@ def _build_portfolio_context(user_id: Optional[str], conn) -> Optional[str]:
             round(max(pos_values) / total_cost * 100)
             if total_cost > 0 and pos_values else None
         )
-        lines = ["=== USER PORTFOLIO ===",
-                  f"Holdings: {', '.join(h_parts)}"]
+        lines = ["=== USER PORTFOLIO ==="]
+        if paper_balance_line:
+            lines.append(paper_balance_line)
+        lines.append(f"Holdings: {', '.join(h_parts)}")
         if total_cost > 0:
             lines.append(f"Total invested (cost basis): £{total_cost:,.0f}")
         if largest_pct is not None:
@@ -1048,7 +1071,7 @@ def run(
         )
         if _subj_counts:
             _lookup_ticker = _subj_counts.most_common(1)[0][0]
-    if _lookup_ticker:
+    if _lookup_ticker and cur_tickers:
         import sqlite3 as _sq_cal
         _tk = _lookup_ticker
 
