@@ -379,7 +379,7 @@ async def telegram_bot_webhook(request: Request):
         parts = text.split(maxsplit=1)
         code  = parts[1].strip().upper() if len(parts) > 1 else ""
         try:
-            from routes.auth import _TG_LOGIN_CODES
+            from routes_v2.auth import _TG_LOGIN_CODES
         except ImportError:
             _TG_LOGIN_CODES = {}
         if code and code in _TG_LOGIN_CODES:

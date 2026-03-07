@@ -486,8 +486,8 @@ function showScreen(name) {
 document.getElementById('go-register').addEventListener('click', e => { e.preventDefault(); showScreen('register'); });
 document.getElementById('go-login').addEventListener('click',    e => { e.preventDefault(); showScreen('login'); });
 
-// Detect /register path on load
-if (location.pathname.indexOf('register') !== -1) showScreen('register');
+// Detect /register path or ?screen=register query param on load
+if (location.pathname.indexOf('register') !== -1 || new URLSearchParams(location.search).get('screen') === 'register') showScreen('register');
 
 // ── Login ──
 document.getElementById('login-btn').addEventListener('click', async () => {

@@ -19,12 +19,8 @@ from middleware.fastapi_rate_limiter import RATE_LIMITS, limiter
 
 router = APIRouter()
 
-# ── Shared login-code state (same dict as Flask side during dual-run) ─────────
-# Import from Flask routes to share state — during cutover this becomes local.
-try:
-    from routes.auth import _TG_LOGIN_CODES
-except ImportError:
-    _TG_LOGIN_CODES: dict = {}
+# ── Shared login-code state ────────────────────────────────────────────────────
+_TG_LOGIN_CODES: dict = {}
 
 
 # ── Cookie helpers ─────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
-# Auth pages — standalone, no app.css dependency
-/login                      /auth/index.html    200
-/register                   /auth/index.html    200
+# Auth pages — redirect to canonical URL
+/login                      /auth               301
+/register                   /auth?screen=register  301
 # SPA routes — all served by /login/index.html (the Trading Galaxy app)
 /dashboard                  /login/index.html   200
 /portfolio                  /login/index.html   200
