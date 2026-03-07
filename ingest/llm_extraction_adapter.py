@@ -270,6 +270,7 @@ class LLMExtractionAdapter(BaseIngestAdapter):
             self._logger.info('No LLM backend reachable (Ollama + Groq) — skipping extraction run')
             return []
 
+        self._logger.info('LLM extraction: using db_path=%s', self._db_path)
         try:
             conn = sqlite3.connect(self._db_path)
             _ensure_extraction_queue(conn)
