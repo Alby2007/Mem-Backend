@@ -1215,6 +1215,7 @@ def run(
                         break
             _cc_ga.close()
             if _ga:
+                _ga['ticker'] = _tk.upper()
                 response['grounding_atoms'] = _ga
                 response['market_stress'] = compute_market_stress(_ga)
         except Exception as _ga_exc:
