@@ -841,6 +841,54 @@
     color: var(--muted);
   }
 
+  /* ── PRODUCT SHOWCASE ── */
+  .showcase-section { padding: 80px 40px; max-width: 1200px; margin: 0 auto; }
+  .showcase-heading { font-size: clamp(28px,4vw,42px); font-weight: 800; color: #fff; margin: 16px 0 40px; }
+  .showcase-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 20px; }
+  @media(max-width:900px) { .showcase-grid { grid-template-columns: 1fr; } }
+  .showcase-panel { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 8px; padding: 24px; }
+  .showcase-label { font-family: var(--mono); font-size: 10px; color: #f59e0b; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 16px; }
+  .kb-mock-card { font-family: var(--mono); }
+  .kb-mock-top { display: flex; gap: 20px; margin-bottom: 16px; }
+  .kb-mock-left { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 70px; }
+  .kb-mock-arrow { color: #10b981; font-size: 24px; }
+  .kb-mock-direction { color: #10b981; font-size: 13px; font-weight: 700; letter-spacing: .1em; }
+  .kb-mock-pill { background: #1a2a1a; color: #10b981; border: 1px solid #10b981; border-radius: 4px; padding: 2px 8px; font-size: 10px; }
+  .kb-mock-right { flex: 1; }
+  .kb-mock-prices { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 4px; }
+  .kb-mock-current { color: #e8e8e8; }
+  .kb-mock-arrow-sm { color: #404040; }
+  .kb-mock-target { color: #e8e8e8; }
+  .kb-mock-upside { color: #10b981; font-weight: 700; }
+  .kb-mock-inv { font-size: 10px; color: #555; margin-bottom: 8px; }
+  .kb-mock-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .kb-mock-tag { background: #1a1a1a; border: 1px solid #333; border-radius: 3px; padding: 2px 7px; font-size: 10px; color: #aaa; }
+  .kb-mock-tag.red { border-color: #ef4444; color: #ef4444; }
+  .kb-mock-tag.green { border-color: #10b981; color: #10b981; }
+  .kb-mock-bars { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid #1a1a1a; padding-top: 12px; }
+  .kb-mock-bar-row { display: flex; align-items: center; gap: 8px; font-size: 10px; }
+  .kb-mock-bar-label { color: #555; width: 90px; flex-shrink: 0; }
+  .kb-mock-bar-track { flex: 1; height: 4px; background: #1a1a1a; border-radius: 2px; overflow: hidden; }
+  .kb-mock-bar-fill { height: 100%; border-radius: 2px; }
+  .kb-mock-bar-fill.amber { background: linear-gradient(90deg, #f59e0b, #f59e0b88); }
+  .kb-mock-bar-fill.blue { background: linear-gradient(90deg, #6366f1, #6366f188); }
+  .kb-mock-bar-val { color: #666; font-size: 10px; width: 50px; text-align: right; }
+  .kb-mock-portfolio { display: flex; flex-direction: column; gap: 12px; font-family: var(--mono); }
+  .kb-port-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #111; }
+  .kb-port-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .kb-port-dot.green { background: #10b981; }
+  .kb-port-dot.amber { background: #f59e0b; }
+  .kb-port-ticker { color: #fff; font-weight: 600; font-size: 13px; width: 65px; flex-shrink: 0; }
+  .kb-port-signal { color: #888; font-size: 11px; }
+  .kb-port-signal .green { color: #10b981; }
+  .kb-mock-equity-strip { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; font-family: var(--mono); }
+  .kb-equity-val { color: #fff; font-size: 22px; font-weight: 700; }
+  .kb-equity-change { font-size: 14px; font-weight: 600; }
+  .kb-equity-change.green { color: #10b981; }
+  .kb-equity-meta { font-size: 11px; color: #555; }
+  .kb-equity-chart { width: 100%; height: 80px; display: block; margin-bottom: 8px; }
+  .kb-equity-note { font-family: var(--mono); font-size: 10px; color: #444; }
+
   /* ── SCROLL REVEAL ── */
   .reveal {
     opacity: 0;
@@ -914,7 +962,7 @@
   </a>
   <div class="nav-right">
     <a href="/login" class="btn-nav-ghost">Sign in</a>
-    <a href="/login" class="btn-nav-primary">JOIN BETA</a>
+    <a href="#hero-cta" class="btn-nav-primary">JOIN BETA</a>
   </div>
 </nav>
 
@@ -977,8 +1025,8 @@
       <div class="hero-stat-label">ENRICHMENT CYCLE</div>
     </div>
     <div class="hero-stat-item">
-      <div class="hero-stat-value" id="stat-waitlist">—</div>
-      <div class="hero-stat-label">ON THE WAITLIST</div>
+      <div class="hero-stat-value">30<span style="font-size:16px;font-weight:400">min</span></div>
+      <div class="hero-stat-label">SCAN CYCLE</div>
     </div>
   </div>
 </section>
@@ -1021,6 +1069,104 @@
     <div class="marquee-item">ACLED Unrest <span>LIVE</span></div>
   </div>
 </div>
+
+<!-- ── PRODUCT SHOWCASE ── -->
+<section class="showcase-section reveal">
+  <div class="section-eyebrow reveal">THE PRODUCT</div>
+  <h2 class="showcase-heading">See what grounded intelligence looks like.</h2>
+  <div class="showcase-grid">
+
+    <!-- Panel 1: KB Grounding Card -->
+    <div class="showcase-panel">
+      <div class="showcase-label">Every answer grounded in live KB data</div>
+      <div class="kb-mock-card">
+        <div class="kb-mock-top">
+          <div class="kb-mock-left">
+            <div class="kb-mock-arrow">▲</div>
+            <div class="kb-mock-direction">BULLISH</div>
+            <div class="kb-mock-pill">MED</div>
+          </div>
+          <div class="kb-mock-right">
+            <div class="kb-mock-prices">
+              <span class="kb-mock-current">$197.22</span>
+              <span class="kb-mock-arrow-sm">→</span>
+              <span class="kb-mock-target">$250.76</span>
+              <span class="kb-mock-upside">+35.45%</span>
+            </div>
+            <div class="kb-mock-inv">invalidation $141.09</div>
+            <div class="kb-mock-tags">
+              <span class="kb-mock-tag">mid range</span>
+              <span class="kb-mock-tag red">high vol</span>
+              <span class="kb-mock-tag green">call sweep</span>
+            </div>
+          </div>
+        </div>
+        <div class="kb-mock-bars">
+          <div class="kb-mock-bar-row">
+            <span class="kb-mock-bar-label">KB CONFIDENCE</span>
+            <div class="kb-mock-bar-track"><div class="kb-mock-bar-fill amber" style="width:53%"></div></div>
+            <span class="kb-mock-bar-val">0.53 MED</span>
+          </div>
+          <div class="kb-mock-bar-row">
+            <span class="kb-mock-bar-label">MARKET REGIME</span>
+            <div class="kb-mock-bar-track"><div class="kb-mock-bar-fill blue" style="width:38%"></div></div>
+            <span class="kb-mock-bar-val">0.38 MED</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel 2: Portfolio signals -->
+    <div class="showcase-panel">
+      <div class="showcase-label">Your portfolio, enriched with live signal intelligence</div>
+      <div class="kb-mock-portfolio">
+        <div class="kb-port-row">
+          <span class="kb-port-dot green"></span>
+          <span class="kb-port-ticker">BARC.L</span>
+          <span class="kb-port-signal">Bullish · high · £4.04 · <span class="green">+28.0% upside</span></span>
+        </div>
+        <div class="kb-port-row">
+          <span class="kb-port-dot green"></span>
+          <span class="kb-port-ticker">LSEG.L</span>
+          <span class="kb-port-signal">Strongest · weak · £87.92 · <span class="green">+42.4% upside</span></span>
+        </div>
+        <div class="kb-port-row">
+          <span class="kb-port-dot green"></span>
+          <span class="kb-port-ticker">STAN.L</span>
+          <span class="kb-port-signal">Bullish · weak · £16.70 · <span class="green">+12.4% upside</span></span>
+        </div>
+        <div class="kb-port-row">
+          <span class="kb-port-dot amber"></span>
+          <span class="kb-port-ticker">HSBA.L</span>
+          <span class="kb-port-signal">Weak · partial · £12.45 · <span style="color:#888">-0.1% upside</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel 3: Equity curve -->
+    <div class="showcase-panel">
+      <div class="showcase-label">AI paper trader tracks every signal's live performance</div>
+      <div class="kb-mock-equity-strip">
+        <span class="kb-equity-val">£12,847</span>
+        <span class="kb-equity-change green">+28.5%</span>
+        <span class="kb-equity-meta">9 open · Win rate 41%</span>
+      </div>
+      <svg class="kb-equity-chart" viewBox="0 0 300 80" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#10b981" stop-opacity="0.3"/>
+            <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <polygon points="0,72 15,68 30,65 45,70 60,62 75,58 90,55 105,50 120,53 135,45 150,42 165,38 180,40 195,32 210,28 225,25 240,20 255,18 270,14 285,10 300,8 300,80 0,80" fill="url(#equityGrad)"/>
+        <polyline points="0,72 15,68 30,65 45,70 60,62 75,58 90,55 105,50 120,53 135,45 150,42 165,38 180,40 195,32 210,28 225,25 240,20 255,18 270,14 285,10 300,8" fill="none" stroke="#10b981" stroke-width="2"/>
+        <circle cx="300" cy="8" r="3" fill="#10b981"/>
+      </svg>
+      <div class="kb-equity-note">Autonomous AI agent · 30min scan cycle · R-multiple tracking</div>
+    </div>
+
+  </div>
+</section>
 
 <!-- ── FEATURES ── -->
 <section>
@@ -1081,7 +1227,7 @@
       <div class="section-eyebrow reveal">LIVE INTELLIGENCE</div>
       <h2 class="section-title reveal reveal-delay-1" style="font-size: clamp(32px,4vw,52px)">The copilot that cites its sources.</h2>
       <p class="reveal reveal-delay-2" style="font-size:16px;color:var(--text-dim);line-height:1.7;margin-bottom:32px">Ask anything. Every answer is grounded in live KB atoms — confidence scores, source attribution, and regime context included. No hallucinations. No vibes.</p>
-      <a href="/login" class="btn-primary reveal reveal-delay-3" style="display:inline-block;text-decoration:none;padding:14px 32px;">ACCESS THE BETA →</a>
+      <a href="#hero-cta" class="btn-primary reveal reveal-delay-3" style="display:inline-block;text-decoration:none;padding:14px 32px;">ACCESS THE BETA →</a>
     </div>
     <div class="terminal reveal reveal-delay-2">
       <div class="terminal-bar">
@@ -1264,20 +1410,23 @@ document.querySelectorAll('.reveal, .hiw-step').forEach(el => revealObs.observe(
 
 // ── TERMINAL ANIMATION ──
 const termLines = [
-  { type: 'prompt', text: 'what is the outlook for BP.L?' },
+  { type: 'prompt', text: "what's the signal on BP.L?" },
   { type: 'output dim', text: '› Retrieving KB atoms for bp.l...' },
-  { type: 'output dim', text: '› Found 47 atoms · 3 open patterns · regime: risk_off' },
+  { type: 'output dim', text: '› 47 atoms · 3 patterns · regime: risk_off' },
   { type: 'output', text: '' },
-  { type: 'output amber', text: '⚡ SIGNAL: Bullish FVG — conviction HIGH' },
-  { type: 'output green', text: '  Entry zone:  432–436p | T1: 451p | Stop: 424p' },
-  { type: 'output', text: '  P(T1 hit):   68% · P(stop): 19% · EV: +£310' },
+  { type: 'output amber', text: '  Bullish FVG setup — HIGH conviction' },
+  { type: 'output green', text: '  Entry: 432–436p  ·  T1: 451p  ·  Stop: 424p' },
+  { type: 'output amber', text: '  Geo-risk: ⚡ ELEVATED (GDELT 74.2 · WTI tight)' },
   { type: 'output', text: '' },
-  { type: 'output dim', text: '› Geopolitical context injected:' },
-  { type: 'output amber', text: '  ⚡ Middle East tension: ELEVATED (GDELT 74.2)' },
-  { type: 'output amber', text: '  ⚡ WTI: $78.42 · supply_trend: tight (EIA)' },
-  { type: 'output', text: '' },
-  { type: 'output green', text: '  Sources: yfinance · eia_energy · gdelt_tension' },
-  { type: 'output dim', text: '  Confidence: 0.81 · Regime adj: +4% (energy tailwind)' },
+  { type: 'output dim', text: '[KB_GROUNDING]' },
+  { type: 'output green', text: 'signal_direction: bullish' },
+  { type: 'output green', text: 'conviction_tier: high' },
+  { type: 'output', text: 'regime: risk_off' },
+  { type: 'output', text: 'volatility_regime: elevated' },
+  { type: 'output', text: 'implied_volatility: 0.31' },
+  { type: 'output dim', text: 'atoms_used: 47' },
+  { type: 'output dim', text: 'stress: 0.24 low' },
+  { type: 'output dim', text: '[/KB_GROUNDING]' },
   { type: 'prompt', text: '_' },
 ];
 
