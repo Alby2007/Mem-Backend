@@ -11,9 +11,11 @@ Prerequisites:
 
 Usage:
     python eval/eval_harness.py                    # 50 portfolios, 2 queries/intent
+    python eval/eval_harness.py --smoke            # 1 portfolio × 7 intents × 1 = 7 queries (~30s)
     python eval/eval_harness.py --n 10             # sanity run
     python eval/eval_harness.py --n 500 --qpi 3   # overnight full run
     python eval/eval_harness.py --n 100 --csv      # also write CSV
+    python eval/eval_harness.py --workers 6        # parallel requests (default 4)
     python eval/eval_harness.py --base http://127.0.0.1:5050
 """
 from __future__ import annotations
@@ -27,8 +29,10 @@ import sys
 import time
 import uuid
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 from typing import Optional
 
 import requests
@@ -41,8 +45,9 @@ RESULTS_DIR      = EVAL_DIR / 'results'
 PORTFOLIOS_PATH  = EVAL_DIR / 'portfolios.json'
 QUERIES_PATH     = EVAL_DIR / 'queries.json'
 TIMEOUT          = 180   # seconds — LLM can be slow
-SLEEP_BETWEEN    = 2.0   # seconds — give Ollama breathing room between requests
+SLEEP_BETWEEN    = 0.5   # seconds — per-thread cooldown between requests
 RETRY_ON_EMPTY   = 2     # retry count when response is empty (Ollama overload)
+DEFAULT_WORKERS  = 4     # parallel request threads
 TARGET_PASS_RATES = {
     'no_data':         0.95,
     'single_ticker':   0.85,
@@ -199,6 +204,58 @@ def _run_query(base: str, user_id: str, token: str, message: str) -> str:
 
 # ── Main eval loop ─────────────────────────────────────────────────────────────
 
+def _provision_portfolio(base: str, portfolio: dict, p_idx: int,
+                         beta_password: str) -> tuple[str, str, bool]:
+    """Register user, upgrade, submit portfolio. Returns (user_id, token, ok)."""
+    user_id, token = _register_eval_user(base, beta_password=beta_password)
+    if not token:
+        print(f'[warn] portfolio {p_idx}: no token — skipping (check BETA_PASSWORD)')
+        return user_id, '', False
+    _upgrade_eval_user(base, user_id, token)
+    _submit_portfolio(base, user_id, token, portfolio)
+    _set_trader_level(base, user_id, token, portfolio['trader_level'])
+    return user_id, token, True
+
+
+def _eval_single_query(
+    base: str, user_id: str, token: str,
+    intent: str, query: str, ticker: Optional[str],
+    portfolio: dict, p_idx: int,
+    kb_has_yield: bool,
+) -> dict:
+    """Execute one eval query and return its result dict."""
+    try:
+        _token = '' if intent == 'no_data' else token
+        response = _run_query(base, user_id, _token, query)
+        scores   = score_response(response, intent, portfolio, ticker,
+                                  kb_has_yield=kb_has_yield, query=query)
+        passed   = is_pass(scores)
+        return {
+            'portfolio_idx':   p_idx,
+            'portfolio_size':  len(portfolio['holdings']),
+            'trader_level':    portfolio['trader_level'],
+            'tier':            portfolio['tier'],
+            'intent':          intent,
+            'query':           query,
+            'ticker':          ticker,
+            'response_length': len(response),
+            'scores':          scores,
+            'pass':            passed,
+            'response_preview': response[:300],
+        }
+    except Exception as e:
+        return {
+            'portfolio_idx': p_idx,
+            'intent':       intent,
+            'query':        query,
+            'ticker':       ticker,
+            'error':        str(e),
+            'pass':         False,
+            'scores':       {},
+            'response_preview': '',
+        }
+
+
 def run_eval(
     base: str = DEFAULT_BASE,
     n_portfolios: int = 50,
@@ -206,6 +263,7 @@ def run_eval(
     write_csv: bool = False,
     seed: Optional[int] = None,
     beta_password: str = '',
+    workers: int = DEFAULT_WORKERS,
 ) -> list[dict]:
 
     if seed is not None:
@@ -237,81 +295,73 @@ def run_eval(
 
     print(f'\nConnecting to {base} …')
 
-    results: list[dict] = []
-    total  = n_portfolios * len(query_bank) * queries_per_intent
-    done   = 0
-    errors = 0
-    queries_per_portfolio = len(query_bank) * queries_per_intent
-
-    print(f'Running {n_portfolios} portfolios × {len(query_bank)} intents × {queries_per_intent} queries = ~{total} requests')
-    print(f'(fresh eval user per portfolio — {queries_per_portfolio} requests each, well under 60/hr limit)\n')
-
+    # ── Build work items ──────────────────────────────────────────────────
+    work_items: list[dict] = []
     for p_idx, portfolio in enumerate(portfolios):
-
-        # Fresh user per portfolio — each gets its own rate-limit bucket.
-        # With 7 intents × 2 queries = 14 requests/portfolio, far under the 60/hr cap.
-        user_id, token = _register_eval_user(base, beta_password=beta_password)
-        if not token:
-            print(f'[warn] portfolio {p_idx}: no token — skipping (check BETA_PASSWORD)')
-            errors += queries_per_portfolio
-            done   += queries_per_portfolio
-            continue
-
-        # Upgrade to premium so chat quota gate is bypassed
-        _upgrade_eval_user(base, user_id, token)
-
-        # Configure user for this portfolio
-        _submit_portfolio(base, user_id, token, portfolio)
-        _set_trader_level(base, user_id, token, portfolio['trader_level'])
-
         for intent, templates in query_bank.items():
             sample = random.sample(templates, min(queries_per_intent, len(templates)))
-
             for template in sample:
                 query, ticker = _fill_template(template, portfolio)
+                work_items.append({
+                    'p_idx': p_idx, 'portfolio': portfolio,
+                    'intent': intent, 'query': query, 'ticker': ticker,
+                })
 
-                try:
-                    # no_data intent: suppress auth token so portfolio context is NOT injected.
-                    # Portfolio atoms give the model real signal data which it then hallucinates
-                    # onto fake tickers. The no_data test should be a clean KB-only query.
-                    _token = '' if intent == 'no_data' else token
-                    response = _run_query(base, user_id, _token, query)
-                    scores   = score_response(response, intent, portfolio, ticker, kb_has_yield=_kb_has_yield, query=query)
-                    passed   = is_pass(scores)
+    total = len(work_items)
+    print(f'Running {n_portfolios} portfolios × {len(query_bank)} intents × {queries_per_intent} queries = {total} requests')
+    print(f'Workers: {workers} parallel threads\n')
 
-                    results.append({
-                        'portfolio_idx':   p_idx,
-                        'portfolio_size':  len(portfolio['holdings']),
-                        'trader_level':    portfolio['trader_level'],
-                        'tier':            portfolio['tier'],
-                        'intent':          intent,
-                        'query':           query,
-                        'ticker':          ticker,
-                        'response_length': len(response),
-                        'scores':          scores,
-                        'pass':            passed,
-                        'response_preview': response[:300],
-                    })
+    # ── Provision users (sequential — lightweight HTTP) ───────────────────
+    user_cache: dict[int, tuple[str, str]] = {}  # p_idx -> (user_id, token)
+    for p_idx, portfolio in enumerate(portfolios):
+        user_id, token, ok = _provision_portfolio(base, portfolio, p_idx, beta_password)
+        if ok:
+            user_cache[p_idx] = (user_id, token)
+        else:
+            user_cache[p_idx] = (user_id, '')
 
-                except Exception as e:
-                    errors += 1
-                    results.append({
-                        'portfolio_idx': p_idx,
-                        'intent':       intent,
-                        'query':        query,
-                        'ticker':       ticker,
-                        'error':        str(e),
-                        'pass':         False,
-                        'scores':       {},
-                        'response_preview': '',
-                    })
+    # ── Execute queries in parallel ───────────────────────────────────────
+    results: list[dict] = []
+    done   = 0
+    errors = 0
+    _progress_lock = Lock()
 
+    def _worker(item: dict) -> dict:
+        nonlocal done, errors
+        p_idx = item['p_idx']
+        user_id, token = user_cache[p_idx]
+        if not token:
+            r = {
+                'portfolio_idx': p_idx, 'intent': item['intent'],
+                'query': item['query'], 'ticker': item['ticker'],
+                'error': 'no auth token', 'pass': False,
+                'scores': {}, 'response_preview': '',
+            }
+            with _progress_lock:
                 done += 1
-                if done % 10 == 0:
-                    pct = 100 * done / total
-                    print(f'  {done}/{total} ({pct:.0f}%)  errors={errors}')
+                errors += 1
+            return r
 
-                time.sleep(SLEEP_BETWEEN)
+        r = _eval_single_query(
+            base, user_id, token,
+            item['intent'], item['query'], item['ticker'],
+            item['portfolio'], p_idx, _kb_has_yield,
+        )
+        time.sleep(SLEEP_BETWEEN)
+
+        with _progress_lock:
+            done += 1
+            if r.get('error'):
+                errors += 1
+            if done % 10 == 0:
+                pct = 100 * done / total
+                print(f'  {done}/{total} ({pct:.0f}%)  errors={errors}')
+        return r
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_worker, item) for item in work_items]
+        for f in as_completed(futures):
+            results.append(f.result())
 
     # ── Save results ────────────────────────────────────────────────────────
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -444,15 +494,25 @@ if __name__ == '__main__':
     parser.add_argument('--n',     type=int, default=50,  help='Number of portfolios')
     parser.add_argument('--qpi',   type=int, default=2,   help='Queries per intent')
     parser.add_argument('--csv',   action='store_true',   help='Also write CSV output')
-    parser.add_argument('--seed',         type=int, default=None, help='Random seed for reproducibility')
+    parser.add_argument('--seed',          type=int, default=None, help='Random seed for reproducibility')
     parser.add_argument('--beta-password', default='',             help='Beta access password for /auth/register')
+    parser.add_argument('--smoke', action='store_true',
+                        help='Smoke test: 1 portfolio × 7 intents × 1 query = 7 requests (~30s)')
+    parser.add_argument('--workers', type=int, default=DEFAULT_WORKERS,
+                        help=f'Parallel request threads (default {DEFAULT_WORKERS})')
     args = parser.parse_args()
+
+    # --smoke overrides --n and --qpi
+    n_port = 1 if args.smoke else args.n
+    qpi    = 1 if args.smoke else args.qpi
+    wk     = 1 if args.smoke else args.workers  # smoke stays sequential for clarity
 
     run_eval(
         base=args.base,
-        n_portfolios=args.n,
-        queries_per_intent=args.qpi,
+        n_portfolios=n_port,
+        queries_per_intent=qpi,
         write_csv=args.csv,
         seed=args.seed,
         beta_password=args.beta_password,
+        workers=wk,
     )
