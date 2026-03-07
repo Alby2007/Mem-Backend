@@ -1292,3 +1292,4 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .pt-bw-ticker { font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--text); }
 .pt-bw-r { font-family: var(--mono); font-size: 12px; margin-top: 2px; }
 @media (max-width: 900px) { .pt-main-grid { grid-template-columns: 1fr; } }
+/* v2 */
