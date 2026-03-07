@@ -770,9 +770,14 @@ def _set_agent_running_db(user_id: str, running: bool) -> None:
     try:
         conn = sqlite3.connect(ext.DB_PATH, timeout=5)
         ensure_paper_tables(conn)
+        # Upsert: works whether or not the paper_account row exists yet
         conn.execute(
-            'UPDATE paper_account SET agent_running=? WHERE user_id=?',
-            (1 if running else 0, user_id)
+            '''
+            INSERT INTO paper_account (user_id, virtual_balance, currency, created_at, agent_running)
+            VALUES (?, 500000.0, 'GBP', datetime('now'), ?)
+            ON CONFLICT(user_id) DO UPDATE SET agent_running=excluded.agent_running
+            ''',
+            (user_id, 1 if running else 0)
         )
         conn.commit()
         conn.close()
@@ -818,10 +823,23 @@ def stop_scanner(user_id: str) -> tuple[str, str]:
 
 
 def scanner_running(user_id: str) -> bool:
-    """Is the continuous scanner running for this user?"""
+    """Is the continuous scanner running for this user?
+    Checks in-memory thread first; falls back to DB flag for post-restart accuracy.
+    """
     with _scanner_lock:
         ev = _scanner_threads.get(user_id)
-    return ev is not None and not ev.is_set()
+    if ev is not None:
+        return not ev.is_set()
+    # No in-memory thread — check persisted DB flag
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+        row = conn.execute(
+            'SELECT agent_running FROM paper_account WHERE user_id=?', (user_id,)
+        ).fetchone()
+        conn.close()
+        return bool(row and row[0])
+    except Exception:
+        return False
 
 
 def restore_scanners() -> None:
