@@ -823,6 +823,16 @@ def build(
         for m in _re.finditer(r"INSTRUCTION: '(\S+)' is an alias.*?Do NOT say you have no data for \S+\.", snippet):
             user_parts.append(m.group(0))
 
+    # KB grounding reminder — inject right before the question so local models
+    # (llama3.2 etc.) see the structured output requirement immediately before generating.
+    # Only fires when grounding is eligible (same gate as the system rule above).
+    if _grounding_eligible:
+        user_parts.append(
+            "REMINDER: After your analysis, you MUST append the [KB_GROUNDING]...[/KB_GROUNDING] "
+            "block exactly as specified in rule 29. Start it on a new line with [KB_GROUNDING] "
+            "and end with [/KB_GROUNDING]. Fill in only values present in the KB atoms above."
+        )
+
     # User question — always last so the LLM sees context then question
     user_parts.append(f"Question: {user_message}")
 

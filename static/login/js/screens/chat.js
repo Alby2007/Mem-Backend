@@ -260,8 +260,9 @@ async function sendChat() {
     const kbPanelHtml = renderKbPanel(grounding);
     const calHtml = renderCalibrationBadge(d.calibration || null);
     const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null);
-    thinking.querySelector('.msg-bubble').innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + calHtml;
-    if (epistemicHtml) thinking.insertAdjacentHTML('beforeend', epistemicHtml);
+    const bubble = thinking.querySelector('.msg-bubble');
+    bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + calHtml;
+    if (epistemicHtml) bubble.insertAdjacentHTML('afterend', epistemicHtml);
     if (tipCardHtml) bindTipFeedback(thinking);
     if (d.kb_enriched && d.live_fetched?.length) {
       const badge = document.createElement('div');

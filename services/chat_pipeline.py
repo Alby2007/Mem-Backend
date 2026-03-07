@@ -1061,8 +1061,9 @@ def run(
                     'calibration_confidence': _cal_row[5],
                     'confidence_label':       _cal_row[6],
                 }
-        except Exception:
-            pass
+        except Exception as _cal_exc:
+            import logging as _cal_log
+            _cal_log.getLogger(__name__).debug('calibration lookup failed: %s', _cal_exc)
 
     # ── Persist assistant turn + KB graduation ────────────────────────────
     _persist_assistant_and_graduate(
