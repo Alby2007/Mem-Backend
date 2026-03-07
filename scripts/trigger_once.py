@@ -21,8 +21,8 @@ sys.path.insert(0, '/home/ubuntu/trading-galaxy')
 os.environ['TRADING_KB_DB'] = DB
 
 print('Importing api module...')
-from api import _paper_ai_run
-print('Running _paper_ai_run...')
+from services.paper_trading import ai_run as _paper_ai_run
+print('Running paper_trading.ai_run...')
 result = _paper_ai_run(USER_ID)
 print('Result:', json.dumps(result, indent=2))
 

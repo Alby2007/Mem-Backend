@@ -226,62 +226,59 @@ def _start_workers():
     except Exception:
         pass
 
-    # Ingest scheduler (adapters on their own intervals)
+    # Ingest scheduler (adapters loaded from registry table)
     if ext.HAS_INGEST:
         try:
+            from importlib import import_module
             from ingest.scheduler import IngestScheduler
-            from ingest.yfinance_adapter import YFinanceAdapter
-            from ingest.fred_adapter import FREDAdapter
-            from ingest.edgar_adapter import EDGARAdapter
-            from ingest.rss_adapter import RSSAdapter
-            from ingest.signal_enrichment_adapter import SignalEnrichmentAdapter
-            from ingest.historical_adapter import HistoricalBackfillAdapter
-            from ingest.llm_extraction_adapter import LLMExtractionAdapter
-            from ingest.edgar_realtime_adapter import EDGARRealtimeAdapter
-            from ingest.options_adapter import OptionsAdapter
-            from ingest.polygon_options_adapter import PolygonOptionsAdapter
-            from ingest.yield_curve_adapter import YieldCurveAdapter
-            from ingest.finra_short_interest_adapter import FINRAShortInterestAdapter
-            from ingest.boe_adapter import BoEAdapter
-            from ingest.earnings_calendar_adapter import EarningsCalendarAdapter
-            from ingest.fca_short_interest_adapter import FCAShortInterestAdapter
-            from ingest.lse_flow_adapter import LSEFlowAdapter
-            from ingest.insider_adapter import InsiderAdapter
-            from ingest.short_interest_adapter import ShortInterestAdapter
-            from ingest.sector_rotation_adapter import SectorRotationAdapter
-            from ingest.economic_calendar_adapter import EconomicCalendarAdapter
-            from ingest.eia_adapter import EIAAdapter
-            from ingest.gdelt_adapter import GDELTAdapter
-            from ingest.ucdp_adapter import UCDPAdapter
-            from ingest.acled_adapter import ACLEDAdapter
-            from ingest.usgs_adapter import USGSAdapter
 
-            sched = IngestScheduler(ext.kg)  # _kg stays private (KG instance)
-            sched.register(YFinanceAdapter(),                                interval_sec=300)
-            sched.register(SignalEnrichmentAdapter(db_path=ext.DB_PATH),     interval_sec=300)
-            sched.register(RSSAdapter(db_path=ext.DB_PATH),                  interval_sec=900)
-            sched.register(LLMExtractionAdapter(db_path=ext.DB_PATH),        interval_sec=300)
-            sched.register(EDGARAdapter(db_path=ext.DB_PATH),                interval_sec=21600)
-            sched.register(EDGARRealtimeAdapter(db_path=ext.DB_PATH),        interval_sec=180)
-            sched.register(OptionsAdapter(),                                  interval_sec=1800)
-            if os.environ.get('POLYGON_API_KEY'):
-                sched.register(PolygonOptionsAdapter(),                       interval_sec=1800)
-                sched.register(YieldCurveAdapter(),                           interval_sec=86400)
-            sched.register(FINRAShortInterestAdapter(db_path=ext.DB_PATH),   interval_sec=86400)
-            sched.register(FREDAdapter(),                                     interval_sec=86400)
-            sched.register(BoEAdapter(),                                      interval_sec=86400)
-            sched.register(EarningsCalendarAdapter(db_path=ext.DB_PATH),     interval_sec=3600)
-            sched.register(FCAShortInterestAdapter(db_path=ext.DB_PATH),     interval_sec=86400)
-            sched.register(LSEFlowAdapter(db_path=ext.DB_PATH),              interval_sec=3600)
-            sched.register(InsiderAdapter(db_path=ext.DB_PATH),              interval_sec=3600)
-            sched.register(ShortInterestAdapter(db_path=ext.DB_PATH),        interval_sec=86400)
-            sched.register(SectorRotationAdapter(db_path=ext.DB_PATH),       interval_sec=3600)
-            sched.register(EconomicCalendarAdapter(db_path=ext.DB_PATH),     interval_sec=86400)
-            sched.register(EIAAdapter(),                                      interval_sec=86400)
-            sched.register(GDELTAdapter(),                                    interval_sec=3600)
-            sched.register(UCDPAdapter(),                                     interval_sec=86400)
-            sched.register(ACLEDAdapter(),                                    interval_sec=21600)
-            sched.register(USGSAdapter(),                                     interval_sec=3600)
+            # (module_path, class_name, needs_db, interval_sec, env_gate)
+            _ADAPTER_REGISTRY = [
+                ('ingest.yfinance_adapter',            'YFinanceAdapter',            False,  300,   None),
+                ('ingest.signal_enrichment_adapter',   'SignalEnrichmentAdapter',    True,   300,   None),
+                ('ingest.rss_adapter',                 'RSSAdapter',                 True,   900,   None),
+                ('ingest.llm_extraction_adapter',      'LLMExtractionAdapter',       True,   300,   None),
+                ('ingest.edgar_adapter',               'EDGARAdapter',               True,   21600, None),
+                ('ingest.edgar_realtime_adapter',      'EDGARRealtimeAdapter',       True,   180,   None),
+                ('ingest.options_adapter',             'OptionsAdapter',             False,  1800,  None),
+                ('ingest.polygon_options_adapter',     'PolygonOptionsAdapter',      False,  1800,  'POLYGON_API_KEY'),
+                ('ingest.yield_curve_adapter',         'YieldCurveAdapter',          False,  86400, 'POLYGON_API_KEY'),
+                ('ingest.finra_short_interest_adapter','FINRAShortInterestAdapter',  True,   86400, None),
+                ('ingest.fred_adapter',                'FREDAdapter',                False,  86400, None),
+                ('ingest.boe_adapter',                 'BoEAdapter',                 False,  86400, None),
+                ('ingest.earnings_calendar_adapter',   'EarningsCalendarAdapter',    True,   3600,  None),
+                ('ingest.fca_short_interest_adapter',  'FCAShortInterestAdapter',    True,   86400, None),
+                ('ingest.lse_flow_adapter',            'LSEFlowAdapter',             True,   3600,  None),
+                ('ingest.insider_adapter',             'InsiderAdapter',             True,   3600,  None),
+                ('ingest.short_interest_adapter',      'ShortInterestAdapter',       True,   86400, None),
+                ('ingest.sector_rotation_adapter',     'SectorRotationAdapter',      True,   3600,  None),
+                ('ingest.economic_calendar_adapter',   'EconomicCalendarAdapter',    True,   86400, None),
+                ('ingest.eia_adapter',                 'EIAAdapter',                 False,  86400, None),
+                ('ingest.gdelt_adapter',               'GDELTAdapter',               False,  3600,  None),
+                ('ingest.ucdp_adapter',                'UCDPAdapter',                False,  86400, None),
+                ('ingest.acled_adapter',               'ACLEDAdapter',               False,  21600, None),
+                ('ingest.usgs_adapter',                'USGSAdapter',                False,  3600,  None),
+            ]
+
+            sched = IngestScheduler(ext.kg)
+            for mod_path, cls_name, needs_db, interval, env_key in _ADAPTER_REGISTRY:
+                if env_key and not os.environ.get(env_key):
+                    continue
+                try:
+                    mod = import_module(mod_path)
+                    cls = getattr(mod, cls_name)
+                    adapter = cls(db_path=ext.DB_PATH) if needs_db else cls()
+                    sched.register(adapter, interval_sec=interval)
+                except Exception as _ae:
+                    _logger.warning('Adapter %s.%s failed: %s', mod_path, cls_name, _ae)
+
+            # Paper agent (autonomous trading every 30 min)
+            try:
+                from services.paper_trading import PaperAgentAdapter
+                sched.register(PaperAgentAdapter(), interval_sec=1800)
+            except Exception as _pae:
+                _logger.warning('PaperAgentAdapter registration failed: %s', _pae)
+
             sched.start()
             ext.ingest_scheduler = sched
         except Exception as e:

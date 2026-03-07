@@ -3,7 +3,9 @@
 import sys, json, sqlite3
 sys.path.insert(0, '/home/ubuntu/trading-galaxy')
 
-from api import _paper_ai_run, _DB_PATH
+from services.paper_trading import ai_run as _paper_ai_run
+import extensions as ext
+_DB_PATH = ext.DB_PATH
 
 USER_ID = 'albertjemmettwaite_uggwq'
 

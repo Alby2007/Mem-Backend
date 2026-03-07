@@ -46,7 +46,7 @@ else:
 
 # --- Run paper agent ---
 print('\n--- Running paper agent ---')
-from api import _paper_ai_run
+from services.paper_trading import ai_run as _paper_ai_run
 result = _paper_ai_run('albertjemmettwaite_uggwq')
 print('Result:', json.dumps(result, indent=2))
 
