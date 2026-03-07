@@ -316,6 +316,11 @@ class LLMExtractionAdapter(BaseIngestAdapter):
                 conn.commit()
                 continue
 
+            if response is None:
+                self._logger.warning('Row %d: no LLM response (both backends failed)', row_id)
+            else:
+                self._logger.info('Row %d: LLM response preview: %.120s', row_id, response)
+
             atoms, success = _parse_llm_atoms(response or '', source_prefix, fallback_conf, now_iso)
 
             if success:
