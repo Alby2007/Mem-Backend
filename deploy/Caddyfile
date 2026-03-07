@@ -48,7 +48,7 @@ api.trading-galaxy.uk {
         X-Frame-Options            "DENY"
         Referrer-Policy            "strict-origin-when-cross-origin"
         Access-Control-Allow-Origin  "https://trading-galaxy.uk"
-        Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+        Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With"
         Access-Control-Allow-Credentials "true"
         -Server
