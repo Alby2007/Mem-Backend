@@ -46,9 +46,20 @@ function extractKbGrounding(rawAnswer) {
 function renderKbPanel(grounding, groundingAtoms) {
   // Merge: LLM rows first (normalise 'regime' -> 'price_regime'), DB wins on conflicts
   const merged = {};
+  // Key aliases: normalise LLM-written keys to canonical form
+  const _KEY_ALIAS = {
+    'regime': 'price_regime',
+    'last price': 'last_price', 'last price (usd)': 'last_price', 'last-price': 'last_price',
+    'current price': 'last_price', 'current_price': 'last_price',
+    'price target': 'price_target', 'target price': 'price_target', 'price-target': 'price_target',
+    'upside pct': 'upside_pct', 'upside percent': 'upside_pct', 'upside percentage': 'upside_pct',
+    'upside_percentage': 'upside_pct', 'upside_potential': 'upside_pct',
+    'invalidation price': 'invalidation_price', 'invalidation-price': 'invalidation_price',
+  };
   if (grounding) {
     grounding.forEach(r => {
-      const key = r.key === 'regime' ? 'price_regime' : r.key;
+      const raw = r.key.trim();
+      const key = _KEY_ALIAS[raw] || _KEY_ALIAS[raw.replace(/\s+/g, '_')] || raw.replace(/\s+/g, '_');
       if (r.val) merged[key] = r.val;
     });
   }
