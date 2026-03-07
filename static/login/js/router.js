@@ -96,6 +96,7 @@ window.addEventListener('popstate', () => {
 
 document.querySelectorAll('.nav-item, .mnav-item').forEach(el => {
   el.addEventListener('click', () => {
+    if (el.dataset.noNav) return;
     const s = el.dataset.screen;
     if (!s) return;
     if (!_AUTH_SCREENS.has(s) && !state.userId) { navigate('login'); return; }
