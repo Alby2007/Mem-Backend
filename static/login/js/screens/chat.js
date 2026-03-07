@@ -17,14 +17,15 @@ function extractKbGrounding(rawAnswer) {
 function renderKbPanel(grounding) {
   if (!grounding || !grounding.length) return '';
   const _LABELS = {
-    signal_direction: 'Signal direction',
-    conviction_tier:  'Conviction tier',
-    regime:           'Regime',
-    sector:           'Sector',
-    iv_rank:          'IV rank',
-    put_call_ratio:   'Put/call ratio',
-    atoms_used:       'Atoms used',
-    stress:           'Epistemic stress',
+    signal_direction:    'Signal direction',
+    conviction_tier:     'Conviction tier',
+    regime:              'Regime',
+    volatility_regime:   'Vol regime',
+    sector:              'Sector',
+    implied_volatility:  'Implied vol',
+    put_call_oi_ratio:   'Put/call OI ratio',
+    atoms_used:          'Atoms used',
+    stress:              'Epistemic stress',
   };
   const rows = grounding.map(r => {
     const label = _LABELS[r.key] || r.key.replace(/_/g, ' ');
