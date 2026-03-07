@@ -29,6 +29,9 @@ DEFAULT_TIMEOUT    = int(os.environ.get("OLLAMA_CHAT_TIMEOUT", "180"))
 _CHAT_URL  = f"{_BASE_URL}/api/chat"
 _TAGS_URL  = f"{_BASE_URL}/api/tags"
 
+# Cache of models confirmed unavailable (404) so we don't retry per-item
+_unavailable_models: set = set()
+
 
 def chat(
     messages: List[dict],
@@ -76,6 +79,13 @@ def chat(
         return None
     except _requests.exceptions.Timeout:
         _logger.warning("Ollama request timed out after %ds", timeout)
+        return None
+    except _requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            _logger.warning("Ollama model '%s' not available (404) — marking unavailable", model)
+            _unavailable_models.add(model)
+        else:
+            _logger.error("Ollama chat error: %s", e)
         return None
     except Exception as e:
         _logger.error("Ollama chat error: %s", e)
@@ -157,10 +167,13 @@ def chat_vision(
         return None
 
 
-def is_available() -> bool:
-    """Quick liveness check — True if Ollama is reachable."""
+def is_available(model: Optional[str] = None) -> bool:
+    """True if Ollama is reachable AND the requested model is not known-unavailable."""
+    check_model = model or EXTRACTION_MODEL
+    if check_model in _unavailable_models:
+        return False
     try:
-        r = _requests.get(f"{_BASE_URL}/api/tags", timeout=10)
+        r = _requests.get(f"{_BASE_URL}/api/tags", timeout=5)
         return r.status_code == 200
     except Exception:
         return False

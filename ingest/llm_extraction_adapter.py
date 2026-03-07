@@ -227,7 +227,7 @@ class LLMExtractionAdapter(BaseIngestAdapter):
         """Try Ollama first, fall back to Groq if unavailable."""
         try:
             from llm.ollama_client import chat as ollama_chat, is_available, EXTRACTION_MODEL
-            if is_available():
+            if is_available(model=EXTRACTION_MODEL):
                 return ollama_chat(messages, model=EXTRACTION_MODEL, timeout=60)
         except Exception as e:
             self._logger.debug('Ollama unavailable: %s', e)
