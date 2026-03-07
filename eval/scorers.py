@@ -95,8 +95,13 @@ def score_portfolio_review(response: str, portfolio: dict, query: str = '') -> d
     q_lower = query.lower()
     # Single-best queries ('which holding has best...'): 1 ticker mentioned is correct
     _is_single_best = any(kw in q_lower for kw in _SINGLE_BEST_KWS)
+    _honest_no_data = any(p in r for p in (
+        'does not contain', 'no kb signal', 'no conviction', 'no comparative',
+        'not available', 'no data', 'no kb data', 'cannot compare',
+        'no information', 'not in the', 'no signal',
+    ))
     if _is_single_best:
-        coverage_ratio = 1.0 if coverage >= 1 else 0.0
+        coverage_ratio = 1.0 if (coverage >= 1 or _honest_no_data) else 0.0
     else:
         coverage_ratio = coverage / total if total else 0.0
     scores['holdings_coverage']         = coverage_ratio
