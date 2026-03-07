@@ -1,6 +1,6 @@
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function doSignOut() {
-  try { await fetch('/auth/logout', { method: 'POST', credentials: 'include' }); } catch {}
+  try { await fetch(API + '/auth/logout', { method: 'POST', credentials: 'include' }); } catch {}
   window.location.replace('/');
 }
 
