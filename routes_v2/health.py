@@ -51,6 +51,18 @@ async def seed_status():
     }
 
 
+@router.get("/health/env-debug")
+async def health_env_debug():
+    import os
+    key = os.environ.get("GROQ_API_KEY", "")
+    return {
+        "GROQ_API_KEY_set": bool(key),
+        "GROQ_API_KEY_prefix": key[:12] + "..." if key else "",
+        "TRADING_KB_DB": os.environ.get("TRADING_KB_DB", ""),
+        "INGEST_BATCH_SIZE": os.environ.get("INGEST_BATCH_SIZE", ""),
+    }
+
+
 @router.get("/health/detailed")
 async def health_detailed():
     result: dict = {"status": "ok", "db": ext.DB_PATH}
