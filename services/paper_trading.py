@@ -84,10 +84,6 @@ def ensure_paper_tables(conn):
             created_at TEXT NOT NULL
         )
     """)
-    try:
-        conn.execute("ALTER TABLE paper_positions ADD COLUMN ai_reasoning TEXT")
-    except Exception:
-        pass
     conn.commit()
 
 
@@ -149,7 +145,6 @@ def compute_pnl_r(direction: str, entry: float, exit_p: float, stop: float) -> f
 def get_account(user_id: str) -> dict:
     """Fetch paper account summary with live unrealised PnL."""
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
-    ensure_paper_tables(conn)
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(
         "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,500000.0,'GBP',?)",
@@ -217,7 +212,6 @@ def get_account(user_id: str) -> dict:
 def list_positions(user_id: str, status_filter: str = 'all') -> dict:
     """List paper positions with optional live price enrichment."""
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
-    ensure_paper_tables(conn)
     conn.row_factory = sqlite3.Row
     if status_filter == 'open':
         rows = conn.execute(
@@ -277,7 +271,6 @@ def open_position(user_id: str, data: dict) -> tuple[dict, int]:
     note       = data.get('note', '')
     now_iso    = datetime.now(timezone.utc).isoformat()
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
-    ensure_paper_tables(conn)
     conn.execute(
         "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,500000.0,'GBP',?)",
         (user_id, now_iso)
@@ -303,7 +296,6 @@ def close_position(user_id: str, pos_id: int, exit_price=None) -> tuple[dict, in
     """Close a paper position. Returns (response_dict, http_status)."""
     now_iso = datetime.now(timezone.utc).isoformat()
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
-    ensure_paper_tables(conn)
     conn.row_factory = sqlite3.Row
     pos = conn.execute(
         "SELECT * FROM paper_positions WHERE id=? AND user_id=?", (pos_id, user_id)
@@ -329,27 +321,25 @@ def close_position(user_id: str, pos_id: int, exit_price=None) -> tuple[dict, in
 
 def monitor_positions(user_id: str) -> dict:
     """Check open positions vs live prices, update stops/targets hit."""
-    import yfinance as _yf
     now_iso = datetime.now(timezone.utc).isoformat()
     conn = sqlite3.connect(ext.DB_PATH, timeout=15)
-    ensure_paper_tables(conn)
     conn.row_factory = sqlite3.Row
     open_pos = conn.execute(
         "SELECT * FROM paper_positions WHERE user_id=? AND status='open'", (user_id,)
     ).fetchall()
     updates = []
+    if not open_pos:
+        conn.close()
+        return {'checked': 0, 'updates': []}
+
+    yf_syms = {pos['ticker']: _YF_MAP.get(pos['ticker'].lower(), pos['ticker']) for pos in open_pos}
+    live_prices = fetch_live_prices(list(yf_syms.values()))
+    sym_to_ticker = {v: k for k, v in yf_syms.items()}
+    prices_by_ticker = {sym_to_ticker[sym]: price for sym, price in live_prices.items()}
+
     for pos in open_pos:
-        ticker  = pos['ticker']
-        yf_sym  = _YF_MAP.get(ticker.lower(), ticker)
-        try:
-            info  = _yf.Ticker(yf_sym).fast_info
-            price = float(info.get('last_price') or info.get('regularMarketPrice') or 0)
-        except Exception:
-            try:
-                hist  = _yf.Ticker(yf_sym).history(period='1d', interval='1m')
-                price = float(hist['Close'].iloc[-1]) if not hist.empty else 0
-            except Exception:
-                price = 0
+        ticker = pos['ticker']
+        price  = prices_by_ticker.get(ticker, 0)
         if price <= 0:
             continue
         entry = pos['entry_price']
@@ -393,7 +383,6 @@ def monitor_positions(user_id: str) -> dict:
 def get_stats(user_id: str) -> dict:
     """Performance breakdown by conviction and pattern type."""
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
-    ensure_paper_tables(conn)
     conn.row_factory = sqlite3.Row
     closed = conn.execute(
         """SELECT p.*, ps.kb_conviction, ps.pattern_type
@@ -437,7 +426,6 @@ def get_stats(user_id: str) -> dict:
 def get_agent_log(user_id: str, limit: int = 100) -> list[dict]:
     """Return last N agent activity entries."""
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
-    ensure_paper_tables(conn)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """SELECT id, user_id, event_type, ticker, detail, created_at
@@ -451,7 +439,6 @@ def get_agent_log(user_id: str, limit: int = 100) -> list[dict]:
 def export_log_csv(user_id: str) -> bytes:
     """Export full audit log + positions as CSV bytes."""
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
-    ensure_paper_tables(conn)
     conn.row_factory = sqlite3.Row
     log_rows = conn.execute(
         "SELECT id, event_type, ticker, detail, created_at FROM paper_agent_log WHERE user_id=? ORDER BY created_at ASC",
@@ -501,12 +488,30 @@ def paper_kb_chat(ticker: str, question: str, kg_conn):
 
 
 def ai_run(user_id: str) -> dict:
-    """Core autonomous paper trading agent for one user."""
+    """Core autonomous paper trading agent for one user.
+
+    Called by two paths:
+      1. PaperAgentAdapter (scheduler) via ai_global_run() — every 30 min, all pro/premium users.
+      2. continuous_scan per-user thread — every 30 min, only when user explicitly starts scanner.
+    A per-user trylock ensures concurrent calls are dropped rather than queued.
+    """
+    with _run_locks_lock:
+        lock = _run_locks.setdefault(user_id, threading.Lock())
+    if not lock.acquire(blocking=False):
+        _logger.debug('ai_run skipped for %s — already in progress', user_id)
+        return {'entries': 0, 'skips': 0, 'monitor_updates': [], 'skipped': True}
+    try:
+        return _ai_run_inner(user_id)
+    finally:
+        lock.release()
+
+
+def _ai_run_inner(user_id: str) -> dict:
+    """Inner body of ai_run — only called when per-user lock is held."""
     now_iso = datetime.now(timezone.utc).isoformat()
 
     try:
         conn = sqlite3.connect(ext.DB_PATH, timeout=15)
-        ensure_paper_tables(conn)
         conn.row_factory = sqlite3.Row
 
         conn.execute(
@@ -552,7 +557,13 @@ def ai_run(user_id: str) -> dict:
         risk_pct = min(risk_pct, 2.0)
         risk_per_trade = balance * risk_pct / 100.0
         max_position_value = balance * 0.10
-        remaining_cash = balance
+
+        committed_rows = conn.execute(
+            "SELECT SUM(entry_price * quantity) FROM paper_positions WHERE user_id=? AND status='open'",
+            (user_id,)
+        ).fetchone()
+        committed_capital = float(committed_rows[0] or 0.0)
+        remaining_cash = max(balance - committed_capital, 0.0)
 
         entries = 0
         skips = 0
@@ -662,10 +673,19 @@ def ai_run(user_id: str) -> dict:
                         llm_reasoning = parsed.get('reasoning', reasoning)[:200]
                         reasoning = f'{llm_reasoning} | kb_depth={kb_depth} ({atom_count} atoms)'
                         if action == 'ENTER':
-                            entry_p = float(parsed.get('entry', entry_p))
-                            stop_p = float(parsed.get('stop', stop_p))
-                            t1_p = float(parsed.get('t1', t1_p))
-                            t2_p = float(parsed.get('t2', t2_p))
+                            _llm_entry = float(parsed.get('entry', entry_p))
+                            _llm_stop  = float(parsed.get('stop', stop_p))
+                            _zone_stop_ref = stop_p
+                            if _zone_stop_ref > 0 and abs(_llm_stop - _zone_stop_ref) / _zone_stop_ref > 0.05:
+                                _logger.warning(
+                                    'LLM stop %.6f deviates >5%% from zone stop %.6f for %s — ignoring LLM prices',
+                                    _llm_stop, _zone_stop_ref, ticker
+                                )
+                            else:
+                                entry_p = _llm_entry
+                                stop_p  = _llm_stop
+                                t1_p = float(parsed.get('t1', t1_p))
+                                t2_p = float(parsed.get('t2', t2_p))
                             risk = abs(entry_p - stop_p)
                 else:
                     reasoning = f'{reasoning} | kb_depth={kb_depth} ({atom_count} atoms)'
@@ -733,6 +753,11 @@ def ai_run(user_id: str) -> dict:
 # ── Continuous scanner ────────────────────────────────────────────────────────
 
 _scanner_threads: dict = {}
+_scanner_lock = threading.Lock()
+
+# Per-user lock: dropped (not queued) if ai_run() is already in progress for that user
+_run_locks: dict[str, threading.Lock] = {}
+_run_locks_lock = threading.Lock()
 
 
 def continuous_scan(user_id: str, stop_event: threading.Event, interval_sec: int = 120):
@@ -749,10 +774,11 @@ def continuous_scan(user_id: str, stop_event: threading.Event, interval_sec: int
 
 def start_scanner(user_id: str) -> tuple[str, str]:
     """Start continuous scanner for user. Returns (status, message)."""
-    if user_id in _scanner_threads and _scanner_threads[user_id].is_set() is False:
-        return 'already_running', 'Scanner already running'
-    stop_ev = threading.Event()
-    _scanner_threads[user_id] = stop_ev
+    with _scanner_lock:
+        if user_id in _scanner_threads and not _scanner_threads[user_id].is_set():
+            return 'already_running', 'Scanner already running'
+        stop_ev = threading.Event()
+        _scanner_threads[user_id] = stop_ev
     t = threading.Thread(target=continuous_scan, args=(user_id, stop_ev, 1800), daemon=True)
     t.start()
     return 'started', 'Continuous scanner started — scans every 30 min'
@@ -760,17 +786,19 @@ def start_scanner(user_id: str) -> tuple[str, str]:
 
 def stop_scanner(user_id: str) -> tuple[str, str]:
     """Stop continuous scanner for user. Returns (status, message)."""
-    ev = _scanner_threads.get(user_id)
+    with _scanner_lock:
+        ev = _scanner_threads.pop(user_id, None)
     if ev:
         ev.set()
-        del _scanner_threads[user_id]
         return 'stopped', 'Scanner stopped'
     return 'not_running', 'Scanner was not running'
 
 
 def scanner_running(user_id: str) -> bool:
     """Is the continuous scanner running for this user?"""
-    return user_id in _scanner_threads and not _scanner_threads[user_id].is_set()
+    with _scanner_lock:
+        ev = _scanner_threads.get(user_id)
+    return ev is not None and not ev.is_set()
 
 
 # ── Global agent run (scheduler adapter) ──────────────────────────────────────

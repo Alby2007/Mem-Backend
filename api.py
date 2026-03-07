@@ -124,6 +124,12 @@ def _ensure_tables():
             except Exception:
                 pass
 
+        try:
+            from services.paper_trading import ensure_paper_tables
+            ensure_paper_tables(conn)
+        except Exception:
+            pass
+
         conn.commit()
         conn.close()
     except Exception as e:
