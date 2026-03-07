@@ -71,20 +71,14 @@ function renderKbPanel(grounding, groundingAtoms) {
     ? `<span class="sig-ticker-badge">${escHtml(groundingAtoms.ticker.toUpperCase())}</span>`
     : '';
 
-  // Tags: skip signal_direction and conviction_tier; apply colour classes
-  const _SKIP = new Set(['signal_direction', 'conviction_tier']);
+  // Tags: whitelist of semantic keys only — skip numerics, raw scores, direction/conviction
+  const _TAG_ORDER = ['price_regime','volatility_regime','smart_money_signal','sector'];
   const _TAG_DISPLAY = {
-    price_regime:       v => v.replace(/_/g, ' '),
-    volatility_regime:  v => v.replace('high_volatility', 'high_vol').replace('extreme_volatility', 'extreme_vol').replace(/_/g, ' '),
-    sector:             v => v.replace('financial services', 'fin. services'),
-    put_call_oi_ratio:  v => `P/C ${v}`,
-    implied_volatility: v => `IV ${v}`,
+    price_regime:      v => v.replace(/_/g, ' '),
+    volatility_regime: v => v.replace('high_volatility', 'high_vol').replace('extreme_volatility', 'extreme_vol').replace(/_/g, ' '),
+    sector:            v => v.replace('financial services', 'fin. services'),
   };
-  const _TAG_ORDER = ['price_regime','volatility_regime','smart_money_signal','sector','put_call_oi_ratio','implied_volatility'];
-  const tagKeys = [
-    ..._TAG_ORDER.filter(k => k in merged && !_SKIP.has(k)),
-    ...Object.keys(merged).filter(k => !_TAG_ORDER.includes(k) && !_SKIP.has(k)),
-  ];
+  const tagKeys = _TAG_ORDER.filter(k => k in merged && merged[k]);
   const tags = tagKeys.map(k => {
     const raw = String(merged[k]);
     const display = _TAG_DISPLAY[k] ? _TAG_DISPLAY[k](raw) : raw.replace(/_/g, ' ');
