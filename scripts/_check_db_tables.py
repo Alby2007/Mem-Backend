@@ -1,6 +1,6 @@
 import sqlite3
 
-DB = '/home/ubuntu/trading-galaxy/trading_knowledge.db'
+DB = '/opt/trading-galaxy/data/trading_knowledge.db'
 c = sqlite3.connect(DB)
 
 tables = c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()

@@ -1,6 +1,6 @@
 import sqlite3
 
-DB = '/home/ubuntu/trading-galaxy/trading_knowledge.db'
+DB = '/opt/trading-galaxy/data/trading_knowledge.db'
 c = sqlite3.connect(DB)
 
 # Discover actual column names in facts table
