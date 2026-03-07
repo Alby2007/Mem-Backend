@@ -55,9 +55,39 @@ class DiscoverRequest(BaseModel):
 @router.get("/ingest/status")
 async def ingest_status():
     if not ext.ingest_scheduler:
-        return {"scheduler": "not_running",
-                "reason": "ingest dependencies not installed or scheduler failed to start",
-                "adapters": {}}
+        # Build a static adapter map directly from the facts table source prefixes
+        adapters: dict = {}
+        try:
+            conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+            try:
+                for name, patterns in _SRC_PATTERNS.items():
+                    total = 0
+                    last_ts = None
+                    for pat in patterns:
+                        row = conn.execute(
+                            "SELECT COUNT(*) FROM facts WHERE source LIKE ?", (pat,)
+                        ).fetchone()
+                        total += row[0] if row else 0
+                        ts_row = conn.execute(
+                            "SELECT MAX(created_at) FROM facts WHERE source LIKE ?", (pat,)
+                        ).fetchone()
+                        if ts_row and ts_row[0]:
+                            if last_ts is None or ts_row[0] > last_ts:
+                                last_ts = ts_row[0]
+                    if total > 0:
+                        adapters[name] = {
+                            "name": name,
+                            "kb_atoms": total,
+                            "total_atoms": total,
+                            "last_run_at": last_ts,
+                            "is_running": False,
+                            "last_error": None,
+                        }
+            finally:
+                conn.close()
+        except Exception:
+            pass
+        return {"scheduler": "static", "adapters": adapters}
 
     adapter_status = ext.ingest_scheduler.get_status()
     try:

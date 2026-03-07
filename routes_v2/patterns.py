@@ -45,6 +45,47 @@ class PositionUpdateRequest(BaseModel):
     close_method: str = "manual"
 
 
+@router.get("/patterns")
+async def patterns_list(
+    limit: int = 50,
+    sort: str = "detected_at",
+    order: str = "desc",
+    status: Optional[str] = None,
+    ticker: Optional[str] = None,
+    min_quality: float = 0.0,
+):
+    _ALLOWED_SORT = {"detected_at", "formed_at", "quality_score", "id"}
+    sort_col = sort if sort in _ALLOWED_SORT else "detected_at"
+    order_dir = "DESC" if order.lower() != "asc" else "ASC"
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+        clauses = ["quality_score >= ?"]
+        params: list = [min_quality]
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if ticker:
+            clauses.append("UPPER(ticker) = ?")
+            params.append(ticker.upper())
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        rows = conn.execute(
+            f"""SELECT id, ticker, pattern_type, direction, zone_high, zone_low,
+                       zone_size_pct, timeframe, formed_at, status,
+                       quality_score, kb_conviction, kb_regime, kb_signal_dir, detected_at
+                FROM pattern_signals
+                {where}
+                ORDER BY {sort_col} {order_dir}
+                LIMIT ?""",
+            params + [min(limit, 200)],
+        ).fetchall()
+        conn.close()
+        patterns = [dict(r) for r in rows]
+        return {"patterns": patterns, "count": len(patterns)}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
 @router.get("/patterns/open")
 async def patterns_open(
     ticker: str = "",
