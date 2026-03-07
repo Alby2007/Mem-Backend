@@ -15,20 +15,7 @@ function extractKbGrounding(rawAnswer) {
 }
 
 function renderKbPanel(grounding, groundingAtoms) {
-  const _LABELS = {
-    signal_direction:    'Signal direction',
-    conviction_tier:     'Conviction tier',
-    price_regime:        'Regime',
-    volatility_regime:   'Vol regime',
-    sector:              'Sector',
-    implied_volatility:  'Implied vol',
-    put_call_oi_ratio:   'Put/call OI ratio',
-    smart_money_signal:  'Smart money',
-    atoms_used:          'Atoms used',
-    stress:              'Epistemic stress',
-  };
-  // Merge: start with LLM-parsed rows (normalise 'regime' -> 'price_regime'),
-  // then overwrite/add from authoritative DB atoms (DB wins on conflicts)
+  // Merge: LLM rows first (normalise 'regime' -> 'price_regime'), DB wins on conflicts
   const merged = {};
   if (grounding) {
     grounding.forEach(r => {
@@ -40,60 +27,125 @@ function renderKbPanel(grounding, groundingAtoms) {
     Object.entries(groundingAtoms).forEach(([k, v]) => { if (v) merged[k] = v; });
   }
   if (!Object.keys(merged).length) return '';
-  // Preferred display order
-  const _ORDER = ['signal_direction','conviction_tier','price_regime',
-    'volatility_regime','sector','implied_volatility','put_call_oi_ratio',
-    'smart_money_signal','atoms_used','stress'];
-  const orderedKeys = [
-    ..._ORDER.filter(k => k in merged),
-    ...Object.keys(merged).filter(k => !_ORDER.includes(k)),
+
+  const dir = (merged.signal_direction || '').toLowerCase();
+  const isBearish = dir === 'bearish';
+  const cardClass = isBearish ? 'sig-card bearish' : 'sig-card';
+  const arrow = isBearish ? '▼' : '▲';
+  const dirWord = isBearish ? 'Bearish' : (dir ? 'Bullish' : '—');
+
+  const conv = (merged.conviction_tier || '').toLowerCase();
+  const pillClass = conv === 'high' ? 'conviction-pill high' : (conv === 'low' ? 'conviction-pill low' : 'conviction-pill');
+  const pillText = conv === 'high' ? 'HIGH' : (conv === 'low' ? 'LOW' : 'MED');
+
+  const ticker = (groundingAtoms && groundingAtoms.ticker)
+    ? `<span class="sig-ticker-badge">${escHtml(groundingAtoms.ticker.toUpperCase())}</span>`
+    : '';
+
+  // Tags: skip signal_direction and conviction_tier; apply colour classes
+  const _SKIP = new Set(['signal_direction', 'conviction_tier']);
+  const _TAG_DISPLAY = {
+    price_regime:       v => v.replace(/_/g, ' '),
+    volatility_regime:  v => v.replace('high_volatility', 'high_vol').replace('extreme_volatility', 'extreme_vol').replace(/_/g, ' '),
+    sector:             v => v.replace('financial services', 'fin. services'),
+    put_call_oi_ratio:  v => `P/C ${v}`,
+    implied_volatility: v => `IV ${v}`,
+  };
+  const _TAG_ORDER = ['price_regime','volatility_regime','smart_money_signal','sector','put_call_oi_ratio','implied_volatility'];
+  const tagKeys = [
+    ..._TAG_ORDER.filter(k => k in merged && !_SKIP.has(k)),
+    ...Object.keys(merged).filter(k => !_TAG_ORDER.includes(k) && !_SKIP.has(k)),
   ];
-  const rows = orderedKeys.map(k => {
-    const label = _LABELS[k] || k.replace(/_/g, ' ');
-    return `<div class="kb-panel-row"><span class="kb-panel-key">${escHtml(label)}</span><span class="kb-panel-val">${escHtml(String(merged[k]))}</span></div>`;
+  const tags = tagKeys.map(k => {
+    const raw = String(merged[k]);
+    const display = _TAG_DISPLAY[k] ? _TAG_DISPLAY[k](raw) : raw.replace(/_/g, ' ');
+    const volLow = raw.toLowerCase();
+    let cls = 'sig-tag';
+    if (k === 'volatility_regime' && (volLow.includes('high') || volLow.includes('extreme'))) cls += ' vol-high';
+    if (k === 'smart_money_signal') cls += ' smart-money';
+    return `<div class="${cls}">${escHtml(display)}</div>`;
   }).join('');
-  return `<div class="kb-panel">
-    <div class="kb-panel-header" onclick="this.parentElement.classList.toggle('kb-panel-open')">
-      <span class="kb-panel-title">KB GROUNDING</span>
-      <span class="kb-panel-toggle">▸</span>
+
+  return `<div class="${cardClass}">
+    <div class="sig-header">
+      <span class="sig-header-label">KB Grounding</span>
+      ${ticker}
     </div>
-    <div class="kb-panel-body">${rows}</div>
+    <div class="sig-card-inner">
+      <div class="sig-direction">
+        <div class="sig-arrow">${arrow}</div>
+        <div class="sig-word">${escHtml(dirWord)}</div>
+        <div class="${pillClass}">${pillText}</div>
+      </div>
+      <div class="sig-tags">${tags}</div>
+    </div>
   </div>`;
 }
 
 function renderCalibrationBadge(cal) {
   if (!cal) return '';
-  const patLabel = (cal.pattern_type || '').replace(/_/g, ' ').toUpperCase();
-  const tf = (cal.timeframe || '').toUpperCase();
-  const t1 = cal.hit_rate_t1 != null ? `${Math.round(cal.hit_rate_t1 * 100)}%` : '—';
-  const t2 = cal.hit_rate_t2 != null ? `${Math.round(cal.hit_rate_t2 * 100)}%` : '—';
-  const n  = cal.n_total != null ? cal.n_total.toLocaleString() : '—';
-  const conf = cal.confidence_label || '';
-  return `<div class="kb-panel kb-calibration-panel">
-    <div class="kb-panel-header" onclick="this.parentElement.classList.toggle('kb-panel-open')">
-      <span class="kb-panel-title">CALIBRATION</span>
-      <span class="kb-panel-toggle">▸</span>
+  const t1Pct = cal.hit_rate_t1 != null ? Math.round(cal.hit_rate_t1 * 100) : null;
+  const t2Pct = cal.hit_rate_t2 != null ? Math.round(cal.hit_rate_t2 * 100) : null;
+  const n = cal.n_total != null ? Number(cal.n_total).toLocaleString() : '—';
+  const pat = (cal.pattern_type || '').replace(/_/g, ' ').toUpperCase();
+  const tf  = (cal.timeframe || '').toUpperCase();
+  const regime = cal.market_regime || 'all regimes';
+  const confRaw = (cal.confidence_label || '').toLowerCase();
+  const confClass = confRaw === 'moderate' ? 'cal-conf-badge moderate'
+    : confRaw === 'low' ? 'cal-conf-badge low'
+    : 'cal-conf-badge';
+  const confText = cal.confidence_label || '';
+  const footerParts = [pat, tf, regime].filter(Boolean).join(' · ');
+  return `<div class="cal-panel">
+    <div class="cal-header">
+      <span class="cal-header-label">Calibration</span>
+      <span class="cal-sample">n=${escHtml(n)} setups</span>
     </div>
-    <div class="kb-panel-body">
-      <div class="kb-panel-row"><span class="kb-panel-key">Pattern</span><span class="kb-panel-val">${escHtml(patLabel)}${tf ? ' · ' + escHtml(tf) : ''}</span></div>
-      <div class="kb-panel-row"><span class="kb-panel-key">Hit rate T1 / T2</span><span class="kb-panel-val">${escHtml(t1)} / ${escHtml(t2)} across ${escHtml(n)} setups</span></div>
-      <div class="kb-panel-row"><span class="kb-panel-key">Confidence</span><span class="kb-panel-val">${escHtml(conf)}</span></div>
+    <div class="cal-body">
+      <div class="cal-row">
+        <div class="cal-row-head">
+          <span class="cal-row-label">Target 1 hit rate</span>
+          <span class="cal-row-pct">${t1Pct != null ? t1Pct + '%' : '—'}</span>
+        </div>
+        <div class="cal-bar-track"><div class="cal-bar-fill" style="width:0%"></div></div>
+      </div>
+      <div class="cal-row">
+        <div class="cal-row-head">
+          <span class="cal-row-label">Target 2 hit rate</span>
+          <span class="cal-row-pct t2">${t2Pct != null ? t2Pct + '%' : '—'}</span>
+        </div>
+        <div class="cal-bar-track"><div class="cal-bar-fill t2" style="width:0%"></div></div>
+      </div>
+    </div>
+    <div class="cal-footer">
+      <span class="cal-pattern">${escHtml(footerParts)}</span>
+      <span class="${confClass}">${escHtml(confText)}</span>
     </div>
   </div>`;
 }
 
 function renderEpistemicFooter(atomsUsed, stress) {
   if (atomsUsed == null && !stress) return '';
-  const parts = [];
-  if (atomsUsed != null) parts.push(`${atomsUsed} atoms`);
-  if (stress && stress.composite_stress != null) {
-    const s = stress.composite_stress;
-    const label = s < 0.30 ? 'LOW' : (s < 0.60 ? 'MED' : 'HIGH');
-    parts.push(`stress ${s.toFixed(2)} ${label}`);
-  }
-  return parts.length
-    ? `<div class="epistemic-footer">⬡ ${parts.join(' · ')}</div>`
-    : '';
+  const s = stress && stress.composite_stress != null ? stress.composite_stress : null;
+  const label = s == null ? '' : (s < 0.30 ? 'LOW' : (s < 0.60 ? 'MED' : 'HIGH'));
+  const lvlClass = label ? `stress-level ${label.toLowerCase()}` : 'stress-level';
+  const fillClass = label ? `stress-bar-fill ${label.toLowerCase()}` : 'stress-bar-fill';
+  const tooltipParts = [];
+  if (atomsUsed != null) tooltipParts.push(`${atomsUsed} atoms`);
+  if (s != null) tooltipParts.push(`stress ${s.toFixed(2)} ${label}`);
+  if (stress && stress.authority_conflict != null) tooltipParts.push(`authority conflict ${Number(stress.authority_conflict).toFixed(2)}`);
+  if (stress && stress.domain_entropy != null) tooltipParts.push(`domain entropy ${Number(stress.domain_entropy).toFixed(2)}`);
+  return `<div class="stress-bar-wrap">
+    <div class="stress-bar-track">
+      <div class="stress-zones"><div class="zone-tick" style="left:30%"></div><div class="zone-tick" style="left:60%"></div></div>
+      <div class="${fillClass}" style="width:0%"></div>
+    </div>
+    <div class="stress-tooltip">${escHtml(tooltipParts.join(' · '))}</div>
+    <div class="stress-meta">
+      <div class="stress-atoms"><span class="hex">⬡</span><span>${atomsUsed != null ? atomsUsed : '—'} atoms</span></div>
+      <div class="${lvlClass}">${s != null ? s.toFixed(2) + ' ' + label : '—'}</div>
+    </div>
+  </div>`;
 }
 
 function appendMsg(role, html) {
@@ -285,6 +337,23 @@ async function sendChat() {
     const bubble = thinking.querySelector('.msg-bubble');
     bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + calHtml;
     if (epistemicHtml) bubble.insertAdjacentHTML('afterend', epistemicHtml);
+    // Animate stress bar and calibration bars after DOM insertion
+    requestAnimationFrame(() => {
+      const stressFill = thinking.querySelector('.stress-bar-fill');
+      if (stressFill && d.stress && d.stress.composite_stress != null) {
+        stressFill.style.width = (d.stress.composite_stress * 100) + '%';
+      }
+      const t1Fill = thinking.querySelector('.cal-bar-fill:not(.t2)');
+      if (t1Fill && d.calibration && d.calibration.hit_rate_t1 != null) {
+        t1Fill.style.width = (d.calibration.hit_rate_t1 * 100) + '%';
+      }
+      setTimeout(() => {
+        const t2Fill = thinking.querySelector('.cal-bar-fill.t2');
+        if (t2Fill && d.calibration && d.calibration.hit_rate_t2 != null) {
+          t2Fill.style.width = (d.calibration.hit_rate_t2 * 100) + '%';
+        }
+      }, 200);
+    });
     if (tipCardHtml) bindTipFeedback(thinking);
     if (d.kb_enriched && d.live_fetched?.length) {
       const badge = document.createElement('div');
