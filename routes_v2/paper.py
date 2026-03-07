@@ -172,6 +172,14 @@ async def paper_agent_status(user_id: str, _: str = Depends(user_path_auth)):
     return {"running": svc.scanner_running(user_id)}
 
 
+@router.delete("/users/{user_id}/paper/reset", status_code=200)
+async def paper_reset(user_id: str, _: str = Depends(user_path_auth)):
+    try:
+        return svc.reset_paper_trader(user_id)
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
 @router.get("/users/{user_id}/paper/agent/log/export")
 async def paper_agent_log_export(user_id: str, _: str = Depends(user_path_auth)):
     _tier_gate(user_id)

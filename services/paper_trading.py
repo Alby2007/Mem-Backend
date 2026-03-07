@@ -539,6 +539,21 @@ def get_agent_log(user_id: str, limit: int = 100) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def reset_paper_trader(user_id: str) -> dict:
+    """Factory reset: stop scanner, delete all positions/logs/equity, delete account row."""
+    stop_scanner(user_id)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    try:
+        conn.execute("DELETE FROM paper_positions WHERE user_id=?", (user_id,))
+        conn.execute("DELETE FROM paper_agent_log WHERE user_id=?", (user_id,))
+        conn.execute("DELETE FROM paper_equity_log WHERE user_id=?", (user_id,))
+        conn.execute("DELETE FROM paper_account WHERE user_id=?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"status": "reset", "user_id": user_id}
+
+
 def export_log_csv(user_id: str) -> bytes:
     """Export full audit log + positions as CSV bytes."""
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)

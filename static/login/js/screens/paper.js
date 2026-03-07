@@ -381,6 +381,36 @@ document.getElementById('pt-download-btn').addEventListener('click', function() 
   document.body.removeChild(a);
 });
 
+document.getElementById('pt-reset-btn').addEventListener('click', function() {
+  const modal = document.getElementById('pt-reset-modal');
+  modal.style.display = 'flex';
+});
+
+document.getElementById('pt-reset-cancel').addEventListener('click', function() {
+  document.getElementById('pt-reset-modal').style.display = 'none';
+});
+
+document.getElementById('pt-reset-modal').addEventListener('click', function(e) {
+  if (e.target === this) this.style.display = 'none';
+});
+
+document.getElementById('pt-reset-confirm').addEventListener('click', async function() {
+  if (!state.userId) return;
+  this.disabled = true;
+  this.textContent = 'Resetting…';
+  try {
+    await apiFetch(`/users/${state.userId}/paper/reset`, { method: 'DELETE' });
+    document.getElementById('pt-reset-modal').style.display = 'none';
+    showToast('Paper trader reset — starting fresh', 'ok');
+    await loadPaperTrader();
+  } catch(e) {
+    showToast(e.message || 'Reset failed', 'error');
+  } finally {
+    this.disabled = false;
+    this.textContent = 'Delete Everything';
+  }
+});
+
 function ptSwitchLogTab(btn, tab) {
   document.querySelectorAll('.pt-log-tab').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
