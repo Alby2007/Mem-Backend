@@ -785,9 +785,12 @@ def _set_agent_running_db(user_id: str, running: bool) -> None:
         _logger.warning('Failed to persist agent_running for %s: %s', user_id, _e)
 
 
-def continuous_scan(user_id: str, stop_event: threading.Event, interval_sec: int = 120):
+def continuous_scan(user_id: str, stop_event: threading.Event, interval_sec: int = 1800, startup_delay: int = 0):
     """Loop: scan every interval_sec until stop_event is set."""
-    _logger.info('Continuous scanner started for %s', user_id)
+    _logger.info('Continuous scanner started for %s (startup_delay=%ds)', user_id, startup_delay)
+    if startup_delay and stop_event.wait(startup_delay):
+        _logger.info('Continuous scanner cancelled during startup delay for %s', user_id)
+        return
     while not stop_event.is_set():
         try:
             ai_run(user_id)
@@ -797,14 +800,14 @@ def continuous_scan(user_id: str, stop_event: threading.Event, interval_sec: int
     _logger.info('Continuous scanner stopped for %s', user_id)
 
 
-def start_scanner(user_id: str) -> tuple[str, str]:
+def start_scanner(user_id: str, startup_delay: int = 0) -> tuple[str, str]:
     """Start continuous scanner for user. Returns (status, message)."""
     with _scanner_lock:
         if user_id in _scanner_threads and not _scanner_threads[user_id].is_set():
             return 'already_running', 'Scanner already running'
         stop_ev = threading.Event()
         _scanner_threads[user_id] = stop_ev
-    t = threading.Thread(target=continuous_scan, args=(user_id, stop_ev, 1800), daemon=True)
+    t = threading.Thread(target=continuous_scan, args=(user_id, stop_ev, 1800, startup_delay), daemon=True)
     t.start()
     _set_agent_running_db(user_id, True)
     return 'started', 'Continuous scanner started — scans every 30 min'
@@ -852,7 +855,7 @@ def restore_scanners() -> None:
         ).fetchall()
         conn.close()
         for (uid,) in rows:
-            status, _ = start_scanner(uid)
+            status, _ = start_scanner(uid, startup_delay=60)
             _logger.info('restore_scanners: %s → %s', uid, status)
     except Exception as _e:
         _logger.error('restore_scanners failed: %s', _e)
