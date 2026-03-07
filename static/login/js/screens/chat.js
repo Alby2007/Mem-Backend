@@ -1,6 +1,35 @@
 // ── CHAT ─────────────────────────────────────────────────────────────────── v2
 let sessionId = `s_${Date.now()}`;
 
+function computeMarketStress(ga) {
+  if (!ga || typeof ga !== 'object') return null;
+  let score = 0;
+  const vol = (ga.volatility_regime || '').toLowerCase();
+  const v = vol.includes('extreme') ? 0.40 : vol.includes('high') ? 0.25 : vol.includes('low') ? 0.0 : vol ? 0.10 : 0.15;
+  score += v;
+  const regime = (ga.price_regime || '').toLowerCase();
+  const r = /overbought|near_52w_high|extended/.test(regime) ? 0.20
+    : /near_52w_low|breakdown|downtrend/.test(regime) ? 0.15
+    : regime.includes('mid_range') ? 0.05 : regime ? 0.08 : 0.10;
+  score += r;
+  let pcr = 0.5;
+  try { pcr = parseFloat(ga.put_call_oi_ratio) || 0.5; } catch(e) {}
+  const smart = (ga.smart_money_signal || '').toLowerCase();
+  const p = (smart.includes('put_sweep') || pcr > 0.80) ? 0.25
+    : (smart.includes('call_sweep') && pcr < 0.40) ? 0.0
+    : pcr > 0.65 ? 0.15 : 0.08;
+  score += p;
+  const composite = Math.min(score, 1.0);
+  return {
+    composite: Math.round(composite * 1000) / 1000,
+    label: composite < 0.30 ? 'LOW' : composite < 0.60 ? 'MED' : 'HIGH',
+    vol_regime: ga.volatility_regime || '',
+    price_regime: ga.price_regime || '',
+    smart_money: ga.smart_money_signal || '',
+    put_call_ratio: pcr,
+  };
+}
+
 function extractKbGrounding(rawAnswer) {
   const m = rawAnswer.match(/\[KB_GROUNDING\]([\s\S]*?)\[\/KB_GROUNDING\]/);
   if (!m) return { prose: rawAnswer, grounding: null };
@@ -373,7 +402,8 @@ async function sendChat() {
     const tipCardHtml = d.tip_card ? renderTipCard(d.tip_card, d.tip_card.tip_id) : '';
     const kbPanelHtml = renderKbPanel(grounding, d.grounding_atoms || null);
     const calHtml = renderCalibrationBadge(d.calibration || null);
-    const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null, d.market_stress || null);
+    const mktStress = d.market_stress || computeMarketStress(d.grounding_atoms || null);
+    const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null, mktStress);
     const bubble = thinking.querySelector('.msg-bubble');
     bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + calHtml + epistemicHtml;
     // Animate both stress bars (generic data-width) + calibration bars
