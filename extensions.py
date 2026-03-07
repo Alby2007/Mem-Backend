@@ -435,7 +435,6 @@ thesis_monitor = None
 conv_store = None
 seed_sync = None
 
-# Per-session state (will be replaced by SessionManager in Phase 2)
-session_streaks: dict = {}
-session_tickers: dict = {}
-session_portfolio_tickers: dict = {}
+# Per-session state — thread-safe SessionManager (Phase 2)
+from services.session import SessionManager
+sessions = SessionManager()

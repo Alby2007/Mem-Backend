@@ -102,7 +102,7 @@ def retrieve_endpoint():
             ensure_adaptation_tables(conn)
             engine = ext.get_adaptation_engine(session_id, db_path=ext.DB_PATH)
             engine._session_id = session_id
-            sess = ext.session_streaks.setdefault(session_id, {'streak': 0, 'last_stress': 0.0})
+            sess = ext.sessions.get_streak(session_id)
 
             class _StateStub:
                 pass
@@ -152,12 +152,13 @@ def retrieve_endpoint():
     if ext.HAS_ADAPTATION and stress_report:
         try:
             from knowledge.epistemic_adaptation import _STRESS_STREAK_THRESHOLD
-            sess = ext.session_streaks.setdefault(session_id, {'streak': 0, 'last_stress': 0.0})
+            sess = ext.sessions.get_streak(session_id)
             if stress_report.composite_stress >= _STRESS_STREAK_THRESHOLD:
                 sess['streak'] = sess.get('streak', 0) + 1
             else:
                 sess['streak'] = max(0, sess.get('streak', 0) - 1)
             sess['last_stress'] = stress_report.composite_stress
+            ext.sessions.set_streak(session_id, sess)
         except Exception:
             pass
 
@@ -270,10 +271,8 @@ def stats():
     except Exception:
         extras['domain_refresh_queue_depth'] = 0
 
-    extras['adaptation_sessions_active'] = sum(
-        1 for s in ext.session_streaks.values() if s.get('streak', 0) > 0
-    )
-    extras['adaptation_sessions_total'] = len(ext.session_streaks)
+    extras['adaptation_sessions_active'] = ext.sessions.active_streak_count()
+    extras['adaptation_sessions_total'] = ext.sessions.total_streak_count()
 
     try:
         from datetime import timedelta as _td
@@ -504,16 +503,13 @@ def adapt_status():
     """Return epistemic adaptation state for all active sessions."""
     session_id = request.args.get('session_id')
     if session_id:
-        sess = ext.session_streaks.get(session_id, {'streak': 0, 'last_stress': 0.0})
+        sess = ext.sessions.get_streak(session_id)
         return jsonify({
             'session_id': session_id,
             'streak': sess['streak'],
             'last_stress': sess['last_stress'],
         })
-    return jsonify({
-        sid: {'streak': s['streak'], 'last_stress': s['last_stress']}
-        for sid, s in ext.session_streaks.items()
-    })
+    return jsonify(ext.sessions.all_streaks())
 
 
 @bp.route('/adapt/reset', methods=['POST'])
@@ -521,10 +517,9 @@ def adapt_reset():
     """Reset the epistemic stress streak for a session."""
     data = request.get_json(force=True, silent=True) or {}
     session_id = data.get('session_id', 'default')
-    if session_id in ext.session_streaks:
-        ext.session_streaks[session_id] = {'streak': 0, 'last_stress': 0.0}
-    ext.session_tickers.pop(session_id, None)
-    ext.session_portfolio_tickers.pop(session_id, None)
+    ext.sessions.reset_streak(session_id)
+    ext.sessions.pop_tickers(session_id)
+    ext.sessions.pop_portfolio_tickers(session_id)
     return jsonify({'session_id': session_id, 'reset': True})
 
 

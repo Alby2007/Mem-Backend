@@ -136,7 +136,7 @@ def chat_endpoint():
             ensure_adaptation_tables(conn)
             engine = ext.get_adaptation_engine(session_id, db_path=ext.DB_PATH)
             engine._session_id = session_id
-            sess = ext.session_streaks.setdefault(session_id, {'streak': 0, 'last_stress': 0.0})
+            sess = ext.sessions.get_streak(session_id)
 
             class _StateStub:
                 pass
@@ -162,21 +162,21 @@ def chat_endpoint():
     except Exception:
         _cur_tickers = []
 
-    if not ext.session_portfolio_tickers.get(session_id) and chat_user_id and ext.HAS_PRODUCT_LAYER:
+    if not ext.sessions.get_portfolio_tickers(session_id) and chat_user_id and ext.HAS_PRODUCT_LAYER:
         try:
             _ph = ext.get_portfolio(ext.DB_PATH, chat_user_id)
             _pticks = [h['ticker'] for h in (_ph or []) if h.get('ticker')]
             if _pticks:
-                ext.session_portfolio_tickers[session_id] = _pticks
+                ext.sessions.set_portfolio_tickers(session_id, _pticks)
         except Exception:
             pass
 
     _retrieve_message = message
     _aug_tickers: list = []
-    if not _cur_tickers and session_id in ext.session_tickers:
-        _aug_tickers = list(ext.session_tickers[session_id])
+    if not _cur_tickers and ext.sessions.has_tickers(session_id):
+        _aug_tickers = list(ext.sessions.get_tickers(session_id) or [])
     if _wants_portfolio:
-        _port_ticks = ext.session_portfolio_tickers.get(session_id, [])
+        _port_ticks = ext.sessions.get_portfolio_tickers(session_id) or []
         for _pt in _port_ticks:
             if _pt not in _aug_tickers and _pt not in _cur_tickers:
                 _aug_tickers.append(_pt)
@@ -187,11 +187,11 @@ def chat_endpoint():
     snippet, atoms = ext.retrieve(_retrieve_message, conn, limit=limit, nudges=nudges)
 
     if _cur_tickers:
-        ext.session_tickers[session_id] = _cur_tickers
-    elif session_id not in ext.session_tickers and atoms:
+        ext.sessions.set_tickers(session_id, _cur_tickers)
+    elif not ext.sessions.has_tickers(session_id) and atoms:
         _seen = list({a['subject'].upper() for a in atoms if 'subject' in a})[:4]
         if _seen:
-            ext.session_tickers[session_id] = _seen
+            ext.sessions.set_tickers(session_id, _seen)
 
     # ── Working memory: on-demand fetch ───────────────────────────────────
     live_context = ''
@@ -231,7 +231,7 @@ def chat_endpoint():
                     except Exception:
                         pass
                 if not tickers_in_query:
-                    tickers_in_query = list(ext.session_tickers.get(session_id, []))
+                    tickers_in_query = list(ext.sessions.get_tickers(session_id) or [])
                 if not tickers_in_query and atoms:
                     tickers_in_query = list({a['subject'].upper() for a in atoms if 'subject' in a})
             from knowledge.working_memory import kb_has_atoms
@@ -301,12 +301,13 @@ def chat_endpoint():
     if ext.HAS_ADAPTATION and stress_report:
         try:
             from knowledge.epistemic_adaptation import _STRESS_STREAK_THRESHOLD
-            sess = ext.session_streaks.setdefault(session_id, {'streak': 0, 'last_stress': 0.0})
+            sess = ext.sessions.get_streak(session_id)
             if stress_report.composite_stress >= _STRESS_STREAK_THRESHOLD:
                 sess['streak'] = sess.get('streak', 0) + 1
             else:
                 sess['streak'] = max(0, sess.get('streak', 0) - 1)
             sess['last_stress'] = stress_report.composite_stress
+            ext.sessions.set_streak(session_id, sess)
         except Exception:
             pass
 
@@ -730,7 +731,7 @@ def chat_endpoint():
         try:
             _stress_val = stress_dict.get('composite_stress') if stress_dict else None
             _asst_meta = {
-                'tickers': ext.session_tickers.get(session_id, []),
+                'tickers': ext.sessions.get_tickers(session_id) or [],
                 'stress':  _stress_val,
                 'atoms':   len(atoms),
             }
@@ -858,8 +859,9 @@ def chat_clear():
     user_id = data.get('user_id') or getattr(g, 'user_id', None)
     purge   = bool(data.get('purge', False))
     conv_sid = _sid_for_user(user_id)
-    ext.session_tickers.pop(data.get('session_id', 'default'), None)
-    ext.session_portfolio_tickers.pop(data.get('session_id', 'default'), None)
+    _clear_sid = data.get('session_id', 'default')
+    ext.sessions.pop_tickers(_clear_sid)
+    ext.sessions.pop_portfolio_tickers(_clear_sid)
     deleted = 0
     if purge and ext.conv_store is not None:
         try:
