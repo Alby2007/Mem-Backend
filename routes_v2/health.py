@@ -51,31 +51,6 @@ async def seed_status():
     }
 
 
-@router.get("/health/env-debug")
-async def health_env_debug():
-    import os
-    key = os.environ.get("GROQ_API_KEY", "")
-
-    groq_test = None
-    groq_error = None
-    try:
-        from llm.groq_client import chat as groq_chat, is_available as groq_available
-        groq_test = {"is_available": groq_available()}
-        if groq_available():
-            result = groq_chat([{"role": "user", "content": "reply pong"}], timeout=10)
-            groq_test["response"] = result[:80] if result else None
-    except Exception as e:
-        groq_error = str(e)
-
-    return {
-        "GROQ_API_KEY_set": bool(key),
-        "GROQ_API_KEY_prefix": key[:12] + "..." if key else "",
-        "TRADING_KB_DB": os.environ.get("TRADING_KB_DB", ""),
-        "INGEST_BATCH_SIZE": os.environ.get("INGEST_BATCH_SIZE", ""),
-        "groq_test": groq_test,
-        "groq_error": groq_error,
-    }
-
 
 @router.get("/health/detailed")
 async def health_detailed():
