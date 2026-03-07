@@ -14,22 +14,40 @@ function extractKbGrounding(rawAnswer) {
   return { prose, grounding: rows.length ? rows : null };
 }
 
-function renderKbPanel(grounding) {
-  if (!grounding || !grounding.length) return '';
+function renderKbPanel(grounding, groundingAtoms) {
   const _LABELS = {
     signal_direction:    'Signal direction',
     conviction_tier:     'Conviction tier',
+    price_regime:        'Regime',
     regime:              'Regime',
     volatility_regime:   'Vol regime',
     sector:              'Sector',
     implied_volatility:  'Implied vol',
     put_call_oi_ratio:   'Put/call OI ratio',
+    smart_money_signal:  'Smart money',
     atoms_used:          'Atoms used',
     stress:              'Epistemic stress',
   };
-  const rows = grounding.map(r => {
-    const label = _LABELS[r.key] || r.key.replace(/_/g, ' ');
-    return `<div class="kb-panel-row"><span class="kb-panel-key">${escHtml(label)}</span><span class="kb-panel-val">${escHtml(r.val)}</span></div>`;
+  // Merge: start with LLM-parsed rows, then overwrite/add from authoritative DB atoms
+  const merged = {};
+  if (grounding) {
+    grounding.forEach(r => { if (r.val) merged[r.key] = r.val; });
+  }
+  if (groundingAtoms && typeof groundingAtoms === 'object') {
+    Object.entries(groundingAtoms).forEach(([k, v]) => { if (v) merged[k] = v; });
+  }
+  if (!Object.keys(merged).length) return '';
+  // Preferred display order
+  const _ORDER = ['signal_direction','conviction_tier','price_regime','regime',
+    'volatility_regime','sector','implied_volatility','put_call_oi_ratio',
+    'smart_money_signal','atoms_used','stress'];
+  const orderedKeys = [
+    ..._ORDER.filter(k => k in merged),
+    ...Object.keys(merged).filter(k => !_ORDER.includes(k)),
+  ];
+  const rows = orderedKeys.map(k => {
+    const label = _LABELS[k] || k.replace(/_/g, ' ');
+    return `<div class="kb-panel-row"><span class="kb-panel-key">${escHtml(label)}</span><span class="kb-panel-val">${escHtml(String(merged[k]))}</span></div>`;
   }).join('');
   return `<div class="kb-panel">
     <div class="kb-panel-header" onclick="this.parentElement.classList.toggle('kb-panel-open')">
@@ -258,7 +276,7 @@ async function sendChat() {
     const answer = mdToHtml(prose);
     const overlayHtml = overlayMode ? renderOverlay(d.overlay) : '';
     const tipCardHtml = d.tip_card ? renderTipCard(d.tip_card, d.tip_card.tip_id) : '';
-    const kbPanelHtml = renderKbPanel(grounding);
+    const kbPanelHtml = renderKbPanel(grounding, d.grounding_atoms || null);
     const calHtml = renderCalibrationBadge(d.calibration || null);
     const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null);
     const bubble = thinking.querySelector('.msg-bubble');

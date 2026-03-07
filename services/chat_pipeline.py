@@ -1036,11 +1036,14 @@ def run(
     if web_searched:
         response['web_searched'] = web_searched
 
-    # ── Calibration lookup — best-evidenced row for primary ticker ────────────
+    # ── Calibration + grounding atoms lookup for primary ticker ──────────────
     if cur_tickers:
         try:
             import sqlite3 as _sq_cal
             _cc = _sq_cal.connect(ext.DB_PATH, timeout=5)
+            _tk = cur_tickers[0].lower()
+
+            # Calibration row
             _cal_row = _cc.execute(
                 """SELECT pattern_type, timeframe, sample_size,
                           hit_rate_t1, hit_rate_t2, calibration_confidence, confidence_label
@@ -1048,9 +1051,8 @@ def run(
                    WHERE ticker = ?
                    ORDER BY calibration_confidence DESC, sample_size DESC
                    LIMIT 1""",
-                (cur_tickers[0].lower(),),
+                (_tk,),
             ).fetchone()
-            _cc.close()
             if _cal_row and _cal_row[2] >= 10:
                 response['calibration'] = {
                     'pattern_type':           _cal_row[0],
@@ -1061,9 +1063,30 @@ def run(
                     'calibration_confidence': _cal_row[5],
                     'confidence_label':       _cal_row[6],
                 }
+
+            # Grounding atoms — fetch best-confidence value for each key predicate
+            _GROUNDING_PREDS = [
+                'signal_direction', 'conviction_tier', 'price_regime',
+                'volatility_regime', 'sector', 'implied_volatility',
+                'put_call_oi_ratio', 'smart_money_signal',
+            ]
+            _ga: dict = {}
+            for _pred in _GROUNDING_PREDS:
+                _row = _cc.execute(
+                    """SELECT object FROM facts
+                       WHERE subject=? AND predicate=? AND (object IS NOT NULL AND object != '')
+                       ORDER BY confidence DESC LIMIT 1""",
+                    (_tk, _pred),
+                ).fetchone()
+                if _row:
+                    _ga[_pred] = _row[0]
+            if _ga:
+                response['grounding_atoms'] = _ga
+
+            _cc.close()
         except Exception as _cal_exc:
             import logging as _cal_log
-            _cal_log.getLogger(__name__).debug('calibration lookup failed: %s', _cal_exc)
+            _cal_log.getLogger(__name__).debug('calibration/grounding lookup failed: %s', _cal_exc)
 
     # ── Persist assistant turn + KB graduation ────────────────────────────
     _persist_assistant_and_graduate(
