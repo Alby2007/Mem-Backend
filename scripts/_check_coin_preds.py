@@ -1,3 +1,4 @@
+import sys; sys.path.insert(0, '/home/ubuntu/trading-galaxy')
 import extensions as ext, sqlite3
 c = sqlite3.connect(ext.DB_PATH)
 rows = c.execute(

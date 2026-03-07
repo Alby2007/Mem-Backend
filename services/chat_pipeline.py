@@ -1184,8 +1184,14 @@ def run(
                 'signal_direction', 'conviction_tier', 'price_regime',
                 'volatility_regime', 'sector', 'implied_volatility',
                 'put_call_oi_ratio', 'smart_money_signal',
-                'last_price', 'price_target', 'upside_pct', 'invalidation_price',
             ]
+            # Price predicates: multiple alias variants, first hit wins
+            _PRICE_ALIASES: dict = {
+                'last_price':        ['last_price', 'last_price_usd', 'last-price', 'lastprice', 'current_price', 'price_last', 'price_last_usd', 'last price', 'last price (usd)', 'last price:'],
+                'price_target':      ['price_target', 'has_price_target', 'target_price', 'price-target', 'lastpricetarget', 'price target'],
+                'upside_pct':        ['upside_pct', 'upside_percentage', 'signal_upside_percentage', 'signal_percentage_upside', 'upside percent', 'upside pct', 'potential_upside', 'upside'],
+                'invalidation_price': ['invalidation_price', 'invalidation price', 'conviction_sizing_invalidation', 'conviction-sizing-invalidation price'],
+            }
             _ga: dict = {}
             for _pred in _GROUNDING_PREDS:
                 _row = _cc_ga.execute(
@@ -1196,6 +1202,17 @@ def run(
                 ).fetchone()
                 if _row:
                     _ga[_pred] = _row[0]
+            for _out_key, _aliases in _PRICE_ALIASES.items():
+                for _alias in _aliases:
+                    _row = _cc_ga.execute(
+                        """SELECT object FROM facts
+                           WHERE subject=? AND predicate=? AND (object IS NOT NULL AND object != '')
+                           ORDER BY confidence DESC LIMIT 1""",
+                        (_tk, _alias),
+                    ).fetchone()
+                    if _row:
+                        _ga[_out_key] = _row[0]
+                        break
             _cc_ga.close()
             if _ga:
                 response['grounding_atoms'] = _ga
