@@ -1103,7 +1103,7 @@ def run(
                 response['grounding_atoms'] = _ga
         except Exception as _ga_exc:
             import logging as _ga_log
-            _ga_log.getLogger(__name__).warning('grounding atoms lookup failed: %s', _ga_exc)
+            _ga_log.getLogger(__name__).error('grounding atoms lookup failed: %s', _ga_exc)
 
     # ── Persist assistant turn + KB graduation ────────────────────────────
     _persist_assistant_and_graduate(
