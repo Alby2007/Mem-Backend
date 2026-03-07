@@ -19,7 +19,6 @@ function renderKbPanel(grounding, groundingAtoms) {
     signal_direction:    'Signal direction',
     conviction_tier:     'Conviction tier',
     price_regime:        'Regime',
-    regime:              'Regime',
     volatility_regime:   'Vol regime',
     sector:              'Sector',
     implied_volatility:  'Implied vol',
@@ -28,17 +27,21 @@ function renderKbPanel(grounding, groundingAtoms) {
     atoms_used:          'Atoms used',
     stress:              'Epistemic stress',
   };
-  // Merge: start with LLM-parsed rows, then overwrite/add from authoritative DB atoms
+  // Merge: start with LLM-parsed rows (normalise 'regime' -> 'price_regime'),
+  // then overwrite/add from authoritative DB atoms (DB wins on conflicts)
   const merged = {};
   if (grounding) {
-    grounding.forEach(r => { if (r.val) merged[r.key] = r.val; });
+    grounding.forEach(r => {
+      const key = r.key === 'regime' ? 'price_regime' : r.key;
+      if (r.val) merged[key] = r.val;
+    });
   }
   if (groundingAtoms && typeof groundingAtoms === 'object') {
     Object.entries(groundingAtoms).forEach(([k, v]) => { if (v) merged[k] = v; });
   }
   if (!Object.keys(merged).length) return '';
   // Preferred display order
-  const _ORDER = ['signal_direction','conviction_tier','price_regime','regime',
+  const _ORDER = ['signal_direction','conviction_tier','price_regime',
     'volatility_regime','sector','implied_volatility','put_call_oi_ratio',
     'smart_money_signal','atoms_used','stress'];
   const orderedKeys = [
