@@ -402,7 +402,11 @@ async function sendChat() {
     const tipCardHtml = d.tip_card ? renderTipCard(d.tip_card, d.tip_card.tip_id) : '';
     const kbPanelHtml = renderKbPanel(grounding, d.grounding_atoms || null);
     const calHtml = renderCalibrationBadge(d.calibration || null);
-    const mktStress = d.market_stress || computeMarketStress(d.grounding_atoms || null);
+    // Build merged atoms from LLM grounding block + DB atoms for market stress fallback
+    const _mergedAtoms = {};
+    if (grounding) grounding.forEach(r => { const k = r.key === 'regime' ? 'price_regime' : r.key; if (r.val) _mergedAtoms[k] = r.val; });
+    if (d.grounding_atoms) Object.assign(_mergedAtoms, d.grounding_atoms);
+    const mktStress = d.market_stress || computeMarketStress(Object.keys(_mergedAtoms).length ? _mergedAtoms : null);
     const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null, mktStress);
     const bubble = thinking.querySelector('.msg-bubble');
     bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + calHtml + epistemicHtml;
