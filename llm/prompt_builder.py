@@ -506,6 +506,31 @@ _SYSTEM_SIZING_RULE = (
 )
 
 
+_SYSTEM_KB_GROUNDING_RULE = (
+    "\n29. KB GROUNDING BLOCK — REQUIRED FOR TICKER SIGNAL QUERIES: "
+    "When you are answering a question about a specific ticker's signal, direction, "
+    "conviction, regime, or setup — and the KB context contains relevant signal atoms — "
+    "you MUST append a structured grounding block at the very end of your response. "
+    "The block MUST look exactly like this (use only values present in the KB atoms, "
+    "omit any line where the atom is absent — do NOT write 'N/A' or '?'):\n"
+    "[KB_GROUNDING]\n"
+    "signal_direction: <value from KB>\n"
+    "conviction_tier: <value from KB>\n"
+    "regime: <price_regime or market_regime value from KB>\n"
+    "sector: <sector atom value if present>\n"
+    "iv_rank: <iv_true value if present>\n"
+    "put_call_ratio: <put_call_oi_ratio value if present>\n"
+    "atoms_used: {atom_count}\n"
+    "stress: {stress_score} {stress_label}\n"
+    "[/KB_GROUNDING]\n"
+    "RULES: The block must start on its own line. "
+    "Only include lines for atoms that are explicitly present in the KB context. "
+    "Do not fabricate values. The atom_count and stress values are provided above — "
+    "copy them exactly into the atoms_used and stress lines. "
+    "This block is for the frontend renderer — do not explain it or describe it in your prose."
+)
+
+
 def build(
     user_message: str,
     snippet: str,
@@ -690,6 +715,30 @@ def build(
         # briefing rule. Gated on not portfolio_context (mutex with rule 21) and
         # not telegram_mode (Telegram format override handles length/depth instead).
         system_text += _SYSTEM_GEO_NEWS_RULE
+
+    # ── KB grounding block rule — single-ticker signal queries only ────────────
+    # Gates: sufficient atoms, not a geo topic, not telegram, not beginner level,
+    # not a portfolio-wide query (those produce prose paragraphs, not signal cards).
+    _grounding_eligible = (
+        atom_count >= 5
+        and not _is_geo_topic
+        and not telegram_mode
+        and _effective_level not in ('beginner',)
+        and not portfolio_context
+        and briefing_mode is None
+        and not opportunity_scan_context
+    )
+    if _grounding_eligible:
+        _stress_val = (stress or {}).get('composite_stress', 0.0)
+        _stress_label = 'LOW' if _stress_val < 0.30 else ('MEDIUM' if _stress_val < 0.60 else 'HIGH')
+        _grounding_rule = _SYSTEM_KB_GROUNDING_RULE.replace(
+            '{atom_count}', str(atom_count)
+        ).replace(
+            '{stress_score}', f'{_stress_val:.2f}'
+        ).replace(
+            '{stress_label}', _stress_label
+        )
+        system_text += _grounding_rule
 
     # ── User turn ─────────────────────────────────────────────────────────────
     user_parts: list[str] = []

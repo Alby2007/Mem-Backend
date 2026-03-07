@@ -1,6 +1,79 @@
 // ── CHAT ──────────────────────────────────────────────────────────────────────
 let sessionId = `s_${Date.now()}`;
 
+function extractKbGrounding(rawAnswer) {
+  const m = rawAnswer.match(/\[KB_GROUNDING\]([\s\S]*?)\[\/KB_GROUNDING\]/);
+  if (!m) return { prose: rawAnswer, grounding: null };
+  const prose = rawAnswer.replace(m[0], '').trim();
+  const rows = m[1].trim().split('\n')
+    .map(l => l.trim()).filter(Boolean)
+    .map(l => {
+      const colon = l.indexOf(':');
+      return colon > -1 ? { key: l.slice(0, colon).trim(), val: l.slice(colon + 1).trim() } : null;
+    }).filter(Boolean);
+  return { prose, grounding: rows.length ? rows : null };
+}
+
+function renderKbPanel(grounding) {
+  if (!grounding || !grounding.length) return '';
+  const _LABELS = {
+    signal_direction: 'Signal direction',
+    conviction_tier:  'Conviction tier',
+    regime:           'Regime',
+    sector:           'Sector',
+    iv_rank:          'IV rank',
+    put_call_ratio:   'Put/call ratio',
+    atoms_used:       'Atoms used',
+    stress:           'Epistemic stress',
+  };
+  const rows = grounding.map(r => {
+    const label = _LABELS[r.key] || r.key.replace(/_/g, ' ');
+    return `<div class="kb-panel-row"><span class="kb-panel-key">${escHtml(label)}</span><span class="kb-panel-val">${escHtml(r.val)}</span></div>`;
+  }).join('');
+  return `<div class="kb-panel">
+    <div class="kb-panel-header" onclick="this.parentElement.classList.toggle('kb-panel-open')">
+      <span class="kb-panel-title">KB GROUNDING</span>
+      <span class="kb-panel-toggle">▸</span>
+    </div>
+    <div class="kb-panel-body">${rows}</div>
+  </div>`;
+}
+
+function renderCalibrationBadge(cal) {
+  if (!cal) return '';
+  const patLabel = (cal.pattern_type || '').replace(/_/g, ' ').toUpperCase();
+  const tf = (cal.timeframe || '').toUpperCase();
+  const t1 = cal.hit_rate_t1 != null ? `${Math.round(cal.hit_rate_t1 * 100)}%` : '—';
+  const t2 = cal.hit_rate_t2 != null ? `${Math.round(cal.hit_rate_t2 * 100)}%` : '—';
+  const n  = cal.n_total != null ? cal.n_total.toLocaleString() : '—';
+  const conf = cal.confidence_label || '';
+  return `<div class="kb-panel kb-calibration-panel">
+    <div class="kb-panel-header" onclick="this.parentElement.classList.toggle('kb-panel-open')">
+      <span class="kb-panel-title">CALIBRATION</span>
+      <span class="kb-panel-toggle">▸</span>
+    </div>
+    <div class="kb-panel-body">
+      <div class="kb-panel-row"><span class="kb-panel-key">Pattern</span><span class="kb-panel-val">${escHtml(patLabel)}${tf ? ' · ' + escHtml(tf) : ''}</span></div>
+      <div class="kb-panel-row"><span class="kb-panel-key">Hit rate T1 / T2</span><span class="kb-panel-val">${escHtml(t1)} / ${escHtml(t2)} across ${escHtml(n)} setups</span></div>
+      <div class="kb-panel-row"><span class="kb-panel-key">Confidence</span><span class="kb-panel-val">${escHtml(conf)}</span></div>
+    </div>
+  </div>`;
+}
+
+function renderEpistemicFooter(atomsUsed, stress) {
+  if (atomsUsed == null && !stress) return '';
+  const parts = [];
+  if (atomsUsed != null) parts.push(`${atomsUsed} atoms`);
+  if (stress && stress.composite_stress != null) {
+    const s = stress.composite_stress;
+    const label = s < 0.30 ? 'LOW' : (s < 0.60 ? 'MED' : 'HIGH');
+    parts.push(`stress ${s.toFixed(2)} ${label}`);
+  }
+  return parts.length
+    ? `<div class="epistemic-footer">⬡ ${parts.join(' · ')}</div>`
+    : '';
+}
+
 function appendMsg(role, html) {
   const msgs = document.getElementById('chat-messages');
   const el = document.createElement('div');
@@ -179,10 +252,16 @@ async function sendChat() {
       body: JSON.stringify({ message: msgForBackend, session_id: sessionId, overlay_mode: overlayMode, user_id: state.userId || null })
     });
     if (!d) { thinking.querySelector('.msg-bubble').innerHTML = '<span style="color:var(--accent)">⬆ Upgrade required — visit Subscription to unlock this feature.</span>'; return; }
-    const answer = mdToHtml(d.response || d.answer || JSON.stringify(d));
+    const rawAnswer = d.response || d.answer || JSON.stringify(d);
+    const { prose, grounding } = extractKbGrounding(rawAnswer);
+    const answer = mdToHtml(prose);
     const overlayHtml = overlayMode ? renderOverlay(d.overlay) : '';
     const tipCardHtml = d.tip_card ? renderTipCard(d.tip_card, d.tip_card.tip_id) : '';
-    thinking.querySelector('.msg-bubble').innerHTML = answer + overlayHtml + tipCardHtml;
+    const kbPanelHtml = renderKbPanel(grounding);
+    const calHtml = renderCalibrationBadge(d.calibration || null);
+    const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null);
+    thinking.querySelector('.msg-bubble').innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + calHtml;
+    if (epistemicHtml) thinking.insertAdjacentHTML('beforeend', epistemicHtml);
     if (tipCardHtml) bindTipFeedback(thinking);
     if (d.kb_enriched && d.live_fetched?.length) {
       const badge = document.createElement('div');

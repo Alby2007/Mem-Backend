@@ -1036,6 +1036,34 @@ def run(
     if web_searched:
         response['web_searched'] = web_searched
 
+    # ── Calibration lookup — best-evidenced row for primary ticker ────────────
+    if cur_tickers:
+        try:
+            import sqlite3 as _sq_cal
+            _cc = _sq_cal.connect(ext.DB_PATH, timeout=5)
+            _cal_row = _cc.execute(
+                """SELECT pattern_type, timeframe, sample_size,
+                          hit_rate_t1, hit_rate_t2, calibration_confidence, confidence_label
+                   FROM signal_calibration
+                   WHERE ticker = ?
+                   ORDER BY calibration_confidence DESC, sample_size DESC
+                   LIMIT 1""",
+                (cur_tickers[0].lower(),),
+            ).fetchone()
+            _cc.close()
+            if _cal_row and _cal_row[2] >= 10:
+                response['calibration'] = {
+                    'pattern_type':           _cal_row[0],
+                    'timeframe':              _cal_row[1],
+                    'n_total':                _cal_row[2],
+                    'hit_rate_t1':            _cal_row[3],
+                    'hit_rate_t2':            _cal_row[4],
+                    'calibration_confidence': _cal_row[5],
+                    'confidence_label':       _cal_row[6],
+                }
+        except Exception:
+            pass
+
     # ── Persist assistant turn + KB graduation ────────────────────────────
     _persist_assistant_and_graduate(
         answer, message, session_id, conv_session_id, user_id,
