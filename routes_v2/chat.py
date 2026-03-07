@@ -39,10 +39,7 @@ async def chat_endpoint(
         message=data.message,
         session_id=data.session_id or "default",
         user_id=user_id,
-        tickers=data.tickers,
-        portfolio=data.portfolio,
-        mode=data.mode,
-        request_remote_addr=request.client.host if request.client else None,
+        overlay_mode=(data.mode == "overlay") if data.mode else False,
     )
     if status != 200:
         raise HTTPException(status_code=status, detail=response)
