@@ -237,9 +237,9 @@ class LLMExtractionAdapter(BaseIngestAdapter):
         try:
             from llm.groq_client import chat as groq_chat, is_available as groq_available
             if groq_available():
-                self._logger.warning('Calling Groq for LLM extraction')
+                self._logger.info('Calling Groq for LLM extraction')
                 result = groq_chat(messages)
-                self._logger.warning('Groq response: %s', repr(result)[:120] if result else 'None/empty')
+                self._logger.info('Groq response: %s', repr(result)[:120] if result else 'None/empty')
                 return result
         except Exception as e:
             self._logger.warning('Groq call failed: %s', e)
@@ -266,7 +266,7 @@ class LLMExtractionAdapter(BaseIngestAdapter):
 
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        self._logger.warning('LLM extraction: using db_path=%s', self._db_path)
+        self._logger.info('LLM extraction: using db_path=%s', self._db_path)
         try:
             conn = sqlite3.connect(self._db_path)
             _ensure_extraction_queue(conn)
@@ -296,7 +296,7 @@ class LLMExtractionAdapter(BaseIngestAdapter):
             conn.close()
             return []
 
-        self._logger.warning('LLM extraction: processing %d items from queue', len(rows))
+        self._logger.info('LLM extraction: processing %d items from queue', len(rows))
 
         all_atoms: List[RawAtom] = []
 
@@ -320,7 +320,7 @@ class LLMExtractionAdapter(BaseIngestAdapter):
             if response is None:
                 self._logger.warning('Row %d: no LLM response (both backends failed)', row_id)
             else:
-                self._logger.warning('Row %d: LLM response preview: %.120s', row_id, response)
+                self._logger.info('Row %d: LLM response preview: %.120s', row_id, response)
 
             atoms, success = _parse_llm_atoms(response or '', source_prefix, fallback_conf, now_iso)
 
