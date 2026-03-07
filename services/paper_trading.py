@@ -312,10 +312,16 @@ def close_position(user_id: str, pos_id: int, exit_price=None) -> tuple[dict, in
         conn.close()
         return {'error': 'position already closed'}, 400
     ep = float(exit_price) if exit_price is not None else pos['entry_price']
+    qty = float(pos['quantity'])
     pnl_r = compute_pnl_r(pos['direction'], pos['entry_price'], ep, pos['stop'])
     conn.execute(
         "UPDATE paper_positions SET status='closed', exit_price=?, pnl_r=?, closed_at=? WHERE id=?",
         (ep, pnl_r, now_iso, pos_id)
+    )
+    # Bug 1 fix: restore position value to balance on close
+    conn.execute(
+        'UPDATE paper_account SET virtual_balance = virtual_balance + ? WHERE user_id=?',
+        (ep * qty, user_id)
     )
     conn.commit()
     conn.close()
@@ -355,27 +361,67 @@ def monitor_positions(user_id: str) -> dict:
         direction = pos['direction']
         new_status = None
         exit_p = None
+        qty = float(pos['quantity'])
         if direction == 'bullish':
             if price <= stop:
                 new_status = 'stopped_out'; exit_p = price
             elif t2 is not None and price >= t2:
                 new_status = 't2_hit'; exit_p = price
             elif not pos['partial_closed'] and price >= t1:
-                conn.execute("UPDATE paper_positions SET partial_closed=1 WHERE id=?", (pos['id'],))
-                updates.append({'id': pos['id'], 'ticker': ticker, 'event': 't1_hit', 'price': price})
+                # Bug 3 fix: partial close — halve quantity, restore half value, log t1 pnl_r
+                half_qty = round(qty / 2, 6)
+                t1_pnl_r = compute_pnl_r(direction, entry, price, stop)
+                partial_value = round(price * half_qty, 2)
+                conn.execute(
+                    'UPDATE paper_positions SET partial_closed=1, quantity=? WHERE id=?',
+                    (half_qty, pos['id'])
+                )
+                conn.execute(
+                    'UPDATE paper_account SET virtual_balance = virtual_balance + ? WHERE user_id=?',
+                    (partial_value, user_id)
+                )
+                conn.execute(
+                    'INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)',
+                    (user_id, 't1_hit', ticker,
+                     f't1_hit at {price:.4f} | partial close {half_qty} units £{partial_value:,.2f} | pnl_r={t1_pnl_r} on closed half',
+                     now_iso)
+                )
+                updates.append({'id': pos['id'], 'ticker': ticker, 'event': 't1_hit', 'price': price, 'pnl_r': t1_pnl_r})
         else:
             if price >= stop:
                 new_status = 'stopped_out'; exit_p = price
             elif t2 is not None and price <= t2:
                 new_status = 't2_hit'; exit_p = price
             elif not pos['partial_closed'] and price <= t1:
-                conn.execute("UPDATE paper_positions SET partial_closed=1 WHERE id=?", (pos['id'],))
-                updates.append({'id': pos['id'], 'ticker': ticker, 'event': 't1_hit', 'price': price})
+                # Bug 3 fix: partial close — halve quantity, restore half value, log t1 pnl_r
+                half_qty = round(qty / 2, 6)
+                t1_pnl_r = compute_pnl_r(direction, entry, price, stop)
+                partial_value = round(price * half_qty, 2)
+                conn.execute(
+                    'UPDATE paper_positions SET partial_closed=1, quantity=? WHERE id=?',
+                    (half_qty, pos['id'])
+                )
+                conn.execute(
+                    'UPDATE paper_account SET virtual_balance = virtual_balance + ? WHERE user_id=?',
+                    (partial_value, user_id)
+                )
+                conn.execute(
+                    'INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)',
+                    (user_id, 't1_hit', ticker,
+                     f't1_hit at {price:.4f} | partial close {half_qty} units £{partial_value:,.2f} | pnl_r={t1_pnl_r} on closed half',
+                     now_iso)
+                )
+                updates.append({'id': pos['id'], 'ticker': ticker, 'event': 't1_hit', 'price': price, 'pnl_r': t1_pnl_r})
         if new_status and exit_p is not None:
             pnl_r = compute_pnl_r(direction, entry, exit_p, stop)
             conn.execute(
-                "UPDATE paper_positions SET status=?, exit_price=?, pnl_r=?, closed_at=? WHERE id=?",
+                'UPDATE paper_positions SET status=?, exit_price=?, pnl_r=?, closed_at=? WHERE id=?',
                 (new_status, exit_p, pnl_r, now_iso, pos['id'])
+            )
+            # Bug 1 fix: restore full remaining position value to balance on full exit
+            conn.execute(
+                'UPDATE paper_account SET virtual_balance = virtual_balance + ? WHERE user_id=?',
+                (exit_p * qty, user_id)
             )
             updates.append({'id': pos['id'], 'ticker': ticker, 'event': new_status, 'price': price, 'pnl_r': pnl_r})
     conn.commit()
@@ -514,6 +560,14 @@ def ai_run(user_id: str) -> dict:
 def _ai_run_inner(user_id: str) -> dict:
     """Inner body of ai_run — only called when per-user lock is held."""
     now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Bug 2 fix: check exits before looking for new entries; wrapped so yfinance failure can't abort scan
+    _monitor_updates = []
+    try:
+        _mon = monitor_positions(user_id)
+        _monitor_updates = _mon.get('updates', [])
+    except Exception as _mon_e:
+        _logger.warning('monitor_positions failed in ai_run for %s: %s', user_id, _mon_e)
 
     try:
         conn = sqlite3.connect(ext.DB_PATH, timeout=15)
@@ -748,7 +802,7 @@ def _ai_run_inner(user_id: str) -> dict:
             )
         conn.commit()
         conn.close()
-        return {'entries': entries, 'skips': skips, 'monitor_updates': []}
+        return {'entries': entries, 'skips': skips, 'monitor_updates': _monitor_updates}
 
     except Exception as e:
         _logger.error('ai_run error for %s: %s', user_id, e)
