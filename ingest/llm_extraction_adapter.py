@@ -224,20 +224,22 @@ class LLMExtractionAdapter(BaseIngestAdapter):
         self._db_path = db_path or os.environ.get('TRADING_KB_DB', 'trading_knowledge.db')
 
     def _llm_call(self, messages: List[dict]) -> Optional[str]:
-        """Try Ollama first, fall back to Groq if unavailable."""
+        """Try Ollama first, fall back to Groq if Ollama returns None."""
         try:
             from llm.ollama_client import chat as ollama_chat, is_available, EXTRACTION_MODEL
             if is_available(model=EXTRACTION_MODEL):
-                return ollama_chat(messages, model=EXTRACTION_MODEL, timeout=60)
+                result = ollama_chat(messages, model=EXTRACTION_MODEL, timeout=60)
+                if result is not None:
+                    return result
         except Exception as e:
-            self._logger.debug('Ollama unavailable: %s', e)
+            self._logger.debug('Ollama failed: %s', e)
 
         try:
             from llm.groq_client import chat as groq_chat, is_available as groq_available
             if groq_available():
-                self._logger.info('Falling back to Groq for LLM extraction')
+                self._logger.info('Calling Groq for LLM extraction')
                 result = groq_chat(messages)
-                self._logger.info('Groq response: %s', repr(result)[:120] if result else 'None')
+                self._logger.info('Groq response: %s', repr(result)[:120] if result else 'None/empty')
                 return result
         except Exception as e:
             self._logger.warning('Groq call failed: %s', e)
