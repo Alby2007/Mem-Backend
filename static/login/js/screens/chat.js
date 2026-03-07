@@ -373,8 +373,7 @@ async function sendChat() {
     const calHtml = renderCalibrationBadge(d.calibration || null);
     const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null, d.market_stress || null);
     const bubble = thinking.querySelector('.msg-bubble');
-    bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + calHtml;
-    if (epistemicHtml) bubble.insertAdjacentHTML('afterend', epistemicHtml);
+    bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + calHtml + epistemicHtml;
     // Animate both stress bars (generic data-width) + calibration bars
     requestAnimationFrame(() => {
       thinking.querySelectorAll('.stress-bar-fill[data-width]').forEach((bar, i) => {
