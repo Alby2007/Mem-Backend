@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -22,7 +24,8 @@ _EXEMPT_IPS = {"127.0.0.1", "::1"}
 def _rate_limit_key(request: Request) -> str:
     ip = get_remote_address(request)
     if ip in _EXEMPT_IPS:
-        return f"exempt-{ip}"
+        # Unique key per request → never shares a bucket → effectively unlimited
+        return f"exempt-{uuid.uuid4().hex}"
     return ip
 
 
