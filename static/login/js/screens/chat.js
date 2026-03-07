@@ -147,11 +147,12 @@ function renderEpistemicFooter(atomsUsed, stress, marketStress) {
     kbBarHtml = `
       <div class="stress-bar-wrap" data-tooltip="${escHtml(tooltip)}">
         <div class="stress-bar-row">
-          <span class="stress-icon stress-icon-kb" title="KB confidence">⬡</span>
-          <div class="stress-bar-track">
-            <div class="stress-bar-fill ${cls}" style="width:0%" data-width="${Math.round(s * 100)}"></div>
-          </div>
+          <span class="stress-icon stress-icon-kb">⬡</span>
+          <span class="stress-row-label">KB Confidence</span>
           <span class="stress-label ${cls}">${atomsUsed != null ? atomsUsed + ' atoms · ' : ''}${s.toFixed(2)} ${label}</span>
+        </div>
+        <div class="stress-bar-track">
+          <div class="stress-bar-fill ${cls}" style="width:0%" data-width="${Math.round(s * 100)}"></div>
         </div>
       </div>`;
   }
@@ -174,11 +175,12 @@ function renderEpistemicFooter(atomsUsed, stress, marketStress) {
     mktBarHtml = `
       <div class="stress-bar-wrap stress-bar-wrap-market" data-tooltip="${escHtml(tooltip)}">
         <div class="stress-bar-row">
-          <span class="stress-icon stress-icon-mkt" title="Market regime stress">◈</span>
-          <div class="stress-bar-track">
-            <div class="stress-bar-fill stress-bar-fill-market ${cls}" style="width:0%" data-width="${Math.round(m * 100)}"></div>
-          </div>
+          <span class="stress-icon stress-icon-mkt">◈</span>
+          <span class="stress-row-label">Market Regime</span>
           <span class="stress-label ${cls}">${m.toFixed(2)} ${label}</span>
+        </div>
+        <div class="stress-bar-track">
+          <div class="stress-bar-fill stress-bar-fill-market ${cls}" style="width:0%" data-width="${Math.round(m * 100)}"></div>
         </div>
       </div>`;
   }

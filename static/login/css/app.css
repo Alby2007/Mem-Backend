@@ -852,26 +852,27 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .sig-header-label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
 .sig-ticker-badge { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--accent); letter-spacing: 0.08em; }
 /* ── Dual Stress Bars ──────────────────────────────────────────────────────── */
-.epistemic-footer { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; max-width: 560px; }
-.stress-bar-wrap { position: relative; cursor: default; }
-.stress-bar-row { display: flex; align-items: center; gap: 7px; }
-.stress-icon { font-size: 11px; width: 14px; flex-shrink: 0; text-align: center; }
-.stress-icon-kb  { color: #f59e0b; opacity: 0.7; }
-.stress-icon-mkt { color: #3b82f6; opacity: 0.7; }
-.stress-bar-track { flex: 1; height: 3px; background: #242424; border-radius: 3px; overflow: hidden; transition: height 0.15s; }
-.stress-bar-wrap:hover .stress-bar-track { height: 5px; }
-.stress-bar-fill { height: 100%; border-radius: 3px; width: 0%; transition: width 1s cubic-bezier(0.16, 1, 0.3, 1); }
-.stress-bar-fill.low  { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,0.5); }
-.stress-bar-fill.med  { background: linear-gradient(90deg, #10b981, #f59e0b); box-shadow: 0 0 6px rgba(245,158,11,0.3); }
-.stress-bar-fill.high { background: linear-gradient(90deg, #f59e0b, #ef4444); box-shadow: 0 0 6px rgba(239,68,68,0.4); }
-.stress-bar-fill-market.low  { background: #3b82f6; box-shadow: 0 0 6px rgba(59,130,246,0.4); }
-.stress-bar-fill-market.med  { background: linear-gradient(90deg, #3b82f6, #a78bfa); box-shadow: 0 0 6px rgba(167,139,250,0.3); }
-.stress-bar-fill-market.high { background: linear-gradient(90deg, #a78bfa, #ef4444); box-shadow: 0 0 6px rgba(239,68,68,0.4); }
-.stress-label { font-family: 'IBM Plex Mono', monospace; font-size: 10px; white-space: nowrap; flex-shrink: 0; min-width: 110px; }
+.epistemic-footer { display: flex; flex-direction: column; gap: 0; margin-top: 10px; max-width: 560px; background: rgba(255,255,255,0.025); border: 1px solid #2a2a2a; border-radius: 6px; overflow: hidden; }
+.stress-bar-wrap { position: relative; cursor: default; padding: 8px 12px; border-bottom: 1px solid #1e1e1e; }
+.stress-bar-wrap:last-child { border-bottom: none; }
+.stress-bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.stress-icon { font-size: 12px; width: 16px; flex-shrink: 0; text-align: center; line-height: 1; }
+.stress-icon-kb  { color: #f59e0b; }
+.stress-icon-mkt { color: #60a5fa; }
+.stress-row-label { font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #555; flex: 1; }
+.stress-label { font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
 .stress-label.low  { color: #10b981; }
 .stress-label.med  { color: #f59e0b; }
 .stress-label.high { color: #ef4444; }
-.stress-bar-wrap::after { content: attr(data-tooltip); display: none; position: absolute; bottom: calc(100% + 6px); left: 0; background: #171717; border: 1px solid #242424; border-radius: 4px; padding: 5px 10px; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #e8e8e8; white-space: nowrap; pointer-events: none; z-index: 20; }
+.stress-bar-track { height: 5px; background: #1a1a1a; border-radius: 3px; overflow: hidden; position: relative; }
+.stress-bar-fill { height: 100%; border-radius: 3px; width: 0%; transition: width 1.1s cubic-bezier(0.16, 1, 0.3, 1); }
+.stress-bar-fill.low  { background: #10b981; box-shadow: 0 0 8px rgba(16,185,129,0.6); }
+.stress-bar-fill.med  { background: linear-gradient(90deg, #10b981, #f59e0b); box-shadow: 0 0 8px rgba(245,158,11,0.4); }
+.stress-bar-fill.high { background: linear-gradient(90deg, #f59e0b, #ef4444); box-shadow: 0 0 8px rgba(239,68,68,0.5); }
+.stress-bar-fill-market.low  { background: #3b82f6; box-shadow: 0 0 8px rgba(59,130,246,0.5); }
+.stress-bar-fill-market.med  { background: linear-gradient(90deg, #3b82f6, #a78bfa); box-shadow: 0 0 8px rgba(167,139,250,0.4); }
+.stress-bar-fill-market.high { background: linear-gradient(90deg, #a78bfa, #ef4444); box-shadow: 0 0 8px rgba(239,68,68,0.5); }
+.stress-bar-wrap::after { content: attr(data-tooltip); display: none; position: absolute; bottom: calc(100% + 4px); left: 8px; background: #111; border: 1px solid #333; border-radius: 4px; padding: 5px 10px; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #ccc; white-space: nowrap; pointer-events: none; z-index: 20; }
 .stress-bar-wrap:hover::after { display: block; }
 /* ── Calibration Hit-Rate Bars ─────────────────────────────────────────────── */
 .cal-panel { max-width: 560px; background: var(--surface-2, #171717); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-top: 10px; }
