@@ -28,11 +28,12 @@ _PORTFOLIO_INTENT_KWS = (
 )
 
 _LIVE_PRICE_KEYWORDS = (
-    'current', 'currently', 'right now', 'right-now', 'today',
-    'trading at', 'trading now', 'priced at', 'price now', 'price today',
-    'what is', "what's", 'whats', 'how much', 'worth', 'value',
-    'rate', 'rates', 'level', 'levels', 'spot', 'live', 'latest',
+    'right now', 'right-now', 'trading at', 'trading now',
+    'priced at', 'price now', 'price today',
+    'how much is', 'how much does', 'worth right now', 'value right now',
+    'spot price', 'live price', 'latest price',
     'at the moment', 'at this moment', 'as of now',
+    'current price', 'current rate', 'current level',
 )
 
 _TIP_INTENT_PHRASES = (
@@ -661,6 +662,14 @@ def _run_opportunity_scan(message: str, response: Dict) -> Optional[str]:
     return None
 
 
+_TOKEN_BUDGET = 100_000
+_CHARS_PER_TOKEN = 4
+
+
+def _estimate_tokens(messages: List[Dict]) -> int:
+    return sum(len(m.get('content', '')) for m in messages) // _CHARS_PER_TOKEN
+
+
 def _persist_and_inject_history(
     message: str, user_id: Optional[str],
     messages: List[Dict], conv_session_id: str,
@@ -668,6 +677,7 @@ def _persist_and_inject_history(
     """Persist user turn and inject DB-backed conversation history.
 
     Returns (updated_messages, user_msg_record).
+    Enforces a token budget: oldest history turns are dropped first if over budget.
     """
     if ext.conv_store is None:
         return messages, None
@@ -691,7 +701,21 @@ def _persist_and_inject_history(
             and message.strip().lower() == last_user_msg.strip().lower()
         )
         if db_hist_msgs and len(messages) >= 2 and not is_retry:
-            messages = [messages[0]] + db_hist_msgs + [messages[-1]]
+            system_msg = messages[0]
+            final_user_msg = messages[-1]
+            base_tokens = _estimate_tokens([system_msg, final_user_msg])
+            history_budget = _TOKEN_BUDGET - base_tokens
+            # Drop oldest turns first until within budget
+            trimmed = list(db_hist_msgs)
+            while trimmed and _estimate_tokens(trimmed) > history_budget:
+                trimmed = trimmed[2:] if len(trimmed) >= 2 else []
+            if trimmed:
+                messages = [system_msg] + trimmed + [final_user_msg]
+                if len(trimmed) < len(db_hist_msgs):
+                    _logger.debug(
+                        'History trimmed %d→%d turns for session %s (token budget)',
+                        len(db_hist_msgs) // 2, len(trimmed) // 2, conv_session_id,
+                    )
         return messages, user_msg_record
     except Exception:
         return messages, None
@@ -733,6 +757,8 @@ def _persist_assistant_and_graduate(
             if atom_msg_id is None:
                 return
             from llm.ollama_client import chat as _oc
+            import sqlite3 as _sq
+            _grad_conn = _sq.connect(ext.DB_PATH, timeout=10)
             atom_prompt = [
                 {'role': 'system', 'content': (
                     'You are a knowledge extractor for a trading intelligence system. '
@@ -752,6 +778,7 @@ def _persist_assistant_and_graduate(
                 )},
             ]
             raw = _oc(atom_prompt, model='llama3.2')
+            _grad_conn.close()
             if not raw:
                 return
             import json as _json
@@ -796,6 +823,7 @@ def _persist_assistant_and_graduate(
                         graduated.append(at)
                     except Exception:
                         pass
+            del _grad_conn
 
             if ext.HAS_WORKING_STATE and graduated:
                 try:
