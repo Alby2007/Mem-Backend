@@ -124,28 +124,66 @@ function renderCalibrationBadge(cal) {
   </div>`;
 }
 
-function renderEpistemicFooter(atomsUsed, stress) {
-  if (atomsUsed == null && !stress) return '';
-  const s = stress && stress.composite_stress != null ? stress.composite_stress : null;
-  const label = s == null ? '' : (s < 0.30 ? 'LOW' : (s < 0.60 ? 'MED' : 'HIGH'));
-  const lvlClass = label ? `stress-level ${label.toLowerCase()}` : 'stress-level';
-  const fillClass = label ? `stress-bar-fill ${label.toLowerCase()}` : 'stress-bar-fill';
-  const tooltipParts = [];
-  if (atomsUsed != null) tooltipParts.push(`${atomsUsed} atoms`);
-  if (s != null) tooltipParts.push(`stress ${s.toFixed(2)} ${label}`);
-  if (stress && stress.authority_conflict != null) tooltipParts.push(`authority conflict ${Number(stress.authority_conflict).toFixed(2)}`);
-  if (stress && stress.domain_entropy != null) tooltipParts.push(`domain entropy ${Number(stress.domain_entropy).toFixed(2)}`);
-  return `<div class="stress-bar-wrap">
-    <div class="stress-bar-track">
-      <div class="stress-zones"><div class="zone-tick" style="left:30%"></div><div class="zone-tick" style="left:60%"></div></div>
-      <div class="${fillClass}" style="width:0%"></div>
-    </div>
-    <div class="stress-tooltip">${escHtml(tooltipParts.join(' · '))}</div>
-    <div class="stress-meta">
-      <div class="stress-atoms"><span class="hex">⬡</span><span>${atomsUsed != null ? atomsUsed : '—'} atoms</span></div>
-      <div class="${lvlClass}">${s != null ? s.toFixed(2) + ' ' + label : '—'}</div>
-    </div>
-  </div>`;
+function renderEpistemicFooter(atomsUsed, stress, marketStress) {
+  const hasKb = atomsUsed != null || (stress && stress.composite_stress != null);
+  const hasMkt = marketStress && marketStress.composite != null;
+
+  if (!hasKb && !hasMkt) return '';
+
+  // KB confidence bar
+  let kbBarHtml = '';
+  if (hasKb) {
+    const s = stress?.composite_stress ?? 0;
+    const label = s < 0.30 ? 'LOW' : (s < 0.60 ? 'MED' : 'HIGH');
+    const cls = s < 0.30 ? 'low' : (s < 0.60 ? 'med' : 'high');
+
+    const ac = stress?.authority_conflict != null
+      ? ` · authority conflict ${stress.authority_conflict.toFixed(2)}` : '';
+    const de = stress?.domain_entropy != null
+      ? ` · domain entropy ${stress.domain_entropy.toFixed(2)}` : '';
+    const atomStr = atomsUsed != null ? `${atomsUsed} atoms` : '';
+    const tooltip = `${atomStr} · KB stress ${s.toFixed(2)} ${label}${ac}${de}`;
+
+    kbBarHtml = `
+      <div class="stress-bar-wrap" data-tooltip="${escHtml(tooltip)}">
+        <div class="stress-bar-row">
+          <span class="stress-icon stress-icon-kb" title="KB confidence">⬡</span>
+          <div class="stress-bar-track">
+            <div class="stress-bar-fill ${cls}" style="width:0%" data-width="${Math.round(s * 100)}"></div>
+          </div>
+          <span class="stress-label ${cls}">${atomsUsed != null ? atomsUsed + ' atoms · ' : ''}${s.toFixed(2)} ${label}</span>
+        </div>
+      </div>`;
+  }
+
+  // Market regime stress bar
+  let mktBarHtml = '';
+  if (hasMkt) {
+    const m = marketStress.composite;
+    const label = marketStress.label;
+    const cls = m < 0.30 ? 'low' : (m < 0.60 ? 'med' : 'high');
+
+    const volStr = marketStress.vol_regime
+      ? `vol: ${marketStress.vol_regime}` : '';
+    const regStr = marketStress.price_regime
+      ? ` · regime: ${marketStress.price_regime}` : '';
+    const smStr = marketStress.smart_money
+      ? ` · ${marketStress.smart_money}` : '';
+    const tooltip = `Market stress ${m.toFixed(2)} ${label}${volStr ? ' · ' + volStr : ''}${regStr}${smStr}`;
+
+    mktBarHtml = `
+      <div class="stress-bar-wrap stress-bar-wrap-market" data-tooltip="${escHtml(tooltip)}">
+        <div class="stress-bar-row">
+          <span class="stress-icon stress-icon-mkt" title="Market regime stress">◈</span>
+          <div class="stress-bar-track">
+            <div class="stress-bar-fill stress-bar-fill-market ${cls}" style="width:0%" data-width="${Math.round(m * 100)}"></div>
+          </div>
+          <span class="stress-label ${cls}">${m.toFixed(2)} ${label}</span>
+        </div>
+      </div>`;
+  }
+
+  return `<div class="epistemic-footer">${kbBarHtml}${mktBarHtml}</div>`;
 }
 
 function appendMsg(role, html) {
@@ -333,16 +371,17 @@ async function sendChat() {
     const tipCardHtml = d.tip_card ? renderTipCard(d.tip_card, d.tip_card.tip_id) : '';
     const kbPanelHtml = renderKbPanel(grounding, d.grounding_atoms || null);
     const calHtml = renderCalibrationBadge(d.calibration || null);
-    const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null);
+    const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null, d.market_stress || null);
     const bubble = thinking.querySelector('.msg-bubble');
     bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + calHtml;
     if (epistemicHtml) bubble.insertAdjacentHTML('afterend', epistemicHtml);
-    // Animate stress bar and calibration bars after DOM insertion
+    // Animate both stress bars (generic data-width) + calibration bars
     requestAnimationFrame(() => {
-      const stressFill = thinking.querySelector('.stress-bar-fill');
-      if (stressFill && d.stress && d.stress.composite_stress != null) {
-        stressFill.style.width = (d.stress.composite_stress * 100) + '%';
-      }
+      thinking.querySelectorAll('.stress-bar-fill[data-width]').forEach((bar, i) => {
+        setTimeout(() => {
+          bar.style.width = bar.dataset.width + '%';
+        }, i * 150);
+      });
       const t1Fill = thinking.querySelector('.cal-bar-fill:not(.t2)');
       if (t1Fill && d.calibration && d.calibration.hit_rate_t1 != null) {
         t1Fill.style.width = (d.calibration.hit_rate_t1 * 100) + '%';
@@ -352,7 +391,7 @@ async function sendChat() {
         if (t2Fill && d.calibration && d.calibration.hit_rate_t2 != null) {
           t2Fill.style.width = (d.calibration.hit_rate_t2 * 100) + '%';
         }
-      }, 200);
+      }, 300);
     });
     if (tipCardHtml) bindTipFeedback(thinking);
     if (d.kb_enriched && d.live_fetched?.length) {

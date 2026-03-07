@@ -17,6 +17,80 @@ import extensions as ext
 
 _logger = logging.getLogger(__name__)
 
+
+def compute_market_stress(grounding_atoms: dict) -> dict:
+    """
+    Compute a market regime stress score from grounding_atoms already
+    fetched from the KB. Returns composite 0-1, label, and factor breakdown.
+    """
+    if not grounding_atoms:
+        return None
+
+    score = 0.0
+    factors = {}
+
+    # --- Volatility regime ---
+    vol = (grounding_atoms.get('volatility_regime') or '').lower()
+    if 'extreme' in vol:
+        v = 0.40
+    elif 'high' in vol:
+        v = 0.25
+    elif 'low' in vol:
+        v = 0.0
+    elif vol:
+        v = 0.10  # known but mid/normal
+    else:
+        v = 0.15  # unknown = mild uncertainty
+    score += v
+    factors['volatility'] = round(v, 2)
+
+    # --- Price regime ---
+    regime = (grounding_atoms.get('price_regime') or '').lower()
+    if any(x in regime for x in ['overbought', 'near_52w_high', 'extended']):
+        r = 0.20
+    elif any(x in regime for x in ['near_52w_low', 'breakdown', 'downtrend']):
+        r = 0.15
+    elif 'mid_range' in regime:
+        r = 0.05
+    elif regime:
+        r = 0.08
+    else:
+        r = 0.10
+    score += r
+    factors['regime'] = round(r, 2)
+
+    # --- Smart money positioning ---
+    smart = (grounding_atoms.get('smart_money_signal') or '').lower()
+    try:
+        pcr = float(grounding_atoms.get('put_call_oi_ratio') or 0.5)
+    except (ValueError, TypeError):
+        pcr = 0.5
+
+    if 'put_sweep' in smart or pcr > 0.80:
+        p = 0.25
+    elif 'call_sweep' in smart and pcr < 0.40:
+        p = 0.0
+    elif pcr > 0.65:
+        p = 0.15
+    else:
+        p = 0.08
+    score += p
+    factors['positioning'] = round(p, 2)
+
+    composite = round(min(score, 1.0), 3)
+    label = 'LOW' if composite < 0.30 else ('MED' if composite < 0.60 else 'HIGH')
+
+    return {
+        'composite': composite,
+        'label': label,
+        'factors': factors,
+        'vol_regime': grounding_atoms.get('volatility_regime') or '',
+        'price_regime': grounding_atoms.get('price_regime') or '',
+        'smart_money': grounding_atoms.get('smart_money_signal') or '',
+        'put_call_ratio': pcr,
+    }
+
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _PORTFOLIO_INTENT_KWS = (
@@ -1124,6 +1198,7 @@ def run(
             _cc_ga.close()
             if _ga:
                 response['grounding_atoms'] = _ga
+                response['market_stress'] = compute_market_stress(_ga)
         except Exception as _ga_exc:
             import logging as _ga_log
             _ga_log.getLogger(__name__).error('grounding atoms lookup failed: %s', _ga_exc)
