@@ -6,36 +6,32 @@ Complete file-by-file reference for the Trading Galaxy codebase.
 
 ## Root
 
-### `api.py`
-Flask REST API — the main entry point. ~7,200 lines.
+### `api_v2.py`
+FastAPI application — main entry point. Served by **Gunicorn + UvicornWorker** on port 5050.
 
-- Initialises `KnowledgeGraph`, `decay_worker`, `IngestScheduler`, and `SeedSyncClient`
-- Registers all adapters with their intervals
-- Exposes all HTTP endpoints
+- Initialises `KnowledgeGraph`, `decay_worker`, `IngestScheduler`, and `SeedSyncClient` at startup
+- Registers all `routes_v2/` routers
 - Optional dependencies imported with graceful fallback (`HAS_AUTH`, `HAS_PRODUCT_LAYER`, `HAS_LIMITER`, etc.)
+- Rate limiting via `slowapi` (`middleware/fastapi_rate_limiter.py`); exempt for localhost and `EVAL_MODE=1`
 
-**Key globals:** `app`, `_kg`, `_decay_worker`, `_ingest_scheduler`, `_DB_PATH`
+**Key globals:** `app`, `_kg`, `_decay_worker`, `_ingest_scheduler`, `DB_PATH` (via `extensions.py`)
 
-**Endpoint groups:**
+### `routes_v2/`
+FastAPI `APIRouter` modules — one file per domain. Registered in `api_v2.py`.
 
-| Group | Key endpoints |
+| Module | Endpoint groups |
 |---|---|
-| KB core | `POST /ingest` · `GET /query` · `POST /retrieve` · `GET /search` · `GET /context/<e>` · `GET /stats` · `GET /health` |
-| Ingest | `GET /ingest/status` · `POST /ingest/run-all` · `POST /ingest/historical` |
-| Repair/governance | `POST /repair/diagnose` · `POST /repair/proposals` · `POST /repair/execute` · `POST /repair/rollback` · `GET /repair/impact` |
-| KB graph | `POST /kb/graph` · `POST /kb/traverse` · `GET /kb/causal-chain` · `POST /kb/causal-edge` · `GET /kb/causal-edges` · `GET /kb/confidence` |
-| Auth | `POST /auth/register` · `POST /auth/token` · `POST /auth/refresh` · `POST /auth/logout` |
-| User / product | `GET/POST /users/<id>/portfolio` · `GET /users/<id>/model` · `POST /users/<id>/onboarding` · `GET /users/<id>/snapshot/preview` · `POST /users/<id>/snapshot/send-now` |
-| Screenshot | `POST /users/<id>/history/screenshot` — vision model extraction |
-| Tips | `GET /users/<id>/tip/preview` · `GET/POST /users/<id>/tip/config` · `GET /users/<id>/delivery-history` |
-| Positions | `GET /users/<id>/positions/open` · `GET /users/<id>/positions/closed` |
-| Alerts | `GET /users/<id>/alerts` · `GET /users/<id>/alerts/unread-count` |
-| Universe | `POST /users/<id>/expand-universe` · `GET /universe/coverage` · `GET /universe/trending` · `GET /universe/staging/global` |
-| Network | `GET /network/health` · `GET /network/calibration/<ticker>` · `GET /network/cohort/<ticker>` |
-| Patterns | `GET /patterns/live` · `GET /patterns/<id>` |
-| Feedback | `POST /feedback` |
-| Chat | `POST /chat` (overlay-mode aware) |
-| Frontend | `GET /` → `static/index.html` |
+| `kb.py` | `POST /ingest` · `GET /query` · `POST /retrieve` · `GET /search` · `GET /context/{e}` · `GET /stats` · `GET /health` · repair · KB graph |
+| `ingest_routes.py` | `GET /ingest/status` · `POST /ingest/run-all` · `POST /ingest/historical` |
+| `auth.py` | `POST /auth/register` · `POST /auth/token` · `POST /auth/refresh` · `POST /auth/logout` · `GET /auth/me` |
+| `users.py` | `GET/POST /users/{id}/portfolio` · onboarding · model · snapshot · screenshot · tip config · positions · alerts · trader-level |
+| `chat.py` | `POST /chat` (overlay-mode aware, portfolio context injection) |
+| `patterns.py` | `GET /patterns/live` · `GET /patterns/{id}` |
+| `network.py` | `GET /network/health` · calibration · cohort |
+| `analytics_.py` | Universe, paper trader, feedback |
+| `telegram.py` | Telegram webhook · bot actions |
+| `waitlist.py` | `POST /waitlist` · `GET /waitlist/count` |
+| `thesis.py` | Thesis management endpoints |
 
 ---
 

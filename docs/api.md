@@ -2,7 +2,11 @@
 
 Base URL: `https://api.trading-galaxy.uk` (production) · `http://localhost:5050` (local dev)
 
+**Framework:** FastAPI (`api_v2.py`), served by Gunicorn + UvicornWorker.
+
 **CORS:** Cross-origin requests are accepted from `https://trading-galaxy.uk`, `https://www.trading-galaxy.uk`, `https://*.pages.dev`, and `http://localhost:3000` / `http://localhost:5050`. Allowed methods: `GET POST PATCH OPTIONS`. The `Authorization` and `Content-Type` headers are allowed.
+
+**Rate limiting:** `slowapi` (in-memory). Exempt for `EVAL_MODE=1` and localhost. `/waitlist` is 3/hour per IP; chat and other sensitive endpoints are individually gated.
 
 All request/response bodies are JSON. All endpoints return `Content-Type: application/json`.
 

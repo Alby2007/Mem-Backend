@@ -11,7 +11,7 @@ Trading Galaxy is a **knowledge-graph-powered trading intelligence platform** �
 5. **Serves** a personalised daily briefing to users via the Product Layer
 6. **Provides** a browser-based internal tool (SPA at `GET /`) for portfolio management and KB exploration
 
-The system runs fully locally on-device (KB, LLM inference via Ollama). In production the API is hosted on OCI and the frontend on Cloudflare Pages. No external LLM API calls are required.
+The system runs fully locally on-device (KB, LLM inference via Ollama). In production the API is hosted on OCI and the frontend on Cloudflare Pages. Groq (`llama-3.3-70b-versatile`) is used for LLM inference when `GROQ_API_KEY` is set; Ollama is the local fallback.
 
 ---
 
@@ -73,7 +73,7 @@ The system runs fully locally on-device (KB, LLM inference via Ollama). In produ
                     ┌────────────┼─────────────┐
                     ▼            ▼             ▼
 ┌────────────┐  ┌─────────┐  ┌──────────────────────────────────────┐
-│  llm/      │  │analytics│  │         api.py (Flask)                │
+│  llm/      │  │analytics│  │    api_v2.py (FastAPI) + routes_v2/   │
 │            │  │         │  │                                        │
 │ ollama_    │  │portfolio│  │  KB core:  POST /ingest  GET /stats   │
 │ client.py  │  │universe_│  │            POST /retrieve GET /query  │
@@ -89,7 +89,7 @@ The system runs fully locally on-device (KB, LLM inference via Ollama). In produ
 │ builder.py │  │engine   │  │  Notifications, tips, alerts,         │
 └────────────┘  │backtest │  │  network, patterns, universe          │
                 │counter- │  │                                        │
-                │factual  │  │  GET / → static/index.html (SPA)      │
+                │factual  │  │  Served by: Gunicorn + UvicornWorker  │
                 └─────────┘  └──────────────────────────────────────┘
                                               │
                               ┌───────────────┼──────────────────┐
@@ -441,12 +441,12 @@ Classifies each calendar month over 5 years into a macro regime using cross-asse
 
 ### OCI server
 
-Flask runs directly under **systemd** (`trading-galaxy.service`) on port `5050`.
+FastAPI (`api_v2.py`) runs under **Gunicorn + UvicornWorker** via **systemd** (`trading-galaxy.service`) on port `5050`.
 [Caddy v2](https://caddyserver.com) handles TLS termination and reverse proxies `localhost:5050`.
 Let's Encrypt certificates are provisioned and renewed automatically by Caddy.
 
 ```
-Internet → Caddy :443 → Flask :5050
+Internet → Caddy :443 → Gunicorn/UvicornWorker :5050
 Internet → Caddy :80  → 301 → :443
 ```
 
@@ -477,7 +477,7 @@ One-shot full deploy (backend + frontend):
 
 ### CORS
 
-Allowed origins (configured in `api.py` via `flask-cors`):
+Allowed origins (configured in `api_v2.py` via FastAPI `CORSMiddleware`):
 
 | Origin | Purpose |
 |---|---|
@@ -616,12 +616,15 @@ Monday cycle (all tiers):
   upsert_tip_followup(status='watching')→ auto-create followup for each sent setup
   TelegramNotifier.send()
 
-Wednesday cycle (all tiers — basic, pro, premium):
+Position monitor cycle (Tue/Wed/Thu — position_monitor, Fri — week_close, Sat — weekend_summary):
   expire_stale_followups()
   get_user_open_positions()
   get_kb_changes_since(monday_00:00, tickers=open_tickers)
-  format_wednesday_update()             → 📍 OPEN POSITIONS + KB CHANGES + EXPIRED
-  TelegramNotifier.send()
+  format_position_monitor_briefing(briefing_mode=…)
+    → 📊 POSITION UPDATE  (Tue/Wed/Thu)
+    → � WEEK IN REVIEW   (Fri)
+    → 🗓 WEEKEND SUMMARY  (Sat, premium only)
+  TelegramNotifier.send()   ← 1 retry on 429/5xx with 2s backoff
 ```
 
 **Tier delivery schedule:**
@@ -637,7 +640,9 @@ Emergency alerts (every 5 min, PositionMonitor):
   _check_triggers() → _send_telegram_alert_with_confidence()
 ```
 
-**KB change predicates (Wednesday filter):** `signal_direction` · `conviction_tier` · `sector_tailwind` · `regime_label` · `market_regime` · `price_regime` · `macro_event_risk` · `smart_money_signal` · `flow_conviction` · `uk_market_regime` · `volatility_regime` (and 3 lower-signal predicates).
+**Delivery gate:** `notifications/notify_gate.py` — single `should_notify()` function used by both `DeliveryScheduler` and `TipScheduler`. Handles timezone, weekday gate, and dedup. Normalises `'daily'` tier config to a full weekday list.
+
+**KB change predicates (position monitor filter):** `signal_direction` · `conviction_tier` · `sector_tailwind` · `regime_label` · `market_regime` · `price_regime` · `macro_event_risk` · `smart_money_signal` · `flow_conviction` · `uk_market_regime` · `volatility_regime` (and 3 lower-signal predicates).
 
 **Position status distinction:**
 - `watching` — auto-created when a tip fires; user has not acted. Shown as "On radar 🔓"
@@ -650,7 +655,7 @@ Emergency alerts (every 5 min, PositionMonitor):
 | Module | Notes |
 |---|---|
 | `knowledge/graph_v2.py` | Requires `aiosqlite`; not imported in live path |
-| `knowledge/graph_enhanced.py` | Standalone class; not wired into `api.py` or `retrieval.py` |
+| `knowledge/graph_enhanced.py` | Standalone class; not wired into `api_v2.py` or `retrieval.py` |
 
 ### Partial
 
