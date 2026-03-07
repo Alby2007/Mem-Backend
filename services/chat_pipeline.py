@@ -1184,6 +1184,7 @@ def run(
                 'signal_direction', 'conviction_tier', 'price_regime',
                 'volatility_regime', 'sector', 'implied_volatility',
                 'put_call_oi_ratio', 'smart_money_signal',
+                'last_price', 'price_target', 'upside_pct', 'invalidation_price',
             ]
             _ga: dict = {}
             for _pred in _GROUNDING_PREDS:

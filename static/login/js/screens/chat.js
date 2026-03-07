@@ -71,7 +71,39 @@ function renderKbPanel(grounding, groundingAtoms) {
     ? `<span class="sig-ticker-badge">${escHtml(groundingAtoms.ticker.toUpperCase())}</span>`
     : '';
 
-  // Tags: whitelist of semantic keys only — skip numerics, raw scores, direction/conviction
+  // Price strip — pull from merged atoms (DB wins via merge)
+  const _price = (k) => {
+    const v = merged[k];
+    if (v == null || v === '') return null;
+    const n = parseFloat(String(v).replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? String(v) : n;
+  };
+  const lastPrice   = _price('last_price');
+  const priceTarget = _price('price_target');
+  const upsidePct   = _price('upside_pct');
+  const invalidation = _price('invalidation_price');
+  const hasPriceStrip = lastPrice != null || priceTarget != null;
+
+  const fmt$ = v => v != null ? `$${Number(v).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2})}` : null;
+  const fmtPct = v => {
+    if (v == null) return null;
+    const n = parseFloat(v);
+    if (isNaN(n)) return String(v);
+    return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+  };
+  const upsideSign = upsidePct != null && parseFloat(upsidePct) < 0;
+  const upsideCls = upsideSign ? 'sig-price-upside bearish' : 'sig-price-upside';
+
+  const priceStripHtml = hasPriceStrip ? `
+    <div class="sig-price-strip">
+      ${lastPrice   != null ? `<span class="sig-price-current">${escHtml(fmt$(lastPrice))}</span>` : ''}
+      ${(lastPrice != null && priceTarget != null) ? `<span class="sig-price-arrow">→</span>` : ''}
+      ${priceTarget != null ? `<span class="sig-price-target">${escHtml(fmt$(priceTarget))}</span>` : ''}
+      ${upsidePct   != null ? `<span class="${upsideCls}">${escHtml(fmtPct(upsidePct))}</span>` : ''}
+    </div>
+    ${invalidation != null ? `<div class="sig-price-invalidation">invalidation ${escHtml(fmt$(invalidation))}</div>` : ''}` : '';
+
+  // Tags: whitelist of semantic keys only
   const _TAG_ORDER = ['price_regime','volatility_regime','smart_money_signal','sector'];
   const _TAG_DISPLAY = {
     price_regime:      v => v.replace(/_/g, ' '),
@@ -100,7 +132,10 @@ function renderKbPanel(grounding, groundingAtoms) {
         <div class="sig-word">${escHtml(dirWord)}</div>
         <div class="${pillClass}">${pillText}</div>
       </div>
-      <div class="sig-tags">${tags}</div>
+      <div class="sig-tags">
+        ${priceStripHtml}
+        <div class="sig-tag-row">${tags}</div>
+      </div>
     </div>
   </div>`;
 }

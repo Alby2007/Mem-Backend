@@ -843,7 +843,15 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .conviction-pill { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.1em; padding: 2px 7px; border-radius: 2px; text-transform: uppercase; background: var(--accent-dim, rgba(245,158,11,0.12)); color: var(--accent); border: 1px solid rgba(245,158,11,0.25); }
 .conviction-pill.high { background: rgba(245,158,11,0.18); color: #fbbf24; border-color: rgba(245,158,11,0.4); }
 .conviction-pill.low { background: rgba(96,96,96,0.2); color: var(--muted); border-color: #404040; }
-.sig-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 14px 16px; flex: 1; }
+.sig-tags { display: flex; flex-direction: column; gap: 8px; justify-content: center; padding: 12px 16px; flex: 1; }
+.sig-tag-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.sig-price-strip { display: flex; align-items: center; gap: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
+.sig-price-current { color: #e8e8e8; font-weight: 500; }
+.sig-price-arrow { color: #404040; }
+.sig-price-target { color: #e8e8e8; font-weight: 500; }
+.sig-price-upside { color: #10b981; font-weight: 600; font-size: 13px; }
+.sig-price-upside.bearish { color: #ef4444; }
+.sig-price-invalidation { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #525252; letter-spacing: 0.04em; }
 .sig-tag { font-family: var(--mono); font-size: 10px; color: #c0c0c0; background: rgba(255,255,255,0.04); border: 1px solid var(--border); border-left: 2px solid #404040; padding: 4px 9px; border-radius: 0 3px 3px 0; letter-spacing: 0.05em; transition: border-left-color 0.15s, color 0.15s; cursor: default; }
 .sig-tag:hover { border-left-color: var(--accent); color: var(--text); }
 .sig-tag.vol-high { border-left-color: #f87171; color: #f87171; background: rgba(248,113,113,0.08); }
