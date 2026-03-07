@@ -52,6 +52,11 @@ def ensure_paper_tables(conn):
             created_at TEXT NOT NULL
         )
     """)
+    # Idempotent: add agent_running column if it doesn't exist yet
+    try:
+        conn.execute('ALTER TABLE paper_account ADD COLUMN agent_running INTEGER NOT NULL DEFAULT 0')
+    except Exception:
+        pass
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_positions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -760,6 +765,21 @@ _run_locks: dict[str, threading.Lock] = {}
 _run_locks_lock = threading.Lock()
 
 
+def _set_agent_running_db(user_id: str, running: bool) -> None:
+    """Persist agent running state to DB so it survives server restarts."""
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+        ensure_paper_tables(conn)
+        conn.execute(
+            'UPDATE paper_account SET agent_running=? WHERE user_id=?',
+            (1 if running else 0, user_id)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as _e:
+        _logger.warning('Failed to persist agent_running for %s: %s', user_id, _e)
+
+
 def continuous_scan(user_id: str, stop_event: threading.Event, interval_sec: int = 120):
     """Loop: scan every interval_sec until stop_event is set."""
     _logger.info('Continuous scanner started for %s', user_id)
@@ -781,6 +801,7 @@ def start_scanner(user_id: str) -> tuple[str, str]:
         _scanner_threads[user_id] = stop_ev
     t = threading.Thread(target=continuous_scan, args=(user_id, stop_ev, 1800), daemon=True)
     t.start()
+    _set_agent_running_db(user_id, True)
     return 'started', 'Continuous scanner started — scans every 30 min'
 
 
@@ -790,6 +811,8 @@ def stop_scanner(user_id: str) -> tuple[str, str]:
         ev = _scanner_threads.pop(user_id, None)
     if ev:
         ev.set()
+    _set_agent_running_db(user_id, False)
+    if ev:
         return 'stopped', 'Scanner stopped'
     return 'not_running', 'Scanner was not running'
 
@@ -799,6 +822,22 @@ def scanner_running(user_id: str) -> bool:
     with _scanner_lock:
         ev = _scanner_threads.get(user_id)
     return ev is not None and not ev.is_set()
+
+
+def restore_scanners() -> None:
+    """Re-launch scanners for users who had agent_running=1 before server restart."""
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+        ensure_paper_tables(conn)
+        rows = conn.execute(
+            'SELECT user_id FROM paper_account WHERE agent_running=1'
+        ).fetchall()
+        conn.close()
+        for (uid,) in rows:
+            status, _ = start_scanner(uid)
+            _logger.info('restore_scanners: %s → %s', uid, status)
+    except Exception as _e:
+        _logger.error('restore_scanners failed: %s', _e)
 
 
 # ── Global agent run (scheduler adapter) ──────────────────────────────────────

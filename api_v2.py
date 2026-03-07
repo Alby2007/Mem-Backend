@@ -7,6 +7,7 @@ Cutover: point gunicorn at this file and drop api.py once all phases pass eval.
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,8 +19,19 @@ import extensions as ext
 _logger = logging.getLogger(__name__)
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # Re-launch any scanners that were running before a server restart
+    try:
+        from services.paper_trading import restore_scanners
+        restore_scanners()
+    except Exception as _e:
+        _logger.warning('restore_scanners on startup failed: %s', _e)
+    yield
+
+
 def create_fastapi_app() -> FastAPI:
-    app = FastAPI(title="Trading Galaxy API", version="2.0")
+    app = FastAPI(title="Trading Galaxy API", version="2.0", lifespan=_lifespan)
 
     app.add_middleware(
         CORSMiddleware,
