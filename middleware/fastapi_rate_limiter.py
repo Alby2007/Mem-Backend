@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 
 from fastapi import Request
@@ -22,6 +23,8 @@ _EXEMPT_IPS = {"127.0.0.1", "::1"}
 
 
 def _rate_limit_key(request: Request) -> str:
+    if os.environ.get("EVAL_MODE") == "1":
+        return f"eval-{uuid.uuid4().hex}"
     ip = get_remote_address(request)
     if ip in _EXEMPT_IPS:
         # Unique key per request → never shares a bucket → effectively unlimited

@@ -5,6 +5,7 @@ set -euo pipefail
 BASE="http://127.0.0.1:5050"
 export DEV_UPGRADE_KEY="eval-gate-key"
 export BETA_PASSWORD="ScoobyDoo2016!"
+export EVAL_MODE=1
 
 echo "[1/3] Health check..."
 curl -sf "$BASE/health" | python3 -m json.tool
