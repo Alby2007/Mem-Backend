@@ -186,6 +186,7 @@ def _run_query(base: str, user_id: str, token: str, message: str) -> str:
     body: dict = {'message': message}
     if token:
         headers['Authorization'] = f'Bearer {token}'
+        body['session_id'] = user_id  # isolate portfolio ticker cache per eval user
         # user_id resolved from token by the server — don't double-send
     # No token: don't send user_id either — that would trigger quota check
     # for a user with no tier row, causing 403 on every request.
