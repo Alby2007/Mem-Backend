@@ -241,28 +241,24 @@ def update_notification_prefs(user_id):
     try:
         conn = sqlite3.connect(ext.DB_PATH, timeout=10)
         try:
+            row = conn.execute(
+                "SELECT notification_prefs FROM user_preferences WHERE user_id=?",
+                (user_id,)
+            ).fetchone()
+            existing = {}
+            if row and row[0]:
+                try:
+                    existing = json.loads(row[0])
+                except Exception:
+                    pass
+            existing.update(prefs)
             conn.execute(
-                "ALTER TABLE user_preferences ADD COLUMN notification_prefs TEXT DEFAULT '{}'"
+                "UPDATE user_preferences SET notification_prefs=? WHERE user_id=?",
+                (json.dumps(existing), user_id)
             )
-        except Exception:
-            pass
-        row = conn.execute(
-            "SELECT notification_prefs FROM user_preferences WHERE user_id=?",
-            (user_id,)
-        ).fetchone()
-        existing = {}
-        if row and row[0]:
-            try:
-                existing = json.loads(row[0])
-            except Exception:
-                pass
-        existing.update(prefs)
-        conn.execute(
-            "UPDATE user_preferences SET notification_prefs=? WHERE user_id=?",
-            (json.dumps(existing), user_id)
-        )
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

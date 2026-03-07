@@ -16,8 +16,22 @@ bp = Blueprint('kb', __name__)
 # ── Core CRUD ─────────────────────────────────────────────────────────────────
 
 @bp.route('/ingest', methods=['POST'])
+@ext.require_auth
 def ingest():
-    """Ingest one or more atoms into the KB."""
+    """Ingest one or more atoms into the KB.
+
+    Requires a valid JWT (via @require_auth) AND either:
+      - the caller is in ADMIN_USER_IDS, OR
+      - an X-Ingest-Key header matching the INGEST_API_KEY env var.
+    """
+    import os as _os
+    from flask import g as _g
+    _admin_ids = {u.strip() for u in _os.environ.get('ADMIN_USER_IDS', '').split(',') if u.strip()}
+    _ingest_key = _os.environ.get('INGEST_API_KEY', '')
+    _caller = getattr(_g, 'user_id', '')
+    _provided_key = request.headers.get('X-Ingest-Key', '')
+    if _caller not in _admin_ids and not (_ingest_key and _provided_key == _ingest_key):
+        return jsonify({'error': 'forbidden — admin or valid X-Ingest-Key required'}), 403
     data = request.get_json(force=True, silent=True)
     if not data:
         return jsonify({'error': 'invalid JSON'}), 400
@@ -53,6 +67,7 @@ def ingest():
 
 
 @bp.route('/query', methods=['GET'])
+@ext.require_auth
 def query():
     """Direct triple-store query with optional filters."""
     subject   = request.args.get('subject')

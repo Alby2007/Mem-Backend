@@ -67,6 +67,7 @@ def ingest_status():
 
 
 @bp.route('/ingest/run-all', methods=['POST'])
+@ext.require_auth
 def ingest_run_all():
     """Trigger an immediate out-of-schedule run of ALL registered ingest adapters."""
     if not ext.ingest_scheduler:
@@ -96,6 +97,7 @@ def ingest_run_all():
 
 
 @bp.route('/ingest/historical', methods=['POST'])
+@ext.require_auth
 def ingest_historical():
     """Trigger a one-shot historical summary backfill for the watchlist."""
     if not ext.HAS_INGEST:
@@ -120,6 +122,7 @@ def ingest_historical():
 
 
 @bp.route('/calibrate/historical', methods=['POST'])
+@ext.require_auth
 def calibrate_historical():
     """Back-populate signal_calibration with historical pattern outcome statistics."""
     if not ext.HAS_INGEST:
@@ -161,6 +164,7 @@ def calibrate_historical():
 
 
 @bp.route('/calibrate/regime-history', methods=['POST'])
+@ext.require_auth
 def calibrate_regime_history():
     """Classify historical months into macro regimes and write regime-conditional atoms."""
     if not ext.HAS_INGEST:
@@ -185,6 +189,7 @@ def calibrate_regime_history():
 
 
 @bp.route('/ingest/patterns', methods=['POST'])
+@ext.require_auth
 def ingest_patterns():
     """Trigger pattern detection across all KB tickers that have last_price atoms."""
     if not ext.HAS_INGEST:
@@ -303,6 +308,7 @@ def ingest_patterns():
 
 
 @bp.route('/discover/<ticker>', methods=['POST'])
+@ext.require_auth
 def discover_ticker(ticker: str):
     """Trigger the universal discovery pipeline for a single ticker."""
     if ext.discovery_pipeline is None:

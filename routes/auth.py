@@ -269,19 +269,14 @@ def auth_telegram_verify():
             conn.close()
     except Exception:
         pass
-    # Issue token
-    if ext.HAS_AUTH:
-        try:
-            from middleware.auth import _make_token
-            access_token = _make_token(user_id, f"{user_id}@telegram.local")
-        except Exception:
-            access_token = _b64.urlsafe_b64encode(_json.dumps(
-                {'user_id': user_id, 'sub': user_id, 'exp': int(_time.time()) + 86400 * 30}
-            ).encode()).decode()
-    else:
-        access_token = _b64.urlsafe_b64encode(_json.dumps(
-            {'user_id': user_id, 'sub': user_id, 'exp': int(_time.time()) + 86400 * 30}
-        ).encode()).decode()
+    # Issue token — hard fail if JWT is not available (base64 is not a token)
+    if not ext.HAS_AUTH:
+        return jsonify({'error': 'auth not available — install PyJWT and bcrypt'}), 503
+    try:
+        from middleware.auth import _make_token
+        access_token = _make_token(user_id, f"{user_id}@telegram.local")
+    except Exception as _te:
+        return jsonify({'error': f'token generation failed: {_te}'}), 500
     resp = jsonify({
         'access_token': access_token,
         'user_id':      user_id,
@@ -331,12 +326,9 @@ def auth_telegram():
 
     user_id = f"tg_{tg_id}"
 
+    # Hard fail if JWT unavailable — base64 is not a token and is trivially forgeable
     if not ext.HAS_AUTH:
-        import base64 as _b64, json as _json
-        minimal = _b64.urlsafe_b64encode(_json.dumps({
-            'user_id': user_id, 'sub': user_id, 'exp': int(time.time()) + 86400 * 30,
-        }).encode()).decode()
-        return jsonify({'access_token': minimal, 'user_id': user_id, 'token_type': 'Bearer'})
+        return jsonify({'error': 'auth not available — install PyJWT and bcrypt'}), 503
 
     try:
         from middleware.auth import _make_token
@@ -479,30 +471,3 @@ def admin_set_dev(target_user_id):
         return jsonify({'error': str(e)}), 500
 
 
-@bp.route('/dev/upgrade-premium', methods=['POST'])
-def dev_upgrade_premium():
-    """POST /dev/upgrade-premium — TEMPORARY: self-upgrade to premium for testing."""
-    if not ext.HAS_PRODUCT_LAYER:
-        return jsonify({'error': 'product layer not available'}), 503
-    user_id = getattr(g, 'user_id', None)
-    if not user_id:
-        if ext.HAS_AUTH:
-            try:
-                from middleware.auth import _decode_token
-                _tok = request.cookies.get('tg_access', '') or \
-                       request.headers.get('Authorization', '').removeprefix('Bearer ').strip()
-                if _tok:
-                    user_id = _decode_token(_tok).get('user_id')
-            except Exception:
-                pass
-    if not user_id:
-        body = request.get_json(force=True, silent=True) or {}
-        user_id = body.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'user_id required'}), 400
-    try:
-        from users.user_store import set_user_tier as _set_tier
-        _set_tier(ext.DB_PATH, user_id, 'premium')
-        return jsonify({'ok': True, 'tier': 'premium', 'user_id': user_id})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500

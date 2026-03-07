@@ -130,6 +130,14 @@ def _ensure_tables():
         except Exception:
             pass
 
+        # notification_prefs column (added after initial schema)
+        try:
+            conn.execute(
+                "ALTER TABLE user_preferences ADD COLUMN notification_prefs TEXT DEFAULT '{}'"
+            )
+        except Exception:
+            pass
+
         conn.commit()
         conn.close()
     except Exception as e:
