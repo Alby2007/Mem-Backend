@@ -1037,11 +1037,22 @@ def run(
         response['web_searched'] = web_searched
 
     # ── Calibration + grounding atoms lookup for primary ticker ──────────────
+    # Use cur_tickers if available; fall back to the most-frequent subject in atoms
+    _lookup_ticker: Optional[str] = None
     if cur_tickers:
+        _lookup_ticker = cur_tickers[0].lower()
+    elif atoms:
+        from collections import Counter as _Counter
+        _subj_counts = _Counter(
+            a['subject'].lower() for a in atoms if a.get('subject')
+        )
+        if _subj_counts:
+            _lookup_ticker = _subj_counts.most_common(1)[0][0]
+    if _lookup_ticker:
         try:
             import sqlite3 as _sq_cal
             _cc = _sq_cal.connect(ext.DB_PATH, timeout=5)
-            _tk = cur_tickers[0].lower()
+            _tk = _lookup_ticker
 
             # Calibration row
             _cal_row = _cc.execute(
