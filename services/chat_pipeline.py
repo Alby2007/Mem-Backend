@@ -1048,24 +1048,24 @@ def run(
         )
         if _subj_counts:
             _lookup_ticker = _subj_counts.most_common(1)[0][0]
-    import logging as _ga_log
-    _ga_log.getLogger(__name__).info('grounding_lookup: _lookup_ticker=%r atoms_len=%d', _lookup_ticker, len(atoms) if atoms else 0)
     if _lookup_ticker:
-        try:
-            import sqlite3 as _sq_cal
-            _cc = _sq_cal.connect(ext.DB_PATH, timeout=5)
-            _tk = _lookup_ticker
+        import sqlite3 as _sq_cal
+        _tk = _lookup_ticker
 
-            # Calibration row
-            _cal_row = _cc.execute(
-                """SELECT pattern_type, timeframe, sample_size,
-                          hit_rate_t1, hit_rate_t2, calibration_confidence, confidence_label
-                   FROM signal_calibration
-                   WHERE ticker = ?
-                   ORDER BY calibration_confidence DESC, sample_size DESC
-                   LIMIT 1""",
+        # ── Calibration row (best-evidenced pattern for this ticker) ──────────
+        try:
+            _cc_cal = _sq_cal.connect(ext.DB_PATH, timeout=5)
+            # Introspect available columns to avoid schema mismatch errors
+            _cal_cols = {r[1] for r in _cc_cal.execute('PRAGMA table_info(signal_calibration)').fetchall()}
+            _has_conf_label = 'confidence_label' in _cal_cols
+            _cal_sel = ('pattern_type, timeframe, sample_size, hit_rate_t1, hit_rate_t2, calibration_confidence'
+                        + (', confidence_label' if _has_conf_label else ''))
+            _cal_row = _cc_cal.execute(
+                f'SELECT {_cal_sel} FROM signal_calibration WHERE ticker=? '
+                'ORDER BY calibration_confidence DESC, sample_size DESC LIMIT 1',
                 (_tk,),
             ).fetchone()
+            _cc_cal.close()
             if _cal_row and _cal_row[2] >= 10:
                 response['calibration'] = {
                     'pattern_type':           _cal_row[0],
@@ -1074,10 +1074,15 @@ def run(
                     'hit_rate_t1':            _cal_row[3],
                     'hit_rate_t2':            _cal_row[4],
                     'calibration_confidence': _cal_row[5],
-                    'confidence_label':       _cal_row[6],
+                    'confidence_label':       _cal_row[6] if _has_conf_label else None,
                 }
+        except Exception as _cal_exc:
+            import logging as _cal_log
+            _cal_log.getLogger(__name__).warning('calibration lookup failed: %s', _cal_exc)
 
-            # Grounding atoms — fetch best-confidence value for each key predicate
+        # ── Grounding atoms — independent try so calibration failure can't block ──
+        try:
+            _cc_ga = _sq_cal.connect(ext.DB_PATH, timeout=5)
             _GROUNDING_PREDS = [
                 'signal_direction', 'conviction_tier', 'price_regime',
                 'volatility_regime', 'sector', 'implied_volatility',
@@ -1085,7 +1090,7 @@ def run(
             ]
             _ga: dict = {}
             for _pred in _GROUNDING_PREDS:
-                _row = _cc.execute(
+                _row = _cc_ga.execute(
                     """SELECT object FROM facts
                        WHERE subject=? AND predicate=? AND (object IS NOT NULL AND object != '')
                        ORDER BY confidence DESC LIMIT 1""",
@@ -1093,14 +1098,12 @@ def run(
                 ).fetchone()
                 if _row:
                     _ga[_pred] = _row[0]
-            _ga_log.getLogger(__name__).info('grounding_lookup: _tk=%r _ga=%r', _tk, _ga)
+            _cc_ga.close()
             if _ga:
                 response['grounding_atoms'] = _ga
-
-            _cc.close()
-        except Exception as _cal_exc:
-            import logging as _cal_log
-            _cal_log.getLogger(__name__).warning('calibration/grounding lookup failed: %s', _cal_exc)
+        except Exception as _ga_exc:
+            import logging as _ga_log
+            _ga_log.getLogger(__name__).warning('grounding atoms lookup failed: %s', _ga_exc)
 
     # ── Persist assistant turn + KB graduation ────────────────────────────
     _persist_assistant_and_graduate(
