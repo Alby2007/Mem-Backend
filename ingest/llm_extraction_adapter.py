@@ -235,10 +235,12 @@ class LLMExtractionAdapter(BaseIngestAdapter):
         try:
             from llm.groq_client import chat as groq_chat, is_available as groq_available
             if groq_available():
-                self._logger.debug('Falling back to Groq for LLM extraction')
-                return groq_chat(messages)
+                self._logger.info('Falling back to Groq for LLM extraction')
+                result = groq_chat(messages)
+                self._logger.info('Groq response: %s', repr(result)[:120] if result else 'None')
+                return result
         except Exception as e:
-            self._logger.debug('Groq unavailable: %s', e)
+            self._logger.warning('Groq call failed: %s', e)
 
         return None
 
