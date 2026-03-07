@@ -1048,6 +1048,8 @@ def run(
         )
         if _subj_counts:
             _lookup_ticker = _subj_counts.most_common(1)[0][0]
+    import logging as _ga_log
+    _ga_log.getLogger(__name__).info('grounding_lookup: _lookup_ticker=%r atoms_len=%d', _lookup_ticker, len(atoms) if atoms else 0)
     if _lookup_ticker:
         try:
             import sqlite3 as _sq_cal
@@ -1091,6 +1093,7 @@ def run(
                 ).fetchone()
                 if _row:
                     _ga[_pred] = _row[0]
+            _ga_log.getLogger(__name__).info('grounding_lookup: _tk=%r _ga=%r', _tk, _ga)
             if _ga:
                 response['grounding_atoms'] = _ga
 
