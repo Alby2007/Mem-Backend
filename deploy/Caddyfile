@@ -54,6 +54,12 @@ api.trading-galaxy.uk {
         -Server
     }
 
+    # Chart iframe endpoint — remove X-Frame-Options so the app can embed it
+    @chart path /markets/chart
+    header @chart {
+        -X-Frame-Options
+    }
+
     # Handle CORS preflight immediately — do not forward to Flask
     @options method OPTIONS
     respond @options 204
