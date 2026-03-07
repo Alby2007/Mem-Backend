@@ -228,7 +228,7 @@ class LLMExtractionAdapter(BaseIngestAdapter):
         try:
             from llm.ollama_client import chat as ollama_chat, is_available, EXTRACTION_MODEL
             if is_available():
-                return ollama_chat(messages, model=EXTRACTION_MODEL, stream=False, timeout=60)
+                return ollama_chat(messages, model=EXTRACTION_MODEL, timeout=60)
         except Exception as e:
             self._logger.debug('Ollama unavailable: %s', e)
 
@@ -236,17 +236,33 @@ class LLMExtractionAdapter(BaseIngestAdapter):
             from llm.groq_client import chat as groq_chat, is_available as groq_available
             if groq_available():
                 self._logger.debug('Falling back to Groq for LLM extraction')
-                return groq_chat(messages, stream=False)
+                return groq_chat(messages)
         except Exception as e:
             self._logger.debug('Groq unavailable: %s', e)
 
         return None
 
+    def _any_llm_available(self) -> bool:
+        """Quick check — no network call needed."""
+        try:
+            from llm.ollama_client import is_available
+            if is_available():
+                return True
+        except Exception:
+            pass
+        try:
+            from llm.groq_client import is_available as groq_available
+            if groq_available():
+                return True
+        except Exception:
+            pass
+        return False
+
     def fetch(self) -> List[RawAtom]:
 
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        if self._llm_call([{'role': 'user', 'content': 'ping'}]) is None:
+        if not self._any_llm_available():
             self._logger.info('No LLM backend reachable (Ollama + Groq) — skipping extraction run')
             return []
 
