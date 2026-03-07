@@ -5,7 +5,7 @@ let _ptPollTimer = null;
 async function loadPaperTrader() {
   if (!state.userId) return;
   await new Promise(r => setTimeout(r, 50)); // let showScreen finish activating the DOM
-  await Promise.all([_ptLoadAccount(), _ptLoadPositions(), _ptLoadAgentLog(), _ptSyncStatus()]);
+  await Promise.all([_ptLoadAccount(), _ptLoadPositions(), _ptLoadAgentLog(), _ptSyncStatus(), _ptLoadEquity()]);
   if (_ptPollTimer) clearInterval(_ptPollTimer);
   _ptPollTimer = setInterval(() => {
     if (document.getElementById('screen-paper')?.classList.contains('active')) {
@@ -13,6 +13,7 @@ async function loadPaperTrader() {
       _ptLoadPositions();
       _ptLoadAgentLog();
       _ptSyncStatus();
+      _ptLoadEquity();
     } else {
       clearInterval(_ptPollTimer);
       _ptPollTimer = null;
@@ -74,11 +75,99 @@ async function _ptLoadAccount() {
     arEl.textContent = ar !== null && ar !== undefined ? ar + 'R' : '—';
     arEl.style.color = ar !== null ? (ar >= 0 ? 'var(--green)' : 'var(--red)') : '';
     document.getElementById('pt-closed-count').textContent = (d.closed_trades ?? 0) + ' closed trades';
+    // Show onboarding modal if account size not yet set
+    if (d.account_size_set === false) _ptShowOnboarding();
   } catch(e) {
     if (e.message && e.message.includes('paper_trading_requires_pro')) {
       _ptShowUpsell();
     }
   }
+}
+
+async function _ptLoadEquity() {
+  const el = document.getElementById('pt-equity-chart');
+  const lbl = document.getElementById('pt-equity-label');
+  if (!el || !state.userId) return;
+  try {
+    const d = await apiFetch(`/users/${state.userId}/paper/equity?days=90`);
+    const rows = d?.equity || [];
+    if (!rows.length) return; // keep placeholder
+    const vals = rows.map(r => r.equity_value);
+    const times = rows.map(r => r.logged_at);
+    const minV = Math.min(...vals);
+    const maxV = Math.max(...vals);
+    const range = maxV - minV || 1;
+    const W = 560, H = 120, PX = 8, PY = 12;
+    const iW = W - PX * 2, iH = H - PY * 2;
+    const pts = vals.map((v, i) => {
+      const x = PX + (i / Math.max(vals.length - 1, 1)) * iW;
+      const y = PY + iH - ((v - minV) / range) * iH;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    const last = vals[vals.length - 1];
+    const first = vals[0];
+    const up = last >= first;
+    const lineCol = up ? 'var(--green)' : 'var(--red)';
+    const lastX = PX + iW;
+    const lastY = PY + iH - ((last - minV) / range) * iH;
+    const fmt = v => v >= 1000 ? '£' + (v/1000).toFixed(1) + 'k' : '£' + v.toFixed(0);
+    const pct = first > 0 ? ((last - first) / first * 100).toFixed(1) : '0.0';
+    const sign = up ? '+' : '';
+    if (lbl) lbl.textContent = `${sign}${pct}% · ${fmt(last)} · ${rows.length} data points`;
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:120px;display:block;">
+      <polyline points="${pts}" fill="none" stroke="${lineCol}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      <circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="3.5" fill="${lineCol}"/>
+      <text x="${(lastX - 2).toFixed(1)}" y="${(lastY - 7).toFixed(1)}" fill="${lineCol}" font-size="9" text-anchor="end" font-family="monospace">${fmt(last)}</text>
+    </svg>`;
+  } catch(e) { /* leave placeholder */ }
+}
+
+let _ptOnboardingShown = false;
+async function _ptShowOnboarding() {
+  if (_ptOnboardingShown || document.getElementById('pt-onboarding-modal')) return;
+  _ptOnboardingShown = true;
+  const overlay = document.createElement('div');
+  overlay.id = 'pt-onboarding-modal';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:28px 32px;max-width:380px;width:90%;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:8px;">Set your paper account size</div>
+      <div style="color:var(--muted);font-size:13px;margin-bottom:20px;">How much would you like to simulate trading with?</div>
+      <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+        <button class="btn btn-ghost btn-sm pt-preset" data-v="5000">£5k</button>
+        <button class="btn btn-ghost btn-sm pt-preset" data-v="10000">£10k</button>
+        <button class="btn btn-ghost btn-sm pt-preset" data-v="25000">£25k</button>
+        <button class="btn btn-ghost btn-sm pt-preset" data-v="50000">£50k</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:20px;">
+        <span style="color:var(--muted);font-size:14px;">£</span>
+        <input id="pt-acct-input" type="number" min="1000" max="100000" step="1000" value="10000"
+          style="flex:1;background:var(--input-bg,#1a1a2e);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:14px;">
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button id="pt-acct-confirm" class="btn btn-primary" style="flex:1;">Confirm</button>
+        <button id="pt-acct-dismiss" class="btn btn-ghost">Not now</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelectorAll('.pt-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('pt-acct-input').value = btn.dataset.v;
+    });
+  });
+  const close = async (save) => {
+    const val = save ? parseFloat(document.getElementById('pt-acct-input').value) : null;
+    try {
+      await apiFetch(`/users/${state.userId}/paper/account`, {
+        method: 'PATCH',
+        body: JSON.stringify({ virtual_balance: val || 500000, mark_set: true }),
+      });
+    } catch(e) { /* best effort */ }
+    overlay.remove();
+    _ptLoadAccount();
+  };
+  document.getElementById('pt-acct-confirm').addEventListener('click', () => close(true));
+  document.getElementById('pt-acct-dismiss').addEventListener('click', () => close(false));
 }
 
 function _ptShowUpsell() {

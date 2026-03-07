@@ -192,7 +192,8 @@ async def user_portfolio_get(user_id: str, _: str = Depends(user_path_auth)):
     if not ext.HAS_PRODUCT_LAYER:
         raise HTTPException(503, detail="product layer not available")
     try:
-        holdings = ext.get_portfolio(ext.DB_PATH, user_id)
+        from users.user_store import get_portfolio_with_signals
+        holdings = get_portfolio_with_signals(ext.DB_PATH, user_id)
         return {"holdings": holdings or [], "count": len(holdings or [])}
     except Exception as e:
         raise HTTPException(500, detail=str(e))

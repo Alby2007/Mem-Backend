@@ -244,22 +244,29 @@ async function loadDashboardPositions() {
         </div>`;
         return;
       }
-      // Show holdings as position rows (no P&L — not yet enriched)
+      // Show holdings with KB signal atoms (enriched by backend)
       el.innerHTML = holdings.slice(0, 6).map(h => {
-        const sym  = { GBP:'£', USD:'$', EUR:'€' }[h.currency || 'GBP'] || '';
+        const sym  = { GBP:'£', USD:'$', EUR:'€' }[h.currency || 'GBP'] || '£';
         const qty  = h.quantity ? h.quantity.toLocaleString() + ' shares' : '';
         const cost = h.avg_cost != null ? `avg ${sym}${Number(h.avg_cost).toFixed(2)}` : '';
+        const dir = (h.signal_direction || '').toLowerCase();
+        const hasSig = !!h.signal_direction;
+        const sigClr = dir === 'bullish' ? 'var(--green)' : dir === 'bearish' ? 'var(--red)' : 'var(--muted)';
+        const conv = h.conviction_tier ? ` · ${h.conviction_tier}` : '';
+        const sigTxt = hasSig ? (dir.charAt(0).toUpperCase() + dir.slice(1)) + conv : 'No KB signal';
+        const price = h.last_price ? `${sym}${parseFloat(h.last_price).toFixed(2)}` : '';
+        const upside = h.upside_pct ? ` · ${parseFloat(h.upside_pct) >= 0 ? '+' : ''}${parseFloat(h.upside_pct).toFixed(1)}% upside` : '';
         return `<div class="dsh-pos-item" onclick="navigate('portfolio')">
           <div class="dsh-pos-meta" style="width:72px;flex-shrink:0;">
             <div class="dsh-pos-ticker">${escHtml(h.ticker)}</div>
+            ${price ? `<div class="dsh-pos-name" style="font-size:10px;color:var(--muted);">${price}</div>` : ''}
           </div>
           <div class="dsh-pos-meta">
             <div class="dsh-pos-qty">${[qty, cost].filter(Boolean).join(' · ')}</div>
-            <div class="dsh-pos-sig"><div class="dsh-pos-sig-dot" style="background:var(--muted)"></div><span style="color:var(--muted)">No signal yet</span></div>
+            <div class="dsh-pos-sig"><div class="dsh-pos-sig-dot" style="background:${sigClr}"></div><span style="color:${sigClr}">${escHtml(sigTxt)}${upside}</span></div>
           </div>
           <div class="dsh-pos-ppl">
             <div class="dsh-pos-ppl-val" style="color:var(--muted);">—</div>
-            <div class="dsh-pos-ppl-pct">submit to enrich</div>
           </div>
         </div>`;
       }).join('');

@@ -22,6 +22,11 @@ def _tier_gate(user_id: str) -> None:
         raise HTTPException(403, detail={"error": err_msg, "tier": tier})
 
 
+class UpdateAccountRequest(BaseModel):
+    virtual_balance: float
+    mark_set: Optional[bool] = True
+
+
 class OpenPositionRequest(BaseModel):
     ticker: str
     direction: str
@@ -40,6 +45,24 @@ async def paper_account_get(user_id: str, _: str = Depends(user_path_auth)):
     _tier_gate(user_id)
     try:
         return svc.get_account(user_id)
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
+@router.patch("/users/{user_id}/paper/account")
+async def paper_account_update(user_id: str, data: UpdateAccountRequest, _: str = Depends(user_path_auth)):
+    _tier_gate(user_id)
+    result = svc.update_account_size(user_id, data.virtual_balance, data.mark_set)
+    if 'error' in result:
+        raise HTTPException(400, detail=result['error'])
+    return result
+
+
+@router.get("/users/{user_id}/paper/equity")
+async def paper_equity_log(user_id: str, days: int = 90, _: str = Depends(user_path_auth)):
+    _tier_gate(user_id)
+    try:
+        return {'equity': svc.get_equity_log(user_id, days)}
     except Exception as e:
         raise HTTPException(500, detail=str(e))
 

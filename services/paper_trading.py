@@ -52,11 +52,25 @@ def ensure_paper_tables(conn):
             created_at TEXT NOT NULL
         )
     """)
-    # Idempotent: add agent_running column if it doesn't exist yet
+    # Idempotent: add columns if they don't exist yet
     try:
         conn.execute('ALTER TABLE paper_account ADD COLUMN agent_running INTEGER NOT NULL DEFAULT 0')
     except Exception:
         pass
+    try:
+        conn.execute('ALTER TABLE paper_account ADD COLUMN account_size_set INTEGER NOT NULL DEFAULT 0')
+    except Exception:
+        pass
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_equity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            equity_value REAL NOT NULL,
+            cash_balance REAL NOT NULL,
+            open_positions INTEGER NOT NULL DEFAULT 0,
+            logged_at TEXT NOT NULL
+        )
+    """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_positions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,8 +170,9 @@ def get_account(user_id: str) -> dict:
         (user_id, now_iso)
     )
     conn.commit()
+    ensure_paper_tables(conn)
     row = conn.execute(
-        "SELECT virtual_balance, currency, created_at FROM paper_account WHERE user_id=?",
+        'SELECT virtual_balance, currency, created_at, account_size_set FROM paper_account WHERE user_id=?',
         (user_id,)
     ).fetchone()
     total = conn.execute(
@@ -204,12 +219,49 @@ def get_account(user_id: str) -> dict:
         'unrealised_pnl': round(unrealised_cash, 2),
         'currency': row[1],
         'created_at': row[2],
+        'account_size_set': bool(row[3]) if len(row) > 3 else False,
         'total_trades': total,
         'open_positions': open_c,
         'closed_trades': total_closed,
         'win_rate_pct': win_rate,
         'avg_r': avg_r,
     }
+
+
+def get_equity_log(user_id: str, days: int = 90) -> list[dict]:
+    """Return equity log rows for the last N days, ordered ascending for charting."""
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    ensure_paper_tables(conn)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        'SELECT logged_at, equity_value, cash_balance, open_positions FROM paper_equity_log '
+        'WHERE user_id=? AND logged_at >= ? ORDER BY logged_at ASC',
+        (user_id, cutoff)
+    ).fetchall()
+    conn.close()
+    return [
+        {'logged_at': r[0], 'equity_value': r[1], 'cash_balance': r[2], 'open_positions': r[3]}
+        for r in rows
+    ]
+
+
+def update_account_size(user_id: str, virtual_balance: float, mark_set: bool = True) -> dict:
+    """Update virtual_balance and optionally mark account_size_set=1."""
+    if virtual_balance < 1000 or virtual_balance > 100000:
+        return {'error': 'account size must be between 1000 and 100000'}
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    ensure_paper_tables(conn)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        'INSERT INTO paper_account (user_id, virtual_balance, currency, created_at, account_size_set) '
+        'VALUES (?, ?, \'GBP\', ?, ?) '
+        'ON CONFLICT(user_id) DO UPDATE SET virtual_balance=excluded.virtual_balance, '
+        'account_size_set=excluded.account_size_set',
+        (user_id, virtual_balance, now_iso, 1 if mark_set else 0)
+    )
+    conn.commit()
+    conn.close()
+    return {'user_id': user_id, 'virtual_balance': virtual_balance, 'account_size_set': mark_set}
 
 
 # ── Position operations ───────────────────────────────────────────────────────
@@ -800,6 +852,25 @@ def _ai_run_inner(user_id: str) -> dict:
                 (user_id, 'skip', None,
                  f'Scanned {scanned} patterns — {entries} entr{"y" if entries==1 else "ies"}, {skips} skipped', now_iso)
             )
+        # Write equity snapshot after all entries/exits are committed
+        try:
+            acct_now = conn.execute(
+                'SELECT virtual_balance FROM paper_account WHERE user_id=?', (user_id,)
+            ).fetchone()
+            open_pos_rows = conn.execute(
+                'SELECT entry_price, quantity FROM paper_positions WHERE user_id=? AND status=?',
+                (user_id, 'open')
+            ).fetchall()
+            cash_now = float(acct_now[0]) if acct_now else 500000.0
+            open_value = sum(float(r[0]) * float(r[1]) for r in open_pos_rows)
+            equity_now = round(cash_now + open_value, 2)
+            open_count = len(open_pos_rows)
+            conn.execute(
+                'INSERT INTO paper_equity_log (user_id, equity_value, cash_balance, open_positions, logged_at) VALUES (?,?,?,?,?)',
+                (user_id, equity_now, cash_now, open_count, now_iso)
+            )
+        except Exception as _eq_e:
+            _logger.warning('equity log write failed for %s: %s', user_id, _eq_e)
         conn.commit()
         conn.close()
         return {'entries': entries, 'skips': skips, 'monitor_updates': _monitor_updates}

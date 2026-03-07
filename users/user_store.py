@@ -373,6 +373,34 @@ def get_portfolio(db_path: str, user_id: str) -> List[dict]:
         conn.close()
 
 
+_PORTFOLIO_SIGNAL_PREDS = ('signal_direction', 'conviction_tier', 'last_price', 'price_target', 'upside_pct')
+
+
+def get_portfolio_with_signals(db_path: str, user_id: str) -> List[dict]:
+    """Return holdings enriched with up to 5 KB signal atoms per ticker (lowercase lookup)."""
+    holdings = get_portfolio(db_path, user_id)
+    if not holdings:
+        return []
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        placeholders = ','.join('?' for _ in _PORTFOLIO_SIGNAL_PREDS)
+        for h in holdings:
+            tk_lower = h['ticker'].lower()
+            rows = conn.execute(
+                f'SELECT predicate, object FROM facts WHERE subject=? AND predicate IN ({placeholders})',
+                (tk_lower, *_PORTFOLIO_SIGNAL_PREDS)
+            ).fetchall()
+            atoms = {p: v for p, v in rows}
+            h['signal_direction'] = atoms.get('signal_direction')
+            h['conviction_tier'] = atoms.get('conviction_tier')
+            h['last_price'] = atoms.get('last_price')
+            h['price_target'] = atoms.get('price_target')
+            h['upside_pct'] = atoms.get('upside_pct')
+    finally:
+        conn.close()
+    return holdings
+
+
 # ── User model ─────────────────────────────────────────────────────────────────
 
 def upsert_user_model(
