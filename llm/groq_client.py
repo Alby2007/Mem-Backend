@@ -19,10 +19,13 @@ import requests as _requests
 
 _logger = logging.getLogger(__name__)
 
-GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
 GROQ_BASE_URL  = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL  = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 DEFAULT_TIMEOUT = int(os.environ.get("GROQ_TIMEOUT", "30"))
+
+
+def _api_key() -> str:
+    return os.environ.get("GROQ_API_KEY", "")
 
 
 def chat(
@@ -34,11 +37,12 @@ def chat(
     Send messages to Groq and return the assistant reply as a string.
     Returns None if GROQ_API_KEY is not set or on any error.
     """
-    if not GROQ_API_KEY:
+    key = _api_key()
+    if not key:
         return None
 
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
     payload = {
@@ -69,4 +73,4 @@ def chat(
 
 def is_available() -> bool:
     """True if GROQ_API_KEY is set and Groq is reachable."""
-    return bool(GROQ_API_KEY)
+    return bool(_api_key())
