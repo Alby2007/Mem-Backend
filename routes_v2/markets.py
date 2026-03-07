@@ -15,12 +15,13 @@ router = APIRouter()
 
 
 @router.get("/markets/chart", response_class=HTMLResponse)
-async def markets_chart(symbol: str = "AAPL"):
+async def markets_chart(sym: str = "AAPL", symbol: str = None):
+    tvSym = sym if sym != "AAPL" or symbol is None else (symbol or sym)
     html = f"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{symbol} – Trading Galaxy Chart</title>
+<title>{tvSym} – Trading Galaxy Chart</title>
 <style>body{{margin:0;overflow:hidden}}#tv{{width:100vw;height:100vh}}</style>
 </head><body>
 <div id="tv"></div>
@@ -29,7 +30,7 @@ async def markets_chart(symbol: str = "AAPL"):
 new TradingView.widget({{
   container_id: 'tv',
   autosize: true,
-  symbol: '{symbol}',
+  symbol: '{tvSym}',
   interval: 'D',
   timezone: 'Etc/UTC',
   theme: 'dark',

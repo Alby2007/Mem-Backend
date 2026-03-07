@@ -694,12 +694,12 @@ def _ai_run_inner(user_id: str) -> dict:
                    SELECT ticker, MAX(quality_score) AS best_q
                    FROM pattern_signals
                    WHERE status NOT IN ('filled','broken')
-                     AND quality_score >= 0.70
+                     AND quality_score >= 0.75
                      AND LOWER(kb_conviction) IN ('high','confirmed','strong')
                    GROUP BY ticker
                ) best ON best.ticker = p.ticker AND best.best_q = p.quality_score
                WHERE p.status NOT IN ('filled','broken')
-                 AND p.quality_score >= 0.70
+                 AND p.quality_score >= 0.75
                  AND LOWER(p.kb_conviction) IN ('high','confirmed','strong')
                ORDER BY RANDOM()
                LIMIT 100"""
@@ -707,8 +707,8 @@ def _ai_run_inner(user_id: str) -> dict:
 
         all_cands = [dict(r) for r in candidate_rows]
         high_band = [c for c in all_cands if c['quality_score'] >= 0.85]
-        mid_band  = [c for c in all_cands if 0.75 <= c['quality_score'] < 0.85]
-        low_band  = [c for c in all_cands if c['quality_score'] < 0.75]
+        mid_band  = [c for c in all_cands if 0.80 <= c['quality_score'] < 0.85]
+        low_band  = [c for c in all_cands if c['quality_score'] < 0.80]
         random.shuffle(high_band)
         random.shuffle(mid_band)
         random.shuffle(low_band)
@@ -728,6 +728,22 @@ def _ai_run_inner(user_id: str) -> dict:
             pattern_id = c['id']
 
             if ticker in open_tickers or ticker in cooled_tickers:
+                skips += 1
+                continue
+
+            # Regime alignment filter — hard skip misaligned entries
+            _regime_lower = regime.lower()
+            _regime_misaligned = (
+                (direction == 'bullish' and any(x in _regime_lower for x in ('risk_off', 'bearish', 'bear')))
+                or (direction == 'bearish' and any(x in _regime_lower for x in ('risk_on', 'bullish', 'bull')))
+            )
+            if _regime_misaligned and _regime_lower:
+                conn.execute(
+                    "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                    (user_id, 'regime_skip', ticker,
+                     f'{ticker} skipped — {direction} in {regime}', now_iso)
+                )
+                conn.commit()
                 skips += 1
                 continue
 
@@ -799,9 +815,11 @@ def _ai_run_inner(user_id: str) -> dict:
                                 t2_p = float(parsed.get('t2', t2_p))
                             risk = abs(entry_p - stop_p)
                 else:
-                    reasoning = f'{reasoning} | kb_depth={kb_depth} ({atom_count} atoms)'
+                    action = 'SKIP'
+                    reasoning = f'{reasoning} | llm_no_response kb_depth={kb_depth}'
             except Exception as llm_err:
-                _logger.warning('KB-chat paper agent error for %s: %s', ticker, llm_err)
+                action = 'SKIP'
+                _logger.warning('KB-chat paper agent error for %s: %s — defaulting to SKIP', ticker, llm_err)
 
             if action == 'ENTER' and entries >= _PAPER_MAX_NEW_PER_SCAN:
                 skips += 1

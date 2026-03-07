@@ -252,6 +252,9 @@ async def user_tip_config_get(user_id: str, _: str = Depends(user_path_auth)):
         d["cash_currency"] = _cd.get("cash_currency","GBP")
     except Exception:
         d["cash_currency"] = "GBP"
+    # Sanitise implausibly large available_cash values (legacy defaults / data errors)
+    if d.get("available_cash") is not None and d["available_cash"] > 1_000_000:
+        d["available_cash"] = None
     return d
 
 
