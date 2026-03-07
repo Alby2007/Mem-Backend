@@ -204,7 +204,7 @@ async def user_portfolio_update(user_id: str, data: PortfolioRequest, _: str = D
         raise HTTPException(503, detail="product layer not available")
     holdings = data.portfolio or data.holdings or []
     if ext.HAS_VALIDATORS:
-        result = ext.validate_portfolio_submission({"portfolio": holdings})
+        result = ext.validate_portfolio_submission(holdings)
         if not result.valid:
             raise HTTPException(400, detail={"error": "validation_failed", "details": result.errors})
     try:

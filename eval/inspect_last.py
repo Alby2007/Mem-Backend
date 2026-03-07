@@ -27,6 +27,14 @@ if other_errs:
 if no_token:
     print(f"\nSample no-token item: {json.dumps(no_token[0], indent=2)[:400]}")
 
+pr_fails = [r for r in d if r.get("intent") == "portfolio_review" and not r.get("pass") and not r.get("error")]
+if pr_fails:
+    print(f"\nportfolio_review failures: {len(pr_fails)}")
+    sample = pr_fails[0]
+    print(f"  query: {sample.get('query','')[:120]}")
+    print(f"  scores: {sample.get('scores',{})}")
+    print(f"  response_preview: {sample.get('response_preview','')[:300]}")
+
 if passes:
     print(f"\nSample passing item intent={passes[0].get('intent')} response_length={passes[0].get('response_length')}")
     print(f"  response_preview: {passes[0].get('response_preview','')[:200]}")
