@@ -415,8 +415,25 @@ window.clearCashHolding = async function() {
   if (cashNudge) cashNudge.innerHTML = '<a href="#" id="cash-set-nudge" style="color:var(--accent);text-decoration:none;font-size:11px;">Set balance \u2192 (Portfolio tab)</a>';
 };
 
-window.removeHolding = function(i) { state.holdings.splice(i, 1); renderHoldings(); };
+window.removeHolding = function(i) { state.holdings.splice(i, 1); renderHoldings(); _autoSaveHoldings(); };
 window.removeCashHolding = window.clearCashHolding;
+
+// Auto-save debounce: persist holdings to backend 1s after last change
+let _autoSaveTimer = null;
+function _autoSaveHoldings() {
+  if (!state.userId) return;
+  clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = setTimeout(async () => {
+    const holdingsToSubmit = state.holdings.filter(h => !h.is_cash);
+    if (!holdingsToSubmit.length) return;
+    try {
+      await apiFetch(`/users/${state.userId}/portfolio`, {
+        method: 'POST',
+        body: JSON.stringify({ holdings: holdingsToSubmit }),
+      });
+    } catch { /* silent — user can still manually submit */ }
+  }, 1000);
+}
 
 document.getElementById('p-add-btn').addEventListener('click', () => {
   const ticker = (_acInput.value || '').trim().toUpperCase();
@@ -429,6 +446,7 @@ document.getElementById('p-add-btn').addEventListener('click', () => {
   document.getElementById('p-qty').value = '';
   document.getElementById('p-cost').value = '';
   renderHoldings();
+  _autoSaveHoldings();
 });
 
 // Screenshot upload

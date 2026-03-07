@@ -179,6 +179,12 @@ _SYSTEM_POSITIONS_RULE = (
 _SYSTEM_PORTFOLIO_BASE = (
     "\n13. You have access to the user's portfolio in the USER PORTFOLIO block below. "
     "Use it to personalise every answer. "
+    "CRITICAL — CASH BALANCE RULE: When a USER ACCOUNT or USER PORTFOLIO block contains a line "
+    "beginning with 'Paper account cash balance:', that line contains the EXACT figure from the database. "
+    "You MUST quote it verbatim — do NOT calculate, estimate, round, or invent a different number. "
+    "If the user asks 'how much cash do I have', read the exact figure from that line and state it directly. "
+    "Never derive a cash figure from trades, positions, or your training data. "
+    "The number after the currency symbol IS the answer — use it word-for-word. "
     "CRITICAL — PROFILE QUERIES: When the user asks how something relates to 'my profile', "
     "'my new profile', 'my risk tolerance', 'my portfolio', or 'me', "
     "you MUST read the USER PORTFOLIO block (risk_tolerance, investment_horizon, sector_affinity, "
