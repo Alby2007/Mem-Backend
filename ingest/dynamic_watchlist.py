@@ -42,7 +42,7 @@ _DEFAULT_TICKERS: List[str] = [
     # Housebuilders
     'PSN.L',
     # Additional FTSE names common in UK ISA portfolios
-    'STAN.L', 'HL.L', 'IAG.L', 'PRU.L', 'EXPN.L',
+    'STAN.L', 'IAG.L', 'PRU.L', 'EXPN.L',
     'DGE.L', 'FRES.L', 'SMT.L', 'ABDN.L', 'MNG.L',
     'IMB.L', 'SSE.L', 'SVT.L', 'SGRO.L', 'LAND.L',
     # FTSE indices as macro proxies
