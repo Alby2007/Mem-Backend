@@ -302,26 +302,24 @@ class YFinanceAdapter(BaseIngestAdapter):
 
     # ── Fast bulk price path ───────────────────────────────────────────────
 
-    # Maximum tickers per yf.download() call. Keep small so one delisted ticker
-    # only blocks its batch, not the entire 155-ticker watchlist.
-    _DOWNLOAD_BATCH_SIZE = 30
-    # Hard deadline per batch in seconds.
-    _DOWNLOAD_BATCH_TIMEOUT = 45
+    # Workers for parallel fast_info price fetch
+    _PRICE_WORKERS = 20
+    # Per-ticker deadline for fast_info call
+    _PRICE_TICKER_TIMEOUT = 10
 
     def _bulk_download_prices(self, now_iso: str) -> List[RawAtom]:
         """
-        Use yf.download() to fetch the latest close price for all tickers.
+        Fetch last_price for all tickers using yf.Ticker.fast_info in parallel.
 
-        Splits the ticker list into batches of _DOWNLOAD_BATCH_SIZE and runs
-        each batch inside a ThreadPoolExecutor with a _DOWNLOAD_BATCH_TIMEOUT
-        deadline so that delisted / hung tickers only kill their own batch,
-        not the entire run.
+        Uses ThreadPoolExecutor instead of yf.download() to avoid Yahoo's
+        bulk-download IP rate limit that affects OCI egress IPs.
+        fast_info is a lightweight per-ticker REST call (~0.2s each) and
+        does not trigger multi-ticker bulk throttling.
 
-        Tickers that yfinance reports as delisted are added to _delisted_cache
-        and skipped in subsequent batches within the same run.
+        Delisted tickers are skipped (from _delisted_cache) and newly
+        discovered ones are persisted to the DB denylist.
         """
         atoms: List[RawAtom] = []
-        # Filter out known-delisted tickers before batching
         active_tickers = [
             t for t in self.tickers if t.upper() not in self._delisted_cache
         ]
@@ -330,101 +328,57 @@ class YFinanceAdapter(BaseIngestAdapter):
                 'Skipping %d delisted tickers, %d active',
                 len(self.tickers) - len(active_tickers), len(active_tickers),
             )
-        batches = [
-            active_tickers[i:i + self._DOWNLOAD_BATCH_SIZE]
-            for i in range(0, len(active_tickers), self._DOWNLOAD_BATCH_SIZE)
-        ]
 
-        import re as _re
-
-        for batch_idx, batch in enumerate(batches):
-            # Intercept yfinance 'possibly delisted' log messages so we can
-            # mark those tickers and skip them on future runs.
-            _newly_delisted: list = []
-
-            class _DelistedHandler(logging.Handler):
-                def emit(self_, record):
-                    msg = record.getMessage()
-                    if 'possibly delisted' in msg.lower() or 'no price data found' in msg.lower():
-                        # Extract ticker symbol from messages like "$PHNX.L: possibly delisted"
-                        m = _re.match(r'\$?([A-Z0-9^=.\-]+):', msg)
-                        if m:
-                            _newly_delisted.append(m.group(1))
-
-            _handler = _DelistedHandler()
-            _yf_logger = logging.getLogger('yfinance')
-            _yf_logger.addHandler(_handler)
-
-            def _do_download(b=batch):
-                return yf.download(
-                    tickers=b,
-                    period='2d',
-                    interval='1d',
-                    group_by='ticker',
-                    auto_adjust=True,
-                    progress=False,
-                    threads=True,
-                )
-
+        def _fetch_price(symbol: str):
+            """Return (symbol, price_float) or (symbol, None) on failure."""
             try:
-                _ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                _fut = _ex.submit(_do_download)
-                timed_out = False
+                fi = yf.Ticker(symbol).fast_info
+                price = (
+                    fi.get('lastPrice')
+                    or fi.get('regularMarketPrice')
+                    or fi.get('navPrice')
+                )
+                if price and float(price) > 0:
+                    return symbol, float(price)
+            except Exception as e:
+                err = str(e).lower()
+                if 'delist' in err or 'no price data' in err or '404' in err:
+                    return symbol, 'DELISTED'
+            return symbol, None
+
+        ex = ThreadPoolExecutor(max_workers=self._PRICE_WORKERS, thread_name_prefix='yf-price')
+        futures = {ex.submit(_fetch_price, sym): sym for sym in active_tickers}
+        fetched = 0
+        try:
+            for future in as_completed(futures, timeout=len(active_tickers) * 0.8 + 30):
+                sym = futures[future]
                 try:
-                    data = _fut.result(timeout=self._DOWNLOAD_BATCH_TIMEOUT)
-                except concurrent.futures.TimeoutError:
-                    timed_out = True
-                    self._logger.warning(
-                        'bulk_download batch %d/%d timed out after %ds — skipping batch',
-                        batch_idx + 1, len(batches), self._DOWNLOAD_BATCH_TIMEOUT,
-                    )
-                    _ex.shutdown(wait=False)
-                finally:
-                    _yf_logger.removeHandler(_handler)
-                    _ex.shutdown(wait=False)
-
-                # Persist any newly-discovered delisted tickers
-                for t in _newly_delisted:
-                    self._logger.info('Marking %s as delisted — will skip in future runs', t)
-                    self._mark_delisted(t, self._db_path)
-
-                if timed_out:
-                    continue
-
-                if data is None or data.empty:
-                    continue
-
-                for symbol in batch:
-                    src = f'exchange_feed_yahoo_{symbol.lower().replace("-", "_")}'
-                    try:
-                        if len(batch) == 1:
-                            col_data = data['Close']
-                        else:
-                            col_data = data[symbol]['Close']
-
-                        series = col_data.dropna()
-                        if series.empty:
-                            continue
-                        price = float(series.iloc[-1])
+                    _, price = future.result(timeout=self._PRICE_TICKER_TIMEOUT)
+                    if price == 'DELISTED':
+                        self._logger.info('Marking %s as delisted — will skip in future runs', sym)
+                        self._mark_delisted(sym, self._db_path)
+                    elif price is not None:
+                        src = f'exchange_feed_yahoo_{sym.lower().replace("-", "_")}'
                         atoms.append(RawAtom(
-                            subject=symbol,
+                            subject=sym,
                             predicate='last_price',
                             object=str(round(price, 2)),
                             confidence=0.95,
                             source=src,
-                            metadata={'as_of': now_iso, 'via': 'bulk_download'},
+                            metadata={'as_of': now_iso, 'via': 'fast_info'},
                             upsert=True,
                         ))
-                    except Exception as e:
-                        self._logger.debug('bulk price miss for %s: %s', symbol, e)
-
-            except Exception as e:
-                _yf_logger.removeHandler(_handler)
-                self._logger.warning('bulk_download batch %d failed: %s', batch_idx + 1, e)
+                        fetched += 1
+                except Exception as e:
+                    self._logger.debug('price fetch failed for %s: %s', sym, e)
+        except Exception:
+            self._logger.warning('price fetch deadline reached — partial results returned')
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
 
         self._logger.info(
-            'bulk_download complete: %d batches, %d price atoms from %d tickers',
-            len(batches), len(atoms), len(self.tickers),
+            'bulk_download complete: %d/%d tickers fetched, %d price atoms',
+            fetched, len(active_tickers), len(atoms),
         )
         return atoms
 
