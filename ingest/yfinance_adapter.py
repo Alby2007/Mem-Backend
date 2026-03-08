@@ -27,6 +27,7 @@ Interval: recommended 5 min for price, 30 min for fundamentals.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -230,19 +231,37 @@ class YFinanceAdapter(BaseIngestAdapter):
         """
         Use yf.download() to fetch the latest close price for ALL tickers in
         a single HTTP round-trip. Falls back to empty list on failure.
+
+        The call runs inside a ThreadPoolExecutor with a hard 90s deadline so
+        yfinance's internal threads (which bypass socket.setdefaulttimeout)
+        cannot block the entire adapter indefinitely. threads=False ensures
+        yfinance uses the main thread's socket so our 30s timeout applies.
         """
         atoms: List[RawAtom] = []
-        try:
-            import pandas as pd
-            data = yf.download(
+
+        def _do_download():
+            return yf.download(
                 tickers=self.tickers,
                 period='2d',
                 interval='1d',
                 group_by='ticker',
                 auto_adjust=True,
                 progress=False,
-                threads=True,
+                threads=False,
             )
+
+        try:
+            _ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            _fut = _ex.submit(_do_download)
+            try:
+                data = _fut.result(timeout=90)
+            except concurrent.futures.TimeoutError:
+                self._logger.warning('bulk_download_prices timed out after 90s — skipping')
+                _ex.shutdown(wait=False)
+                return atoms
+            finally:
+                _ex.shutdown(wait=False)
+
             if data is None or data.empty:
                 return atoms
 
@@ -250,7 +269,6 @@ class YFinanceAdapter(BaseIngestAdapter):
                 src = f'exchange_feed_yahoo_{symbol.lower().replace("-", "_")}'
                 try:
                     if len(self.tickers) == 1:
-                        # Single-ticker download has flat columns
                         col_data = data['Close']
                     else:
                         col_data = data[symbol]['Close']

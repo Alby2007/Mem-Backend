@@ -99,6 +99,7 @@ def with_retry(
     base_delay_sec: float = 2.0,
     backoff_factor: float = 2.0,
     exceptions: tuple = (Exception,),
+    exclude: tuple = (),
 ) -> Callable[[_F], _F]:
     """
     Decorator: retry the wrapped function up to max_attempts times with
@@ -107,8 +108,11 @@ def with_retry(
     Delays: base_delay_sec, base_delay_sec*backoff_factor, ...
     Final failure re-raises the last exception.
 
+    exclude: tuple of exception types that are NOT retried (re-raised immediately).
+             Use to avoid retrying TimeoutError or other non-transient failures.
+
     Usage:
-        @with_retry(max_attempts=3, base_delay_sec=2.0)
+        @with_retry(max_attempts=3, base_delay_sec=2.0, exclude=(TimeoutError,))
         def fetch(self) -> List[RawAtom]: ...
     """
     def decorator(fn: _F) -> _F:
@@ -121,6 +125,8 @@ def with_retry(
                 try:
                     return fn(*args, **kwargs)
                 except exceptions as exc:
+                    if exclude and isinstance(exc, exclude):
+                        raise
                     last_exc = exc
                     if attempt < max_attempts:
                         _log.warning(
@@ -233,6 +239,8 @@ class BaseIngestAdapter(abc.ABC):
         """
         _fetch_with_retry = with_retry(
             max_attempts=3, base_delay_sec=2.0, backoff_factor=2.0,
+            exceptions=(Exception,),
+            exclude=(TimeoutError,),
         )(self.fetch)
         try:
             raw = _fetch_with_retry()
