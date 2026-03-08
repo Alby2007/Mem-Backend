@@ -1281,6 +1281,53 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
         </div>
       </div>
 
+      <!-- Signal Style (Layer 3 personalisation) -->
+      <div class="prf-card">
+        <div class="prf-card-header">
+          <div class="prf-card-title">SIGNAL STYLE</div>
+          <span class="prf-notif-saved" id="prf-style-saved"></span>
+        </div>
+        <div class="prf-card-body">
+          <div class="prf-field">
+            <label>Risk Tolerance</label>
+            <div class="prf-btn-group" id="prf-style-risk">
+              <button class="prf-choice-btn" data-val="conservative">Conservative</button>
+              <button class="prf-choice-btn active" data-val="moderate">Moderate</button>
+              <button class="prf-choice-btn" data-val="aggressive">Aggressive</button>
+            </div>
+            <div class="prf-hint">Filters signal conviction thresholds and stop-loss tightness.</div>
+          </div>
+          <div class="prf-field">
+            <label>Preferred Timeframe</label>
+            <div class="prf-btn-group" id="prf-style-tf">
+              <button class="prf-choice-btn" data-val="scalp">Scalp <span class="prf-choice-sub">15m</span></button>
+              <button class="prf-choice-btn" data-val="intraday">Intraday <span class="prf-choice-sub">1h</span></button>
+              <button class="prf-choice-btn active" data-val="swing">Swing <span class="prf-choice-sub">4h/1d</span></button>
+              <button class="prf-choice-btn" data-val="position">Position <span class="prf-choice-sub">1d+</span></button>
+            </div>
+            <div class="prf-hint">Signals matching your timeframe rank higher in chat responses.</div>
+          </div>
+          <div class="prf-field">
+            <label>Sector Focus <span class="prf-label-opt">— optional</span></label>
+            <div class="prf-pill-grid" id="prf-style-sectors">
+              <button class="prf-pill" data-val="technology">Technology</button>
+              <button class="prf-pill" data-val="financials">Financials</button>
+              <button class="prf-pill" data-val="energy">Energy</button>
+              <button class="prf-pill" data-val="healthcare">Healthcare</button>
+              <button class="prf-pill" data-val="industrials">Industrials</button>
+              <button class="prf-pill" data-val="consumer_discretionary">Consumer</button>
+              <button class="prf-pill" data-val="materials">Materials</button>
+              <button class="prf-pill" data-val="real_estate">Real Estate</button>
+              <button class="prf-pill" data-val="utilities">Utilities</button>
+              <button class="prf-pill" data-val="communication_services">Comms</button>
+            </div>
+            <div class="prf-hint">Personalises which sectors surface first in opportunity scans.</div>
+          </div>
+          <button class="btn btn-primary prf-btn-full" id="prf-style-save-btn">Save Signal Style</button>
+          <div class="profile-msg" id="prf-style-msg"></div>
+        </div>
+      </div>
+
     </div><!-- /left -->
 
     <!-- RIGHT COLUMN -->

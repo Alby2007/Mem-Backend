@@ -124,6 +124,9 @@ _PREFERENCES_MIGRATIONS = [
     "ALTER TABLE user_preferences ADD COLUMN cash_currency TEXT DEFAULT 'GBP'",
     "ALTER TABLE user_preferences ADD COLUMN is_dev INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE user_preferences ADD COLUMN trader_level TEXT DEFAULT 'developing'",
+    "ALTER TABLE user_preferences ADD COLUMN style_risk_tolerance TEXT DEFAULT 'moderate'",
+    "ALTER TABLE user_preferences ADD COLUMN style_timeframe TEXT DEFAULT 'swing'",
+    "ALTER TABLE user_preferences ADD COLUMN style_sector_focus TEXT DEFAULT '[]'",
 ]
 
 _DDL_DELIVERY_LOG = """
@@ -312,6 +315,89 @@ def update_preferences(
         return get_user(db_path, user_id) or {}
     finally:
         conn.close()
+
+
+# Timeframe style → PatternAdapter timeframe strings
+_STYLE_TF_MAP: dict = {
+    'scalp':    ['15m'],
+    'intraday': ['1h'],
+    'swing':    ['4h', '1d'],
+    'position': ['1d', '1w'],
+}
+
+
+def get_style_prefs(db_path: str, user_id: str) -> dict:
+    """Return the three style preference fields for a user with safe defaults."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_tables(conn)
+        row = conn.execute(
+            """SELECT style_risk_tolerance, style_timeframe, style_sector_focus
+               FROM user_preferences WHERE user_id = ?""",
+            (user_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return {'style_risk_tolerance': 'moderate', 'style_timeframe': 'swing', 'style_sector_focus': []}
+    risk, tf, sectors_raw = row
+    try:
+        sectors = json.loads(sectors_raw or '[]')
+    except (json.JSONDecodeError, TypeError):
+        sectors = []
+    return {
+        'style_risk_tolerance': risk or 'moderate',
+        'style_timeframe':      tf   or 'swing',
+        'style_sector_focus':   sectors,
+        'style_tf_values':      _STYLE_TF_MAP.get(tf or 'swing', ['4h', '1d']),
+    }
+
+
+def update_style_prefs(
+    db_path: str,
+    user_id: str,
+    *,
+    style_risk_tolerance: Optional[str] = None,
+    style_timeframe: Optional[str] = None,
+    style_sector_focus: Optional[List[str]] = None,
+) -> dict:
+    """
+    Update style preference fields. Only provided (non-None) fields are changed.
+    Returns the updated style prefs dict.
+    """
+    _VALID_RISK = frozenset({'conservative', 'moderate', 'aggressive'})
+    _VALID_TF   = frozenset(_STYLE_TF_MAP.keys())
+    if style_risk_tolerance and style_risk_tolerance not in _VALID_RISK:
+        raise ValueError(f"style_risk_tolerance must be one of {sorted(_VALID_RISK)}")
+    if style_timeframe and style_timeframe not in _VALID_TF:
+        raise ValueError(f"style_timeframe must be one of {sorted(_VALID_TF)}")
+
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_tables(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)",
+            (user_id,),
+        )
+        if style_risk_tolerance is not None:
+            conn.execute(
+                "UPDATE user_preferences SET style_risk_tolerance = ? WHERE user_id = ?",
+                (style_risk_tolerance, user_id),
+            )
+        if style_timeframe is not None:
+            conn.execute(
+                "UPDATE user_preferences SET style_timeframe = ? WHERE user_id = ?",
+                (style_timeframe, user_id),
+            )
+        if style_sector_focus is not None:
+            conn.execute(
+                "UPDATE user_preferences SET style_sector_focus = ? WHERE user_id = ?",
+                (json.dumps(style_sector_focus), user_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_style_prefs(db_path, user_id)
 
 
 # ── Portfolio ──────────────────────────────────────────────────────────────────

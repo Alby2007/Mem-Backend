@@ -163,6 +163,87 @@ async function loadProfile() {
     });
   });
 
+  // Signal Style — load saved prefs
+  try {
+    const sp = await apiFetch(`/users/${state.userId}/style-prefs`);
+    if (sp) {
+      // Risk tolerance toggle
+      const riskGroup = document.getElementById('prf-style-risk');
+      if (riskGroup && sp.style_risk_tolerance) {
+        riskGroup.querySelectorAll('.prf-choice-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.val === sp.style_risk_tolerance);
+        });
+      }
+      // Timeframe toggle
+      const tfGroup = document.getElementById('prf-style-tf');
+      if (tfGroup && sp.style_timeframe) {
+        tfGroup.querySelectorAll('.prf-choice-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.val === sp.style_timeframe);
+        });
+      }
+      // Sector pills
+      const pillGrid = document.getElementById('prf-style-sectors');
+      if (pillGrid && Array.isArray(sp.style_sector_focus)) {
+        pillGrid.querySelectorAll('.prf-pill').forEach(p => {
+          p.classList.toggle('active', sp.style_sector_focus.includes(p.dataset.val));
+        });
+      }
+    }
+  } catch(e) { /* silent */ }
+
+  // Signal Style — choice-btn single-select toggle
+  ['prf-style-risk', 'prf-style-tf'].forEach(groupId => {
+    const grp = document.getElementById(groupId);
+    if (!grp) return;
+    grp.querySelectorAll('.prf-choice-btn').forEach(btn => {
+      btn.addEventListener('click', function() {
+        grp.querySelectorAll('.prf-choice-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+      });
+    });
+  });
+
+  // Signal Style — sector pills multi-select toggle
+  const pillGrid = document.getElementById('prf-style-sectors');
+  if (pillGrid) {
+    pillGrid.querySelectorAll('.prf-pill').forEach(pill => {
+      pill.addEventListener('click', function() { this.classList.toggle('active'); });
+    });
+  }
+
+  // Signal Style — save button
+  const styleSaveBtn = document.getElementById('prf-style-save-btn');
+  if (styleSaveBtn && !styleSaveBtn._wired) {
+    styleSaveBtn._wired = true;
+    styleSaveBtn.addEventListener('click', async function() {
+      const msgEl   = document.getElementById('prf-style-msg');
+      const savedEl = document.getElementById('prf-style-saved');
+      const riskGrp = document.getElementById('prf-style-risk');
+      const tfGrp   = document.getElementById('prf-style-tf');
+      const pillGrd = document.getElementById('prf-style-sectors');
+      const risk    = riskGrp?.querySelector('.prf-choice-btn.active')?.dataset.val || 'moderate';
+      const tf      = tfGrp?.querySelector('.prf-choice-btn.active')?.dataset.val  || 'swing';
+      const sectors = pillGrd
+        ? Array.from(pillGrd.querySelectorAll('.prf-pill.active')).map(p => p.dataset.val)
+        : [];
+      try {
+        await apiFetch(`/users/${state.userId}/style-prefs`, {
+          method: 'PATCH',
+          body: JSON.stringify({ style_risk_tolerance: risk, style_timeframe: tf, style_sector_focus: sectors })
+        });
+        if (savedEl) {
+          savedEl.textContent = '✓ Saved';
+          savedEl.classList.add('show');
+          clearTimeout(savedEl._t);
+          savedEl._t = setTimeout(() => savedEl.classList.remove('show'), 2000);
+        }
+        if (msgEl) msgEl.textContent = '';
+      } catch(e) {
+        if (msgEl) { msgEl.style.color = 'var(--red)'; msgEl.textContent = 'Error saving style preferences'; }
+      }
+    });
+  }
+
   // Trading prefs save button
   const tradingSaveBtn = document.getElementById('prf-trading-save-btn');
   if (tradingSaveBtn && !tradingSaveBtn._wired) {

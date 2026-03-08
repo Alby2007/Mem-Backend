@@ -251,6 +251,54 @@ def _boost_watchlist_atoms(
     return boosted
 
 
+# ── Layer 3: Style-prefs timeframe boost ─────────────────────────────────────
+
+_STYLE_TF_BOOST    = 1.25   # multiplier for atoms matching preferred timeframe
+_STYLE_TF_FALLBACK = True   # always fall through if no TF-matched atoms exist
+
+
+def _boost_style_prefs_atoms(
+    atoms: List[Dict],
+    user_id: Optional[str],
+) -> Tuple[List[Dict], Optional[str]]:
+    """
+    Layer 3: boost atoms whose `timeframe` matches the user's preferred_timeframe
+    (scalp→15m, intraday→1h, swing→4h/1d, position→1d/1w).
+
+    Returns (boosted_atoms, tf_hint) where tf_hint is a string like
+    "preferred_timeframe: swing — no matching signals found" when the preferred
+    TF had zero matching atoms (lets the LLM mention it to the user).
+    """
+    if not (user_id and ext.HAS_PRODUCT_LAYER) or not atoms:
+        return atoms, None
+    try:
+        from users.user_store import get_style_prefs
+        prefs = get_style_prefs(ext.DB_PATH, user_id)
+    except Exception:
+        return atoms, None
+
+    preferred_tfs = set(prefs.get('style_tf_values') or [])
+    style_label   = prefs.get('style_timeframe', 'swing')
+    if not preferred_tfs:
+        return atoms, None
+
+    boosted = []
+    has_match = False
+    for a in atoms:
+        tf = str(a.get('timeframe') or a.get('metadata', {}).get('timeframe', '')).lower()
+        if tf and tf in preferred_tfs:
+            a = dict(a)
+            a['confidence'] = min(a.get('confidence', 0.5) * _STYLE_TF_BOOST, 1.0)
+            has_match = True
+        boosted.append(a)
+
+    boosted.sort(key=lambda x: x.get('confidence', 0.0), reverse=True)
+    tf_hint = None if has_match else (
+        f"preferred_timeframe: {style_label} — no {style_label} signals found, showing best available"
+    )
+    return boosted, tf_hint
+
+
 def _check_chat_quota(user_id: Optional[str]) -> Optional[Dict]:
     """Check chat quota. Returns error dict if quota exceeded, else None."""
     if not (user_id and ext.HAS_TIERS and ext.HAS_PATTERN_LAYER):
@@ -1072,6 +1120,8 @@ def run(
     snippet, atoms = ext.retrieve(retrieve_message, conn, limit=limit, nudges=nudges)
     # Layer 1: boost watchlist ticker atoms so they rank above non-watchlist atoms
     atoms = _boost_watchlist_atoms(atoms, user_id)
+    # Layer 3: boost atoms matching user's preferred trading timeframe
+    atoms, _style_tf_hint = _boost_style_prefs_atoms(atoms, user_id)
     _update_session_tickers(session_id, cur_tickers, atoms)
 
     # ── Working memory ────────────────────────────────────────────────────
@@ -1161,6 +1211,10 @@ def run(
 
     # ── Opportunity scan ──────────────────────────────────────────────────
     opportunity_scan_context = _run_opportunity_scan(message, response)
+
+    # ── Layer 3: inject TF hint into prior_context if no preferred-TF match ─
+    if _style_tf_hint:
+        prior_context = (prior_context + '\n' if prior_context else '') + _style_tf_hint
 
     # ── Build full prompt ─────────────────────────────────────────────────
     messages = ext.build_prompt(

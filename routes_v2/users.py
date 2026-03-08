@@ -63,6 +63,12 @@ class TradingPrefsRequest(BaseModel):
     trading_bio: Optional[str] = None
 
 
+class StylePrefsRequest(BaseModel):
+    style_risk_tolerance: Optional[str] = None  # conservative | moderate | aggressive
+    style_timeframe: Optional[str] = None       # scalp | intraday | swing | position
+    style_sector_focus: Optional[list] = None   # list of sector strings
+
+
 class ExpandUniverseRequest(BaseModel):
     description: str
     market_type: str = "equities"
@@ -418,6 +424,37 @@ async def update_trading_prefs(
     except Exception as e:
         raise HTTPException(500, detail=str(e))
     return {"ok": True}
+
+
+@router.get("/users/{user_id}/style-prefs")
+async def get_style_prefs_route(user_id: str, _: str = Depends(user_path_auth)):
+    try:
+        from users.user_store import get_style_prefs
+        return get_style_prefs(ext.DB_PATH, user_id)
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
+@router.patch("/users/{user_id}/style-prefs")
+async def update_style_prefs_route(
+    user_id: str, data: StylePrefsRequest,
+    current_user: str = Depends(get_current_user),
+):
+    if current_user != user_id:
+        raise HTTPException(403, detail="forbidden")
+    try:
+        from users.user_store import update_style_prefs
+        result = update_style_prefs(
+            ext.DB_PATH, user_id,
+            style_risk_tolerance=data.style_risk_tolerance,
+            style_timeframe=data.style_timeframe,
+            style_sector_focus=data.style_sector_focus,
+        )
+        return {"ok": True, **result}
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
 
 
 @router.delete("/users/{user_id}")

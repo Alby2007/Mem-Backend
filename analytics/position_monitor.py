@@ -225,9 +225,13 @@ def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
             return ('pattern_invalidated', 'CRITICAL')
 
     # Earnings within 2 days
-    earnings_flag = _get_kb_atom(db_path, ticker, 'pre_earnings_flag')
-    if earnings_flag == 'imminent':
-        return ('earnings_within_2_days', 'CRITICAL')
+    earnings_days = _get_kb_atom(db_path, ticker, 'next_earnings_days')
+    if earnings_days is not None:
+        try:
+            if int(float(earnings_days)) <= 2:
+                return ('earnings_within_2_days', 'CRITICAL')
+        except (ValueError, TypeError):
+            pass
 
     # ── HIGH/MEDIUM — only during actionable hours and weekdays ─────────────
     if now.weekday() >= 5 or not _is_actionable_hours():
@@ -269,8 +273,8 @@ def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
             if bullish:
                 return ('sector_tailwind_reversed', 'MEDIUM')
 
-        squeeze = _get_kb_atom(db_path, ticker, 'short_interest_tension')
-        if squeeze == 'building':
+        squeeze = _get_kb_atom(db_path, ticker, 'short_vs_signal')
+        if squeeze == 'tension':
             return ('short_squeeze_developing', 'MEDIUM')
 
     return None
