@@ -53,6 +53,7 @@ async def _lifespan(app: FastAPI):
         from ingest.fred_adapter import FREDAdapter
         from ingest.lse_flow_adapter import LSEFlowAdapter
         from ingest.acled_adapter import ACLEDAdapter
+        from ingest.eia_adapter import EIAAdapter
         from ingest.pattern_adapter import PatternAdapter
         from analytics.position_monitor import PositionMonitor
 
@@ -109,9 +110,12 @@ async def _lifespan(app: FastAPI):
         # ACLED geopolitical conflict/protest events — skips gracefully if no API key
         scheduler.register(ACLEDAdapter(), interval_sec=86400)
 
+        # EIA oil/gas prices, production, inventories, Henry Hub
+        scheduler.register(EIAAdapter(), interval_sec=86400)
+
         app.state.scheduler = scheduler
         scheduler.start(startup_delay_sec=15)
-        _logger.info('Ingest scheduler started (%d adapters)', 17)
+        _logger.info('Ingest scheduler started (%d adapters)', 18)
 
         # PatternAdapter — not a BaseIngestAdapter; runs in its own daemon thread
         _pattern = PatternAdapter(db_path=db_path)
