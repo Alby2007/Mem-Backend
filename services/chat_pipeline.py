@@ -251,10 +251,26 @@ def _boost_watchlist_atoms(
     return boosted
 
 
-# ── Layer 3: Style-prefs timeframe boost ─────────────────────────────────────
+# ── Layer 3: Style-prefs timeframe + sector boost ────────────────────────────
 
-_STYLE_TF_BOOST    = 1.25   # multiplier for atoms matching preferred timeframe
-_STYLE_TF_FALLBACK = True   # always fall through if no TF-matched atoms exist
+_STYLE_TF_BOOST     = 1.25  # multiplier for atoms matching preferred timeframe
+_STYLE_SECTOR_BOOST = 1.20  # multiplier for atoms whose ticker is in preferred sector
+_STYLE_TF_FALLBACK  = True  # always fall through if no TF-matched atoms exist
+
+
+def _get_ticker_sector(ticker: str, db_path: str) -> Optional[str]:
+    """Look up sector predicate from KB for a given ticker."""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(db_path, timeout=5)
+        row = conn.execute(
+            "SELECT object FROM facts WHERE subject=? AND predicate='sector' LIMIT 1",
+            (ticker,)
+        ).fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
 
 
 def _boost_style_prefs_atoms(
@@ -263,11 +279,10 @@ def _boost_style_prefs_atoms(
 ) -> Tuple[List[Dict], Optional[str]]:
     """
     Layer 3: boost atoms whose `timeframe` matches the user's preferred_timeframe
-    (scalp→15m, intraday→1h, swing→4h/1d, position→1d/1w).
+    (scalp→15m, intraday→1h, swing→4h/1d, position→1d/1w) — ×1.25.
+    Also boost atoms whose ticker maps to the user's preferred sector — ×1.2.
 
-    Returns (boosted_atoms, tf_hint) where tf_hint is a string like
-    "preferred_timeframe: swing — no matching signals found" when the preferred
-    TF had zero matching atoms (lets the LLM mention it to the user).
+    Returns (boosted_atoms, hint) where hint surfaces "no match" notes to the LLM.
     """
     if not (user_id and ext.HAS_PRODUCT_LAYER) or not atoms:
         return atoms, None
@@ -277,26 +292,55 @@ def _boost_style_prefs_atoms(
     except Exception:
         return atoms, None
 
-    preferred_tfs = set(prefs.get('style_tf_values') or [])
-    style_label   = prefs.get('style_timeframe', 'swing')
-    if not preferred_tfs:
+    preferred_tfs  = set(prefs.get('style_tf_values') or [])
+    style_label    = prefs.get('style_timeframe', 'swing')
+    sector_focus   = prefs.get('style_sector_focus')  # e.g. 'financials'
+
+    if not preferred_tfs and not sector_focus:
         return atoms, None
 
+    # ── Timeframe boost pass ─────────────────────────────────────────────────
     boosted = []
-    has_match = False
+    has_tf_match = False
     for a in atoms:
         tf = str(a.get('timeframe') or a.get('metadata', {}).get('timeframe', '')).lower()
-        if tf and tf in preferred_tfs:
+        if preferred_tfs and tf and tf in preferred_tfs:
             a = dict(a)
             a['confidence'] = min(a.get('confidence', 0.5) * _STYLE_TF_BOOST, 1.0)
-            has_match = True
+            has_tf_match = True
         boosted.append(a)
 
+    # ── Sector boost pass ────────────────────────────────────────────────────
+    has_sector_match = False
+    if sector_focus:
+        _sector_cache: dict = {}
+        boosted_sector = []
+        for a in boosted:
+            ticker = str(a.get('subject', '')).lower()
+            atom_sector = _sector_cache.get(ticker)
+            if atom_sector is None:
+                atom_sector = _get_ticker_sector(ticker, ext.DB_PATH)
+                _sector_cache[ticker] = atom_sector or ''
+            if atom_sector and atom_sector.lower() == sector_focus.lower():
+                a = dict(a)
+                a['confidence'] = min(a.get('confidence', 0.5) * _STYLE_SECTOR_BOOST, 1.0)
+                has_sector_match = True
+            boosted_sector.append(a)
+        boosted = boosted_sector
+
     boosted.sort(key=lambda x: x.get('confidence', 0.0), reverse=True)
-    tf_hint = None if has_match else (
-        f"preferred_timeframe: {style_label} — no {style_label} signals found, showing best available"
-    )
-    return boosted, tf_hint
+
+    hints = []
+    if preferred_tfs and not has_tf_match:
+        hints.append(
+            f"preferred_timeframe: {style_label} — no {style_label} signals found, showing best available"
+        )
+    if sector_focus and not has_sector_match:
+        hints.append(
+            f"preferred_sector: {sector_focus} — no {sector_focus} signals found in current context"
+        )
+    hint = '\n'.join(hints) if hints else None
+    return boosted, hint
 
 
 def _check_chat_quota(user_id: Optional[str]) -> Optional[Dict]:

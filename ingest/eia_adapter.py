@@ -41,12 +41,6 @@ _logger = logging.getLogger(__name__)
 
 _EIA_BASE = 'https://api.eia.gov/v2'
 
-# EIA series IDs
-_WTI_SERIES    = 'PET.RWTC.W'   # Weekly WTI spot price (USD/bbl)
-_BRENT_SERIES  = 'PET.RBRTE.W'  # Weekly Brent spot price (USD/bbl)
-_PROD_SERIES   = 'PET.WCRFPUS2.W'  # US weekly crude production (Mbbl/d)
-_INV_SERIES    = 'PET.WCRSTUS1.W'  # US crude oil inventories (thousand bbl)
-
 # 5-year average inventory baseline (thousand bbl) — EIA seasonal norm
 _INV_BASELINE  = 420_000
 _INV_BAND_PCT  = 0.05  # ±5% = normal; outside = above/below avg
@@ -56,21 +50,34 @@ _PRICE_TREND_PCT  = 0.02  # ±2%
 _SUPPLY_TREND_PCT = 0.01  # ±1%
 
 
-def _eia_fetch(api_key: str, series_id: str, num_periods: int = 2) -> Optional[List[dict]]:
-    """Fetch the most recent N data points for an EIA series."""
+def _eia_fetch(
+    api_key: str,
+    path: str,
+    facets: dict,
+    num_periods: int = 2,
+) -> Optional[List[dict]]:
+    """Fetch the most recent N data points using EIA APIv2 path/facet routing."""
+    import urllib.parse
+    facet_params = '&'.join(
+        f'facets[{k}][]={urllib.parse.quote(str(v))}'
+        for k, vals in facets.items()
+        for v in vals
+    )
     url = (
-        f'{_EIA_BASE}/seriesid/{series_id}'
-        f'?api_key={api_key}&out=json&num={num_periods}'
+        f'{_EIA_BASE}/{path}/?api_key={api_key}'
+        f'&frequency=weekly&data[0]=value'
+        f'&{facet_params}'
+        f'&sort[0][column]=period&sort[0][direction]=desc'
+        f'&offset=0&length={num_periods}'
     )
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'TradingKB/1.0'})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = _json.loads(resp.read().decode())
-        # EIA v2 response structure
-        series = data.get('response', {}).get('data', [])
-        return series if series else None
+        rows = data.get('response', {}).get('data', [])
+        return rows if rows else None
     except Exception as exc:
-        _logger.warning('EIA fetch failed for %s: %s', series_id, exc)
+        _logger.warning('EIA fetch failed for %s: %s', path, exc)
         return None
 
 
@@ -112,7 +119,7 @@ class EIAAdapter(BaseIngestAdapter):
         meta_base = {'fetched_at': now_iso, 'source_url': 'https://api.eia.gov/v2'}
 
         # ── WTI crude spot price ───────────────────────────────────────────────
-        wti_data = _eia_fetch(self._api_key, _WTI_SERIES, num_periods=2)
+        wti_data = _eia_fetch(self._api_key, 'petroleum/pri/spt/data', {'product': ['EPCWTI']}, 2)
         wti_cur = wti_prev = None
         if wti_data and len(wti_data) >= 1:
             try:
@@ -124,13 +131,13 @@ class EIAAdapter(BaseIngestAdapter):
                     object=f'{wti_cur:.2f}',
                     confidence=0.92,
                     source=source,
-                    metadata={**meta_base, 'unit': 'USD/bbl', 'series': _WTI_SERIES},
+                    metadata={**meta_base, 'unit': 'USD/bbl'},
                 ))
             except (TypeError, ValueError) as e:
                 self._logger.warning('WTI parse error: %s', e)
 
         # ── Brent crude spot price ─────────────────────────────────────────────
-        brent_data = _eia_fetch(self._api_key, _BRENT_SERIES, num_periods=2)
+        brent_data = _eia_fetch(self._api_key, 'petroleum/pri/spt/data', {'product': ['EPBRENT']}, 2)
         brent_cur = brent_prev = None
         if brent_data and len(brent_data) >= 1:
             try:
@@ -142,7 +149,7 @@ class EIAAdapter(BaseIngestAdapter):
                     object=f'{brent_cur:.2f}',
                     confidence=0.92,
                     source=source,
-                    metadata={**meta_base, 'unit': 'USD/bbl', 'series': _BRENT_SERIES},
+                    metadata={**meta_base, 'unit': 'USD/bbl'},
                 ))
             except (TypeError, ValueError) as e:
                 self._logger.warning('Brent parse error: %s', e)
@@ -172,7 +179,7 @@ class EIAAdapter(BaseIngestAdapter):
             ))
 
         # ── US crude production ────────────────────────────────────────────────
-        prod_data = _eia_fetch(self._api_key, _PROD_SERIES, num_periods=2)
+        prod_data = _eia_fetch(self._api_key, 'petroleum/crd/crpdn/agg/mbbl/a/data', {'duoarea': ['NUS']}, 2)
         prod_cur = prod_prev = None
         if prod_data and len(prod_data) >= 1:
             try:
@@ -184,7 +191,7 @@ class EIAAdapter(BaseIngestAdapter):
                     object=f'{prod_cur:.1f}',
                     confidence=0.88,
                     source=source,
-                    metadata={**meta_base, 'unit': 'Mbbl/d', 'series': _PROD_SERIES},
+                    metadata={**meta_base, 'unit': 'Mbbl/d'},
                 ))
             except (TypeError, ValueError) as e:
                 self._logger.warning('Production parse error: %s', e)
@@ -202,7 +209,7 @@ class EIAAdapter(BaseIngestAdapter):
             ))
 
         # ── Inventory level (vs 5-year average baseline) ──────────────────────
-        inv_data = _eia_fetch(self._api_key, _INV_SERIES, num_periods=1)
+        inv_data = _eia_fetch(self._api_key, 'petroleum/stoc/wstk/data', {'product': ['EPC0']}, 1)
         if inv_data and len(inv_data) >= 1:
             try:
                 inv_cur = float(inv_data[0].get('value', 0))
@@ -241,6 +248,33 @@ class EIAAdapter(BaseIngestAdapter):
                 source=source,
                 metadata={**meta_base, 'wti': wti_cur, 'supply_trend': supply_trend if prod_cur and prod_prev else 'unknown'},
             ))
+
+        # ── Henry Hub natural gas spot price ──────────────────────────────────
+        gas_data = _eia_fetch(self._api_key, 'natural-gas/pri/sum/data', {'process': ['PUS']}, 2)
+        if gas_data and len(gas_data) >= 1:
+            try:
+                gas_cur = float(gas_data[0].get('value', 0))
+                gas_prev = float(gas_data[1].get('value', 0)) if len(gas_data) >= 2 else None
+                atoms.append(RawAtom(
+                    subject='gas_market',
+                    predicate='henry_hub_price',
+                    object=f'{gas_cur:.2f}',
+                    confidence=0.92,
+                    source=source,
+                    metadata={**meta_base, 'unit': 'USD/MMBtu'},
+                ))
+                if gas_prev:
+                    gas_trend = _trend(gas_cur, gas_prev, _PRICE_TREND_PCT)
+                    atoms.append(RawAtom(
+                        subject='gas_market',
+                        predicate='price_trend',
+                        object=gas_trend,
+                        confidence=0.85,
+                        source=source,
+                        metadata={**meta_base, 'gas_current': gas_cur, 'gas_previous': gas_prev},
+                    ))
+            except (TypeError, ValueError) as e:
+                self._logger.warning('Henry Hub parse error: %s', e)
 
         self._logger.info('EIA adapter: %d atoms produced', len(atoms))
         return atoms
