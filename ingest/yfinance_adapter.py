@@ -198,16 +198,25 @@ class YFinanceAdapter(BaseIngestAdapter):
             self._logger.error('yfinance not installed — pip install yfinance')
             return []
 
+        import socket as _socket
         now_iso = datetime.now(timezone.utc).isoformat()
         atoms: List[RawAtom] = []
 
-        # ── 1. Bulk last_price via yf.download() ──────────────────────────
-        bulk_prices = self._bulk_download_prices(now_iso)
-        atoms.extend(bulk_prices)
+        # Apply a global socket timeout so no yfinance network call blocks indefinitely.
+        # This is the primary guard against the scheduler timer chain being killed by
+        # a hung HTTP connection (e.g. bad tickers returning no response from Yahoo).
+        old_timeout = _socket.getdefaulttimeout()
+        _socket.setdefaulttimeout(30)
+        try:
+            # ── 1. Bulk last_price via yf.download() ──────────────────────
+            bulk_prices = self._bulk_download_prices(now_iso)
+            atoms.extend(bulk_prices)
 
-        # ── 2. Parallel per-ticker info() for fundamentals + targets ──────
-        info_atoms = self._parallel_info_fetch(now_iso, bulk_prices)
-        atoms.extend(info_atoms)
+            # ── 2. Parallel per-ticker info() for fundamentals + targets ──
+            info_atoms = self._parallel_info_fetch(now_iso, bulk_prices)
+            atoms.extend(info_atoms)
+        finally:
+            _socket.setdefaulttimeout(old_timeout)
 
         self._logger.info(
             'fetch complete: %d tickers, %d total atoms (%d price, %d info)',
