@@ -34,7 +34,7 @@ _logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-BATCH_SIZE   = int(os.environ.get('LLM_EXTRACTION_BATCH', os.environ.get('INGEST_BATCH_SIZE', '20')))
+BATCH_SIZE   = int(os.environ.get('LLM_EXTRACTION_BATCH', os.environ.get('INGEST_BATCH_SIZE', '5')))
 MAX_FAILURES = 3
 
 _VALID_PREDICATES = {

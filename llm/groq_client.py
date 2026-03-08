@@ -21,7 +21,7 @@ _logger = logging.getLogger(__name__)
 
 GROQ_BASE_URL  = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL  = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-DEFAULT_TIMEOUT = int(os.environ.get("GROQ_TIMEOUT", "30"))
+DEFAULT_TIMEOUT = int(os.environ.get("GROQ_TIMEOUT", "15"))
 
 
 def _api_key() -> str:
