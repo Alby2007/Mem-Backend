@@ -247,7 +247,7 @@ class YFinanceAdapter(BaseIngestAdapter):
                 group_by='ticker',
                 auto_adjust=True,
                 progress=False,
-                threads=False,
+                threads=True,
             )
 
         try:
