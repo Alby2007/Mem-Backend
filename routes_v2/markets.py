@@ -99,10 +99,27 @@ async def market_snapshot():
             macro[subj] = atoms
 
     tickers.sort(key=lambda t: t.get("conviction_tier", "z"))
+
+    # Build symbols dict for dashboard market snapshot widget
+    # Keys are yFinance-style tickers; values have price + return_1m
+    _SNAPSHOT_TICKERS = ['^GSPC', '^FTSE', '^FTMC', 'GLD', 'GBPUSD=X']
+    symbols: dict = {}
+    for sym in _SNAPSHOT_TICKERS:
+        atoms = by_subject.get(sym, {})
+        if atoms.get('last_price') is not None:
+            try:
+                symbols[sym] = {
+                    'price':     float(atoms['last_price']),
+                    'return_1m': float(atoms['return_1m']) if atoms.get('return_1m') is not None else None,
+                }
+            except (TypeError, ValueError):
+                pass
+
     return {
         "tickers": tickers,
         "count": len(tickers),
         "macro": macro,
+        "symbols": symbols,
         "as_of": datetime.now(timezone.utc).isoformat(),
     }
 

@@ -81,9 +81,17 @@ async function loadSubscription() {
       }
     });
 
-    // Pro badge: show MOST POPULAR only if not on pro
+    // Pro badge: show MOST POPULAR only if user is not already on pro or premium
     const proBadge = document.getElementById('sub-badge-pro');
-    if (proBadge && tier !== 'pro') { proBadge.className = 'sub-badge sub-badge-popular'; proBadge.style.display = ''; proBadge.textContent = 'MOST POPULAR'; }
+    if (proBadge) {
+      if (tier === 'pro') {
+        proBadge.className = 'sub-badge sub-badge-current'; proBadge.style.display = ''; proBadge.textContent = 'CURRENT';
+      } else if (tier === 'premium') {
+        proBadge.style.display = 'none';
+      } else {
+        proBadge.className = 'sub-badge sub-badge-popular'; proBadge.style.display = ''; proBadge.textContent = 'MOST POPULAR';
+      }
+    }
   } catch(e) { /* silent — banner stays at defaults */ }
 }
 

@@ -341,10 +341,10 @@ async function loadDashboardBottomRow() {
   // Market snapshot — fetch from /market/snapshot (KB cached facts, no live calls)
   const MKT_SYMBOLS = [
     { id: 'spx',  sym: '^GSPC',    name: 'S&P 500' },
-    { id: 'ndx',  sym: '^NDX',     name: 'NASDAQ 100' },
     { id: 'ftse', sym: '^FTSE',    name: 'FTSE 100' },
+    { id: 'ftmc', sym: '^FTMC',    name: 'FTSE 250' },
     { id: 'gld',  sym: 'GLD',      name: 'Gold' },
-    { id: 'dxy',  sym: 'DX-Y.NYB', name: 'US Dollar Index' },
+    { id: 'gbp',  sym: 'GBPUSD=X', name: 'GBP/USD' },
   ];
   try {
     const snap = await apiFetch('/market/snapshot');
