@@ -167,8 +167,8 @@ class YFinanceAdapter(BaseIngestAdapter):
     """
     Yahoo Finance ingest adapter — parallel fetch version.
 
-    Fast path: yf.download() fetches all last_price atoms in a single
-    bulk HTTP call (~2s for 60 tickers).
+    Fast path: yf.download() fetches all last_price atoms in batches of
+    _DOWNLOAD_BATCH_SIZE with per-batch deadlines.
 
     Parallel path: ThreadPoolExecutor with _MAX_WORKERS concurrent threads
     for per-ticker info() calls (fundamentals, analyst targets, beta).
@@ -178,8 +178,17 @@ class YFinanceAdapter(BaseIngestAdapter):
     the existing row from the same source rather than appending new rows.
     """
 
+    # Process-lifetime denylist of tickers confirmed as delisted by yfinance.
+    # Populated from the DB on init and updated when new delisted tickers are found.
+    # Class-level so it persists across scheduler cycles.
+    _delisted_cache: set = set()
+
     def __init__(self, tickers: Optional[List[str]] = None, db_path: Optional[str] = None):
         super().__init__(name='yfinance')
+        self._db_path = db_path
+        # Load persisted delisted tickers from DB
+        if db_path:
+            self._load_delisted_from_db(db_path)
         # If no explicit tickers, use DynamicWatchlistManager (falls back to _DEFAULT_TICKERS)
         if tickers is None:
             if _HAS_DYNAMIC_WATCHLIST and db_path:
@@ -193,6 +202,46 @@ class YFinanceAdapter(BaseIngestAdapter):
             if t not in seen:
                 seen.add(t)
                 self.tickers.append(t)
+
+    @classmethod
+    def _load_delisted_from_db(cls, db_path: str) -> None:
+        """Load previously-confirmed-delisted tickers from the DB denylist table."""
+        try:
+            import sqlite3 as _sq
+            conn = _sq.connect(db_path, timeout=5)
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS yfinance_delisted "
+                "(ticker TEXT PRIMARY KEY, noted_at TEXT)"
+            )
+            conn.commit()
+            rows = conn.execute("SELECT ticker FROM yfinance_delisted").fetchall()
+            conn.close()
+            for (t,) in rows:
+                cls._delisted_cache.add(t.upper())
+        except Exception:
+            pass
+
+    @classmethod
+    def _mark_delisted(cls, ticker: str, db_path: Optional[str]) -> None:
+        """Add a ticker to the process-level denylist and persist to DB."""
+        key = ticker.upper()
+        if key in cls._delisted_cache:
+            return
+        cls._delisted_cache.add(key)
+        if not db_path:
+            return
+        try:
+            import sqlite3 as _sq
+            from datetime import datetime, timezone as _tz
+            conn = _sq.connect(db_path, timeout=5)
+            conn.execute(
+                "INSERT OR IGNORE INTO yfinance_delisted (ticker, noted_at) VALUES (?, ?)",
+                (key, datetime.now(_tz.utc).isoformat()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
     @staticmethod
     def _clear_yf_session() -> None:
@@ -253,9 +302,9 @@ class YFinanceAdapter(BaseIngestAdapter):
 
     # ── Fast bulk price path ───────────────────────────────────────────────
 
-    # Maximum tickers per yf.download() call. Larger batches increase the risk
-    # of a single delisted/hung ticker blocking the entire batch for 90s.
-    _DOWNLOAD_BATCH_SIZE = 50
+    # Maximum tickers per yf.download() call. Keep small so one delisted ticker
+    # only blocks its batch, not the entire 155-ticker watchlist.
+    _DOWNLOAD_BATCH_SIZE = 30
     # Hard deadline per batch in seconds.
     _DOWNLOAD_BATCH_TIMEOUT = 45
 
@@ -267,14 +316,45 @@ class YFinanceAdapter(BaseIngestAdapter):
         each batch inside a ThreadPoolExecutor with a _DOWNLOAD_BATCH_TIMEOUT
         deadline so that delisted / hung tickers only kill their own batch,
         not the entire run.
+
+        Tickers that yfinance reports as delisted are added to _delisted_cache
+        and skipped in subsequent batches within the same run.
         """
         atoms: List[RawAtom] = []
+        # Filter out known-delisted tickers before batching
+        active_tickers = [
+            t for t in self.tickers if t.upper() not in self._delisted_cache
+        ]
+        if len(active_tickers) < len(self.tickers):
+            self._logger.info(
+                'Skipping %d delisted tickers, %d active',
+                len(self.tickers) - len(active_tickers), len(active_tickers),
+            )
         batches = [
-            self.tickers[i:i + self._DOWNLOAD_BATCH_SIZE]
-            for i in range(0, len(self.tickers), self._DOWNLOAD_BATCH_SIZE)
+            active_tickers[i:i + self._DOWNLOAD_BATCH_SIZE]
+            for i in range(0, len(active_tickers), self._DOWNLOAD_BATCH_SIZE)
         ]
 
+        import re as _re
+
         for batch_idx, batch in enumerate(batches):
+            # Intercept yfinance 'possibly delisted' log messages so we can
+            # mark those tickers and skip them on future runs.
+            _newly_delisted: list = []
+
+            class _DelistedHandler(logging.Handler):
+                def emit(self_, record):
+                    msg = record.getMessage()
+                    if 'possibly delisted' in msg.lower() or 'no price data found' in msg.lower():
+                        # Extract ticker symbol from messages like "$PHNX.L: possibly delisted"
+                        m = _re.match(r'\$?([A-Z0-9^=.\-]+):', msg)
+                        if m:
+                            _newly_delisted.append(m.group(1))
+
+            _handler = _DelistedHandler()
+            _yf_logger = logging.getLogger('yfinance')
+            _yf_logger.addHandler(_handler)
+
             def _do_download(b=batch):
                 return yf.download(
                     tickers=b,
@@ -289,17 +369,27 @@ class YFinanceAdapter(BaseIngestAdapter):
             try:
                 _ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
                 _fut = _ex.submit(_do_download)
+                timed_out = False
                 try:
                     data = _fut.result(timeout=self._DOWNLOAD_BATCH_TIMEOUT)
                 except concurrent.futures.TimeoutError:
+                    timed_out = True
                     self._logger.warning(
                         'bulk_download batch %d/%d timed out after %ds — skipping batch',
                         batch_idx + 1, len(batches), self._DOWNLOAD_BATCH_TIMEOUT,
                     )
                     _ex.shutdown(wait=False)
-                    continue
                 finally:
+                    _yf_logger.removeHandler(_handler)
                     _ex.shutdown(wait=False)
+
+                # Persist any newly-discovered delisted tickers
+                for t in _newly_delisted:
+                    self._logger.info('Marking %s as delisted — will skip in future runs', t)
+                    self._mark_delisted(t, self._db_path)
+
+                if timed_out:
+                    continue
 
                 if data is None or data.empty:
                     continue
@@ -329,6 +419,7 @@ class YFinanceAdapter(BaseIngestAdapter):
                         self._logger.debug('bulk price miss for %s: %s', symbol, e)
 
             except Exception as e:
+                _yf_logger.removeHandler(_handler)
                 self._logger.warning('bulk_download batch %d failed: %s', batch_idx + 1, e)
 
         self._logger.info(
