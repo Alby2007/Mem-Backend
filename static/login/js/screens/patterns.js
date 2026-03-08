@@ -137,7 +137,7 @@ async function _fetchAndRenderPatterns(grid, ticker, append) {
     }
     // Change 5 — load more footer
     const loadMoreEl = document.getElementById('pf-load-more');
-    const hasMore = pats.length >= PAGE && !ticker;
+    const hasMore = pats.length >= 30 && !ticker;
     if (hasMore) {
       const shown = totalLoaded;
       const ofStr = _patTotal != null ? ` of ${_patTotal}` : '+';
