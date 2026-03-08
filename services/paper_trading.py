@@ -248,30 +248,27 @@ def get_account(user_id: str) -> dict:
     open_tickers = list({r[0] for r in open_pos})
     live = fetch_live_prices(open_tickers)
 
-    unrealised_cash = 0.0
-    committed_capital = 0.0
+    unrealised_pnl = 0.0
+    open_positions_value = 0.0
     for r in open_pos:
         tk, direction, entry, stop_, qty = r
-        if entry and qty:
-            committed_capital += entry * qty
         cp = live.get(tk)
-        if cp is not None and entry and stop_:
-            risk = abs(entry - stop_)
-            if risk > 0:
-                if direction == 'bullish':
-                    pnl_r = (cp - entry) / risk
-                else:
-                    pnl_r = (entry - cp) / risk
-                unrealised_cash += pnl_r * risk * qty
+        effective_price = cp if cp is not None else entry  # fall back to entry cost if no live price
+        if effective_price and qty:
+            open_positions_value += effective_price * qty
+        if cp is not None and entry and qty:
+            unrealised_pnl += (cp - entry) * qty if direction == 'bullish' else (entry - cp) * qty
 
-    # account_value = free cash + value of open positions at current price
-    # = virtual_balance (free cash) + committed_capital (entry * qty) + unrealised P&L delta
-    account_value = round(row[0] + committed_capital + unrealised_cash, 2)
+    # account_value = free cash + current market value of open positions
+    free_cash = float(row[0])
+    account_value = round(free_cash + open_positions_value, 2)
     return {
         'user_id': user_id,
         'virtual_balance': row[0],
         'account_value': account_value,
-        'unrealised_pnl': round(unrealised_cash, 2),
+        'unrealised_pnl': round(unrealised_pnl, 2),
+        'free_cash': round(free_cash, 2),
+        'open_positions_value': round(open_positions_value, 2),
         'currency': row[1],
         'created_at': row[2],
         'account_size_set': bool(row[3]) if len(row) > 3 else False,

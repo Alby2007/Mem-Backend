@@ -58,11 +58,16 @@ async function _ptLoadAccount() {
     if (!d) return;
     const acctVal = d.account_value ?? d.virtual_balance ?? 10000;
     document.getElementById('pt-balance').textContent = acctVal.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
-    const unreal = d.unrealised_pnl ?? 0;
     const subEl = document.getElementById('pt-balance-sub');
     if (subEl) {
-      const sign = unreal >= 0 ? '+' : '';
-      subEl.textContent = `${d.currency || 'GBP'} · unrealised ${sign}${unreal.toFixed(2)}`;
+      const freeCash = d.free_cash ?? d.virtual_balance ?? 0;
+      const posVal   = d.open_positions_value ?? 0;
+      const unreal   = d.unrealised_pnl ?? 0;
+      const sign     = unreal >= 0 ? '+' : '';
+      const parts    = [`${d.currency || 'GBP'} · cash £${freeCash.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`];
+      if (posVal > 0) parts.push(`positions £${posVal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`);
+      parts.push(`unrealised ${sign}${unreal.toFixed(2)}`);
+      subEl.textContent = parts.join(' · ');
       subEl.style.color = unreal > 0 ? 'var(--green)' : unreal < 0 ? 'var(--red)' : '';
     }
     document.getElementById('pt-open-count').textContent = d.open_positions ?? 0;
