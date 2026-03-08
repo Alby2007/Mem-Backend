@@ -628,7 +628,7 @@ def _ai_run_inner(user_id: str) -> dict:
     """Inner body of ai_run — only called when per-user lock is held."""
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    # Bug 2 fix: check exits before looking for new entries; wrapped so yfinance failure can't abort scan
+    # Check exits before looking for new entries; wrapped so yfinance failure can't abort scan
     _monitor_updates = []
     try:
         _mon = monitor_positions(user_id)
@@ -637,8 +637,11 @@ def _ai_run_inner(user_id: str) -> dict:
         _logger.warning('monitor_positions failed in ai_run for %s: %s', user_id, _mon_e)
 
     try:
-        conn = sqlite3.connect(ext.DB_PATH, timeout=15)
+        # Use isolation_level=DEFERRED (default) but with an explicit BEGIN IMMEDIATE so
+        # the open-positions read is serialised against any other concurrent scan for this user.
+        conn = sqlite3.connect(ext.DB_PATH, timeout=15, isolation_level=None)
         conn.row_factory = sqlite3.Row
+        conn.execute('BEGIN IMMEDIATE')
 
         conn.execute(
             "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,500000.0,'GBP',?)",
@@ -663,7 +666,7 @@ def _ai_run_inner(user_id: str) -> dict:
                 (user_id, 'scan_start', None,
                  f'Scan skipped — already at max {_PAPER_MAX_OPEN_POSITIONS} open positions', now_iso)
             )
-            conn.commit()
+            conn.execute('COMMIT')
             conn.close()
             return {'entries': 0, 'skips': 0, 'monitor_updates': []}
 
@@ -689,6 +692,7 @@ def _ai_run_inner(user_id: str) -> dict:
             (user_id,)
         ).fetchone()
         committed_capital = float(committed_rows[0] or 0.0)
+        # remaining_cash tracks cash available within this scan; re-read from DB before each entry
         remaining_cash = max(balance - committed_capital, 0.0)
 
         entries = 0
@@ -841,20 +845,34 @@ def _ai_run_inner(user_id: str) -> dict:
                 continue
 
             if action == 'ENTER' and risk > 0:
+                # Re-read open slot count from DB (within our BEGIN IMMEDIATE txn) to prevent
+                # stale-read race when two scan paths fire close together.
+                _cur_open = conn.execute(
+                    "SELECT COUNT(*) FROM paper_positions WHERE user_id=? AND status='open'", (user_id,)
+                ).fetchone()[0]
+                if _cur_open >= _PAPER_MAX_OPEN_POSITIONS:
+                    skips += 1
+                    continue
+
                 qty = round(risk_per_trade / risk, 4) if risk > 0 else 1.0
                 qty = max(qty, 0.0001)
                 position_value = round(entry_p * qty, 2)
                 if position_value > max_position_value:
                     qty = round(max_position_value / entry_p, 4)
                     position_value = round(entry_p * qty, 2)
+                # Issue 2 fix: instead of hard-rejecting when position_value > remaining_cash,
+                # scale down qty to fit available cash (minimum viable notional = risk_per_trade * 2)
                 if position_value > remaining_cash:
-                    skips += 1
-                    conn.execute(
-                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-                        (user_id, 'skip', ticker,
-                         f'Insufficient cash: need £{position_value:,.2f}, have £{remaining_cash:,.2f}', now_iso)
-                    )
-                    continue
+                    if remaining_cash < risk_per_trade * 2:
+                        skips += 1
+                        conn.execute(
+                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                            (user_id, 'skip', ticker,
+                             f'Insufficient cash: need £{position_value:,.2f}, have £{remaining_cash:,.2f} (below min viable)', now_iso)
+                        )
+                        continue
+                    qty = round(remaining_cash / entry_p, 4)
+                    position_value = round(entry_p * qty, 2)
                 remaining_cash -= position_value
                 conn.execute(
                     "UPDATE paper_account SET virtual_balance = virtual_balance - ? WHERE user_id=?",
@@ -879,7 +897,7 @@ def _ai_run_inner(user_id: str) -> dict:
             else:
                 skips += 1
 
-        if skips > 0:
+        if skips > 0 or entries > 0:
             conn.execute(
                 "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
                 (user_id, 'skip', None,
@@ -904,12 +922,27 @@ def _ai_run_inner(user_id: str) -> dict:
             )
         except Exception as _eq_e:
             _logger.warning('equity log write failed for %s: %s', user_id, _eq_e)
-        conn.commit()
+        conn.execute('COMMIT')
         conn.close()
+
+        # Issue 3 fix: run monitor again after entries so any positions that gap through
+        # their stop during LLM-decision latency are caught in the same cycle.
+        if entries > 0:
+            try:
+                _mon2 = monitor_positions(user_id)
+                _monitor_updates.extend(_mon2.get('updates', []))
+            except Exception as _mon2_e:
+                _logger.warning('post-entry monitor_positions failed for %s: %s', user_id, _mon2_e)
+
         return {'entries': entries, 'skips': skips, 'monitor_updates': _monitor_updates}
 
     except Exception as e:
         _logger.error('ai_run error for %s: %s', user_id, e)
+        try:
+            conn.execute('ROLLBACK')
+            conn.close()
+        except Exception:
+            pass
         return {'error': str(e)}
 
 
