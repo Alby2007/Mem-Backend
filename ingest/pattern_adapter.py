@@ -114,16 +114,23 @@ def _fetch_ohlcv(ticker: str, timeframe: str) -> List[OHLCV]:
         )
         if df is None or df.empty:
             return []
+        # yfinance may return MultiIndex columns; squeeze to scalar via iloc[0]
+        def _scalar(v) -> float:
+            try:
+                return float(v.iloc[0]) if hasattr(v, 'iloc') else float(v)
+            except Exception:
+                return 0.0
+
         candles: List[OHLCV] = []
         for ts, row in df.iterrows():
             try:
                 candles.append(OHLCV(
                     timestamp = ts.isoformat(),
-                    open      = float(row['Open']),
-                    high      = float(row['High']),
-                    low       = float(row['Low']),
-                    close     = float(row['Close']),
-                    volume    = float(row.get('Volume', 0) or 0),
+                    open      = _scalar(row['Open']),
+                    high      = _scalar(row['High']),
+                    low       = _scalar(row['Low']),
+                    close     = _scalar(row['Close']),
+                    volume    = _scalar(row.get('Volume', 0) or 0),
                 ))
             except Exception:
                 continue
