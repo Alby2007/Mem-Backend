@@ -166,7 +166,7 @@ def get_account(user_id: str) -> dict:
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(
-        "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,500000.0,'GBP',?)",
+        "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,100000.0,'GBP',?)",
         (user_id, now_iso)
     )
     conn.commit()
@@ -257,7 +257,7 @@ def update_account_size(user_id: str, virtual_balance: Optional[float], mark_set
         # "Not now" path — just mark the flag, don't touch the balance
         conn.execute(
             'INSERT INTO paper_account (user_id, virtual_balance, currency, created_at, account_size_set) '
-            'VALUES (?, 500000.0, \'GBP\', ?, 1) '
+            'VALUES (?, 100000.0, \'GBP\', ?, 1) '
             'ON CONFLICT(user_id) DO UPDATE SET account_size_set=1',
             (user_id, now_iso)
         )
@@ -555,14 +555,22 @@ def get_agent_log(user_id: str, limit: int = 100) -> list[dict]:
 
 
 def reset_paper_trader(user_id: str) -> dict:
-    """Factory reset: stop scanner, delete all positions/logs/equity, delete account row."""
+    """Factory reset: stop scanner, delete all positions/logs/equity, re-seed account at £100k."""
     stop_scanner(user_id)
+    now_iso = datetime.now(timezone.utc).isoformat()
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
     try:
         conn.execute("DELETE FROM paper_positions WHERE user_id=?", (user_id,))
         conn.execute("DELETE FROM paper_agent_log WHERE user_id=?", (user_id,))
         conn.execute("DELETE FROM paper_equity_log WHERE user_id=?", (user_id,))
         conn.execute("DELETE FROM paper_account WHERE user_id=?", (user_id,))
+        # Re-insert with default £100k balance and account_size_set=0 so onboarding modal fires
+        ensure_paper_tables(conn)
+        conn.execute(
+            "INSERT INTO paper_account (user_id, virtual_balance, currency, created_at, account_size_set) "
+            "VALUES (?, 100000.0, 'GBP', ?, 0)",
+            (user_id, now_iso)
+        )
         conn.commit()
     finally:
         conn.close()
@@ -659,7 +667,7 @@ def _ai_run_inner(user_id: str) -> dict:
         conn.execute('BEGIN IMMEDIATE')
 
         conn.execute(
-            "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,500000.0,'GBP',?)",
+            "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,100000.0,'GBP',?)",
             (user_id, now_iso)
         )
 
@@ -988,7 +996,7 @@ def _set_agent_running_db(user_id: str, running: bool) -> None:
         conn.execute(
             '''
             INSERT INTO paper_account (user_id, virtual_balance, currency, created_at, agent_running)
-            VALUES (?, 500000.0, 'GBP', datetime('now'), ?)
+            VALUES (?, 100000.0, 'GBP', datetime('now'), ?)
             ON CONFLICT(user_id) DO UPDATE SET agent_running=excluded.agent_running
             ''',
             (user_id, 1 if running else 0)
