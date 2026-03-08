@@ -48,6 +48,19 @@ _VALID_DIRECTIONS = {'long', 'short', 'neutral'}
 # Exact lowercase macro entity names the parser accepts as valid subjects
 _VALID_MACRO_ENTITIES = {'fed', 'ecb', 'treasury', 'us_macro', 'us_labor', 'us_yields', 'us_credit'}
 
+# Common-word subjects the LLM hallucinates as tickers — hard block regardless of ticker regex
+_SUBJECT_BLOCKLIST: frozenset[str] = frozenset({
+    'ai', 'eps', 'us', 'uk', 'eu', 'gdp', 'cpi', 'ipo',
+    'esg', 'etf', 'ceo', 'cfo', 'coo', 'cto', 'llm', 'api',
+    'roe', 'roe', 'roi', 'ebt', 'net', 'tax', 'rev', 'yoy',
+    'qoq', 'mom', 'fy', 'q1', 'q2', 'q3', 'q4', 'h1', 'h2',
+    'gaap', 'fifo', 'lifo', 'cash', 'debt', 'bond', 'loan',
+    'bank', 'fund', 'tech', 'news', 'data', 'corp', 'inc',
+    'ltd', 'plc', 'llc', 'co', 'sa',
+    'financial_news', 'market', 'macro', 'sector', 'index',
+    'equity', 'stock', 'share', 'price', 'rate', 'yield',
+})
+
 # Watchlist for ticker context hint in the prompt
 _WATCHLIST_HINT = (
     'AAPL MSFT GOOGL AMZN NVDA META TSLA AVGO JPM V MA BAC GS '
@@ -177,6 +190,9 @@ def _parse_llm_atoms(
         is_valid_ticker = bool(re.match(r'^[A-Z]{2,5}$', subject))
         is_valid_macro  = subj_lower in _VALID_MACRO_ENTITIES
         if not (is_valid_ticker or is_valid_macro):
+            continue
+        # Hard-block common words the LLM hallucinates as tickers
+        if subj_lower in _SUBJECT_BLOCKLIST:
             continue
         subject = subj_lower  # normalise to lowercase for KB consistency
 
