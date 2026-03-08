@@ -129,7 +129,16 @@ def _fetch_finra_file(date_str: str) -> Optional[str]:
     for prefix in ('FNSQ', 'FNYX'):
         url = f'{_FINRA_BASE}/{prefix}{date_str}.txt'
         try:
-            with urllib.request.urlopen(url, timeout=15) as r:
+            req = urllib.request.Request(
+                url,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                    'Accept': 'text/plain,*/*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Referer': 'https://www.finra.org/',
+                },
+            )
+            with urllib.request.urlopen(req, timeout=15) as r:
                 return r.read().decode('utf-8', errors='replace')
         except urllib.error.HTTPError as e:
             if e.code == 404:
