@@ -426,12 +426,24 @@ class YFinanceAdapter(BaseIngestAdapter):
             for sym in self.tickers
         }
         # Total budget for all info() calls: 120s regardless of ticker count
+        _info_auth_fails = 0
+        _INFO_AUTH_ABORT = 5
         try:
             for future in as_completed(futures, timeout=120.0):
                 sym = futures[future]
                 try:
                     result = future.result(timeout=15)
-                    all_atoms.extend(result)
+                    if result == '__AUTH_FAIL__':
+                        _info_auth_fails += 1
+                        if _info_auth_fails >= _INFO_AUTH_ABORT:
+                            self._logger.warning(
+                                'Yahoo Finance blocking OCI IP on info() — '
+                                'aborting info fetch; will retry next cycle'
+                            )
+                            break
+                    else:
+                        _info_auth_fails = 0
+                        all_atoms.extend(result)
                 except Exception as e:
                     self._logger.warning('info fetch failed for %s: %s', sym, e)
         except Exception:
@@ -462,19 +474,11 @@ class YFinanceAdapter(BaseIngestAdapter):
                 err = str(e).lower()
                 is_crumb = '401' in err or 'crumb' in err or 'unauthorized' in err
                 is_ratelimit = any(k in err for k in ('429', 'rate', 'too many', 'timeout'))
-                if attempt == 0 and (is_crumb or is_ratelimit):
-                    if is_crumb:
-                        # Clear stale session/crumb so next attempt fetches a fresh one
-                        try:
-                            yf.utils.get_json.cache_clear()  # type: ignore[attr-defined]
-                        except Exception:
-                            pass
-                        try:
-                            import yfinance.cache as _yfc
-                            _yfc.clear_cache()
-                        except Exception:
-                            pass
-                    time.sleep(5.0 if is_crumb else 3.0)
+                if is_crumb:
+                    # Signal IP-level block to caller — no point retrying
+                    return '__AUTH_FAIL__'  # type: ignore[return-value]
+                if attempt == 0 and is_ratelimit:
+                    time.sleep(3.0)
                     continue
                 self._logger.debug('info() failed for %s (attempt %d): %s', symbol, attempt + 1, e)
                 return []
