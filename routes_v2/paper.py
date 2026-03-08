@@ -23,7 +23,7 @@ def _tier_gate(user_id: str) -> None:
 
 
 class UpdateAccountRequest(BaseModel):
-    virtual_balance: float
+    virtual_balance: Optional[float] = None
     mark_set: Optional[bool] = True
 
 

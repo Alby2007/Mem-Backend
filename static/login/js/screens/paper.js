@@ -160,7 +160,7 @@ async function _ptShowOnboarding() {
     try {
       await apiFetch(`/users/${state.userId}/paper/account`, {
         method: 'PATCH',
-        body: JSON.stringify({ virtual_balance: val || 500000, mark_set: true }),
+        body: JSON.stringify({ virtual_balance: val, mark_set: true }),
       });
     } catch(e) { /* best effort */ }
     overlay.remove();

@@ -245,13 +245,28 @@ def get_equity_log(user_id: str, days: int = 90) -> list[dict]:
     ]
 
 
-def update_account_size(user_id: str, virtual_balance: float, mark_set: bool = True) -> dict:
-    """Update virtual_balance and optionally mark account_size_set=1."""
-    if virtual_balance < 1000 or virtual_balance > 100000:
-        return {'error': 'account size must be between 1000 and 100000'}
+def update_account_size(user_id: str, virtual_balance: Optional[float], mark_set: bool = True) -> dict:
+    """Update virtual_balance and optionally mark account_size_set=1.
+
+    If virtual_balance is None, only mark_set is written (balance unchanged).
+    """
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
     ensure_paper_tables(conn)
     now_iso = datetime.now(timezone.utc).isoformat()
+    if virtual_balance is None:
+        # "Not now" path — just mark the flag, don't touch the balance
+        conn.execute(
+            'INSERT INTO paper_account (user_id, virtual_balance, currency, created_at, account_size_set) '
+            'VALUES (?, 500000.0, \'GBP\', ?, 1) '
+            'ON CONFLICT(user_id) DO UPDATE SET account_size_set=1',
+            (user_id, now_iso)
+        )
+        conn.commit()
+        conn.close()
+        return {'status': 'dismissed'}
+    if virtual_balance < 1000 or virtual_balance > 100000:
+        conn.close()
+        return {'error': 'account size must be between 1000 and 100000'}
     conn.execute(
         'INSERT INTO paper_account (user_id, virtual_balance, currency, created_at, account_size_set) '
         'VALUES (?, ?, \'GBP\', ?, ?) '
