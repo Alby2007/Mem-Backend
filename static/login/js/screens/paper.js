@@ -296,7 +296,8 @@ function _ptRenderOpen(rows) {
     const unrStr     = unr != null ? (unr >= 0 ? '+' : '') + unr + 'R' : '—';
     const unrCls     = unr != null ? (unr >= 0 ? 'pt-pnl-pos' : 'pt-pnl-neg') : '';
     const qty        = p.quantity != null ? p.quantity : 1;
-    const posVal     = p.entry_price != null ? (p.entry_price * qty) : null;
+    const livePrice  = p.current_price != null ? p.current_price : p.entry_price;
+    const posVal     = livePrice != null ? (livePrice * qty) : null;
     const posValStr  = posVal != null ? '£' + posVal.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
     return `<tr>
       <td><span class="mono" style="font-weight:700;">${escHtml(p.ticker)}</span></td>

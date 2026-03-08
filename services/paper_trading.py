@@ -199,8 +199,11 @@ def get_account(user_id: str) -> dict:
     live = fetch_live_prices(open_tickers)
 
     unrealised_cash = 0.0
+    committed_capital = 0.0
     for r in open_pos:
         tk, direction, entry, stop_, qty = r
+        if entry and qty:
+            committed_capital += entry * qty
         cp = live.get(tk)
         if cp is not None and entry and stop_:
             risk = abs(entry - stop_)
@@ -211,7 +214,9 @@ def get_account(user_id: str) -> dict:
                     pnl_r = (entry - cp) / risk
                 unrealised_cash += pnl_r * risk * qty
 
-    account_value = round(row[0] + unrealised_cash, 2)
+    # account_value = free cash + value of open positions at current price
+    # = virtual_balance (free cash) + committed_capital (entry * qty) + unrealised P&L delta
+    account_value = round(row[0] + committed_capital + unrealised_cash, 2)
     return {
         'user_id': user_id,
         'virtual_balance': row[0],
