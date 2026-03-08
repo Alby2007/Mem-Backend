@@ -194,6 +194,63 @@ def _get_trader_level(user_id: Optional[str]) -> str:
     return 'developing'
 
 
+# ── Layer 2: Tier-gated KB depth ─────────────────────────────────────────────
+
+_TIER_ATOM_LIMIT: dict = {
+    'free':    10,
+    'basic':   20,
+    'pro':     60,
+    'premium': 120,
+}
+_TIER_ATOM_LIMIT_DEFAULT = 30  # unauthenticated / unknown
+
+
+def _tier_atom_limit(user_id: Optional[str]) -> int:
+    """Return KB retrieval atom limit for user's subscription tier."""
+    if not (user_id and ext.HAS_TIERS):
+        return _TIER_ATOM_LIMIT_DEFAULT
+    try:
+        tier = ext.get_user_tier_for_request(user_id)
+        return _TIER_ATOM_LIMIT.get(tier, _TIER_ATOM_LIMIT_DEFAULT)
+    except Exception:
+        return _TIER_ATOM_LIMIT_DEFAULT
+
+
+# ── Layer 1: Watchlist-weighted atom boost ────────────────────────────────────
+
+_WATCHLIST_BOOST = 1.3
+
+
+def _boost_watchlist_atoms(
+    atoms: List[Dict],
+    user_id: Optional[str],
+) -> List[Dict]:
+    """
+    Boost confidence of atoms whose subject matches a ticker in the user's
+    watchlist/portfolio by ×1.3, then re-sort by boosted confidence so
+    watchlist tickers surface higher in the KB context window.
+    No atoms are dropped — only ranking changes.
+    """
+    if not (user_id and ext.HAS_PRODUCT_LAYER) or not atoms:
+        return atoms
+    try:
+        from users.user_store import get_user_watchlist_tickers
+        watchlist = {t.upper() for t in get_user_watchlist_tickers(ext.DB_PATH, user_id)}
+    except Exception:
+        return atoms
+    if not watchlist:
+        return atoms
+    boosted = []
+    for a in atoms:
+        subj = str(a.get('subject', '')).upper()
+        if subj in watchlist:
+            a = dict(a)
+            a['confidence'] = min(a.get('confidence', 0.5) * _WATCHLIST_BOOST, 1.0)
+        boosted.append(a)
+    boosted.sort(key=lambda x: x.get('confidence', 0.0), reverse=True)
+    return boosted
+
+
 def _check_chat_quota(user_id: Optional[str]) -> Optional[Dict]:
     """Check chat quota. Returns error dict if quota exceeded, else None."""
     if not (user_id and ext.HAS_TIERS and ext.HAS_PATTERN_LAYER):
@@ -975,15 +1032,18 @@ def run(
     if model is None:
         model = ext.DEFAULT_MODEL if ext.HAS_LLM else 'llama3.2'
 
-    # ── Trader level ──────────────────────────────────────────────────────
+    # ── Trader level ──────────────────────────────────────────────────────────────
     trader_level = _get_trader_level(user_id)
 
-    # ── Chat quota ────────────────────────────────────────────────────────
+    # ── Layer 2: tier-gated KB depth ─────────────────────────────────────────
+    limit = max(limit, _tier_atom_limit(user_id))
+
+    # ── Chat quota ──────────────────────────────────────────────────────────────
     quota_error = _check_chat_quota(user_id)
     if quota_error:
         return quota_error, 403
 
-    # ── Portfolio intent ──────────────────────────────────────────────────
+    # ── Portfolio intent ──────────────────────────────────────────────────────
     portfolio_wanted = _wants_portfolio(message)
     if user_id and portfolio_wanted:
         limit = max(limit, 80)
@@ -1010,6 +1070,8 @@ def run(
         message, session_id, user_id, portfolio_wanted,
     )
     snippet, atoms = ext.retrieve(retrieve_message, conn, limit=limit, nudges=nudges)
+    # Layer 1: boost watchlist ticker atoms so they rank above non-watchlist atoms
+    atoms = _boost_watchlist_atoms(atoms, user_id)
     _update_session_tickers(session_id, cur_tickers, atoms)
 
     # ── Working memory ────────────────────────────────────────────────────

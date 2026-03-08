@@ -44,6 +44,10 @@ function extractKbGrounding(rawAnswer) {
 }
 
 function renderKbPanel(grounding, groundingAtoms) {
+  // Predicate filter — drop LLM hallucinations before merging into KB card
+  const _SKIP_TAGS = new Set(['key_finding','quality','reasoning','confidence score','tag','label','ticker']);
+  const _validPred = k => k && !k.includes(' ') && k.length <= 40 && !_SKIP_TAGS.has(k.toLowerCase());
+
   // Merge: LLM rows first (normalise 'regime' -> 'price_regime'), DB wins on conflicts
   const merged = {};
   // Key aliases: normalise LLM-written keys to canonical form
@@ -57,14 +61,14 @@ function renderKbPanel(grounding, groundingAtoms) {
     'invalidation price': 'invalidation_price', 'invalidation-price': 'invalidation_price',
   };
   if (grounding) {
-    grounding.forEach(r => {
+    grounding.filter(r => _validPred(r.key.trim())).forEach(r => {
       const raw = r.key.trim();
       const key = _KEY_ALIAS[raw] || _KEY_ALIAS[raw.replace(/\s+/g, '_')] || raw.replace(/\s+/g, '_');
       if (r.val) merged[key] = r.val;
     });
   }
   if (groundingAtoms && typeof groundingAtoms === 'object') {
-    Object.entries(groundingAtoms).forEach(([k, v]) => { if (v) merged[k] = v; });
+    Object.entries(groundingAtoms).forEach(([k, v]) => { if (v && _validPred(k)) merged[k] = v; });
   }
   if (!Object.keys(merged).length) return '';
 

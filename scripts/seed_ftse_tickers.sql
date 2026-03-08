@@ -1,0 +1,138 @@
+-- FTSE ticker expansion: 111 tickers (FTSE 100 gaps + key FTSE 250)
+-- Safe to re-run: INSERT OR IGNORE skips duplicates
+-- Deploy: sqlite3 /opt/trading-galaxy/data/trading_knowledge.db < /tmp/seed_ftse_tickers.sql
+
+CREATE TABLE IF NOT EXISTS universe_tickers (
+    ticker          TEXT PRIMARY KEY,
+    added_to_ingest INTEGER DEFAULT 0,
+    added_at        TEXT
+);
+
+-- FTSE 100 gaps
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('ADM.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('AHT.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('ANTO.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('AUTO.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('AVV.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('AV.L',   1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('BA.L',   1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('BDEV.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('BKG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('BNZL.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('BRBY.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('CNA.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('CPG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('CRDA.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('DCC.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('DGE.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('ENT.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('EXPN.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('EZJ.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('FERG.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('FRES.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('GLEN.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('HIK.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('HLMA.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('HL.L',   1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('HLN.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('HSBA.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('IAG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('IHG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('III.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('IMB.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('INF.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('ITRK.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('JD.L',   1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('KGF.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('LAND.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('LGEN.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('LLOY.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('LSEG.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('MKS.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('MNDI.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('MNG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('MRO.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('NG.L',   1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('NWG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('NXT.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('OCDO.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('PHNX.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('PRU.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('PSH.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('PSON.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('RKT.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('RMV.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('RR.L',   1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('RS1.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SBRY.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SDR.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SGE.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SGRO.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SKG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SMDS.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SMIN.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SMT.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SN.L',   1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SPX.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('STAN.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SVT.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('TSCO.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('TW.L',   1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('ULVR.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('UU.L',   1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('VOD.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('WEIR.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('WPP.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('WTB.L',  1, datetime('now'));
+
+-- FTSE 250 key names
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('ABDN.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('AGR.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('AIR.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('ALW.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('BNNG.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('BBOX.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('BLND.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('BME.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('BOWL.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('BTG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('CCH.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('CHG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('COB.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('CVS.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('DLG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('DNLM.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('DPLM.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('EMG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('ENGT.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('FLTV.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('GRI.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('HMSO.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('HOME.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('HSL.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('HTG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('IGR.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('INM.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('IPO.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('JMG.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('JUP.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('MCB.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('MCX.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('MGAM.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('MPI.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('NCC.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('OXIG.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('PFC.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('PETS.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('PHP.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('QQ.L',   1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('REL.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('RHM.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('RTO.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SHI.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SPI.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SPDI.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('SUPR.L', 1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('TEM.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('TRN.L',  1, datetime('now'));
+INSERT OR IGNORE INTO universe_tickers (ticker, added_to_ingest, added_at) VALUES ('VTY.L',  1, datetime('now'));
