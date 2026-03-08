@@ -302,10 +302,13 @@ class YFinanceAdapter(BaseIngestAdapter):
 
     # ── Fast bulk price path ───────────────────────────────────────────────
 
-    # Workers for parallel fast_info price fetch
-    _PRICE_WORKERS = 20
+    # Workers for parallel fast_info price fetch.
+    # Yahoo Finance rate-limits burst traffic from OCI IPs — keep concurrency low.
+    _PRICE_WORKERS = 3
     # Per-ticker deadline for fast_info call
-    _PRICE_TICKER_TIMEOUT = 10
+    _PRICE_TICKER_TIMEOUT = 12
+    # Small delay between fast_info calls to avoid per-IP burst detection
+    _PRICE_REQUEST_DELAY = 0.3
 
     def _bulk_download_prices(self, now_iso: str) -> List[RawAtom]:
         """
@@ -331,6 +334,8 @@ class YFinanceAdapter(BaseIngestAdapter):
 
         def _fetch_price(symbol: str):
             """Return (symbol, price_float) or (symbol, None) on failure."""
+            import time as _time
+            _time.sleep(self._PRICE_REQUEST_DELAY)  # throttle to avoid Yahoo burst block
             try:
                 fi = yf.Ticker(symbol).fast_info
                 price = (
@@ -344,20 +349,34 @@ class YFinanceAdapter(BaseIngestAdapter):
                 err = str(e).lower()
                 if 'delist' in err or 'no price data' in err or '404' in err:
                     return symbol, 'DELISTED'
+                if '401' in err or 'crumb' in err or 'unauthorized' in err:
+                    return symbol, 'AUTH_FAIL'
             return symbol, None
 
         ex = ThreadPoolExecutor(max_workers=self._PRICE_WORKERS, thread_name_prefix='yf-price')
         futures = {ex.submit(_fetch_price, sym): sym for sym in active_tickers}
         fetched = 0
+        auth_fails = 0
+        _AUTH_FAIL_ABORT = 5  # abort if Yahoo blocks this many tickers in a row
         try:
-            for future in as_completed(futures, timeout=len(active_tickers) * 0.8 + 30):
+            for future in as_completed(futures, timeout=len(active_tickers) * 1.5 + 60):
                 sym = futures[future]
                 try:
                     _, price = future.result(timeout=self._PRICE_TICKER_TIMEOUT)
                     if price == 'DELISTED':
                         self._logger.info('Marking %s as delisted — will skip in future runs', sym)
                         self._mark_delisted(sym, self._db_path)
+                    elif price == 'AUTH_FAIL':
+                        auth_fails += 1
+                        if auth_fails >= _AUTH_FAIL_ABORT:
+                            self._logger.warning(
+                                'Yahoo Finance blocking OCI IP (401 on %d tickers) — '
+                                'aborting price fetch; will retry next cycle',
+                                auth_fails,
+                            )
+                            break
                     elif price is not None:
+                        auth_fails = 0  # reset on success
                         src = f'exchange_feed_yahoo_{sym.lower().replace("-", "_")}'
                         atoms.append(RawAtom(
                             subject=sym,
