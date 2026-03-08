@@ -88,8 +88,9 @@ _DEFAULT_TICKERS = [
     'IMB.L', 'SSE.L', 'SVT.L', 'SGRO.L', 'LAND.L',
 ]
 
-# Parallel workers for per-ticker info() calls
-_MAX_WORKERS = 12
+# Parallel workers for per-ticker info() calls.
+# Keep low to avoid Yahoo Finance per-IP burst rate limiting from OCI.
+_MAX_WORKERS = 3
 
 # ETF quoteType values that don't carry equity fundamentals
 _ETF_QUOTE_TYPES = {'ETF', 'MUTUALFUND', 'INDEX', 'FUTURE', 'CRYPTOCURRENCY'}
