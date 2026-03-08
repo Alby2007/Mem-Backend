@@ -1,7 +1,7 @@
 // ── Router ────────────────────────────────────────────────────────────────────
-const _SCREENS = ['dashboard','portfolio','markets','chat','tips','patterns','network','history','paper','subscription','profile'];
+const _SCREENS = ['dashboard','portfolio','markets','visualiser','chat','tips','patterns','network','history','paper','subscription','profile'];
 const _AUTH_SCREENS = new Set(['login', 'register']);
-const _NEXT_RE = /^\/[a-z0-9_-]+\/(dashboard|portfolio|markets|chat|tips|patterns|network|history|paper|subscription|profile)$/;
+const _NEXT_RE = /^\/[a-z0-9_-]+\/(dashboard|portfolio|markets|visualiser|chat|tips|patterns|network|history|paper|subscription|profile)$/;
 
 function _screenFromPath(path) {
   // /:username/screen  → screen name
@@ -51,7 +51,8 @@ function showScreen(name) {
   if (name === 'history')   loadHistory();
   if (name === 'tips')      { loadTipsHistory(); loadTipsAccountValue(); loadTipConfig(); }
   if (name === 'portfolio') { loadPortfolioModel(); loadPortfolioHoldings(); loadTickerList(); loadSimBannerIfSet(); }
-  if (name === 'markets')   initMarketsScreen();
+  if (name === 'markets')    initMarketsScreen();
+  if (name === 'visualiser') loadVisualiser();
   if (name === 'paper')     loadPaperTrader();
   if (name === 'login')         { _injectAuthTgWidget(); _loadLoginStats(); }
   if (name === 'register')      {}

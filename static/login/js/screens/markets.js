@@ -367,6 +367,71 @@ function askKBAbout(ticker) {
   }
 }
 
+// ── Sector normalisation (shared with visualiser) ────────────────────────────
+const _SECTOR_NORM = {
+  'financial services': 'Financial Services', 'financial_services': 'Financial Services',
+  'financials': 'Financial Services', 'financial': 'Financial Services',
+  'technology': 'Technology', 'information technology': 'Technology', 'tech': 'Technology',
+  'healthcare': 'Healthcare', 'health care': 'Healthcare',
+  'consumer cyclical': 'Consumer', 'consumer discretionary': 'Consumer',
+  'consumer defensive': 'Consumer', 'consumer staples': 'Consumer', 'consumer': 'Consumer',
+  'energy': 'Energy',
+  'industrials': 'Industrials', 'industrial': 'Industrials',
+  'communication services': 'Communication', 'communications': 'Communication', 'communication': 'Communication',
+  'real estate': 'Real Estate', 'reits': 'Real Estate',
+  'utilities': 'Utilities',
+  'basic materials': 'Materials', 'materials': 'Materials',
+};
+function _normSector(raw) {
+  if (!raw) return 'Other';
+  return _SECTOR_NORM[(raw || '').toLowerCase()] || raw;
+}
+
+async function _loadSectorPulse() {
+  const el = document.getElementById('mkt-sector-pulse');
+  if (!el) return;
+  try {
+    const snap = await apiFetch('/market/snapshot');
+    const tickers = snap?.tickers || [];
+    if (!tickers.length) return;
+    const byS = {};
+    tickers.forEach(t => {
+      const s = _normSector(t.sector);
+      if (!byS[s]) byS[s] = { count: 0, bull: 0, upsides: [] };
+      byS[s].count++;
+      if ((t.signal_direction || '').toLowerCase().includes('bull')) byS[s].bull++;
+      const u = parseFloat(t.upside_pct);
+      if (!isNaN(u)) byS[s].upsides.push(u);
+    });
+    const sectors = Object.entries(byS)
+      .map(([name, d]) => ({
+        name,
+        count: d.count,
+        bullPct: Math.round(d.bull / d.count * 100),
+        avgUpside: d.upsides.length ? (d.upsides.reduce((a, b) => a + b, 0) / d.upsides.length).toFixed(1) : null,
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+
+    el.innerHTML = sectors.map(s => {
+      const clr = s.bullPct >= 60 ? '#22c55e' : s.bullPct >= 40 ? '#f59e0b' : '#6b7280';
+      const up  = s.avgUpside != null ? `Avg upside: ${s.avgUpside}%` : '';
+      return `<div class="mkt-sector-tile" style="border-top-color:${clr}" onclick="_mktSectorClick('${escHtml(s.name)}')">
+        <div class="mst-name">${escHtml(s.name)}</div>
+        <div class="mst-count">${s.count} tickers</div>
+        <div class="mst-bull" style="color:${clr}">↑ ${s.bullPct}% bullish</div>
+        ${up ? `<div class="mst-upside">${escHtml(up)}</div>` : ''}
+      </div>`;
+    }).join('');
+    el.style.display = '';
+  } catch { /* silent */ }
+}
+
+window._mktSectorClick = function(sector) {
+  window._visPrefilterSector = sector;
+  navigate('visualiser');
+};
+
 function initMarketsScreen() {
   if (!_marketsInited) {
     document.querySelectorAll('.mcat-tab').forEach(tab => {
@@ -391,5 +456,6 @@ function initMarketsScreen() {
   }
   _renderChips(_marketsCat);
   _loadMarketSymbol(_tvCurrentSym, _tvCurrentKb);
+  _loadSectorPulse();
 }
 

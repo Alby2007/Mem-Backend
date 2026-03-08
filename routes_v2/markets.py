@@ -6,8 +6,10 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
+
+from middleware.fastapi_auth import get_current_user
 
 import extensions as ext
 
@@ -123,6 +125,120 @@ async def market_snapshot():
         "macro": macro,
         "symbols": symbols,
         "as_of": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+_VIS_SECTOR_NORM: dict[str, str] = {
+    'financial services': 'Financial Services', 'financial_services': 'Financial Services',
+    'financials': 'Financial Services', 'financial': 'Financial Services',
+    'technology': 'Technology', 'information technology': 'Technology', 'tech': 'Technology',
+    'healthcare': 'Healthcare', 'health care': 'Healthcare',
+    'consumer cyclical': 'Consumer', 'consumer discretionary': 'Consumer',
+    'consumer defensive': 'Consumer', 'consumer staples': 'Consumer', 'consumer': 'Consumer',
+    'energy': 'Energy',
+    'industrials': 'Industrials', 'industrial': 'Industrials',
+    'communication services': 'Communication', 'communications': 'Communication',
+    'communication': 'Communication',
+    'real estate': 'Real Estate', 'reits': 'Real Estate',
+    'utilities': 'Utilities',
+    'basic materials': 'Materials', 'materials': 'Materials',
+}
+
+def _vis_norm_sector(raw: str | None) -> str:
+    if not raw:
+        return 'Other'
+    return _VIS_SECTOR_NORM.get(raw.lower(), raw)
+
+
+@router.get("/kb/visualiser")
+async def kb_visualiser(_user: str = Depends(get_current_user)):
+    """Pre-aggregated KB data for the Visualiser screen."""
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        rows = conn.execute(
+            """SELECT subject, predicate, object
+               FROM facts
+               WHERE predicate IN (
+                   'conviction_tier','signal_direction','upside_pct',
+                   'macro_confirmation','volatility_regime','return_1m','return_1y',
+                   'price_target','last_price','sector'
+               )
+               ORDER BY subject, predicate"""
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    by_subject: dict = {}
+    for subj, pred, obj in rows:
+        if subj not in by_subject:
+            by_subject[subj] = {}
+        if pred not in by_subject[subj]:
+            by_subject[subj][pred] = obj
+
+    tickers_out = []
+    for subj, atoms in by_subject.items():
+        if not (atoms.get('conviction_tier') or atoms.get('signal_direction')):
+            continue
+        try:
+            upside = float(atoms['upside_pct']) if atoms.get('upside_pct') else None
+        except (TypeError, ValueError):
+            upside = None
+        tickers_out.append({
+            'ticker':            subj,
+            'sector':            _vis_norm_sector(atoms.get('sector')),
+            'signal_direction':  atoms.get('signal_direction', 'neutral'),
+            'upside_pct':        upside,
+            'conviction_tier':   atoms.get('conviction_tier'),
+            'macro_confirmation':atoms.get('macro_confirmation'),
+            'volatility_regime': atoms.get('volatility_regime'),
+            'return_1m':         atoms.get('return_1m'),
+            'return_1y':         atoms.get('return_1y'),
+            'price_target':      atoms.get('price_target'),
+            'last_price':        atoms.get('last_price'),
+        })
+
+    # Sector stats
+    sector_stats: dict = {}
+    for t in tickers_out:
+        s = t['sector']
+        if s not in sector_stats:
+            sector_stats[s] = {'count': 0, 'bull': 0, 'upsides': [], 'tickers': []}
+        sector_stats[s]['count'] += 1
+        if (t['signal_direction'] or '').lower().startswith('bull'):
+            sector_stats[s]['bull'] += 1
+        if t['upside_pct'] is not None:
+            sector_stats[s]['upsides'].append(t['upside_pct'])
+        sector_stats[s]['tickers'].append((t['ticker'], t['upside_pct'] or 0))
+
+    sector_out = {}
+    for s, d in sector_stats.items():
+        top3 = sorted(d['tickers'], key=lambda x: x[1], reverse=True)[:3]
+        avg_up = (sum(d['upsides']) / len(d['upsides'])) if d['upsides'] else None
+        sector_out[s] = {
+            'count':       d['count'],
+            'avg_upside':  round(avg_up, 1) if avg_up is not None else None,
+            'bullish_pct': round(d['bull'] / d['count'] * 100) if d['count'] else 0,
+            'top':         [t[0] for t in top3],
+        }
+
+    # Signal counts
+    bull = sum(1 for t in tickers_out if (t['signal_direction'] or '').lower().startswith('bull'))
+    bear = sum(1 for t in tickers_out if (t['signal_direction'] or '').lower().startswith('bear'))
+    neut = len(tickers_out) - bull - bear
+
+    # Top 20 by upside
+    top_upside = sorted(
+        [t for t in tickers_out if t['upside_pct'] is not None],
+        key=lambda x: x['upside_pct'], reverse=True
+    )[:20]
+
+    return {
+        'tickers':      tickers_out,
+        'sector_stats': sector_out,
+        'signal_counts': {'bullish': bull, 'bearish': bear, 'neutral': neut, 'total': len(tickers_out)},
+        'top_upside':   top_upside,
+        'as_of':        datetime.now(timezone.utc).isoformat(),
     }
 
 

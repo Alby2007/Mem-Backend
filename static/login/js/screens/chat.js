@@ -497,5 +497,73 @@ document.querySelectorAll('.prompt-chip').forEach(btn => {
 document.getElementById('chat-input').addEventListener('input', function() {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+  _tickerAcUpdate(this);
+});
+
+// ── Ticker autocomplete on $ ──────────────────────────────────────────────────
+const _AC_FALLBACK = ['AAPL','MSFT','NVDA','GOOGL','AMZN','META','TSLA','AVGO','AMD',
+  'JPM','BAC','GS','V','MA','XOM','CVX','JNJ','UNH','WMT','COIN','PLTR','MSTR',
+  'BARC.L','HSBA.L','LLOY.L','AZN.L','SHEL.L','BP.L','GSK.L','RIO.L'];
+
+function _tickerAcSources() {
+  const keys = Object.keys(window._snapshotPrices || {});
+  return keys.length ? keys : _AC_FALLBACK;
+}
+
+function _tickerAcUpdate(textarea) {
+  const ac = document.getElementById('ticker-autocomplete');
+  if (!ac) return;
+  const val = textarea.value;
+  const pos = textarea.selectionStart;
+  // Find last $ before cursor
+  const before = val.slice(0, pos);
+  const m = before.match(/\$([A-Z0-9.]*)$/i);
+  if (!m) { ac.style.display = 'none'; return; }
+  const query = m[1].toUpperCase();
+  if (!query) { ac.style.display = 'none'; return; }
+  const matches = _tickerAcSources()
+    .filter(t => t.toUpperCase().startsWith(query))
+    .slice(0, 6);
+  if (!matches.length) { ac.style.display = 'none'; return; }
+  ac.innerHTML = matches.map(t => {
+    const hi = `<span class="ticker-ac-match">${escHtml(t.slice(0, query.length))}</span>${escHtml(t.slice(query.length))}`;
+    return `<div class="ticker-ac-item" data-ticker="${escHtml(t)}">${hi}</div>`;
+  }).join('');
+  ac.style.display = 'block';
+}
+
+function _tickerAcInsert(ticker) {
+  const textarea = document.getElementById('chat-input');
+  const ac = document.getElementById('ticker-autocomplete');
+  const pos = textarea.selectionStart;
+  const val = textarea.value;
+  const before = val.slice(0, pos);
+  const m = before.match(/\$([A-Z0-9.]*)$/i);
+  if (!m) return;
+  const start = pos - m[0].length;
+  textarea.value = val.slice(0, start) + ticker + val.slice(pos);
+  const newPos = start + ticker.length;
+  textarea.setSelectionRange(newPos, newPos);
+  textarea.focus();
+  if (ac) ac.style.display = 'none';
+}
+
+document.getElementById('ticker-autocomplete').addEventListener('mousedown', function(e) {
+  const item = e.target.closest('.ticker-ac-item');
+  if (item) { e.preventDefault(); _tickerAcInsert(item.dataset.ticker); }
+});
+
+document.getElementById('chat-input').addEventListener('keydown', function(e) {
+  const ac = document.getElementById('ticker-autocomplete');
+  if (e.key === 'Escape' && ac && ac.style.display !== 'none') {
+    ac.style.display = 'none'; e.preventDefault();
+  }
+});
+
+document.addEventListener('mousedown', function(e) {
+  const ac = document.getElementById('ticker-autocomplete');
+  if (ac && !ac.contains(e.target) && e.target.id !== 'chat-input') {
+    ac.style.display = 'none';
+  }
 });
 

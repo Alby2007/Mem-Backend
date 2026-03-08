@@ -369,6 +369,38 @@ async function loadDashboardBottomRow() {
         chgEl.textContent = '—'; chgEl.className = 'dsh-mkt-chg';
       }
     });
+
+    // KB coverage + signal bias from snap.tickers
+    const tickers = snap?.tickers || [];
+    if (tickers.length) {
+      const sectors = new Set(tickers.map(t => (t.sector || '').toLowerCase()).filter(Boolean));
+      const covEl = document.getElementById('dsh-kb-coverage');
+      if (covEl) covEl.textContent = `Coverage: ${tickers.length} tickers · ${sectors.size} sectors`;
+
+      let bull = 0, bear = 0, neut = 0;
+      tickers.forEach(t => {
+        const d = (t.signal_direction || '').toLowerCase();
+        if (d.includes('bull')) bull++;
+        else if (d.includes('bear')) bear++;
+        else neut++;
+      });
+      const total = tickers.length;
+      const bullPct = Math.round(bull / total * 100);
+      const neutPct = Math.round(neut / total * 100);
+      const bearPct = 100 - bullPct - neutPct;
+      const wrapEl = document.getElementById('dsh-kb-signal-wrap');
+      if (wrapEl) {
+        document.getElementById('dsh-kb-sig-bull').style.width = bullPct + '%';
+        document.getElementById('dsh-kb-sig-neut').style.width = neutPct + '%';
+        document.getElementById('dsh-kb-sig-bear').style.width = bearPct + '%';
+        const labEl = document.getElementById('dsh-kb-signal-labels');
+        if (labEl) labEl.innerHTML =
+          `<span style="color:#22c55e">${bullPct}% bull</span>` +
+          `<span style="color:#6b7280">${neutPct}% neut</span>` +
+          `<span style="color:#ef4444">${bearPct}% bear</span>`;
+        wrapEl.style.display = '';
+      }
+    }
   } catch { /* keep dashes */ }
 }
 

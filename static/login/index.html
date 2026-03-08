@@ -4,7 +4,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://telegram.org https://fonts.googleapis.com; frame-src https://oauth.telegram.org https://s.tradingview.com https://api.trading-galaxy.uk https://telegram.org; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.trading-galaxy.uk https://telegram.org;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://telegram.org https://fonts.googleapis.com https://cdnjs.cloudflare.com; frame-src https://oauth.telegram.org https://s.tradingview.com https://api.trading-galaxy.uk https://telegram.org; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.trading-galaxy.uk https://telegram.org;">
 <title>Trading Galaxy — Sign In</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -229,6 +229,9 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
     </div>
     <div class="nav-item" data-screen="markets" id="nav-markets">
       <span class="nav-icon">◬</span><span class="nav-label">Markets</span>
+    </div>
+    <div class="nav-item" data-screen="visualiser" id="nav-visualiser">
+      <span class="nav-icon">⬡</span><span class="nav-label">Visualiser</span>
     </div>
     <div class="nav-item" data-screen="chat" id="nav-chat">
       <span class="nav-icon">◎</span><span class="nav-label">Chat</span>
@@ -576,6 +579,17 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
         <div class="dsh-mkt-item"><div class="dsh-mkt-sym">GLD</div><div class="dsh-mkt-name">Gold</div><div class="dsh-mkt-price" id="dsh-gld-price">—</div><div class="dsh-mkt-chg" id="dsh-gld-chg">—</div></div>
         <div class="dsh-mkt-item"><div class="dsh-mkt-sym">GBP/USD</div><div class="dsh-mkt-name">GBP/USD</div><div class="dsh-mkt-price" id="dsh-gbp-price">—</div><div class="dsh-mkt-chg" id="dsh-gbp-chg">—</div></div>
       </div>
+      <div class="dsh-kb-extra">
+        <div class="dsh-kb-coverage" id="dsh-kb-coverage">—</div>
+        <div class="dsh-kb-signal-wrap" id="dsh-kb-signal-wrap" style="display:none;">
+          <div class="dsh-kb-signal-bar">
+            <div class="dsh-kb-sig-bull" id="dsh-kb-sig-bull"></div>
+            <div class="dsh-kb-sig-neut" id="dsh-kb-sig-neut"></div>
+            <div class="dsh-kb-sig-bear" id="dsh-kb-sig-bear"></div>
+          </div>
+          <div class="dsh-kb-signal-labels" id="dsh-kb-signal-labels"></div>
+        </div>
+      </div>
     </div>
 
     <!-- INTELLIGENCE SOURCES (KB health) -->
@@ -850,6 +864,31 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
     <div id="tv-chart"></div>
     <div id="kb-panel"><div class="kb-title">KB Intelligence</div><div style="color:var(--muted);font-size:12px;">Select a symbol to load KB data.</div></div>
   </div>
+  <div id="mkt-sector-pulse" class="mkt-sector-pulse-row" style="display:none;"></div>
+</div>
+
+<!-- VISUALISER ────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-visualiser">
+  <div class="vis-topbar">
+    <div style="font-size:16px;font-weight:700;">KB Visualiser</div>
+    <div class="vis-toggle-group">
+      <button class="vis-toggle-btn active" data-view="bubble">Bubble Map</button>
+      <button class="vis-toggle-btn" data-view="heatmap">Sector Heatmap</button>
+      <button class="vis-toggle-btn" data-view="radar">Signal Radar</button>
+    </div>
+    <div class="vis-filter-row">
+      <div class="vis-pills">
+        <span class="vis-pill" data-filter="bullish">Bullish</span>
+        <span class="vis-pill" data-filter="bearish">Bearish</span>
+        <span class="vis-pill" data-filter="neutral">Neutral</span>
+      </div>
+      <input id="vis-search" class="vis-searchbox" placeholder="Search ticker…" autocomplete="off" />
+    </div>
+  </div>
+  <div id="vis-canvas" class="vis-canvas"></div>
+  <div class="vis-footer">
+    <span id="vis-last-updated" class="vis-last-updated"></span>
+  </div>
 </div>
 
 <!-- HISTORY ───────────────────────────────────────────────────────── -->
@@ -903,7 +942,10 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
       <label class="toggle"><input type="checkbox" id="overlay-toggle"><span class="toggle-slider"></span></label>
       <span>Overlay</span>
     </div>
-    <textarea id="chat-input" placeholder="Ask the KB anything…" rows="1"></textarea>
+    <div style="position:relative;flex:1;display:flex;">
+      <textarea id="chat-input" placeholder="Ask the KB anything… (type $ for ticker suggestions)" rows="1" style="flex:1;"></textarea>
+      <div id="ticker-autocomplete" class="ticker-ac-dropdown" style="display:none;"></div>
+    </div>
     <button class="btn btn-primary" id="chat-send-btn">Send</button>
   </div>
 </div>
@@ -1692,6 +1734,7 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
     <div class="mnav-item active" data-screen="dashboard" id="mnav-dashboard"><span class="mnav-icon">▦</span>Dashboard</div>
     <div class="mnav-item" data-screen="portfolio" id="mnav-portfolio"><span class="mnav-icon">◈</span>Portfolio</div>
     <div class="mnav-item" data-screen="markets" id="mnav-markets"><span class="mnav-icon">◬</span>Markets</div>
+    <div class="mnav-item" data-screen="visualiser" id="mnav-visualiser"><span class="mnav-icon">⬡</span>Visualiser</div>
     <div class="mnav-item" data-screen="chat" id="mnav-chat"><span class="mnav-icon">◎</span>Chat</div>
     <div class="mnav-item" data-screen="tips" id="mnav-tips"><span class="mnav-icon">◆</span>Tips</div>
     <div class="mnav-item" data-screen="patterns" id="mnav-patterns"><span class="mnav-icon">⟁</span>Patterns</div>
@@ -1720,6 +1763,8 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
 <script src="js/screens/patterns.js"></script>
 <script src="js/screens/network.js"></script>
 <script src="js/screens/history.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js" crossorigin="anonymous"></script>
+<script src="js/screens/visualiser.js"></script>
 <script src="js/boot.js?v=20260307"></script>
 <script>
 (function() {
