@@ -30,7 +30,7 @@ TICKER_GEO_EXPOSURE: Dict[str, List[str]] = {
     'xom':      ['middle_east', 'latam'],                        # ExxonMobil (Guyana, Middle East)
     'cvx':      ['middle_east', 'latam'],                        # Chevron
     'tte':      ['middle_east', 'africa'],                       # TotalEnergies (Nigeria, Libya, Angola)
-    'equnor':   ['europe_east', 'middle_east'],                  # Equinor (Norway, Barents)
+    'eqnr':     ['europe_east', 'middle_east'],                  # Equinor (Norway, Barents)
 
     # ── Defence: elevated by any geopolitical tension ─────────────────────────
     'ba.l':     ['global_defence'],                              # BAE Systems
@@ -51,9 +51,9 @@ TICKER_GEO_EXPOSURE: Dict[str, List[str]] = {
 
     # ── Mining: commodity regions ─────────────────────────────────────────────
     'glen.l':   ['africa', 'europe_east'],                       # Glencore (DRC, Kazakhstan)
-    'aav.l':    ['latam'],                                       # Antofagasta (Chile, Peru)
+    'anto.l':   ['latam'],                                       # Antofagasta (Chile, Peru)
     'bhp':      ['asia_east', 'latam'],                          # BHP (China demand, LatAm supply)
-    'rio':      ['asia_east', 'africa'],                         # Rio Tinto (Guinea, Mongolia)
+    'rio.l':    ['asia_east', 'africa'],                         # Rio Tinto (Guinea, Mongolia)
     'aal.l':    ['africa', 'latam'],                             # Anglo American
     'fmc':      ['latam'],                                       # FMC (lithium, LatAm)
 

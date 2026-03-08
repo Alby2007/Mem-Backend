@@ -208,17 +208,16 @@ class EarningsCalendarAdapter(BaseIngestAdapter):
             ))
 
             # Implied move — try options first, fall back to vol estimate
-            implied = _implied_move_from_options(ticker)
-            if implied is None:
-                implied = _implied_move_from_vol(vol_30d)
+            implied_options = _implied_move_from_options(ticker)
+            implied = implied_options if implied_options is not None else _implied_move_from_vol(vol_30d)
 
             if implied:
                 atoms.append(RawAtom(
                     subject=ticker, predicate='earnings_implied_move',
                     object=implied,
-                    confidence=0.75 if implied else 0.50,
+                    confidence=0.75 if implied_options else 0.50,
                     source=source,
-                    metadata={**meta, 'method': 'options_straddle' if _implied_move_from_options(ticker) else 'vol_proxy'},
+                    metadata={**meta, 'method': 'options_straddle' if implied_options else 'vol_proxy'},
                     upsert=True,
                 ))
 

@@ -273,32 +273,33 @@ class LSEFlowAdapter(BaseIngestAdapter):
                 'dist_score':    signals['dist_score'],
             }
 
+            subj = ticker.lower()
             atoms.append(RawAtom(
-                subject=ticker, predicate='institutional_flow',
+                subject=subj, predicate='institutional_flow',
                 object=signals['flow'],
                 confidence=0.60, source=source,
                 metadata=meta, upsert=True,
             ))
             atoms.append(RawAtom(
-                subject=ticker, predicate='block_volume_ratio',
+                subject=subj, predicate='block_volume_ratio',
                 object=str(signals['bvr']),
                 confidence=0.80, source=source,
                 metadata=meta, upsert=True,
             ))
             atoms.append(RawAtom(
-                subject=ticker, predicate='flow_conviction',
+                subject=subj, predicate='flow_conviction',
                 object=signals['conviction'],
                 confidence=0.60, source=source,
                 metadata=meta, upsert=True,
             ))
             atoms.append(RawAtom(
-                subject=ticker, predicate='volume_trend_5d',
+                subject=subj, predicate='volume_trend_5d',
                 object=signals['volume_trend'],
                 confidence=0.75, source=source,
                 metadata=meta, upsert=True,
             ))
             atoms.append(RawAtom(
-                subject=ticker, predicate='price_range_compression',
+                subject=subj, predicate='price_range_compression',
                 object=signals['range_compression'],
                 confidence=0.70, source=source,
                 metadata=meta, upsert=True,

@@ -192,10 +192,7 @@ class EconomicCalendarAdapter(BaseIngestAdapter):
 
         # CPI and NFP via FRED or fallback
         for event_type, series_id in _FRED_RELEASE_SERIES.items():
-            if event_type == 'gdp':
-                dates = _fetch_fred_release_dates(series_id)
-            else:
-                dates = _fetch_fred_release_dates(series_id)
+            dates = _fetch_fred_release_dates(series_id)
             for d in dates[:2]:
                 days = _days_until(d)
                 if 0 <= days <= 60:

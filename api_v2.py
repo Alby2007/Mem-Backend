@@ -42,6 +42,13 @@ async def _lifespan(app: FastAPI):
         from ingest.yfinance_adapter import YFinanceAdapter
         from ingest.sector_rotation_adapter import SectorRotationAdapter
         from ingest.edgar_realtime_adapter import EDGARRealtimeAdapter
+        from ingest.insider_adapter import InsiderAdapter
+        from ingest.boe_adapter import BoEAdapter
+        from ingest.gdelt_adapter import GDELTAdapter
+        from ingest.usgs_adapter import USGSAdapter
+        from ingest.earnings_calendar_adapter import EarningsCalendarAdapter
+        from ingest.economic_calendar_adapter import EconomicCalendarAdapter
+        from ingest.finra_short_interest_adapter import FINRAShortInterestAdapter
 
         db_path = ext.DB_PATH
         scheduler = IngestScheduler(ext.kg)
@@ -63,9 +70,30 @@ async def _lifespan(app: FastAPI):
         # SEC real-time filings — 8-K atom feed
         scheduler.register(EDGARRealtimeAdapter(db_path=db_path), interval_sec=1800)
 
+        # SEC Form 4 insider transactions — directional signal, no key needed
+        scheduler.register(InsiderAdapter(db_path=db_path), interval_sec=3600)
+
+        # UK macro — BoE rate decisions, gilt yields; critical for FTSE coverage
+        scheduler.register(BoEAdapter(), interval_sec=86400)
+
+        # Geopolitical tension scores — GDELT event counts, no key needed
+        scheduler.register(GDELTAdapter(), interval_sec=3600)
+
+        # Commodity region seismic risk — no key needed
+        scheduler.register(USGSAdapter(), interval_sec=3600)
+
+        # Earnings risk flags — reads next_earnings_date atoms from KB
+        scheduler.register(EarningsCalendarAdapter(db_path=db_path), interval_sec=3600)
+
+        # FOMC/CPI/NFP countdown — macro event risk atoms
+        scheduler.register(EconomicCalendarAdapter(db_path=db_path), interval_sec=86400)
+
+        # FINRA short interest — full biweekly universe CDN file, no key needed
+        scheduler.register(FINRAShortInterestAdapter(db_path=db_path), interval_sec=86400)
+
         app.state.scheduler = scheduler
         scheduler.start(startup_delay_sec=15)
-        _logger.info('Ingest scheduler started (%d adapters)', 6)
+        _logger.info('Ingest scheduler started (%d adapters)', 13)
 
     except Exception as _e:
         _logger.warning('Ingest scheduler failed to start: %s', _e)
