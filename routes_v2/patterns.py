@@ -150,6 +150,14 @@ async def tip_performance(user_id: str = Depends(get_current_user)):
         raise HTTPException(500, detail=str(e))
 
 
+_TF_MAX_AGE_DAYS: dict[str, int] = {
+    "1m": 1, "5m": 1, "15m": 2, "30m": 2,
+    "1h": 3, "2h": 3, "4h": 5,
+    "1d": 14, "1w": 30,
+}
+_DEFAULT_MAX_AGE_DAYS = 14
+
+
 @router.get("/patterns/live")
 async def patterns_live(
     ticker: Optional[str] = None,
@@ -171,6 +179,24 @@ async def patterns_live(
             min_quality=min_quality,
             limit=limit,
         )
+        # Filter out stale patterns whose age exceeds their timeframe's expiry window.
+        # This handles the case where yfinance is blocked and status updates haven't run.
+        now = datetime.now(timezone.utc)
+        def _is_fresh(p: dict) -> bool:
+            ts = p.get("detected_at") or p.get("formed_at")
+            if not ts:
+                return True
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                age_days = (now - dt).total_seconds() / 86400
+                tf = (p.get("timeframe") or "").lower()
+                max_age = _TF_MAX_AGE_DAYS.get(tf, _DEFAULT_MAX_AGE_DAYS)
+                return age_days <= max_age
+            except Exception:
+                return True
+        patterns = [p for p in patterns if _is_fresh(p)]
         return {"patterns": patterns, "count": len(patterns)}
     except Exception as e:
         raise HTTPException(500, detail=str(e))
