@@ -1,36 +1,116 @@
 // ── PATTERNS ──────────────────────────────────────────────────────────────────
+
+// Change 1 — relative timestamps
+function _relTime(ts) {
+  const diff = Date.now() - new Date(ts).getTime();
+  const h = diff / 3600000;
+  if (h < 1)  return Math.round(diff / 60000) + 'm ago';
+  if (h < 24) return Math.round(h) + 'h ago';
+  if (h < 48) return 'Yesterday';
+  return Math.round(h / 24) + 'd ago';
+}
+
+// Change 2 — conviction colour
+function _qualColour(q) {
+  if (q >= 0.90) return 'qual-high';
+  if (q >= 0.75) return 'qual-med';
+  return 'qual-low';
+}
+
+// Change 3 — distance to zone
+function _zoneStatus(p, currentPrice) {
+  if (!currentPrice) return null;
+  const mid = (p.zone_high + p.zone_low) / 2;
+  const inZone = currentPrice >= p.zone_low && currentPrice <= p.zone_high;
+  if (inZone) return { label: '● IN ZONE', cls: 'zone-in' };
+  const pct = ((mid - currentPrice) / currentPrice * 100);
+  const dist = Math.abs(pct).toFixed(1);
+  if (p.direction === 'bullish') {
+    return pct > 0
+      ? { label: `▼ ${dist}% to zone`,   cls: 'zone-near' }
+      : { label: `▲ ${dist}% past zone`, cls: 'zone-past' };
+  } else {
+    return pct < 0
+      ? { label: `▲ ${dist}% to zone`,   cls: 'zone-near' }
+      : { label: `▼ ${dist}% past zone`, cls: 'zone-past' };
+  }
+}
+
+// Change 5 — pagination state
+let _patOffset = 0;
+let _patFilters = {};
+let _patTotal   = null;
+
 async function loadPatterns() {
   const grid = document.getElementById('patterns-grid');
   grid.innerHTML = '<div class="empty"><div class="spinner"></div></div>';
-  const params = new URLSearchParams();
   const type   = document.getElementById('pf-type').value;
   const tf     = document.getElementById('pf-tf').value;
   const dir    = document.getElementById('pf-dir').value;
   const ticker = document.getElementById('pf-ticker').value.trim().toUpperCase();
+  // Reset pagination on a fresh search
+  _patOffset  = 0;
+  _patTotal   = null;
+  _patFilters = { type, tf, dir, ticker };
+  document.getElementById('pf-shift-hint').style.display = 'none';
+  // Fetch snapshot prices for zone indicator
+  if (!window._snapshotPrices) {
+    apiFetch('/market/snapshot').then(d => {
+      window._snapshotPrices = {};
+      (d?.tickers || []).forEach(t => { window._snapshotPrices[t.ticker] = t.price; });
+    }).catch(() => {});
+  }
+  await _fetchAndRenderPatterns(grid, ticker, false);
+}
+
+async function _fetchAndRenderPatterns(grid, ticker, append) {
+  if (!append) grid.innerHTML = '<div class="empty"><div class="spinner"></div></div>';
+  const { type, tf, dir } = _patFilters;
+  const params = new URLSearchParams();
   if (type)   params.set('pattern_type', type);
   if (tf)     params.set('timeframe', tf);
   if (dir)    params.set('direction', dir);
   if (ticker) params.set('ticker', ticker);
   params.set('min_quality', '0.5');
-  params.set('limit', ticker ? '100' : '200');
-  document.getElementById('pf-shift-hint').style.display = '';
+  const PAGE = 60;
+  params.set('limit',  ticker ? '100' : String(PAGE));
+  params.set('offset', String(_patOffset));
   try {
     const d = await apiFetch(`/patterns/live?${params}`);
     let pats = d?.patterns || [];
+    if (d?.total != null) _patTotal = d.total;
     // If no ticker filter, cap to 3 results per ticker to avoid flooding
     if (!ticker) {
       const seenCounts = {};
       pats = pats.filter(p => {
         seenCounts[p.ticker] = (seenCounts[p.ticker] || 0) + 1;
         return seenCounts[p.ticker] <= 3;
-      }).slice(0, 60);
+      });
     }
-    document.getElementById('pf-count').textContent = `${pats.length} result${pats.length===1?'':'s'}`;
-    if (!pats.length) { grid.innerHTML = '<div class="empty text-sm text-muted">No open patterns match filters</div>'; return; }
-    window._patternCache = {};
+    if (!append) {
+      window._patternCache = {};
+    }
     pats.forEach(p => { window._patternCache[p.id] = p; });
-    grid.innerHTML = pats.map(p => `
-      <div class="pattern-card" title="Ctrl+click to discuss in Chat" onclick="handlePatternClick(event,this,${p.id})">
+    const totalLoaded = (_patOffset || 0) + pats.length;
+    if (_patTotal != null) {
+      document.getElementById('pf-count').textContent = `${totalLoaded} of ${_patTotal} result${_patTotal===1?'':'s'}`;
+    } else {
+      document.getElementById('pf-count').textContent = `${totalLoaded} result${totalLoaded===1?'':'s'}`;
+    }
+    if (!pats.length && !append) {
+      grid.innerHTML = '<div class="empty text-sm text-muted">No open patterns match filters</div>';
+      document.getElementById('pf-load-more').style.display = 'none';
+      return;
+    }
+    const prices = window._snapshotPrices || {};
+    const cards = pats.map(p => {
+      const formedRel  = _relTime(p.formed_at);
+      const formedFull = fmtDate(p.formed_at);
+      const detectedRel  = p.detected_at ? _relTime(p.detected_at) : null;
+      const zs = _zoneStatus(p, prices[p.ticker]);
+      const zoneTag = zs ? `<span class="zone-tag ${zs.cls}">${zs.label}</span>` : '';
+      return `
+      <div class="pattern-card" onclick="handlePatternClick(event,this,${p.id})">
         <div class="flex-center gap-8 mb-8">
           <span class="mono-amber fw-700">${escHtml(p.ticker)}</span>
           ${dirBadge(p.direction)}
@@ -38,21 +118,44 @@ async function loadPatterns() {
         </div>
         <div class="flex-center gap-12 text-sm mb-8">
           <span class="text-muted">TF</span><span class="mono">${escHtml(p.timeframe||'—')}</span>
-          <span class="text-muted">Q</span><span class="mono-amber">${fmt(p.quality_score)}</span>
+          <span class="text-muted">Q</span><span class="qual-dot ${_qualColour(p.quality_score)}"></span><span class="mono-amber">${fmt(p.quality_score)}</span>
         </div>
-        <div class="text-xs text-muted">Zone: <span class="mono">${fmt(p.zone_low)} – ${fmt(p.zone_high)}</span></div>
-        <div class="text-xs text-muted mt-8">Formed: ${fmtDate(p.formed_at)}</div>
+        <div class="text-xs text-muted">Zone: <span class="mono">${fmt(p.zone_low)} – ${fmt(p.zone_high)}</span> ${zoneTag}</div>
+        <div class="text-xs text-muted mt-8" title="${escHtml(formedFull)}">Formed: ${escHtml(formedRel)}${detectedRel ? ` · detected ${escHtml(detectedRel)}` : ''}</div>
         <div class="pattern-detail" id="pd-${p.id}"><div class="spinner"></div></div>
-      </div>`).join('');
-  } catch(e) { grid.innerHTML = `<div class="empty text-sm" style="color:var(--red)">${escHtml(e.message)}</div>`; }
+        <button class="pat-chat-btn" onclick="event.stopPropagation();sendPatternToChat(window._patternCache[${p.id}])" title="Discuss in Chat">💬 Discuss</button>
+      </div>`;
+    }).join('');
+    if (append) {
+      const loadMoreEl = document.getElementById('pf-load-more');
+      loadMoreEl.insertAdjacentHTML('beforebegin', cards);
+    } else {
+      grid.innerHTML = cards;
+    }
+    // Change 5 — load more footer
+    const loadMoreEl = document.getElementById('pf-load-more');
+    const hasMore = pats.length >= PAGE && !ticker;
+    if (hasMore) {
+      const shown = totalLoaded;
+      const ofStr = _patTotal != null ? ` of ${_patTotal}` : '+';
+      loadMoreEl.innerHTML = `<span>Showing ${shown}${ofStr} patterns</span><button onclick="loadMorePatterns()">Load more</button>`;
+      loadMoreEl.style.display = '';
+    } else {
+      loadMoreEl.style.display = 'none';
+    }
+  } catch(e) {
+    if (!append) grid.innerHTML = `<div class="empty text-sm" style="color:var(--red)">${escHtml(e.message)}</div>`;
+  }
 }
 
+window.loadMorePatterns = async function() {
+  const PAGE = 60;
+  _patOffset += PAGE;
+  const grid = document.getElementById('patterns-grid');
+  await _fetchAndRenderPatterns(grid, _patFilters.ticker || '', true);
+};
+
 window.handlePatternClick = function(event, el, id) {
-  if (event.ctrlKey) {
-    const p = (window._patternCache || {})[id];
-    if (p) sendPatternToChat(p);
-    return;
-  }
   togglePattern(el, id);
 };
 

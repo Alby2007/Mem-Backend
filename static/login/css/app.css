@@ -1022,12 +1022,34 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .tip-rej-btn:disabled { opacity: .4; cursor: default; }
 
 /* ── Pattern card ── */
-.pattern-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 14px; cursor: pointer; transition: border-color .15s; }
+.pattern-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 14px; cursor: pointer; transition: border-color .15s; position: relative; }
 .pattern-card:hover { border-color: var(--accent); }
 .pattern-card.expanded { border-color: var(--accent); }
 .pattern-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .pattern-detail { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: none; }
 .pattern-card.expanded .pattern-detail { display: block; }
+
+/* ── Conviction colour dot ── */
+.qual-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; flex-shrink: 0; vertical-align: middle; }
+.qual-high { background: #22c55e; }
+.qual-med  { background: #f59e0b; }
+.qual-low  { background: #6b7280; }
+
+/* ── Zone distance tag ── */
+.zone-tag  { font-size: 10px; font-family: monospace; padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
+.zone-in   { color: #22c55e; border: 1px solid #22c55e33; background: #22c55e11; }
+.zone-near { color: #f59e0b; border: 1px solid #f59e0b33; background: #f59e0b11; }
+.zone-past { color: #6b7280; border: 1px solid #6b728033; background: transparent; }
+
+/* ── Discuss in Chat hover button ── */
+.pat-chat-btn { position: absolute; bottom: 10px; right: 10px; opacity: 0; transition: opacity 0.15s; background: #1a1a2e; border: 1px solid #f59e0b44; color: #f59e0b; font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer; pointer-events: none; }
+.pattern-card:hover .pat-chat-btn { opacity: 1; pointer-events: auto; }
+.pattern-card.expanded .pat-chat-btn { opacity: 1; pointer-events: auto; }
+
+/* ── Load more footer ── */
+.pat-load-more { text-align: center; padding: 20px; color: #6b7280; font-size: 13px; }
+.pat-load-more button { margin-left: 12px; color: #f59e0b; background: none; border: 1px solid #f59e0b44; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.pat-load-more button:hover { border-color: #f59e0b99; }
 
 /* ── Conviction ticker card ── */
 .conviction-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 14px; display: flex; align-items: center; gap: 12px; }
