@@ -198,10 +198,8 @@ def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
     alert_level = pos.get('alert_level', '')
     bullish    = direction != 'bearish'
 
-    # ── CRITICAL — fires any time Mon-Fri (no actionable hours gate) ──────────
+    # ── CRITICAL — fires any time, including weekends (gap-open stops must fire) ─
     now = datetime.now(timezone.utc)
-    if now.weekday() >= 5:  # weekend: suppress everything
-        return None
 
     # ── CRITICAL ─────────────────────────────────────────────────────────────
     if stop is not None:
@@ -231,8 +229,8 @@ def _check_triggers(pos: dict, price: float, db_path: str) -> Optional[tuple]:
     if earnings_flag == 'imminent':
         return ('earnings_within_2_days', 'CRITICAL')
 
-    # ── HIGH/MEDIUM — only during actionable hours ───────────────────────────
-    if not _is_actionable_hours():
+    # ── HIGH/MEDIUM — only during actionable hours and weekdays ─────────────
+    if now.weekday() >= 5 or not _is_actionable_hours():
         return None
 
     # ── HIGH ─────────────────────────────────────────────────────────────────
@@ -583,11 +581,18 @@ def _run_monitor_cycle(db_path: str) -> None:
 
             alert_id = _write_alert(db_path, pos, alert_type, priority, price)
 
+            now_iso = datetime.now(timezone.utc).isoformat()
             update_followup_status(
                 db_path, pos['id'],
                 status=pos['status'],
                 alert_level=priority,
             )
+            # Update pos in-memory so cooldown is respected if monitor fires again
+            # before the next DB read (prevents same alert spamming every 5-min cycle)
+            if not isinstance(pos, dict):
+                pos = dict(pos)
+            pos['alert_level'] = priority
+            pos['last_alert_at'] = now_iso
 
             # For trailing_pullback: record which peak triggered the alert
             if alert_type == 'trailing_pullback':

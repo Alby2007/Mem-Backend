@@ -49,6 +49,9 @@ async def _lifespan(app: FastAPI):
         from ingest.earnings_calendar_adapter import EarningsCalendarAdapter
         from ingest.economic_calendar_adapter import EconomicCalendarAdapter
         from ingest.finra_short_interest_adapter import FINRAShortInterestAdapter
+        from ingest.yield_curve_adapter import YieldCurveAdapter
+        from ingest.pattern_adapter import PatternAdapter
+        from analytics.position_monitor import PositionMonitor
 
         db_path = ext.DB_PATH
         scheduler = IngestScheduler(ext.kg)
@@ -91,9 +94,35 @@ async def _lifespan(app: FastAPI):
         # FINRA biweekly short interest — REST API per symbol, no key needed
         scheduler.register(FINRAShortInterestAdapter(db_path=db_path), interval_sec=86400)
 
+        # Yield curve regime — TLT/IEF/SHY via Polygon; skips gracefully if no key
+        scheduler.register(YieldCurveAdapter(), interval_sec=86400)
+
         app.state.scheduler = scheduler
         scheduler.start(startup_delay_sec=15)
-        _logger.info('Ingest scheduler started (%d adapters)', 13)
+        _logger.info('Ingest scheduler started (%d adapters)', 14)
+
+        # PatternAdapter — not a BaseIngestAdapter; runs in its own daemon thread
+        _pattern = PatternAdapter(db_path=db_path)
+        import threading as _threading
+        def _pattern_loop(adapter: PatternAdapter, stop: _threading.Event) -> None:
+            import time as _time
+            while not stop.is_set():
+                try:
+                    adapter.run()
+                except Exception as _pe:
+                    _logger.error('PatternAdapter cycle error: %s', _pe)
+                stop.wait(adapter.interval_sec)
+        _pattern_stop = _threading.Event()
+        _pt = _threading.Thread(target=_pattern_loop, args=(_pattern, _pattern_stop),
+                                name='pattern-adapter', daemon=True)
+        _pt.start()
+        app.state.pattern_stop = _pattern_stop
+        _logger.info('PatternAdapter thread started (interval=%ds)', _pattern.interval_sec)
+
+        # PositionMonitor — background thread watching open positions
+        _pos_monitor = PositionMonitor(db_path=db_path, interval_sec=300)
+        _pos_monitor.start()
+        app.state.position_monitor = _pos_monitor
 
     except Exception as _e:
         _logger.warning('Ingest scheduler failed to start: %s', _e)
@@ -107,6 +136,16 @@ async def _lifespan(app: FastAPI):
             scheduler.stop()
         except Exception:
             pass
+    try:
+        if getattr(app.state, 'pattern_stop', None):
+            app.state.pattern_stop.set()
+    except Exception:
+        pass
+    try:
+        if getattr(app.state, 'position_monitor', None):
+            app.state.position_monitor.stop()
+    except Exception:
+        pass
 
 
 def create_fastapi_app() -> FastAPI:
