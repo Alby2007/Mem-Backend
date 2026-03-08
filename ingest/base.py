@@ -86,8 +86,57 @@ from __future__ import annotations
 
 import abc
 import logging
+import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from functools import wraps
+from typing import Any, Callable, Dict, List, Optional, TypeVar
+
+_F = TypeVar('_F', bound=Callable)
+
+
+def with_retry(
+    max_attempts: int = 3,
+    base_delay_sec: float = 2.0,
+    backoff_factor: float = 2.0,
+    exceptions: tuple = (Exception,),
+) -> Callable[[_F], _F]:
+    """
+    Decorator: retry the wrapped function up to max_attempts times with
+    exponential back-off on any exception in `exceptions`.
+
+    Delays: base_delay_sec, base_delay_sec*backoff_factor, ...
+    Final failure re-raises the last exception.
+
+    Usage:
+        @with_retry(max_attempts=3, base_delay_sec=2.0)
+        def fetch(self) -> List[RawAtom]: ...
+    """
+    def decorator(fn: _F) -> _F:
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            _log = logging.getLogger(__name__)
+            delay = base_delay_sec
+            last_exc: BaseException = RuntimeError('no attempts made')
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return fn(*args, **kwargs)
+                except exceptions as exc:
+                    last_exc = exc
+                    if attempt < max_attempts:
+                        _log.warning(
+                            '%s attempt %d/%d failed: %s — retrying in %.1fs',
+                            fn.__qualname__, attempt, max_attempts, exc, delay,
+                        )
+                        time.sleep(delay)
+                        delay *= backoff_factor
+                    else:
+                        _log.error(
+                            '%s failed after %d attempts: %s',
+                            fn.__qualname__, max_attempts, exc,
+                        )
+            raise last_exc
+        return wrapper  # type: ignore[return-value]
+    return decorator
 
 logger = logging.getLogger(__name__)
 
@@ -179,11 +228,16 @@ class BaseIngestAdapter(abc.ABC):
         """
         Execute fetch → transform → validate pipeline.
         Invalid atoms are logged and dropped (never silently accepted).
+        fetch() is wrapped with 3-attempt exponential back-off retry so
+        transient network/API errors are handled transparently.
         """
+        _fetch_with_retry = with_retry(
+            max_attempts=3, base_delay_sec=2.0, backoff_factor=2.0,
+        )(self.fetch)
         try:
-            raw = self.fetch()
+            raw = _fetch_with_retry()
         except Exception as e:
-            self._logger.error(f'fetch() failed: {e}')
+            self._logger.error(f'fetch() failed after retries: {e}')
             return []
 
         transformed = self.transform(raw)

@@ -89,7 +89,28 @@ async def thesis_status_narrative(thesis_id: str, user_id: str = Depends(get_cur
     Re-evaluate a thesis and return a 2–3 sentence human narrative
     summarising its current validity alongside structured data.
     Falls back gracefully if LLM is unavailable (narrative=null).
+
+    Auth check (401) is performed before thesis lookup (404) so that
+    unauthenticated requests cannot probe which thesis IDs exist.
     """
+    # user_id is guaranteed non-None here — get_current_user raises 401 if absent.
+    # Now look up the thesis and enforce ownership before evaluating.
+    try:
+        import sqlite3 as _sq
+        _c = _sq.connect(ext.DB_PATH, timeout=5)
+        _owner_row = _c.execute(
+            "SELECT user_id FROM thesis_index WHERE thesis_id=?",
+            (thesis_id,),
+        ).fetchone()
+        _c.close()
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    if _owner_row is None:
+        raise HTTPException(404, detail="thesis not found")
+    if _owner_row[0] != user_id:
+        raise HTTPException(403, detail="not your thesis")
+
     try:
         from knowledge.thesis_builder import ThesisBuilder
         builder    = ThesisBuilder(ext.DB_PATH)

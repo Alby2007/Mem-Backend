@@ -35,6 +35,12 @@ try:
 except ImportError:
     HAS_GRAPH_RETRIEVAL = False
 
+try:
+    from knowledge.decay import decay_confidence as _decay_confidence
+    HAS_DECAY = True
+except ImportError:
+    HAS_DECAY = False
+
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -729,10 +735,13 @@ def retrieve(
     if HAS_GRAPH_RETRIEVAL and (is_graph_query or (not tickers and terms)) and not _suppress_graph:
         try:
             # Broad fetch: all atoms for the first two key terms, up to 200
+            # Include confidence_effective + timestamp so graph node importance
+            # uses decay-adjusted scores (recency weight γ in importance formula).
             graph_atoms: list = []
             for term in terms[:2]:
                 c.execute("""
-                    SELECT subject, predicate, object, source, confidence
+                    SELECT subject, predicate, object, source, confidence,
+                           confidence_effective, timestamp
                     FROM facts
                     WHERE (LOWER(subject) LIKE ? OR LOWER(object) LIKE ?)
                     AND predicate NOT IN ('source_code','has_title','has_section','has_content')
@@ -740,11 +749,13 @@ def retrieve(
                 """, (f'%{term}%', f'%{term}%'))
                 for r in c.fetchall():
                     graph_atoms.append({
-                        'subject':    str(r[0]).strip(),
-                        'predicate':  str(r[1]).strip(),
-                        'object':     str(r[2])[:200].strip(),
-                        'source':     str(r[3]).strip() if r[3] else '',
-                        'confidence': float(r[4]) if r[4] else 0.5,
+                        'subject':              str(r[0]).strip(),
+                        'predicate':            str(r[1]).strip(),
+                        'object':               str(r[2])[:200].strip(),
+                        'source':               str(r[3]).strip() if r[3] else '',
+                        'confidence':           float(r[4]) if r[4] else 0.5,
+                        'confidence_effective': float(r[5]) if r[5] else None,
+                        'timestamp':            str(r[6])[:10] if r[6] else '',
                     })
             # Deduplicate
             seen_ga: set = set()
@@ -1178,6 +1189,23 @@ def retrieve(
             conn.commit()
         except Exception:
             pass
+
+    # ── Inline decay multiplier — re-rank by effective confidence ─────────────
+    # Applies temporal decay at query time so stale atoms lose rank even when
+    # confidence_effective hasn't been recomputed by the background DecayWorker.
+    # Uses pre-computed confidence_effective if present; otherwise computes on-the-fly.
+    if HAS_DECAY:
+        _now = None  # lazily imported datetime.now inside _decay_confidence
+        def _eff_conf(atom: dict) -> float:
+            ce = atom.get('confidence_effective')
+            if ce is not None:
+                return float(ce)
+            return _decay_confidence(
+                base_confidence=atom.get('confidence', 0.5),
+                source=atom.get('source', ''),
+                timestamp=atom.get('timestamp'),
+            )
+        results.sort(key=_eff_conf, reverse=True)
 
     # ── Prioritise named-ticker atoms, demote unrelated ones ──────────────────
     # When explicit tickers are present, sort results so those atoms come first.
