@@ -118,7 +118,14 @@ async def _lifespan(app: FastAPI):
         _logger.info('Ingest scheduler started (%d adapters)', 18)
 
         # PatternAdapter — not a BaseIngestAdapter; runs in its own daemon thread
-        _pattern = PatternAdapter(db_path=db_path)
+        # Pass explicit tickers so it doesn't fall back to reading all facts subjects
+        # (which includes thousands of LLM-extracted entity names that aren't valid tickers)
+        try:
+            from ingest.dynamic_watchlist import DynamicWatchlistManager as _DWM
+            _pattern_tickers = _DWM.get_active_tickers(db_path)
+        except Exception:
+            _pattern_tickers = None
+        _pattern = PatternAdapter(db_path=db_path, tickers=_pattern_tickers)
         import threading as _threading
         def _pattern_loop(adapter: PatternAdapter, stop: _threading.Event) -> None:
             import time as _time
