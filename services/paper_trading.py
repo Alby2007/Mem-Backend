@@ -700,7 +700,8 @@ def _ai_run_inner(user_id: str) -> dict:
         risk_pct = float((_pref_row[0] if _pref_row and _pref_row[0] else None) or 1.0)
         risk_pct = min(risk_pct, 2.0)
         risk_per_trade = balance * risk_pct / 100.0
-        max_position_value = balance * 0.10
+        # Hard cap: no single position may exceed 20% of account notional
+        max_position_value = balance * 0.20
 
         committed_rows = conn.execute(
             "SELECT SUM(entry_price * quantity) FROM paper_positions WHERE user_id=? AND status='open'",
@@ -869,12 +870,19 @@ def _ai_run_inner(user_id: str) -> dict:
                     skips += 1
                     continue
 
-                qty = round(risk_per_trade / risk, 4) if risk > 0 else 1.0
+                # Size by risk: qty = risk_per_trade / stop_distance
+                # Cap by notional: qty = min(risk_per_trade / risk, max_position_value / entry_p)
+                # This prevents tight stops (e.g. 0.5%) from producing 200%+ notional positions
+                qty_by_risk    = risk_per_trade / risk
+                qty_by_notional = max_position_value / entry_p
+                qty = round(min(qty_by_risk, qty_by_notional), 4)
                 qty = max(qty, 0.0001)
                 position_value = round(entry_p * qty, 2)
-                if position_value > max_position_value:
-                    qty = round(max_position_value / entry_p, 4)
-                    position_value = round(entry_p * qty, 2)
+                if qty_by_risk > qty_by_notional:
+                    _logger.info(
+                        '%s: notional cap applied — risk-based qty=%.4f capped to %.4f (%.0f%% of acct)',
+                        ticker, qty_by_risk, qty, position_value / balance * 100
+                    )
                 # Issue 2 fix: instead of hard-rejecting when position_value > remaining_cash,
                 # scale down qty to fit available cash (minimum viable notional = risk_per_trade * 2)
                 if position_value > remaining_cash:
