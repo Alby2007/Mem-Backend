@@ -356,18 +356,18 @@ html[data-auth] .auth-candles {
 .auth-ticker-feed { display: flex; flex-direction: column; gap: 10px; width: 180px; }
 .auth-ticker-item {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 14px; background: rgba(255,255,255,0.02);
-  border: 1px solid rgba(232,160,32,0.07); border-radius: 8px; font-size: 11px;
+  padding: 10px 14px; background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(232,160,32,0.18); border-radius: 8px; font-size: 11px;
   font-family: 'DM Mono', monospace;
 }
 .auth-ticker-col { flex-direction: column; align-items: flex-start; gap: 4px; }
 .auth-ticker-top { display: flex; justify-content: space-between; width: 100%; }
-.auth-ticker-sym { color: #E8E4DC; font-weight: 500; letter-spacing: 0.04em; }
-.auth-ticker-up { color: #4CAF50; }
-.auth-ticker-down { color: #EF5350; }
+.auth-ticker-sym { color: #F0EDE6; font-weight: 600; letter-spacing: 0.04em; }
+.auth-ticker-up { color: #4ade80; font-weight: 600; }
+.auth-ticker-down { color: #f87171; font-weight: 600; }
 .auth-tick-bar { width: 100%; height: 24px; display: flex; align-items: flex-end; gap: 2px; }
 .auth-tick-bar span {
-  flex: 1; border-radius: 1px; background: rgba(232,160,32,0.25);
+  flex: 1; border-radius: 1px; background: rgba(232,160,32,0.55);
   animation: authBarAnim 3s ease-in-out infinite;
 }
 .auth-tick-bar span:nth-child(2) { animation-delay: 0.2s; }
