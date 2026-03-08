@@ -56,8 +56,11 @@ async function loadPatterns() {
   // Fetch snapshot prices for zone indicator
   if (!window._snapshotPrices) {
     apiFetch('/market/snapshot').then(d => {
+      const syms = d?.symbols || {};
       window._snapshotPrices = {};
-      (d?.tickers || []).forEach(t => { window._snapshotPrices[t.ticker] = t.price; });
+      Object.entries(syms).forEach(([sym, data]) => {
+        if (data?.price != null) window._snapshotPrices[sym] = data.price;
+      });
     }).catch(() => {});
   }
   await _fetchAndRenderPatterns(grid, ticker, false);
