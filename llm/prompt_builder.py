@@ -562,6 +562,23 @@ _SYSTEM_THESIS_VALIDITY_RULE = (
     "Do not hedge or give generic market commentary. Do NOT append a KB_GROUNDING block."
 )
 
+_SYSTEM_SCENARIO_RULE = (
+    "\n\nSCENARIO ANALYSIS RULE — MANDATORY FORMAT:\n"
+    "You are explaining the market impact of a hypothetical macro shock scenario. "
+    "Produce exactly 3 sentences, no headers, no bullet points.\n"
+    "Sentence 1: Name the shock and its primary first-order effect — the highest-confidence "
+    "hop in the causal chain (cite the mechanism in parentheses).\n"
+    "Sentence 2: Name the 2 most affected asset classes or sectors via the causal chain, "
+    "citing the mechanism that connects them.\n"
+    "Sentence 3: If portfolio_impact is listed in the context, name the user's specific "
+    "holdings most at risk or benefit and whether the effect is tailwind or headwind. "
+    "If no portfolio holdings are affected, state which broad market segments are most exposed.\n"
+    "RULES:\n"
+    "- Never introduce causal links not present in the chain provided.\n"
+    "- chain_confidence is a geometric mean — mention if it is below 0.5 (weak chain).\n"
+    "- Do NOT append a KB_GROUNDING block."
+)
+
 _SYSTEM_PREMARKET_RULE = (
     "\n\nPREMARKET BRIEFING RULE — MANDATORY STRUCTURE:\n"
     "You are writing a personalised pre-market briefing for a trader. "
@@ -724,9 +741,13 @@ def build(
     if briefing_mode == 'premarket':
         system_text += _SYSTEM_PREMARKET_RULE
 
-    # ── Thesis status rule ───────────────────────────────────────────────────
+    # ── Thesis status rule ────────────────────────────────────────────
     if briefing_mode == 'thesis_status':
         system_text += _SYSTEM_THESIS_STATUS_RULE
+
+    # ── Scenario rule ─────────────────────────────────────────────────
+    if briefing_mode == 'scenario':
+        system_text += _SYSTEM_SCENARIO_RULE
 
     # ── Thesis validity rule (chat) ─────────────────────────────────────────
     if thesis_context:
