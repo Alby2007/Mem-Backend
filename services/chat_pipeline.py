@@ -173,6 +173,20 @@ def _is_tip_request(message: str) -> bool:
     return any(ph in m for ph in _TIP_INTENT_PHRASES)
 
 
+_PLAIN_ENGLISH_KWS = (
+    'explain ', 'what does ', 'what do you mean', 'in simple terms',
+    "i don't understand", "i dont understand", 'simply ', 'plain english',
+    'layman', 'what is a ', 'what is an ', 'help me understand',
+    'what are ', 'break it down', 'make it simple', 'eli5',
+)
+
+
+def _detect_plain_english_intent(message: str) -> bool:
+    """Return True when the message asks for a simple / jargon-free explanation."""
+    m = message.lower()
+    return any(kw in m for kw in _PLAIN_ENGLISH_KWS)
+
+
 def sid_for_user(user_id):
     """Resolve the conversation session ID for a user."""
     if ext.HAS_CONV_STORE:
@@ -1116,6 +1130,7 @@ def run(
     screen_entities: list | None = None,
     overlay_mode: bool = False,
     user_id: str | None = None,
+    explain_mode: bool = False,
 ) -> Tuple[Dict, int]:
     """Execute the full KB-grounded chat pipeline.
 
@@ -1126,6 +1141,10 @@ def run(
 
     # ── Trader level ──────────────────────────────────────────────────────────────
     trader_level = _get_trader_level(user_id)
+
+    # ── Plain-English intent detection (per-message, no DB write) ────────────
+    # explain_mode can be set by the caller (route) OR detected from message keywords
+    explain_mode = explain_mode or _detect_plain_english_intent(message)
 
     # ── Layer 2: tier-gated KB depth ─────────────────────────────────────────
     limit = max(limit, _tier_atom_limit(user_id))
@@ -1272,6 +1291,7 @@ def run(
         has_history=has_prior_turns,
         opportunity_scan_context=opportunity_scan_context,
         trader_level=trader_level,
+        explain_mode=explain_mode,
     )
 
     # ── Persist user turn + inject history ────────────────────────────────

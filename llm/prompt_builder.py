@@ -534,6 +534,45 @@ _SYSTEM_SIZING_RULE = (
 )
 
 
+_SYSTEM_PREMARKET_RULE = (
+    "\n\nPREMARKET BRIEFING RULE — MANDATORY STRUCTURE:\n"
+    "You are writing a personalised pre-market briefing for a trader. "
+    "Produce exactly 3 short paragraphs, no headers, no bullet points. "
+    "Target 150–200 words total. Hard cap: 220 words. Stop at the end of paragraph 3 — do NOT continue.\n\n"
+    "PARAGRAPH 1 — PORTFOLIO FIRST (≈60 words):\n"
+    "Lead with the single highest-confidence KB atom that directly touches the user's open positions. "
+    "Name the position(s) by ticker, state the atom value, explain the implication in one sentence. "
+    "If a position ticker appears in any atom (geo_risk, supply_disruption_risk, signal_direction, "
+    "sector_tailwind, causal_signal), that atom takes priority over generic macro atoms. "
+    "Example: 'Your energy holdings (BP.L, SHEL.L) face a headwind this morning — "
+    "WTI slipped 2.1% overnight and geo-risk atoms remain elevated. "
+    "(KB: supply_disruption_risk=elevated, wti_crude=71.2)'\n"
+    "NEVER open with 'Markets were mixed', 'Good morning', or any generic opener.\n\n"
+    "PARAGRAPH 2 — MACRO CONTEXT (≈60 words):\n"
+    "Synthesise 2–3 macro atoms into a regime statement. "
+    "Connect yield curve + central bank stance + risk appetite into one coherent read. "
+    "Cite the atoms inline in parentheses: (KB: yield_curve_regime=bear_steepen, risk_appetite=risk_off)\n\n"
+    "PARAGRAPH 3 — ONE THING TO WATCH (≈50 words):\n"
+    "Name the single most important level, event, or atom threshold to watch today. "
+    "Be specific — a price, a predicate crossing a threshold, or a scheduled data release if present in KB. "
+    "Never be vague. If nothing specific is in the KB, name the highest-stress atom.\n\n"
+    "HARD PROHIBITIONS:\n"
+    "- Do NOT exceed 220 words under any circumstances — stop writing at paragraph 3 end.\n"
+    "- Do NOT use markdown headers, bold text, or bullet points anywhere in the 3 paragraphs.\n"
+    "- Do NOT list tickers that are not in the user's open positions.\n"
+    "- Do NOT append a KB_GROUNDING block to this briefing."
+)
+
+_SYSTEM_PLAIN_ENGLISH_OVERRIDE = (
+    "\n\nPLAIN ENGLISH OVERRIDE — THIS MESSAGE ONLY:\n"
+    "The user has asked for a simple explanation. Override your normal communication level:\n"
+    "- Use everyday analogies; zero jargon. If a technical term is unavoidable, define it in brackets.\n"
+    "- One concept at a time, short sentences, no more than 3 sentences per idea.\n"
+    "- Never show raw KB atom values, quality scores, Greek letters, conviction tiers, or statistical labels.\n"
+    "- End your response with a single plain-English summary sentence.\n"
+    "- Do NOT append a KB_GROUNDING block."
+)
+
 _SYSTEM_KB_GROUNDING_RULE = (
     "\n29. KB GROUNDING BLOCK — REQUIRED FOR TICKER SIGNAL QUERIES: "
     "When you are answering a question about a specific ticker's signal, direction, "
@@ -580,6 +619,7 @@ def build(
     telegram_mode: bool = False,
     briefing_mode: Optional[str] = None,
     trader_level: Optional[str] = None,
+    explain_mode: bool = False,
 ) -> list[dict]:
     """
     Build the [system, user] message list for Ollama.
@@ -651,10 +691,21 @@ def build(
     if opportunity_scan_context and _EMPTY_SCAN_SENTINEL not in opportunity_scan_context:
         system_text += _SYSTEM_GENERATION_RULE
 
+    # ── Premarket briefing rule ───────────────────────────────────────────────
+    if briefing_mode == 'premarket':
+        system_text += _SYSTEM_PREMARKET_RULE
+
+    # ── Plain-English override ────────────────────────────────────────────────
+    if explain_mode:
+        system_text += _SYSTEM_PLAIN_ENGLISH_OVERRIDE
+
     # ── Trader level resolution ────────────────────────────────────────────────
     _effective_level = (trader_level or 'developing').lower()
     if _effective_level not in _LEVEL_RULES:
         _effective_level = 'developing'
+    # Plain-English override forces beginner level for this message
+    if explain_mode:
+        _effective_level = 'beginner'
 
     # ── Options Greeks rule ────────────────────────────────────────────────────
     # Two conditions BOTH required — explicit and independent of the level rule:

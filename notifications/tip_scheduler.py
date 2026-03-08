@@ -891,14 +891,78 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
                 _log.info('TipScheduler: nothing for %s briefing for user %s', briefing_mode, user_id)
                 return
 
-            message = format_position_monitor_briefing(
-                open_positions      = open_positions,
-                kb_changes          = kb_changes,
-                expired_this_cycle  = expired_this_cycle,
-                tier                = tier,
-                get_price_fn        = _price_fn,
-                briefing_mode       = briefing_mode,
-            )
+            # ── Hybrid premarket narrative (Pro/Premium daily_briefing) ──────
+            # Pro/Premium users get a personalised KB-grounded narrative header
+            # followed by the structured position list.
+            # Fallback: if narrative generation fails, use structured list only.
+            from core.tiers import check_feature as _check_feature
+            _use_narrative = check_feature(tier, 'daily_briefing')
+            _narrative_text = ''
+            if _use_narrative:
+                try:
+                    from notifications.premarket_briefing import generate_premarket_narrative
+                    _trader_level = 'developing'
+                    try:
+                        import sqlite3 as _sq3
+                        _pref_conn = _sq3.connect(db_path, timeout=5)
+                        _pref_row = _pref_conn.execute(
+                            "SELECT trader_level FROM user_preferences WHERE user_id=?",
+                            (user_id,),
+                        ).fetchone()
+                        _pref_conn.close()
+                        if _pref_row and _pref_row[0]:
+                            _trader_level = _pref_row[0]
+                    except Exception:
+                        pass
+                    _narrative_text = generate_premarket_narrative(
+                        user_id        = user_id,
+                        db_path        = db_path,
+                        open_positions = open_positions,
+                        tier           = tier,
+                        trader_level   = _trader_level,
+                    )
+                except Exception as _ne:
+                    _log.warning(
+                        'TipScheduler: premarket narrative failed for user %s, '
+                        'falling back to structured list: %s', user_id, _ne,
+                    )
+
+            if _narrative_text:
+                # Hybrid: narrative already contains the structured list for positions
+                # (premarket_briefing.generate_premarket_narrative appends it).
+                # For the structured position monitor (kb_changes, expired), append
+                # those below the narrative if they exist.
+                _structured = format_position_monitor_briefing(
+                    open_positions      = open_positions,
+                    kb_changes          = kb_changes,
+                    expired_this_cycle  = expired_this_cycle,
+                    tier                = tier,
+                    get_price_fn        = _price_fn,
+                    briefing_mode       = briefing_mode,
+                )
+                # The narrative already includes the open-position levels panel.
+                # Only append the structured section for KB changes / expired
+                # positions, which the narrative doesn't cover.
+                _kb_section = ''
+                if kb_changes or expired_this_cycle:
+                    # Extract just the KB changes + expired block from the structured msg.
+                    # Heuristic: starts after the second occurrence of the divider line.
+                    _div = '─────────────────────'
+                    _parts = _structured.split(_div)
+                    if len(_parts) >= 3:
+                        _kb_section = _div + _div.join(_parts[2:])
+                    elif len(_parts) == 2:
+                        _kb_section = _parts[1]
+                message = _narrative_text + ('\n\n' + _kb_section.strip() if _kb_section.strip() else '')
+            else:
+                message = format_position_monitor_briefing(
+                    open_positions      = open_positions,
+                    kb_changes          = kb_changes,
+                    expired_this_cycle  = expired_this_cycle,
+                    tier                = tier,
+                    get_price_fn        = _price_fn,
+                    briefing_mode       = briefing_mode,
+                )
 
             notifier = TelegramNotifier()
             sent = notifier.send(chat_id, message)

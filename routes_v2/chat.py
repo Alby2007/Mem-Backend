@@ -25,6 +25,7 @@ class ChatRequest(BaseModel):
     tickers: Optional[list] = None
     portfolio: Optional[list] = None
     mode: Optional[str] = None
+    explain_mode: Optional[bool] = False
 
 
 @router.get("/chat/history")
@@ -100,6 +101,7 @@ async def chat_endpoint(
         session_id=data.session_id or "default",
         user_id=user_id,
         overlay_mode=(data.mode == "overlay") if data.mode else False,
+        explain_mode=bool(data.explain_mode),
     )
     if status != 200:
         raise HTTPException(status_code=status, detail=response)
