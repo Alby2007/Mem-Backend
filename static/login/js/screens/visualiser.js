@@ -247,26 +247,21 @@ function _renderBubble() {
   })
   .on('mouseout', () => tooltip.style('display', 'none'));
 
-  // Set initial positions immediately so bubbles are visible before simulation ticks
-  node.attr('transform', d => `translate(${
-    Math.max(d.r, Math.min(W - d.r, d.x))
-  },${
-    Math.max(d.r, Math.min(H - d.r, d.y))
-  })`);
-
-  // D3 force simulation — cluster by sector
+  // Run simulation synchronously — no rAF/tick callbacks needed, renders instantly
   d3.forceSimulation(nodes)
     .force('x', d3.forceX(d => sectorCx[d.sector]).strength(0.12))
     .force('y', d3.forceY(d => sectorCy[d.sector]).strength(0.12))
     .force('collide', d3.forceCollide(d => d.r + 2).strength(0.9))
     .force('charge', d3.forceManyBody().strength(-8))
-    .on('tick', () => {
-      node.attr('transform', d => `translate(${
-        Math.max(d.r, Math.min(W - d.r, d.x))
-      },${
-        Math.max(d.r, Math.min(H - d.r, d.y))
-      })`);
-    });
+    .stop()
+    .tick(120);
+
+  // Apply final positions in one synchronous DOM update
+  node.attr('transform', d => `translate(${
+    Math.max(d.r, Math.min(W - d.r, d.x))
+  },${
+    Math.max(d.r, Math.min(H - d.r, d.y))
+  })`);
 }
 
 // ── VIEW B — Sector Heatmap ───────────────────────────────────────────────────
