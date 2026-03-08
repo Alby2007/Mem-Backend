@@ -49,15 +49,13 @@ NOTES
 
 from __future__ import annotations
 
-import csv
-import io
+import json as _json
 import logging
-import os
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
 
 from .base import BaseIngestAdapter, RawAtom
 
@@ -75,8 +73,8 @@ _US_TICKERS = frozenset({
     'GLD', 'SLV', 'TLT', 'IEF',
 })
 
-# FINRA CDN base — two feeds: NASDAQ and NYSE consolidated
-_FINRA_BASE = 'https://cdn.finra.org/equity/regsho/biweekly'
+# FINRA REST API — publicly accessible, no key required, no IP block
+_FINRA_API = 'https://services.finra.org/api/v1/equity/short'
 
 # Days-to-cover thresholds for squeeze risk classification
 _DTC_HIGH     = 5.0
@@ -84,104 +82,46 @@ _DTC_MODERATE = 2.5
 _DTC_LOW      = 1.0
 
 
-def _candidate_dates(n: int = 6) -> List[str]:
+def _fetch_finra_api(symbol: str) -> Optional[dict]:
     """
-    Generate candidate settlement date strings (yyyymmdd).
-    FINRA publishes biweekly on ~1st and ~15th of each month (settlement dates).
-    We target those anchors ±3 days for the last n months, sorted newest-first.
+    Query FINRA REST API for the most recent short interest record for a symbol.
+    Returns dict with short_interest, avg_daily_vol, days_to_cover or None on failure.
+    API docs: https://www.finra.org/finra-data/browse-catalog/equity-short-interest
     """
-    from datetime import date as _date
-    seen: set = set()
-    dates: List[str] = []
-    today = datetime.now(timezone.utc).date()
-
-    # Go back n months, checking the ~1st and ~15th anchors
-    for month_offset in range(n):
-        month = today.month - month_offset
-        year  = today.year + (month - 1) // 12
-        month = ((month - 1) % 12) + 1
-        for anchor_day in (15, 1):
-            try:
-                anchor = _date(year, month, anchor_day)
-            except ValueError:
-                continue
-            # ±3 days around anchor, newest first
-            for offset in range(-3, 4):
-                candidate = anchor + timedelta(days=offset)
-                if candidate > today:
-                    continue
-                s = candidate.strftime('%Y%m%d')
-                if s not in seen:
-                    seen.add(s)
-                    dates.append(s)
-
-    # Sort newest-first so we hit the most recent file first
-    dates.sort(reverse=True)
-    return dates
-
-
-def _fetch_finra_file(date_str: str) -> Optional[str]:
-    """
-    Try to download the FINRA short interest file for a given date string.
-    Returns the raw text content or None if the file doesn't exist (404).
-    Tries NASDAQ feed first, then NYSE.
-    """
-    for prefix in ('FNSQ', 'FNYX'):
-        url = f'{_FINRA_BASE}/{prefix}{date_str}.txt'
-        try:
-            req = urllib.request.Request(
-                url,
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                    'Accept': 'text/plain,*/*',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Referer': 'https://www.finra.org/',
-                },
-            )
-            with urllib.request.urlopen(req, timeout=15) as r:
-                return r.read().decode('utf-8', errors='replace')
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                continue
-            _logger.debug('[finra_short] HTTP %d for %s', e.code, url)
-        except Exception as exc:
-            _logger.debug('[finra_short] fetch error %s: %s', url, exc)
-    return None
-
-
-def _parse_finra_text(text: str, tickers: frozenset) -> Dict[str, dict]:
-    """
-    Parse FINRA short interest tab-delimited text.
-    Returns dict keyed by ticker with keys: short_interest, avg_daily_vol, days_to_cover.
-    """
-    results: Dict[str, dict] = {}
+    url = (
+        f'{_FINRA_API}?fields=issueSymbolIdentifier,settlementDate,'
+        f'shortInterestQty,averageDailyShareVolume,daysToCoverQty'
+        f'&compareFilters=issueSymbolIdentifier+eq+{symbol}'
+        f'&sortFields=-settlementDate&limit=1'
+    )
     try:
-        reader = csv.DictReader(io.StringIO(text), delimiter='|')
-        for row in reader:
-            symbol = (row.get('Symbol') or row.get('symbol') or '').strip().upper()
-            if symbol not in tickers:
-                continue
-            try:
-                short_int = int(row.get('ShortInterest') or row.get('ShortVolume') or 0)
-                avg_vol   = int(row.get('AvgDailyShareVolume') or row.get('TotalVolume') or 0)
-                dtc_raw   = row.get('DaysToConvert') or row.get('DaysToCover') or ''
-                try:
-                    dtc = float(dtc_raw) if dtc_raw.strip() else (
-                        round(short_int / avg_vol, 2) if avg_vol > 0 else None
-                    )
-                except (ValueError, TypeError):
-                    dtc = round(short_int / avg_vol, 2) if avg_vol > 0 else None
-
-                results[symbol] = {
-                    'short_interest':  short_int,
-                    'avg_daily_vol':   avg_vol,
-                    'days_to_cover':   dtc,
-                }
-            except (ValueError, TypeError, KeyError):
-                continue
+        req = urllib.request.Request(
+            url,
+            headers={'Accept': 'application/json', 'User-Agent': 'TradingKB/1.0'},
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = _json.loads(r.read().decode('utf-8', errors='replace'))
+        if not data:
+            return None
+        row = data[0] if isinstance(data, list) else data
+        short_int = int(row.get('shortInterestQty') or 0)
+        avg_vol   = int(row.get('averageDailyShareVolume') or 0)
+        dtc_raw   = row.get('daysToCoverQty')
+        try:
+            dtc = float(dtc_raw) if dtc_raw is not None else (
+                round(short_int / avg_vol, 2) if avg_vol > 0 else None
+            )
+        except (ValueError, TypeError):
+            dtc = round(short_int / avg_vol, 2) if avg_vol > 0 else None
+        return {
+            'short_interest': short_int,
+            'avg_daily_vol':  avg_vol,
+            'days_to_cover':  dtc,
+            'settlement_date': row.get('settlementDate', ''),
+        }
     except Exception as exc:
-        _logger.debug('[finra_short] parse error: %s', exc)
-    return results
+        _logger.debug('[finra_short] API error for %s: %s', symbol, exc)
+        return None
 
 
 def _squeeze_risk(dtc: Optional[float], short_int: int) -> str:
@@ -230,29 +170,16 @@ class FINRAShortInterestAdapter(BaseIngestAdapter):
         self._last_date: Optional[str] = None  # track last-fetched date to skip re-downloads
 
     def fetch(self) -> List[RawAtom]:
-        # Find most recent available FINRA file
-        text: Optional[str] = None
-        file_date: Optional[str] = None
-
-        for date_str in _candidate_dates(n=4):
-            if self._last_date and date_str <= self._last_date:
-                _logger.debug('[finra_short] %s <= last fetched %s — no new file', date_str, self._last_date)
-                break
-            text = _fetch_finra_file(date_str)
-            if text:
-                file_date = date_str
-                break
-            time.sleep(0.5)
-
-        if not text or not file_date:
-            _logger.info('[finra_short] no recent FINRA file found — will retry next cycle')
-            return []
-
-        self._last_date = file_date
-        parsed = _parse_finra_text(text, self._tickers)
+        # Query FINRA REST API per symbol — no CDN/IP-block issues
+        parsed: Dict[str, dict] = {}
+        for sym in sorted(self._tickers):
+            data = _fetch_finra_api(sym)
+            if data and data['short_interest'] > 0:
+                parsed[sym] = data
+            time.sleep(1.0)  # ~24 tickers × 1s = ~24s total, well within 86400s interval
 
         if not parsed:
-            _logger.info('[finra_short] file %s parsed but no watched tickers found', file_date)
+            _logger.info('[finra_short] FINRA API returned no data for any watched ticker')
             return []
 
         # Optionally look up signal_direction from KB for vs_signal cross-ref
@@ -273,21 +200,23 @@ class FINRAShortInterestAdapter(BaseIngestAdapter):
             except Exception:
                 pass
 
-        now_iso = datetime.now(timezone.utc).isoformat()
         atoms: List[RawAtom] = []
+        latest_date = ''
 
         for sym, data in parsed.items():
             short_int  = data['short_interest']
             avg_vol    = data['avg_daily_vol']
             dtc        = data['days_to_cover']
             direction  = signal_dirs.get(sym)
+            if data.get('settlement_date', '') > latest_date:
+                latest_date = data['settlement_date']
 
             squeeze    = _squeeze_risk(dtc, short_int)
             vs_sig     = _vs_signal(short_int, avg_vol, direction)
 
-            def _a(pred: str, val: str) -> RawAtom:
+            def _a(pred: str, val: str, _sym: str = sym) -> RawAtom:
                 return RawAtom(
-                    subject    = sym,
+                    subject    = _sym,
                     predicate  = pred,
                     object     = val,
                     source     = _SOURCE_PFX,
@@ -302,7 +231,7 @@ class FINRAShortInterestAdapter(BaseIngestAdapter):
             atoms.append(_a('short_vs_signal',    vs_sig))
 
         _logger.info(
-            '[finra_short] file=%s tickers=%d atoms=%d',
-            file_date, len(parsed), len(atoms),
+            '[finra_short] settlement=%s tickers=%d atoms=%d',
+            latest_date, len(parsed), len(atoms),
         )
         return atoms
