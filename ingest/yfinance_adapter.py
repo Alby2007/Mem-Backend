@@ -194,6 +194,29 @@ class YFinanceAdapter(BaseIngestAdapter):
                 seen.add(t)
                 self.tickers.append(t)
 
+    @staticmethod
+    def _clear_yf_session() -> None:
+        """
+        Clear yfinance's cached crumb/session so the next request fetches a
+        fresh one. Guards against stale crumbs set at process startup when
+        Yahoo Finance may have been temporarily unreachable.
+        Safe to call; all paths are wrapped in try/except.
+        """
+        try:
+            # yfinance 0.2.x / 1.x: shared requests Session lives on yf.shared
+            import yfinance.shared as _yfs
+            if hasattr(_yfs, '_session') and _yfs._session is not None:
+                _yfs._session.cookies.clear()
+        except Exception:
+            pass
+        try:
+            # yfinance 1.x peewee-backed cache
+            from yfinance.data import YfData
+            if hasattr(YfData, '_crumb'):
+                YfData._crumb = None  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
     def fetch(self) -> List[RawAtom]:
         if not HAS_YFINANCE:
             self._logger.error('yfinance not installed — pip install yfinance')
@@ -202,6 +225,9 @@ class YFinanceAdapter(BaseIngestAdapter):
         import socket as _socket
         now_iso = datetime.now(timezone.utc).isoformat()
         atoms: List[RawAtom] = []
+
+        # Clear any stale crumb/session from process startup before fetching.
+        self._clear_yf_session()
 
         # Apply a global socket timeout so no yfinance network call blocks indefinitely.
         # This is the primary guard against the scheduler timer chain being killed by
@@ -339,7 +365,9 @@ class YFinanceAdapter(BaseIngestAdapter):
     ) -> List[RawAtom]:
         """
         Fetch .info() for one ticker and return non-price atoms.
-        Retries once on rate-limit / timeout.
+        Retries once on rate-limit / timeout / crumb expiry.
+        On 401 (Invalid Crumb), clears the yfinance session cache so the
+        next attempt re-fetches a fresh crumb from Yahoo.
         """
         import time
         for attempt in range(2):
@@ -351,8 +379,21 @@ class YFinanceAdapter(BaseIngestAdapter):
                 return self._info_to_atoms(symbol, info, now_iso, bulk_prices)
             except Exception as e:
                 err = str(e).lower()
-                if attempt == 0 and any(k in err for k in ('429', 'rate', 'too many', 'timeout')):
-                    time.sleep(3.0)
+                is_crumb = '401' in err or 'crumb' in err or 'unauthorized' in err
+                is_ratelimit = any(k in err for k in ('429', 'rate', 'too many', 'timeout'))
+                if attempt == 0 and (is_crumb or is_ratelimit):
+                    if is_crumb:
+                        # Clear stale session/crumb so next attempt fetches a fresh one
+                        try:
+                            yf.utils.get_json.cache_clear()  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                        try:
+                            import yfinance.cache as _yfc
+                            _yfc.clear_cache()
+                        except Exception:
+                            pass
+                    time.sleep(5.0 if is_crumb else 3.0)
                     continue
                 self._logger.debug('info() failed for %s (attempt %d): %s', symbol, attempt + 1, e)
                 return []
