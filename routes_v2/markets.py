@@ -103,9 +103,11 @@ async def market_snapshot():
     # Build symbols dict for dashboard market snapshot widget
     # Keys are yFinance-style tickers; values have price + return_1m
     _SNAPSHOT_TICKERS = ['^GSPC', '^FTSE', '^FTMC', 'GLD', 'GBPUSD=X']
+    # Case-insensitive lookup: KB may store tickers in any case (e.g. 'gld' vs 'GLD')
+    _by_subject_lower = {k.lower(): v for k, v in by_subject.items()}
     symbols: dict = {}
     for sym in _SNAPSHOT_TICKERS:
-        atoms = by_subject.get(sym, {})
+        atoms = _by_subject_lower.get(sym.lower(), {})
         if atoms.get('last_price') is not None:
             try:
                 symbols[sym] = {
