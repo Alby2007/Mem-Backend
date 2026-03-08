@@ -125,27 +125,77 @@ def paper_tier_check(user_id: str) -> tuple[str, Optional[str]]:
 # ── Live price helpers ────────────────────────────────────────────────────────
 
 def fetch_live_prices(tickers: list[str]) -> dict[str, float]:
-    """Fetch latest prices for a list of tickers via yfinance. Returns {ticker: price}."""
+    """Fetch latest prices for a list of tickers via yfinance. Returns {ticker: price}.
+
+    Strategy (most-to-least current):
+      1. yf.download 1d/1m  — real-time during market hours
+      2. yf.download 5d/1h  — works outside market hours (last close)
+      3. yf.Ticker.fast_info.last_price — lightweight fallback per ticker
+    """
     if not tickers:
         return {}
     try:
         import yfinance as _yf
-        data_batch = _yf.download(
-            tickers, period='1d', interval='1m',
+    except ImportError:
+        return {}
+
+    prices: dict[str, float] = {}
+    missing: list[str] = list(tickers)
+
+    # Pass 1: batch 1m download
+    try:
+        data1 = _yf.download(
+            missing, period='1d', interval='1m',
             progress=False, auto_adjust=True, threads=False
         )
-        prices = {}
-        for tk in tickers:
+        found = []
+        for tk in missing:
             try:
-                if len(tickers) == 1:
-                    prices[tk] = float(data_batch['Close'].dropna().iloc[-1])
+                if len(missing) == 1:
+                    val = float(data1['Close'].dropna().iloc[-1])
                 else:
-                    prices[tk] = float(data_batch['Close'][tk].dropna().iloc[-1])
+                    val = float(data1['Close'][tk].dropna().iloc[-1])
+                prices[tk] = val
+                found.append(tk)
             except Exception:
                 pass
-        return prices
+        missing = [t for t in missing if t not in found]
     except Exception:
-        return {}
+        pass
+
+    # Pass 2: batch 5d/1h for anything still missing (market closed)
+    if missing:
+        try:
+            data2 = _yf.download(
+                missing, period='5d', interval='1h',
+                progress=False, auto_adjust=True, threads=False
+            )
+            found = []
+            for tk in missing:
+                try:
+                    if len(missing) == 1:
+                        val = float(data2['Close'].dropna().iloc[-1])
+                    else:
+                        val = float(data2['Close'][tk].dropna().iloc[-1])
+                    prices[tk] = val
+                    found.append(tk)
+                except Exception:
+                    pass
+            missing = [t for t in missing if t not in found]
+        except Exception:
+            pass
+
+    # Pass 3: per-ticker fast_info for anything still missing
+    for tk in missing:
+        try:
+            t = _yf.Ticker(tk)
+            val = t.fast_info.last_price
+            if val and val > 0:
+                prices[tk] = float(val)
+        except Exception:
+            pass
+
+    return prices
 
 
 def compute_pnl_r(direction: str, entry: float, exit_p: float, stop: float) -> float:
