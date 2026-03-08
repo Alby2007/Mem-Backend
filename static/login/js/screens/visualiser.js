@@ -162,8 +162,8 @@ function _renderBubble() {
       macro: t.macro_confirmation || '',
       vol: t.volatility_regime || '',
       r1m: t.return_1m, r1y: t.return_1y,
-      cx: sectorCx[s] + (Math.random() - 0.5) * 60,
-      cy: sectorCy[s] + (Math.random() - 0.5) * 60,
+      x: sectorCx[s] + (Math.random() - 0.5) * 60,
+      y: sectorCy[s] + (Math.random() - 0.5) * 60,
     };
   });
 
