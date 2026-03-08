@@ -253,71 +253,88 @@ class YFinanceAdapter(BaseIngestAdapter):
 
     # ── Fast bulk price path ───────────────────────────────────────────────
 
+    # Maximum tickers per yf.download() call. Larger batches increase the risk
+    # of a single delisted/hung ticker blocking the entire batch for 90s.
+    _DOWNLOAD_BATCH_SIZE = 50
+    # Hard deadline per batch in seconds.
+    _DOWNLOAD_BATCH_TIMEOUT = 45
+
     def _bulk_download_prices(self, now_iso: str) -> List[RawAtom]:
         """
-        Use yf.download() to fetch the latest close price for ALL tickers in
-        a single HTTP round-trip. Falls back to empty list on failure.
+        Use yf.download() to fetch the latest close price for all tickers.
 
-        The call runs inside a ThreadPoolExecutor with a hard 90s deadline so
-        yfinance's internal threads (which bypass socket.setdefaulttimeout)
-        cannot block the entire adapter indefinitely. threads=False ensures
-        yfinance uses the main thread's socket so our 30s timeout applies.
+        Splits the ticker list into batches of _DOWNLOAD_BATCH_SIZE and runs
+        each batch inside a ThreadPoolExecutor with a _DOWNLOAD_BATCH_TIMEOUT
+        deadline so that delisted / hung tickers only kill their own batch,
+        not the entire run.
         """
         atoms: List[RawAtom] = []
+        batches = [
+            self.tickers[i:i + self._DOWNLOAD_BATCH_SIZE]
+            for i in range(0, len(self.tickers), self._DOWNLOAD_BATCH_SIZE)
+        ]
 
-        def _do_download():
-            return yf.download(
-                tickers=self.tickers,
-                period='2d',
-                interval='1d',
-                group_by='ticker',
-                auto_adjust=True,
-                progress=False,
-                threads=True,
-            )
+        for batch_idx, batch in enumerate(batches):
+            def _do_download(b=batch):
+                return yf.download(
+                    tickers=b,
+                    period='2d',
+                    interval='1d',
+                    group_by='ticker',
+                    auto_adjust=True,
+                    progress=False,
+                    threads=True,
+                )
 
-        try:
-            _ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            _fut = _ex.submit(_do_download)
             try:
-                data = _fut.result(timeout=90)
-            except concurrent.futures.TimeoutError:
-                self._logger.warning('bulk_download_prices timed out after 90s — skipping')
-                _ex.shutdown(wait=False)
-                return atoms
-            finally:
-                _ex.shutdown(wait=False)
-
-            if data is None or data.empty:
-                return atoms
-
-            for symbol in self.tickers:
-                src = f'exchange_feed_yahoo_{symbol.lower().replace("-", "_")}'
+                _ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                _fut = _ex.submit(_do_download)
                 try:
-                    if len(self.tickers) == 1:
-                        col_data = data['Close']
-                    else:
-                        col_data = data[symbol]['Close']
+                    data = _fut.result(timeout=self._DOWNLOAD_BATCH_TIMEOUT)
+                except concurrent.futures.TimeoutError:
+                    self._logger.warning(
+                        'bulk_download batch %d/%d timed out after %ds — skipping batch',
+                        batch_idx + 1, len(batches), self._DOWNLOAD_BATCH_TIMEOUT,
+                    )
+                    _ex.shutdown(wait=False)
+                    continue
+                finally:
+                    _ex.shutdown(wait=False)
 
-                    series = col_data.dropna()
-                    if series.empty:
-                        continue
-                    price = float(series.iloc[-1])
-                    atoms.append(RawAtom(
-                        subject=symbol,
-                        predicate='last_price',
-                        object=str(round(price, 2)),
-                        confidence=0.95,
-                        source=src,
-                        metadata={'as_of': now_iso, 'via': 'bulk_download'},
-                        upsert=True,
-                    ))
-                except Exception as e:
-                    self._logger.debug('bulk price miss for %s: %s', symbol, e)
+                if data is None or data.empty:
+                    continue
 
-        except Exception as e:
-            self._logger.warning('bulk_download_prices failed: %s', e)
+                for symbol in batch:
+                    src = f'exchange_feed_yahoo_{symbol.lower().replace("-", "_")}'
+                    try:
+                        if len(batch) == 1:
+                            col_data = data['Close']
+                        else:
+                            col_data = data[symbol]['Close']
 
+                        series = col_data.dropna()
+                        if series.empty:
+                            continue
+                        price = float(series.iloc[-1])
+                        atoms.append(RawAtom(
+                            subject=symbol,
+                            predicate='last_price',
+                            object=str(round(price, 2)),
+                            confidence=0.95,
+                            source=src,
+                            metadata={'as_of': now_iso, 'via': 'bulk_download'},
+                            upsert=True,
+                        ))
+                    except Exception as e:
+                        self._logger.debug('bulk price miss for %s: %s', symbol, e)
+
+            except Exception as e:
+                self._logger.warning('bulk_download batch %d failed: %s', batch_idx + 1, e)
+
+        self._logger.info(
+            'bulk_download complete: %d batches, %d price atoms from %d tickers',
+            len(batches), len(atoms), len(self.tickers),
+        )
         return atoms
 
     # ── Parallel info() path ───────────────────────────────────────────────
