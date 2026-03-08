@@ -48,6 +48,7 @@ async def _lifespan(app: FastAPI):
         from ingest.usgs_adapter import USGSAdapter
         from ingest.earnings_calendar_adapter import EarningsCalendarAdapter
         from ingest.economic_calendar_adapter import EconomicCalendarAdapter
+        from ingest.finra_short_interest_adapter import FINRAShortInterestAdapter
 
         db_path = ext.DB_PATH
         scheduler = IngestScheduler(ext.kg)
@@ -75,8 +76,8 @@ async def _lifespan(app: FastAPI):
         # UK macro — BoE rate decisions, gilt yields; critical for FTSE coverage
         scheduler.register(BoEAdapter(), interval_sec=86400)
 
-        # Geopolitical tension scores — GDELT event counts, no key needed (2h to stay under per-IP quota)
-        scheduler.register(GDELTAdapter(), interval_sec=7200)
+        # Geopolitical tension scores — GDELT event counts, no key needed
+        scheduler.register(GDELTAdapter(), interval_sec=3600)
 
         # Commodity region seismic risk — no key needed
         scheduler.register(USGSAdapter(), interval_sec=3600)
@@ -87,9 +88,12 @@ async def _lifespan(app: FastAPI):
         # FOMC/CPI/NFP countdown — macro event risk atoms
         scheduler.register(EconomicCalendarAdapter(db_path=db_path), interval_sec=86400)
 
+        # FINRA biweekly short interest — REST API per symbol, no key needed
+        scheduler.register(FINRAShortInterestAdapter(db_path=db_path), interval_sec=86400)
+
         app.state.scheduler = scheduler
         scheduler.start(startup_delay_sec=15)
-        _logger.info('Ingest scheduler started (%d adapters)', 12)
+        _logger.info('Ingest scheduler started (%d adapters)', 13)
 
     except Exception as _e:
         _logger.warning('Ingest scheduler failed to start: %s', _e)
