@@ -236,27 +236,33 @@ class IngestScheduler:
         timeout_sec = max(120.0, min(interval_sec * 3, 600.0))
 
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(adapter.run_and_push, self._kg)
-                try:
-                    result = future.result(timeout=timeout_sec)
-                except concurrent.futures.TimeoutError:
-                    _logger.error(
-                        '[%s] run #%d TIMED OUT after %.0fs — skipping',
-                        adapter.name, status.total_runs, timeout_sec,
-                    )
-                    status.total_errors += 1
-                    status.last_error = f'timeout after {timeout_sec:.0f}s'
-                    status.last_error_at = now
-                    return
-            ingested = result.get('ingested', 0)
-            status.total_atoms += ingested
-            status.last_success_at = now
-            status.last_error = None
-            _logger.info(
-                '[%s] run #%d: ingested %d atoms (total: %d)',
-                adapter.name, status.total_runs, ingested, status.total_atoms,
-            )
+            ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = ex.submit(adapter.run_and_push, self._kg)
+            timed_out = False
+            try:
+                result = future.result(timeout=timeout_sec)
+            except concurrent.futures.TimeoutError:
+                timed_out = True
+                _logger.error(
+                    '[%s] run #%d TIMED OUT after %.0fs — skipping',
+                    adapter.name, status.total_runs, timeout_sec,
+                )
+                status.total_errors += 1
+                status.last_error = f'timeout after {timeout_sec:.0f}s'
+                status.last_error_at = now
+            finally:
+                # Don't wait for the hung background thread — let it die on its own
+                ex.shutdown(wait=False)
+
+            if not timed_out:
+                ingested = result.get('ingested', 0)
+                status.total_atoms += ingested
+                status.last_success_at = now
+                status.last_error = None
+                _logger.info(
+                    '[%s] run #%d: ingested %d atoms (total: %d)',
+                    adapter.name, status.total_runs, ingested, status.total_atoms,
+                )
 
         except Exception as e:
             status.total_errors += 1
