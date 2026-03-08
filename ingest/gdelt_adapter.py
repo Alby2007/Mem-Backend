@@ -144,7 +144,7 @@ class GDELTAdapter(BaseIngestAdapter):
         region_scores: Dict[str, List[float]] = {}
 
         for pair_label, query, region in _PAIRS:
-            time.sleep(12)  # 5 pairs/min to avoid 429 rate limit
+            time.sleep(15)  # 4 pairs/min to avoid 429 rate limit
             score = _gdelt_tone_query(query, timespan='1d')
             if score is None:
                 self._logger.warning('No GDELT data for pair %s', pair_label)

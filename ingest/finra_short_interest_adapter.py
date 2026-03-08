@@ -86,20 +86,37 @@ _DTC_LOW      = 1.0
 
 def _candidate_dates(n: int = 6) -> List[str]:
     """
-    Generate candidate settlement date strings (yyyymmdd) going back n*2 weeks.
-    FINRA publishes on ~1st and ~15th settlement dates; we try recent candidates
-    and stop at the first one that has a file available.
+    Generate candidate settlement date strings (yyyymmdd).
+    FINRA publishes biweekly on ~1st and ~15th of each month (settlement dates).
+    We target those anchors ±3 days for the last n months, sorted newest-first.
     """
-    dates = []
-    base = datetime.now(timezone.utc).date()
-    for weeks_back in range(n):
-        d = base - timedelta(weeks=weeks_back * 2)
-        # Try the most-recent Friday before d as a proxy for settlement date
-        # (settlement is T+2 from trade date, but FINRA files are dated by settlement)
-        # We generate a range of recent dates and let HTTP 404 filter them.
-        for offset in range(0, 10):
-            candidate = d - timedelta(days=offset)
-            dates.append(candidate.strftime('%Y%m%d'))
+    from datetime import date as _date
+    seen: set = set()
+    dates: List[str] = []
+    today = datetime.now(timezone.utc).date()
+
+    # Go back n months, checking the ~1st and ~15th anchors
+    for month_offset in range(n):
+        month = today.month - month_offset
+        year  = today.year + (month - 1) // 12
+        month = ((month - 1) % 12) + 1
+        for anchor_day in (15, 1):
+            try:
+                anchor = _date(year, month, anchor_day)
+            except ValueError:
+                continue
+            # ±3 days around anchor, newest first
+            for offset in range(-3, 4):
+                candidate = anchor + timedelta(days=offset)
+                if candidate > today:
+                    continue
+                s = candidate.strftime('%Y%m%d')
+                if s not in seen:
+                    seen.add(s)
+                    dates.append(s)
+
+    # Sort newest-first so we hit the most recent file first
+    dates.sort(reverse=True)
     return dates
 
 
@@ -209,9 +226,9 @@ class FINRAShortInterestAdapter(BaseIngestAdapter):
         file_date: Optional[str] = None
 
         for date_str in _candidate_dates(n=4):
-            if date_str == self._last_date:
-                _logger.debug('[finra_short] already fetched %s — skipping', date_str)
-                return []
+            if self._last_date and date_str <= self._last_date:
+                _logger.debug('[finra_short] %s <= last fetched %s — no new file', date_str, self._last_date)
+                break
             text = _fetch_finra_file(date_str)
             if text:
                 file_date = date_str
