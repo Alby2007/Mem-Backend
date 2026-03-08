@@ -247,6 +247,13 @@ function _renderBubble() {
   })
   .on('mouseout', () => tooltip.style('display', 'none'));
 
+  // Set initial positions immediately so bubbles are visible before simulation ticks
+  node.attr('transform', d => `translate(${
+    Math.max(d.r, Math.min(W - d.r, d.x))
+  },${
+    Math.max(d.r, Math.min(H - d.r, d.y))
+  })`);
+
   // D3 force simulation — cluster by sector
   d3.forceSimulation(nodes)
     .force('x', d3.forceX(d => sectorCx[d.sector]).strength(0.12))
