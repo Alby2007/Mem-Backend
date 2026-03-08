@@ -288,7 +288,7 @@ function _ptRenderOpen(rows) {
     const statusCls  = 'pt-status-' + (p.status || 'open').replace(/[^a-z_]/g,'');
     const dirCls     = p.direction === 'bullish' ? 'kb-dir-bullish' : 'kb-dir-bearish';
     const t2         = p.t2 !== null && p.t2 !== undefined ? _ptFmt(p.t2) : '—';
-    const dateStr    = p.opened_at ? p.opened_at.slice(0,10) : '—';
+    const dateStr    = p.opened_at ? (() => { const d = new Date(p.opened_at); return d.toISOString().slice(0,10) + ' ' + d.toISOString().slice(11,16) + ' GMT'; })() : '—';
     const partialDot = p.partial_closed ? '<span title="T1 hit" style="color:var(--accent);margin-left:4px;">●T1</span>' : '';
     const reasoning  = p.ai_reasoning ? `<span class="text-xs text-muted" title="${escHtml(p.ai_reasoning)}">${escHtml(p.ai_reasoning.slice(0,40))}${p.ai_reasoning.length>40?'…':''}</span>` : '<span class="text-xs text-muted">—</span>';
     const nowPrice   = p.current_price != null ? _ptFmt(p.current_price) : '<span style="color:var(--muted);">…</span>';
