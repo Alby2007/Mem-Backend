@@ -391,7 +391,7 @@ async def tip_feedback_action(tip_id: int, request: Request, data: TipFeedbackRe
             except Exception:
                 pass
 
-            followup = create_tip_followup(
+            followup_id, thesis_candidates = create_tip_followup(
                 ext.DB_PATH, user_id=user_id, ticker=pattern_row["ticker"],
                 tip_id=tip_id, pattern_id=pattern_row["id"], direction=pattern_row["direction"],
                 entry_price=pos.suggested_entry if pos else pattern_row["zone_low"],
@@ -412,7 +412,7 @@ async def tip_feedback_action(tip_id: int, request: Request, data: TipFeedbackRe
                 except Exception:
                     pass
             return {
-                "action": "taking_it", "followup_id": followup["id"], "ticker": pattern_row["ticker"],
+                "action": "taking_it", "followup_id": followup_id, "ticker": pattern_row["ticker"],
                 "entry_price": pos.suggested_entry if pos else None,
                 "stop_loss": pos.stop_loss if pos else None,
                 "target_1": pos.target_1 if pos else None, "target_2": pos.target_2 if pos else None,
@@ -422,6 +422,7 @@ async def tip_feedback_action(tip_id: int, request: Request, data: TipFeedbackRe
                 "cash_after": cash_result.get("new_balance") if cash_result else None,
                 "cash_is_negative": cash_result.get("is_negative", False) if cash_result else False,
                 "cash_deduction_skipped": cash_result.get("skipped", False) if cash_result else False,
+                "thesis_candidates": thesis_candidates,
                 "message": (f"{pattern_row['ticker']} added to monitoring — "
                             f"position monitor activated. You'll be alerted when action is needed."),
             }

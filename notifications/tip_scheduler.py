@@ -820,7 +820,7 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
             for row, pos in pairs:
                 try:
                     mark_pattern_alerted(db_path, row['id'], user_id)
-                    upsert_tip_followup(
+                    _fid, _tcands = upsert_tip_followup(
                         db_path,
                         user_id    = user_id,
                         ticker     = row['ticker'],

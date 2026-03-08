@@ -1605,6 +1605,15 @@ def _ensure_tip_followups_table(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tip_followups ADD COLUMN peak_price_updated_at TEXT")
     if 'alerted_peak_price' not in cols:
         conn.execute("ALTER TABLE tip_followups ADD COLUMN alerted_peak_price REAL")
+    if 'thesis_id' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN thesis_id TEXT")
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tip_followups_thesis "
+                "ON tip_followups(thesis_id)"
+            )
+        except Exception:
+            pass
     # 'active' = user consciously accepted; 'watching' = auto-created at tip send
     # status column already exists in DDL with DEFAULT 'watching'
     conn.commit()
@@ -1618,6 +1627,7 @@ _FOLLOWUP_COLS = [
     'pattern_type', 'timeframe', 'zone_low', 'zone_high',
     'expires_at', 'regime_at_entry', 'conviction_at_entry',
     'peak_price', 'peak_price_updated_at', 'alerted_peak_price',
+    'thesis_id',
 ]
 _FOLLOWUP_SELECT = """
     SELECT id, user_id, ticker, direction, entry_price,
@@ -1626,7 +1636,8 @@ _FOLLOWUP_SELECT = """
            tip_id, opened_at, closed_at,
            pattern_type, timeframe, zone_low, zone_high,
            expires_at, regime_at_entry, conviction_at_entry,
-           peak_price, peak_price_updated_at, alerted_peak_price
+           peak_price, peak_price_updated_at, alerted_peak_price,
+           thesis_id
     FROM tip_followups
 """
 
@@ -1793,6 +1804,61 @@ def update_followup_status(
         conn.close()
 
 
+def _auto_link_thesis(
+    conn: sqlite3.Connection,
+    user_id: str,
+    ticker: str,
+) -> tuple:
+    """
+    Find active thesis_index rows matching (user_id, ticker).
+
+    Returns (linked_thesis_id, candidates):
+      - 0 matches: (None, [])
+      - 1 match, created within 30 days: (thesis_id, [])   ← auto-link
+      - 1 match, older than 30 days:     (None, [match])   ← stale, ask user
+      - 2+ matches:                       (None, [all])     ← ambiguous, ask user
+    """
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=30)).isoformat()
+    ticker_up = ticker.upper()
+    try:
+        rows = conn.execute(
+            """SELECT thesis_id, ticker, direction, thesis_status, created_at,
+                      invalidation_condition
+               FROM thesis_index
+               WHERE user_id=? AND UPPER(ticker)=?
+                 AND thesis_status != 'INVALIDATED'
+               ORDER BY created_at DESC""",
+            (user_id, ticker_up),
+        ).fetchall()
+    except Exception:
+        return (None, [])
+    if not rows:
+        return (None, [])
+    cols = ['thesis_id', 'ticker', 'direction', 'thesis_status', 'created_at',
+            'invalidation_condition']
+    matches = [dict(zip(cols, r)) for r in rows]
+    if len(matches) == 1:
+        if matches[0]['created_at'] > cutoff:
+            return (matches[0]['thesis_id'], [])   # fresh single match → auto-link
+        return (None, matches)   # stale single match → prompt user
+    return (None, matches)   # multiple matches → prompt user
+
+
+def link_followup_thesis(db_path: str, followup_id: int, thesis_id: str) -> None:
+    """Set thesis_id on an existing tip_followup row."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        conn.execute(
+            "UPDATE tip_followups SET thesis_id=? WHERE id=?",
+            (thesis_id, followup_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def upsert_tip_followup(
     db_path: str,
     user_id: str,
@@ -1811,9 +1877,12 @@ def upsert_tip_followup(
     regime_at_entry: Optional[str] = None,
     conviction_at_entry: Optional[str] = None,
     initial_status: str = 'watching',
-) -> int:
+) -> tuple:
     """
-    Insert a new tip followup record. Returns the new row id.
+    Insert a new tip followup record.
+    Returns (new_row_id, thesis_candidates) where thesis_candidates is a list
+    of thesis_index rows that need user confirmation before linking.
+    Empty list means either auto-linked (thesis_id set on the row) or no match.
     initial_status='watching' for auto-created (tip delivery);
     initial_status='active' for user-accepted (taking_it).
     """
@@ -1825,6 +1894,10 @@ def upsert_tip_followup(
         now_iso = now.isoformat()
         expiry_days = _FOLLOWUP_EXPIRY_DAYS.get(timeframe or '', _FOLLOWUP_EXPIRY_DEFAULT)
         expires_at = (now + timedelta(days=expiry_days)).isoformat()
+
+        # Attempt semi-automatic thesis linkage before insert
+        auto_thesis_id, thesis_candidates = _auto_link_thesis(conn, user_id, ticker)
+
         # Detect whether the server schema has created_at/updated_at columns
         existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(tip_followups)")}
         has_timestamps = 'created_at' in existing_cols
@@ -1834,12 +1907,14 @@ def upsert_tip_followup(
                    (user_id, ticker, direction, entry_price, stop_loss,
                     target_1, target_2, target_3, tip_id, opened_at, status,
                     pattern_type, timeframe, zone_low, zone_high, expires_at,
-                    regime_at_entry, conviction_at_entry, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    regime_at_entry, conviction_at_entry, thesis_id,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (user_id, ticker.upper(), direction, entry_price, stop_loss,
                  target_1, target_2, target_3, tip_id, now_iso, initial_status,
                  pattern_type, timeframe, zone_low, zone_high, expires_at,
-                 regime_at_entry, conviction_at_entry, now_iso, now_iso),
+                 regime_at_entry, conviction_at_entry, auto_thesis_id,
+                 now_iso, now_iso),
             )
         else:
             cur = conn.execute(
@@ -1847,15 +1922,15 @@ def upsert_tip_followup(
                    (user_id, ticker, direction, entry_price, stop_loss,
                     target_1, target_2, target_3, tip_id, opened_at, status,
                     pattern_type, timeframe, zone_low, zone_high, expires_at,
-                    regime_at_entry, conviction_at_entry)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    regime_at_entry, conviction_at_entry, thesis_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (user_id, ticker.upper(), direction, entry_price, stop_loss,
                  target_1, target_2, target_3, tip_id, now_iso, initial_status,
                  pattern_type, timeframe, zone_low, zone_high, expires_at,
-                 regime_at_entry, conviction_at_entry),
+                 regime_at_entry, conviction_at_entry, auto_thesis_id),
             )
         conn.commit()
-        return cur.lastrowid
+        return cur.lastrowid, thesis_candidates
     finally:
         conn.close()
 
@@ -1887,6 +1962,14 @@ def update_alerted_peak_price(db_path: str, followup_id: int, peak_price: float)
         conn.close()
 
 
+def get_user_open_positions_with_thesis(db_path: str, user_id: str) -> List[dict]:
+    """
+    Same as get_user_open_positions() but ensures thesis_id is included.
+    Returns open (watching + active) followups with thesis_id field populated.
+    """
+    return get_user_open_positions(db_path, user_id)
+
+
 def create_tip_followup(
     db_path: str,
     user_id: str,
@@ -1910,7 +1993,7 @@ def create_tip_followup(
     """
     Create a tip followup from a user 'taking_it' action.
     Sets status='active' (user-accepted position, distinct from auto-created 'watching').
-    Returns the new followup row id.
+    Returns (new_followup_id, thesis_candidates).
     """
     return upsert_tip_followup(
         db_path,

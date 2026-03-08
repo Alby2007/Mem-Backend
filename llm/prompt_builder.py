@@ -534,6 +534,34 @@ _SYSTEM_SIZING_RULE = (
 )
 
 
+_SYSTEM_THESIS_STATUS_RULE = (
+    "\n\nTHESIS STATUS RULE — MANDATORY FORMAT:\n"
+    "You are summarising the current validity of an investment thesis in 2\u20133 sentences. "
+    "No bullet points, no headers.\n"
+    "REQUIRED STRUCTURE:\n"
+    "Sentence 1: State the ticker, direction, and status with score as a parenthetical — "
+    "e.g. 'Your HSBA.L bullish thesis is CONFIRMED (0.72).' NOT 'with a score of 0.72 out of 1.0'.\n"
+    "Sentence 2: Name the single most important supporting OR contradicting atom driving that status.\n"
+    "Sentence 3: State the invalidation condition and how close or far current KB state is from it. "
+    "Be specific — name the predicate and its current value vs threshold.\n"
+    "RULES:\n"
+    "- If status=INVALIDATED, lead sentence 1 with that fact.\n"
+    "- Score must appear as (0.XX) parenthetical — never prose.\n"
+    "- Never speculate beyond KB atoms provided.\n"
+    "- Do NOT append a KB_GROUNDING block."
+)
+
+_SYSTEM_THESIS_VALIDITY_RULE = (
+    "\n\nTHESIS VALIDITY RULE:\n"
+    "THESIS CONTEXT is present above. Answer the thesis validity question directly:\n"
+    "(1) State status and score as a parenthetical (e.g. CONFIRMED (0.72)) in the first sentence.\n"
+    "(2) Name the single most important supporting or contradicting atom.\n"
+    "(3) State how far the current KB state is from the invalidation condition — "
+    "name the predicate and current value vs threshold.\n"
+    "(4) If INVALIDATED, state that immediately in sentence 1 and name the atom that triggered it.\n"
+    "Do not hedge or give generic market commentary. Do NOT append a KB_GROUNDING block."
+)
+
 _SYSTEM_PREMARKET_RULE = (
     "\n\nPREMARKET BRIEFING RULE — MANDATORY STRUCTURE:\n"
     "You are writing a personalised pre-market briefing for a trader. "
@@ -620,6 +648,7 @@ def build(
     briefing_mode: Optional[str] = None,
     trader_level: Optional[str] = None,
     explain_mode: bool = False,
+    thesis_context: Optional[str] = None,
 ) -> list[dict]:
     """
     Build the [system, user] message list for Ollama.
@@ -694,6 +723,14 @@ def build(
     # ── Premarket briefing rule ───────────────────────────────────────────────
     if briefing_mode == 'premarket':
         system_text += _SYSTEM_PREMARKET_RULE
+
+    # ── Thesis status rule ───────────────────────────────────────────────────
+    if briefing_mode == 'thesis_status':
+        system_text += _SYSTEM_THESIS_STATUS_RULE
+
+    # ── Thesis validity rule (chat) ─────────────────────────────────────────
+    if thesis_context:
+        system_text += _SYSTEM_THESIS_VALIDITY_RULE
 
     # ── Plain-English override ────────────────────────────────────────────────
     if explain_mode:
@@ -899,6 +936,10 @@ def build(
     # Opportunity scan — injected after portfolio, right before the question
     if opportunity_scan_context:
         user_parts.append(opportunity_scan_context)
+
+    # Thesis context — injected after scan, right before the question
+    if thesis_context:
+        user_parts.append(thesis_context)
 
     # If snippet contains alias instructions, echo them right before the question
     # so they are the last thing the LLM reads before answering

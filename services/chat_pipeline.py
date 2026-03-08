@@ -187,6 +187,109 @@ def _detect_plain_english_intent(message: str) -> bool:
     return any(kw in m for kw in _PLAIN_ENGLISH_KWS)
 
 
+_THESIS_VALIDITY_KWS = (
+    'is my thesis', 'thesis still valid', 'thesis holding',
+    'thesis still hold', 'thesis broken', 'thesis challenged',
+    'invalidation', 'thesis update', 'check my thesis',
+    'thesis check', 'my bullish case', 'my bearish case',
+    'is the thesis', 'thesis on ',
+)
+
+_STATUS_PRIORITY = {'CHALLENGED': 3, 'INVALIDATED': 2, 'CONFIRMED': 1}
+
+
+def _detect_thesis_validity_intent(message: str) -> bool:
+    """Return True when the message is asking about thesis validity / status."""
+    m = message.lower()
+    return any(kw in m for kw in _THESIS_VALIDITY_KWS)
+
+
+def _resolve_thesis_for_message(message: str, user_id: str) -> Optional[dict]:
+    """
+    Find the most relevant active thesis for this user + message.
+
+    Matching priority:
+      1. Ticker mentioned in message — find thesis for that ticker
+      2. No ticker — sort by (status_priority DESC, last_evaluated DESC)
+         CHALLENGED > INVALIDATED > CONFIRMED, then most recently evaluated
+
+    Returns a ThesisEvaluation-like dict or None if no theses found.
+    """
+    import re as _re
+    import sqlite3 as _sq
+    try:
+        from knowledge.thesis_builder import ThesisBuilder
+        builder = ThesisBuilder(ext.DB_PATH)
+        theses = builder.list_user_theses(user_id)
+    except Exception:
+        return None
+    if not theses:
+        return None
+
+    # Extract any ticker mentioned in the message (e.g. "BP.L", "HSBA", "BARC.L")
+    msg_upper = message.upper()
+    mentioned_tickers = set(
+        t for t in _re.findall(r'\b([A-Z]{2,5}(?:\.[A-Z]{1,2})?)\b', msg_upper)
+        if t not in {'KB', 'THE', 'AND', 'FOR', 'WITH', 'IS', 'MY', 'ARE'}
+    )
+
+    # Filter to ticker match if any tickers mentioned
+    if mentioned_tickers:
+        ticker_matches = [
+            t for t in theses
+            if t['ticker'].upper() in mentioned_tickers
+               or t['ticker'].upper().rstrip('.L') in mentioned_tickers
+        ]
+        if ticker_matches:
+            theses = ticker_matches
+
+    # Sort: CHALLENGED=3 > INVALIDATED=2 > CONFIRMED=1, then by last_evaluated DESC
+    def _sort_key(t: dict):
+        status_pri = _STATUS_PRIORITY.get(t.get('thesis_status', 'CONFIRMED'), 1)
+        last_eval = t.get('last_evaluated') or t.get('created_at') or ''
+        return (status_pri, last_eval)
+
+    theses.sort(key=_sort_key, reverse=True)
+    best = theses[0]
+
+    # Re-evaluate against current KB
+    try:
+        evaluation = ThesisBuilder(ext.DB_PATH).evaluate(best['thesis_id'])
+        if evaluation is None:
+            return None
+
+        inv_condition = best.get('invalidation_condition') or 'see thesis atoms'
+
+        return {
+            'thesis_id':             evaluation.thesis_id,
+            'ticker':                evaluation.ticker,
+            'direction':             best.get('direction', 'bullish'),
+            'status':                evaluation.status,
+            'score':                 evaluation.score,
+            'supporting':            evaluation.supporting,
+            'contradicting':         evaluation.contradicting,
+            'invalidation_condition': inv_condition,
+            'evaluated_at':          evaluation.evaluated_at,
+        }
+    except Exception:
+        return None
+
+
+def _build_thesis_context_string(thesis: dict) -> str:
+    """Format a thesis dict into a context block for prompt injection."""
+    sup_str = '; '.join(thesis.get('supporting', [])[:3]) or 'none'
+    con_str = '; '.join(thesis.get('contradicting', [])[:2]) or 'none'
+    return (
+        f"THESIS CONTEXT:\n"
+        f"thesis_id: {thesis['thesis_id']}\n"
+        f"ticker: {thesis['ticker']} | direction: {thesis.get('direction','bullish')} "
+        f"| status: {thesis['status']} | score: {thesis['score']:.2f}\n"
+        f"supporting: {sup_str}\n"
+        f"contradicting: {con_str}\n"
+        f"invalidation_condition: {thesis.get('invalidation_condition', 'see thesis atoms')}\n"
+    )
+
+
 def sid_for_user(user_id):
     """Resolve the conversation session ID for a user."""
     if ext.HAS_CONV_STORE:
@@ -1146,6 +1249,32 @@ def run(
     # explain_mode can be set by the caller (route) OR detected from message keywords
     explain_mode = explain_mode or _detect_plain_english_intent(message)
 
+    # ── Thesis validity intent detection ─────────────────────────────────────
+    thesis_context: Optional[str] = None
+    _thesis_intent = _detect_thesis_validity_intent(message) if user_id else False
+    if _thesis_intent and user_id and ext.HAS_PRODUCT_LAYER:
+        _thesis = _resolve_thesis_for_message(message, user_id)
+        if _thesis:
+            thesis_context = _build_thesis_context_string(_thesis)
+        else:
+            # No thesis found for this user/ticker — offer to build one
+            import re as _re_tk
+            _tks = [t for t in _re_tk.findall(r'\b([A-Z]{2,5}(?:\.[A-Z]{1,2})?)\b', message.upper())
+                    if t not in {'KB', 'THE', 'IS', 'MY', 'ARE', 'FOR', 'WITH'}]
+            _tk_label = _tks[0] if _tks else 'this ticker'
+            return {
+                'answer': (
+                    f"You don't have an active thesis for {_tk_label} — "
+                    f"would you like me to build one from current KB signals? "
+                    f"Reply \"build a thesis for {_tk_label}\" to get started."
+                ),
+                'model': model,
+                'atoms_used': 0,
+                'snippet': '',
+                'thesis_offer': True,
+                'offer_ticker': _tk_label,
+            }, 200
+
     # ── Layer 2: tier-gated KB depth ─────────────────────────────────────────
     limit = max(limit, _tier_atom_limit(user_id))
 
@@ -1292,6 +1421,7 @@ def run(
         opportunity_scan_context=opportunity_scan_context,
         trader_level=trader_level,
         explain_mode=explain_mode,
+        thesis_context=thesis_context,
     )
 
     # ── Persist user turn + inject history ────────────────────────────────
