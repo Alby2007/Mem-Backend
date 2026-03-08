@@ -31,33 +31,32 @@ _log = logging.getLogger(__name__)
 # ── Default watchlist ──────────────────────────────────────────────────────────
 
 _DEFAULT_TICKERS: List[str] = [
-    # Mega-cap tech
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'AVGO',
-    # Financials
-    'JPM', 'V', 'MA', 'BAC', 'GS', 'MS', 'BRK-B',
-    # Healthcare
-    'UNH', 'JNJ', 'LLY', 'ABBV', 'PFE',
-    # Energy
-    'XOM', 'CVX', 'COP',
-    # Consumer
-    'WMT', 'PG', 'KO', 'MCD', 'COST',
-    # Industrials
-    'CAT', 'HON', 'RTX',
-    # Comms
-    'DIS', 'NFLX', 'CMCSA',
-    # Broad market ETFs
-    'SPY', 'QQQ', 'IWM', 'DIA', 'VTI',
-    # Sector ETFs
-    'XLF', 'XLE', 'XLK', 'XLV', 'XLI', 'XLC', 'XLY', 'XLP',
+    # FTSE 100 heavyweights
+    'SHEL.L', 'AZN.L', 'HSBA.L', 'ULVR.L', 'BP.L',
+    'GSK.L', 'RIO.L', 'BATS.L', 'VOD.L', 'LLOY.L',
+    'BARC.L', 'NWG.L', 'LSEG.L', 'REL.L', 'NG.L',
+    # Defence / industrials
+    'BA.L', 'QQ.L', 'RR.L',
+    # Consumer / retail
+    'TSCO.L', 'MKS.L', 'PSON.L',
+    # Housebuilders
+    'PSN.L',
+    # Additional FTSE names common in UK ISA portfolios
+    'STAN.L', 'HL.L', 'IAG.L', 'PRU.L', 'EXPN.L',
+    'DGE.L', 'FRES.L', 'SMT.L', 'ABDN.L', 'MNG.L',
+    'IMB.L', 'SSE.L', 'SVT.L', 'SGRO.L', 'LAND.L',
+    # FTSE indices as macro proxies
+    '^FTSE', '^FTMC',
+    # UK FX
+    'GBPUSD=X', 'EURGBP=X',
     # Macro proxies
-    'GLD', 'SLV', 'TLT', 'HYG', 'LQD', 'UUP',
-    # Additional high-coverage equities
-    'AMD', 'INTC', 'QCOM', 'MU', 'CRM', 'ADBE', 'NOW', 'SNOW',
-    'PYPL', 'COIN',
-    'AXP', 'BLK', 'SCHW',
-    'CVS', 'MRK', 'BMY', 'GILD',
-    'NEE', 'DUK', 'SO',
-    'AMT', 'PLD', 'EQIX',
+    'GLD', 'TLT', 'HYG', 'SPY',
+    # US macro confirmation proxies
+    '^GSPC', '^VIX',
+    # US mega-cap (global correlation + common in UK portfolios)
+    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'MA',
+    # User portfolio holdings
+    'ARKK', 'COIN', 'HOOD', 'MSTR', 'PLTR',
 ]
 
 # ── Promotion criteria ─────────────────────────────────────────────────────────
