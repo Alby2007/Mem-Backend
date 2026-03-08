@@ -92,8 +92,15 @@ async function _fetchAndRenderPatterns(grid, ticker, append) {
     }
     if (!append) {
       window._patternCache = {};
+      window._patternList    = [];
+      window._patternListIdx = {};
     }
-    pats.forEach(p => { window._patternCache[p.id] = p; });
+    pats.forEach((p, i) => {
+      window._patternCache[p.id] = p;
+      const offset = _patOffset || 0;
+      window._patternList.push(p.id);
+      window._patternListIdx[p.id] = (append ? (window._patternList.length - 1) : (offset + i));
+    });
     const totalLoaded = (_patOffset || 0) + pats.length;
     if (_patTotal != null) {
       document.getElementById('pf-count').textContent = `${totalLoaded} of ${_patTotal} result${_patTotal===1?'':'s'}`;
@@ -125,8 +132,7 @@ async function _fetchAndRenderPatterns(grid, ticker, append) {
         </div>
         <div class="text-xs text-muted">Zone: <span class="mono">${fmt(p.zone_low)} – ${fmt(p.zone_high)}</span> ${zoneTag}</div>
         <div class="text-xs text-muted mt-8" title="${escHtml(formedFull)}">Formed: ${escHtml(formedRel)}${detectedRel ? ` · detected ${escHtml(detectedRel)}` : ''}</div>
-        <div class="pattern-detail" id="pd-${p.id}"><div class="spinner"></div></div>
-        <button class="pat-chat-btn" onclick="event.stopPropagation();sendPatternToChat(window._patternCache[${p.id}])" title="Discuss in Chat">💬 Discuss</button>
+        <button class="pat-chat-btn" onclick="event.stopPropagation();sendPatternToChat(window._patternCache[${p.id}])" title="Ctrl+click to discuss in Chat">💬 Discuss</button>
       </div>`;
     }).join('');
     if (append) {
@@ -159,7 +165,11 @@ window.loadMorePatterns = async function() {
 };
 
 window.handlePatternClick = function(event, el, id) {
-  togglePattern(el, id);
+  if (event.ctrlKey || event.metaKey) {
+    sendPatternToChat(window._patternCache[id]);
+    return;
+  }
+  openPatternModal(id);
 };
 
 function sendPatternToChat(p) {
@@ -173,35 +183,225 @@ function sendPatternToChat(p) {
   inp.style.height = inp.scrollHeight + 'px';
 }
 
-window.togglePattern = async function(el, id) {
-  el.classList.toggle('expanded');
-  const detail = document.getElementById(`pd-${id}`);
-  if (!el.classList.contains('expanded')) return;
-  if (detail.dataset.loaded) return;
-  detail.dataset.loaded = '1';
-  try {
-    const qs = state.userId ? `?user_id=${state.userId}` : '';
-    const d = await apiFetch(`/patterns/${id}${qs}`);
-    const p = d?.pattern || d || {};
-    const pos = d?.position_recommendation;
-    detail.innerHTML = `
-      <div style="font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-        <div><span class="text-muted">Conviction</span><br><span class="mono-amber">${escHtml(p.kb_conviction||'—')}</span></div>
-        <div><span class="text-muted">Regime</span><br><span class="mono">${escHtml((p.kb_regime||'—').replace(/_/g,' '))}</span></div>
-        <div><span class="text-muted">Signal Dir</span><br>${dirBadge(p.kb_signal_dir)}</div>
-        <div><span class="text-muted">Status</span><br><span class="badge badge-open">${escHtml(p.status||'open')}</span></div>
-      </div>
-      ${pos ? `<div class="card-sm text-sm">
-        <div class="text-xs text-muted mb-8">Position Sizing</div>
-        <div class="flex-center gap-12">
-          <span><span class="text-muted">Entry</span> <span class="mono-amber">${fmt(pos.entry_price)}</span></span>
-          <span><span class="text-muted">Stop</span> <span class="mono-red">${fmt(pos.stop_loss)}</span></span>
-          <span><span class="text-muted">Units</span> <span class="mono-green">${pos.position_units || '—'}</span></span>
-          <span><span class="text-muted">R/R</span> <span class="mono">${fmt(pos.rr_ratio)}</span></span>
+// ── Pattern list tracking for keyboard nav ───────────────────────────────────
+window._patternList    = [];
+window._patternListIdx = {};
+
+// ── TF → TradingView interval map ────────────────────────────────────────────
+const _TV_INTERVAL = { '1m':'1','5m':'5','15m':'15','30m':'30','1h':'60','2h':'120','4h':'240','1d':'D','1w':'W' };
+
+function _tvSymbol(ticker) {
+  if (!ticker) return ticker;
+  if (ticker.toUpperCase().endsWith('.L')) return 'LSE:' + ticker.slice(0, -2).toUpperCase();
+  if (ticker.toUpperCase().endsWith('.l')) return 'LSE:' + ticker.slice(0, -2).toUpperCase();
+  return ticker.toUpperCase();
+}
+
+// ── Zone bar SVG ─────────────────────────────────────────────────────────────
+function _buildZoneBar(p, atoms) {
+  const atomMap = {};
+  (atoms || []).forEach(a => { atomMap[a.predicate] = a.value; });
+  const price     = (window._snapshotPrices || {})[p.ticker] || null;
+  const zl        = p.zone_low,  zh = p.zone_high;
+  const target    = parseFloat(atomMap['price_target'] || atomMap['target_price'] || 0) || null;
+  const inv       = parseFloat(atomMap['invalidation_price'] || atomMap['invalidation'] || 0) || null;
+
+  const lo = Math.min(zl, inv || zl, price || zl) * 0.985;
+  const hi = Math.max(zh, target || zh, price || zh) * 1.015;
+  const range = hi - lo || 1;
+  const pct = v => ((v - lo) / range * 100).toFixed(2);
+
+  const zonePctL = pct(zl), zonePctH = pct(zh);
+  const zoneW = (zh - zl) / range * 100;
+
+  const pricePin = price ? `<div class="pzb-pin" style="left:${pct(price)}%" title="Current price: ${fmt(price)}"></div>` : '';
+  const targetPin = target ? `<div class="pzb-target" style="left:${pct(target)}%" title="Target: ${fmt(target)}">▼</div>` : '';
+  const invPin    = inv    ? `<div class="pzb-inv"    style="left:${pct(inv)}%"    title="Invalidation: ${fmt(inv)}">✕</div>` : '';
+
+  return `<div class="pat-zone-bar">
+    <div class="pzb-label">Zone</div>
+    <div class="pzb-track">
+      <div class="pzb-zone" style="left:${zonePctL}%;width:${zoneW.toFixed(2)}%"></div>
+      ${pricePin}${targetPin}${invPin}
+    </div>
+    <div class="pzb-vals">
+      <span>${fmt(zl)}</span><span class="pzb-dash">–</span><span>${fmt(zh)}</span>
+      ${target ? `<span class="pzb-tgt">T: ${fmt(target)}</span>` : ''}
+      ${inv    ? `<span class="pzb-inv-lbl">✕: ${fmt(inv)}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+// ── Quality dots ─────────────────────────────────────────────────────────────
+function _qualDots(q) {
+  const filled = Math.round((q || 0) * 5);
+  return Array.from({length:5}, (_,i) =>
+    `<span class="qdot${i < filled ? ' qdot-on' : ''}"></span>`).join('');
+}
+
+// ── Modal open / close ────────────────────────────────────────────────────────
+let _modalPatId = null;
+
+function openPatternModal(id) {
+  const p = window._patternCache[id];
+  if (!p) return;
+  _modalPatId = id;
+  closePatternModal(true);
+
+  const tvSym  = _tvSymbol(p.ticker);
+  const tvInt  = _TV_INTERVAL[p.timeframe] || 'D';
+  const ifrSrc = `https://www.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSym)}&interval=${tvInt}&theme=dark&style=1&locale=en&hide_top_toolbar=0&save_image=0&hide_legend=0`;
+
+  const dirCls = (p.direction||'').toLowerCase().includes('bull') ? 'color:#22c55e' : 'color:#ef4444';
+
+  const backdrop = document.createElement('div');
+  backdrop.id = 'pat-modal-backdrop';
+  backdrop.className = 'pat-modal-backdrop';
+  backdrop.innerHTML = `
+  <div class="pat-modal" id="pat-modal" role="dialog" aria-modal="true">
+    <div class="pat-modal-header">
+      <span class="pm-ticker">${escHtml(p.ticker)}</span>
+      ${dirBadge(p.direction)}
+      <span class="pm-type">${escHtml((p.pattern_type||'').replace(/_/g,' '))}</span>
+      <span class="pm-tf">${escHtml(p.timeframe||'—')}</span>
+      <span class="pm-qual">${_qualDots(p.quality_score)}<span class="pm-qual-num">${fmt(p.quality_score)}</span></span>
+      <button class="pm-close" id="pm-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="pat-modal-chart" id="pm-chart">
+      <div class="pm-chart-placeholder" id="pm-chart-ph"><div class="spinner"></div><div class="pm-loading-text">Loading chart…</div></div>
+      <iframe id="pm-iframe" src="${ifrSrc}" allowtransparency="true" frameborder="0" style="display:none;"></iframe>
+      <div id="pm-zone-bar">${_buildZoneBar(p, [])}</div>
+    </div>
+    <div class="pat-modal-right" id="pm-right">
+      <div class="pat-modal-section">
+        <div class="pat-modal-section-title">Pattern Details</div>
+        <div class="pat-modal-details-grid">
+          <div class="pm-detail-row"><span class="pm-dlabel">Zone</span><span class="pm-dval mono">${fmt(p.zone_low)} – ${fmt(p.zone_high)}</span></div>
+          <div class="pm-detail-row"><span class="pm-dlabel">Quality</span><span class="pm-dval">${_qualDots(p.quality_score)} <span class="mono-amber">${fmt(p.quality_score)}</span></span></div>
+          <div class="pm-detail-row"><span class="pm-dlabel">Formed</span><span class="pm-dval">${escHtml(_relTime(p.formed_at))}</span></div>
+          <div class="pm-detail-row"><span class="pm-dlabel">Status</span><span class="pm-dval"><span class="badge badge-open">${escHtml(p.status||'open')}</span></span></div>
+          <div class="pm-detail-row"><span class="pm-dlabel">Conviction</span><span class="pm-dval mono-amber" id="pm-conviction">…</span></div>
+          <div class="pm-detail-row"><span class="pm-dlabel">Regime</span><span class="pm-dval mono" id="pm-regime">…</span></div>
+          <div class="pm-detail-row"><span class="pm-dlabel">Signal Dir</span><span class="pm-dval" id="pm-sigdir">…</span></div>
         </div>
-      </div>` : ''}`;
-  } catch(e) { detail.innerHTML = `<span class="text-sm" style="color:var(--red)">${escHtml(e.message)}</span>`; }
-};
+      </div>
+      <div class="pat-modal-section" id="pm-evidence-section">
+        <div class="pat-modal-section-title" id="pm-evidence-title">KB Evidence</div>
+        <div id="pm-evidence-rows">
+          <div class="pat-evidence-skeleton"></div>
+          <div class="pat-evidence-skeleton"></div>
+          <div class="pat-evidence-skeleton"></div>
+        </div>
+      </div>
+      <div class="pat-modal-footer">
+        <button class="pat-discuss-btn" id="pm-discuss">💬 Discuss in Chat &rarr;</button>
+      </div>
+    </div>
+  </div>`;
+
+  document.body.appendChild(backdrop);
+
+  // Show iframe once loaded
+  const iframe = document.getElementById('pm-iframe');
+  iframe.addEventListener('load', () => {
+    document.getElementById('pm-chart-ph').style.display = 'none';
+    iframe.style.display = 'block';
+  });
+
+  // Close handlers
+  document.getElementById('pm-close').addEventListener('click', closePatternModal);
+  backdrop.addEventListener('click', e => { if (e.target === backdrop) closePatternModal(); });
+
+  // Discuss CTA
+  document.getElementById('pm-discuss').addEventListener('click', () => {
+    closePatternModal();
+    sendPatternToChat(p);
+  });
+
+  // Load context async
+  _loadPatternContext(id, p);
+}
+
+function closePatternModal(silent) {
+  const el = document.getElementById('pat-modal-backdrop');
+  if (el) el.remove();
+  if (!silent) _modalPatId = null;
+}
+
+async function _loadPatternContext(id, p) {
+  let data;
+  try {
+    data = await apiFetch(`/patterns/${id}/context`);
+  } catch(e) {
+    const evEl = document.getElementById('pm-evidence-rows');
+    if (evEl) evEl.innerHTML = `<div class="text-xs" style="color:var(--red);padding:8px 16px;">${escHtml(e.message)}</div>`;
+    return;
+  }
+
+  const d = data || {};
+  const pat = d.pattern || p;
+  const atoms = d.atoms || [];
+
+  // Fill conviction / regime / signal dir
+  const convEl = document.getElementById('pm-conviction');
+  const regEl  = document.getElementById('pm-regime');
+  const sdEl   = document.getElementById('pm-sigdir');
+  if (convEl) convEl.textContent = pat.kb_conviction || '—';
+  if (regEl)  regEl.textContent  = (pat.kb_regime || '—').replace(/_/g,' ');
+  if (sdEl)   sdEl.innerHTML     = dirBadge(pat.kb_signal_dir);
+
+  // Update zone bar with actual atom data
+  const zoneEl = document.getElementById('pm-zone-bar');
+  if (zoneEl) zoneEl.innerHTML = _buildZoneBar(pat, atoms);
+
+  // Evidence title
+  const titleEl = document.getElementById('pm-evidence-title');
+  if (titleEl) titleEl.textContent = `KB Evidence  (${d.atom_count || atoms.length} atoms)`;
+
+  // Render evidence rows
+  const evEl = document.getElementById('pm-evidence-rows');
+  if (!evEl) return;
+  if (!atoms.length) {
+    evEl.innerHTML = '<div class="text-xs text-muted" style="padding:8px 16px;">No KB atoms found for this ticker.</div>';
+    return;
+  }
+  const SHOW = 8;
+  const top  = atoms.slice(0, SHOW);
+  const rest = atoms.slice(SHOW);
+  const renderRow = a => `
+    <div class="pat-evidence-row">
+      <span class="pe-pred">${escHtml(a.predicate.replace(/_/g,' '))}</span>
+      <span class="pe-val">${escHtml(a.value)}<span class="pe-conf">(${a.confidence})</span></span>
+    </div>`;
+  let html = top.map(renderRow).join('');
+  if (rest.length) {
+    html += `<div class="pe-show-more" id="pm-show-more">+ ${rest.length} more</div>`;
+    html += `<div id="pm-rest-rows" style="display:none;">${rest.map(renderRow).join('')}</div>`;
+  }
+  evEl.innerHTML = html;
+  const moreBtn = document.getElementById('pm-show-more');
+  if (moreBtn) {
+    moreBtn.addEventListener('click', () => {
+      const restEl = document.getElementById('pm-rest-rows');
+      if (restEl) { restEl.style.display = ''; moreBtn.remove(); }
+    });
+  }
+}
+
+// ── Keyboard nav ──────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && _modalPatId !== null) { closePatternModal(); return; }
+  if (!_modalPatId) return;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    const list = window._patternList || [];
+    const idx  = window._patternListIdx || {};
+    const cur  = idx[_modalPatId];
+    if (cur === undefined) return;
+    const next = e.key === 'ArrowRight' ? cur + 1 : cur - 1;
+    if (next < 0 || next >= list.length) return;
+    openPatternModal(list[next]);
+  }
+});
 
 document.getElementById('pf-search-btn').addEventListener('click', loadPatterns);
 ['pf-type','pf-tf','pf-dir'].forEach(id => {

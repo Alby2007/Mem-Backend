@@ -202,6 +202,93 @@ async def patterns_live(
         raise HTTPException(500, detail=str(e))
 
 
+@router.get("/patterns/{pattern_id}/context")
+async def pattern_context(pattern_id: int, _user: str = Depends(get_current_user)):
+    """Return pattern + top KB atoms for the pattern detail modal."""
+    if not ext.HAS_PATTERN_LAYER:
+        raise HTTPException(503, detail="pattern layer not available")
+    import json as _json
+    # ── 1. Load pattern row ──────────────────────────────────────────────────
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        row = conn.execute(
+            """SELECT id, ticker, pattern_type, direction, zone_high, zone_low,
+                      zone_size_pct, timeframe, formed_at, status, filled_at,
+                      quality_score, kb_conviction, kb_regime, kb_signal_dir,
+                      alerted_users, detected_at
+               FROM pattern_signals WHERE id = ?""",
+            (pattern_id,),
+        ).fetchone()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+    if row is None:
+        raise HTTPException(404, detail="pattern not found")
+    cols = ["id","ticker","pattern_type","direction","zone_high","zone_low",
+            "zone_size_pct","timeframe","formed_at","status","filled_at",
+            "quality_score","kb_conviction","kb_regime","kb_signal_dir","alerted_users","detected_at"]
+    pattern = dict(zip(cols, row))
+    try:
+        pattern["alerted_users"] = _json.loads(pattern["alerted_users"] or "[]")
+    except Exception:
+        pattern["alerted_users"] = []
+    ticker = pattern["ticker"]
+
+    # ── 2. Load KB atoms for this ticker ────────────────────────────────────
+    atoms: list = []
+    now_utc = datetime.now(timezone.utc)
+    try:
+        conn2 = sqlite3.connect(ext.DB_PATH, timeout=10)
+        fact_rows = conn2.execute(
+            """SELECT predicate, object, confidence, source, timestamp
+               FROM facts
+               WHERE LOWER(subject) = LOWER(?)
+               ORDER BY confidence DESC
+               LIMIT 60""",
+            (ticker,),
+        ).fetchall()
+        conn2.close()
+        # Deduplicate by predicate — keep highest confidence per predicate
+        seen_pred: dict = {}
+        for fr in fact_rows:
+            pred, obj, conf, src, ts = fr
+            if pred not in seen_pred or conf > seen_pred[pred]["confidence"]:
+                # Compute human-readable age
+                age_str = "—"
+                if ts:
+                    try:
+                        dt = datetime.fromisoformat(ts[:19])
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        diff_h = (now_utc - dt).total_seconds() / 3600
+                        if diff_h < 1:
+                            age_str = f"{int(diff_h * 60)}m ago"
+                        elif diff_h < 24:
+                            age_str = f"{int(diff_h)}h ago"
+                        elif diff_h < 48:
+                            age_str = "Yesterday"
+                        else:
+                            age_str = f"{int(diff_h / 24)}d ago"
+                    except Exception:
+                        age_str = ts[:10] if ts else "—"
+                seen_pred[pred] = {
+                    "predicate": pred,
+                    "value": obj,
+                    "confidence": round(float(conf), 3),
+                    "source": src or "",
+                    "age": age_str,
+                }
+        atoms = sorted(seen_pred.values(), key=lambda x: x["confidence"], reverse=True)[:30]
+    except Exception:
+        atoms = []
+
+    return {
+        "pattern": pattern,
+        "atoms": atoms,
+        "atom_count": len(atoms),
+    }
+
+
 @router.get("/patterns/{pattern_id}")
 async def pattern_detail(pattern_id: int, user_id: Optional[str] = None):
     if not ext.HAS_PATTERN_LAYER:
