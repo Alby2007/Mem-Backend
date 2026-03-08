@@ -12,6 +12,7 @@ from slowapi.util import get_remote_address
 RATE_LIMITS: dict[str, str] = {
     "auth":      "10/minute",
     "chat":      "60/hour",
+    "scenario":  "20/hour",
     "snapshot":  "5/hour",
     "patterns":  "60/hour",
     "portfolio": "60/hour",

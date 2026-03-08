@@ -10,7 +10,7 @@ import sqlite3
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import extensions as ext
 from middleware.fastapi_auth import get_current_user_optional
@@ -20,11 +20,11 @@ router = APIRouter()
 
 
 class ChatRequest(BaseModel):
-    message: str
-    session_id: Optional[str] = "default"
-    tickers: Optional[list] = None
-    portfolio: Optional[list] = None
-    mode: Optional[str] = None
+    message:      str            = Field(..., max_length=2000)
+    session_id:   Optional[str]  = Field("default", max_length=128)
+    tickers:      Optional[list] = None
+    portfolio:    Optional[list] = None
+    mode:         Optional[str]  = Field(None, max_length=32)
     explain_mode: Optional[bool] = False
 
 

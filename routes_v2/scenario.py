@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 import extensions as ext
 from middleware.fastapi_auth import get_current_user
+from middleware.fastapi_rate_limiter import RATE_LIMITS, limiter
 from services.scenario_engine import (
     SEED_CATEGORIES,
     _SHOCK_ALIASES,
@@ -21,10 +22,10 @@ _logger = logging.getLogger(__name__)
 
 
 class ScenarioRequest(BaseModel):
-    shock: str
-    max_depth: int = 4
-    min_confidence: float = 0.5
-    narrative: bool = False
+    shock:          str   = Field(..., max_length=500)
+    max_depth:      int   = Field(4, ge=1, le=8)
+    min_confidence: float = Field(0.5, ge=0.0, le=1.0)
+    narrative:      bool  = False
 
 
 # ── GET /scenario/seeds ───────────────────────────────────────────────────────
@@ -44,7 +45,9 @@ async def scenario_seeds(_: str = Depends(get_current_user)):
 # ── POST /scenario/run ────────────────────────────────────────────────────────
 
 @router.post("/scenario/run")
+@limiter.limit(RATE_LIMITS["scenario"])
 async def scenario_run(
+    request: Request,
     body: ScenarioRequest,
     user_id: str = Depends(get_current_user),
 ):
