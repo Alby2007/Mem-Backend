@@ -22,6 +22,7 @@ retries on the next interval. Other adapters are unaffected.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import threading
 import time
@@ -229,8 +230,25 @@ class IngestScheduler:
         status.last_run_at = now
         status.total_runs += 1
 
+        # Hard timeout: adapter must complete within 3× its interval (min 120s, max 600s)
+        # This ensures a hung adapter (e.g. yfinance blocking on bad tickers) never
+        # prevents the finally block from scheduling the next run.
+        timeout_sec = max(120.0, min(interval_sec * 3, 600.0))
+
         try:
-            result = adapter.run_and_push(self._kg)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(adapter.run_and_push, self._kg)
+                try:
+                    result = future.result(timeout=timeout_sec)
+                except concurrent.futures.TimeoutError:
+                    _logger.error(
+                        '[%s] run #%d TIMED OUT after %.0fs — skipping',
+                        adapter.name, status.total_runs, timeout_sec,
+                    )
+                    status.total_errors += 1
+                    status.last_error = f'timeout after {timeout_sec:.0f}s'
+                    status.last_error_at = now
+                    return
             ingested = result.get('ingested', 0)
             status.total_atoms += ingested
             status.last_success_at = now
@@ -251,5 +269,5 @@ class IngestScheduler:
 
         finally:
             status.is_running = False
-            # Schedule next run
+            # Schedule next run regardless of outcome
             self._schedule(adapter, interval_sec, immediate=False)
