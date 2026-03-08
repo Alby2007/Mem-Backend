@@ -1412,7 +1412,8 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .mst-upside { font-size: 9px; color: #f59e0b; }
 
 /* ── F1: KB Visualiser ── */
-#screen-visualiser { display: flex; flex-direction: column; height: calc(100vh - var(--topbar-h) - 1px); overflow: hidden; }
+#screen-visualiser { display: none; flex-direction: column; height: calc(100vh - var(--topbar-h) - 48px); overflow: hidden; }
+#screen-visualiser.active { display: flex; }
 .vis-topbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .vis-toggle-group { display: flex; gap: 4px; }
 .vis-toggle-btn { background: none; border: 1px solid var(--border); color: var(--muted); font-size: 11px; padding: 4px 12px; border-radius: 4px; cursor: pointer; transition: all .15s; }

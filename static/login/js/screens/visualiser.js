@@ -62,6 +62,7 @@ function _visFiltered() {
 
 // ── Load + entry point ────────────────────────────────────────────────────────
 async function loadVisualiser() {
+  _visWireEvents();
   const container = document.getElementById('vis-canvas');
   if (!container) return;
 
@@ -84,21 +85,22 @@ async function loadVisualiser() {
     }
   }
 
-  // Apply prefilter sector as search
-  if (window._visPrefilterSector) {
-    // highlight sector in heatmap view — switch to heatmap
-    _setVisView('heatmap');
-    window._visPrefilterSector = null;
-  } else {
-    _setVisView(_visView);
-  }
-
   // Update last-updated
   const luEl = document.getElementById('vis-last-updated');
   if (luEl && _visData.as_of) {
     const d = new Date(_visData.as_of);
     luEl.textContent = 'Updated: ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   }
+
+  // Use rAF so the screen is fully laid out before D3 reads clientWidth/clientHeight
+  requestAnimationFrame(() => {
+    if (window._visPrefilterSector) {
+      _setVisView('heatmap');
+      window._visPrefilterSector = null;
+    } else {
+      _setVisView(_visView);
+    }
+  });
 }
 
 function _setVisView(v) {
@@ -406,8 +408,12 @@ function _renderRadar() {
     .attr('font-size', '9px').text('% bullish');
 }
 
-// ── Event wiring (runs once on page load) ─────────────────────────────────────
-(function _visWireEvents() {
+// ── Event wiring (lazy, runs once after screen first shown) ──────────────────
+let _visWired = false;
+function _visWireEvents() {
+  if (_visWired) return;
+  _visWired = true;
+
   document.querySelectorAll('.vis-toggle-btn').forEach(btn => {
     btn.addEventListener('click', () => _setVisView(btn.dataset.view));
   });
@@ -428,4 +434,4 @@ function _renderRadar() {
       if (_visView === 'bubble') _renderBubble();
     });
   }
-})();
+}
