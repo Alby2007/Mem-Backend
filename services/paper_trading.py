@@ -38,6 +38,36 @@ ALWAYS respond with JSON only:
 {"action": "ENTER"|"SKIP", "entry": float, "stop": float, "t1": float, "t2": float, "reasoning": "cite signal data, max 120 chars"}"""
 
 _PAPER_MAX_OPEN_POSITIONS = 12
+
+
+def _is_market_open(ticker: str) -> bool:
+    """Return True only if the primary exchange for this ticker is currently open.
+
+    US equities (default): NYSE/NASDAQ 14:30-21:00 UTC Mon-Fri
+    UK equities (.L suffix): LSE 08:00-16:30 UTC Mon-Fri
+    Futures/FX/indices: treated as always-open (24h products)
+    """
+    always_open_prefixes = ('GC=F', 'SI=F', 'PL=F', 'CL=F', 'BZ=F', 'NG=F',
+                            'GBPUSD=X', 'EURUSD=X', 'JPY=X', 'DX-Y.NYB')
+    yf_sym = _YF_MAP.get(ticker.lower(), ticker)
+    if any(yf_sym.startswith(p) or yf_sym == p for p in always_open_prefixes):
+        return True
+
+    now_utc = datetime.now(timezone.utc)
+    weekday = now_utc.weekday()  # 0=Mon, 6=Sun
+    if weekday >= 5:
+        return False
+
+    if ticker.upper().endswith('.L'):
+        market_open  = now_utc.replace(hour=8,  minute=0,  second=0, microsecond=0)
+        market_close = now_utc.replace(hour=16, minute=30, second=0, microsecond=0)
+    else:
+        market_open  = now_utc.replace(hour=14, minute=30, second=0, microsecond=0)
+        market_close = now_utc.replace(hour=21, minute=0,  second=0, microsecond=0)
+
+    return market_open <= now_utc <= market_close
+
+
 _PAPER_MAX_NEW_PER_SCAN = 3
 
 
@@ -396,7 +426,7 @@ def open_position(user_id: str, data: dict) -> tuple[dict, int]:
     now_iso    = datetime.now(timezone.utc).isoformat()
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
     conn.execute(
-        "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,500000.0,'GBP',?)",
+        "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,100000.0,'GBP',?)",
         (user_id, now_iso)
     )
     cur = conn.execute(
@@ -469,6 +499,9 @@ def monitor_positions(user_id: str) -> dict:
 
     for pos in open_pos:
         ticker = pos['ticker']
+        # Skip stop/target checks when market is closed — stale prices must not trigger exits
+        if not _is_market_open(ticker):
+            continue
         price  = prices_by_ticker.get(ticker, 0)
         if price <= 0:
             continue
@@ -824,6 +857,15 @@ def _ai_run_inner(user_id: str) -> dict:
 
             if ticker in open_tickers or ticker in cooled_tickers:
                 skips += 1
+                continue
+
+            # Market hours guard — no entries when exchange is closed (stale prices)
+            if not _is_market_open(ticker):
+                skips += 1
+                conn.execute(
+                    "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                    (user_id, 'skip', ticker, f'{ticker} skipped — market closed', now_iso)
+                )
                 continue
 
             # Regime alignment filter — hard skip misaligned entries
