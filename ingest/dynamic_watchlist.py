@@ -53,6 +53,8 @@ _DEFAULT_TICKERS: List[str] = [
     'GLD', 'TLT', 'HYG', 'SPY',
     # US macro confirmation proxies
     '^GSPC', '^VIX',
+    # US sector ETFs — required for SectorRotationAdapter to compute leaders/laggards
+    'XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLC', 'XLY', 'XLP', 'XLU',
     # US mega-cap (global correlation + common in UK portfolios)
     'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'MA',
     # User portfolio holdings

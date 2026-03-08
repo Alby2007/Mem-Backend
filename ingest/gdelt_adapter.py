@@ -188,5 +188,32 @@ class GDELTAdapter(BaseIngestAdapter):
                 metadata={**meta_base, 'region_avg_score': round(avg, 1)},
             ))
 
+        # ── Energy ticker geo-risk linkage ────────────────────────────────────
+        # When Middle East or LatAm tension is elevated/moderate, write
+        # geopolitical_risk_exposure atoms keyed by major energy tickers so
+        # that BP/Shell/XOM queries surface geo context directly.
+        _ENERGY_TICKERS = ['bp.l', 'shel.l', 'xom', 'cvx', 'cop']
+        for region, scores in region_scores.items():
+            if region not in ('middle_east', 'latam'):
+                continue
+            avg = sum(scores) / len(scores)
+            tier = _risk_tier(avg)
+            if tier in ('elevated', 'moderate'):
+                for ticker in _ENERGY_TICKERS:
+                    atoms.append(RawAtom(
+                        subject=ticker,
+                        predicate='geopolitical_risk_exposure',
+                        object=f'{tier}_geo_risk:{region}',
+                        confidence=0.62,
+                        source=source,
+                        metadata={
+                            **meta_base,
+                            'region': region,
+                            'tension_score': round(avg, 1),
+                            'risk_tier': tier,
+                        },
+                        upsert=True,
+                    ))
+
         self._logger.info('GDELT adapter: %d atoms produced', len(atoms))
         return atoms

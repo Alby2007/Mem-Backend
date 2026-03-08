@@ -249,6 +249,35 @@ class EIAAdapter(BaseIngestAdapter):
                 metadata={**meta_base, 'wti': wti_cur, 'supply_trend': supply_trend if prod_cur and prod_prev else 'unknown'},
             ))
 
+        # ── Energy ticker supply-risk linkage ────────────────────────────────
+        # Write supply_disruption_risk atoms keyed by major energy tickers so
+        # that BP/Shell/XOM queries surface EIA supply context directly.
+        _ENERGY_TICKERS = ['bp.l', 'shel.l', 'xom', 'cvx', 'cop']
+        _supply_trend_val = supply_trend if (prod_cur and prod_prev) else None
+        if wti_cur is not None:
+            _risk_label = None
+            if wti_cur > 85 and _supply_trend_val in ('falling', 'stable', None):
+                _risk_label = 'elevated'
+            elif wti_cur > 75:
+                _risk_label = 'moderate'
+            elif wti_cur < 60:
+                _risk_label = 'low_supply_risk'
+            if _risk_label:
+                for _eticker in _ENERGY_TICKERS:
+                    atoms.append(RawAtom(
+                        subject=_eticker,
+                        predicate='supply_disruption_risk',
+                        object=_risk_label,
+                        confidence=0.72,
+                        source=source,
+                        metadata={
+                            **meta_base,
+                            'wti_crude': wti_cur,
+                            'supply_trend': _supply_trend_val or 'unknown',
+                        },
+                        upsert=True,
+                    ))
+
         # ── Henry Hub natural gas spot price ──────────────────────────────────
         gas_data = _eia_fetch(self._api_key, 'natural-gas/pri/sum/data', {'process': ['PUS']}, 2)
         if gas_data and len(gas_data) >= 1:

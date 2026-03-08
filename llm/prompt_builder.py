@@ -100,6 +100,28 @@ Do NOT invent impact magnitudes. Do NOT say "increased volatility in the financi
 unless a KB atom states a specific volatility figure or regime label for that sector.\
 """
 
+_SYSTEM_SYNTHESIS_RULE = (
+    "\n\nSYNTHESIS RULE — CRITICAL: When multiple atoms together imply a conclusion, "
+    "you MUST state that conclusion. Do NOT refuse to answer or say the information "
+    "'is not explicitly stated' when atoms collectively point to a clear answer. "
+    "Examples of required synthesis:\n"
+    "- yield_curve_regime=bear_steepen + central_bank_stance=neutral + market=near_52w_low "
+    "→ you MUST synthesise: 'Bear-steepening yield curve with a neutral central bank in a "
+    "near-52w-low regime signals late-cycle risk-off pressure.'\n"
+    "- sector_rotation_leader=energy + sector_rotation_laggard=technology + signal_direction=bearish "
+    "→ you MUST synthesise: 'Rotation is favouring defensives/energy over growth/tech — "
+    "consistent with a risk-off macro backdrop.'\n"
+    "- bp atom has signal_direction + sector_tailwind=positive + EIA supply disruption atoms "
+    "→ you MUST lead with the BP-specific data, then add geo context.\n"
+    "SYNTHESIS FORMAT: State the inference clearly, then immediately cite the atoms it "
+    "came from in parentheses: e.g. '(KB: yield_curve_regime=bear_steepen, "
+    "central_bank_stance=neutral)'. This makes your reasoning transparent and grounded.\n"
+    "PROHIBITION: Never write 'the current market regime is not explicitly stated', "
+    "'there is no explicit information on', 'no direct information is available', or any "
+    "equivalent deflection phrase when relevant atoms ARE present in the context. "
+    "Such deflections are a reasoning failure, not an honest answer."
+)
+
 _SYSTEM_NO_HALLUCINATION = (
     "\n10. Do NOT introduce company names, executive names, news headlines, sector names, "
     "industry descriptions, or ANY narrative not present verbatim in the KB atoms. "
@@ -575,7 +597,7 @@ def build(
         [{"role": "system", "content": ...}, {"role": "user", "content": ...}]
     """
     # ── Build dynamic system prompt ────────────────────────────────────────────
-    system_text = _SYSTEM_PROMPT_BASE + _SYSTEM_NO_HALLUCINATION
+    system_text = _SYSTEM_PROMPT_BASE + _SYSTEM_SYNTHESIS_RULE + _SYSTEM_NO_HALLUCINATION
 
     composite = 0.0
     if stress:
