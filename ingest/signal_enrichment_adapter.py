@@ -1178,6 +1178,10 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
         skipped  = 0
 
         for ticker, preds in ticker_atoms.items():
+            # Skip empty or invalid ticker subjects
+            if not ticker or not ticker.strip():
+                skipped += 1
+                continue
             # Skip subjects that have no signal_direction (not an equity/ETF)
             if 'signal_direction' not in preds and 'last_price' not in preds:
                 skipped += 1

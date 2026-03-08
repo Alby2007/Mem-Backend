@@ -61,9 +61,9 @@ _DEFAULT_FEEDS: Dict[str, str] = {
     'energy_monitor':       'https://www.energymonitor.ai/feed/',
     # UK-specific sources — FTSE 100 coverage
     'sky_business':         'https://feeds.skynews.com/feeds/rss/business.xml',
-    'proactive_investors':  'https://www.proactiveinvestors.co.uk/rss.php',
+    # 'proactive_investors': disabled — returns malformed XML consistently
+    # 'investegate':         disabled — returns malformed XML consistently
     'thisismoney':          'https://www.thisismoney.co.uk/money/investing/index.rss',
-    'investegate':          'https://www.investegate.co.uk/rss.aspx',  # RNS regulatory filings
 }
 
 # Max parallel workers for feed fetching
