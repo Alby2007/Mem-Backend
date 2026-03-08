@@ -295,18 +295,24 @@ class YFinanceAdapter(BaseIngestAdapter):
                     pass
 
         all_atoms: List[RawAtom] = []
-        with ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix='yf-info') as ex:
-            futures = {
-                ex.submit(self._fetch_info_atoms, sym, now_iso, bulk_prices): sym
-                for sym in self.tickers
-            }
-            for future in as_completed(futures):
+        ex = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix='yf-info')
+        futures = {
+            ex.submit(self._fetch_info_atoms, sym, now_iso, bulk_prices): sym
+            for sym in self.tickers
+        }
+        # Total budget for all info() calls: 120s regardless of ticker count
+        try:
+            for future in as_completed(futures, timeout=120.0):
                 sym = futures[future]
                 try:
-                    result = future.result(timeout=30)
+                    result = future.result(timeout=15)
                     all_atoms.extend(result)
                 except Exception as e:
                     self._logger.warning('info fetch failed for %s: %s', sym, e)
+        except Exception:
+            self._logger.warning('info fetch deadline reached — abandoning remaining tickers')
+        # Abandon remaining futures — don't block on hung network calls
+        ex.shutdown(wait=False, cancel_futures=True)
 
         return all_atoms
 
