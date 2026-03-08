@@ -1216,11 +1216,12 @@ def run(
         }
 
     # ── LLM availability ─────────────────────────────────────────────────
-    if not ext.HAS_LLM:
-        response['error'] = 'llm package not available'
-        return response, 503
-    if not ext.is_available():
-        response['error'] = 'Ollama not reachable — KB context returned without LLM answer'
+    # Groq takes priority over Ollama in llm_chat(); only gate on 503 when
+    # neither Groq nor Ollama is reachable.
+    _groq_up = ext.HAS_GROQ and ext.groq_available and ext.groq_available()
+    _ollama_up = ext.HAS_LLM and ext.is_available and ext.is_available()
+    if not _groq_up and not _ollama_up:
+        response['error'] = 'LLM not reachable — KB context returned without LLM answer'
         return response, 503
 
     # ── Portfolio context ─────────────────────────────────────────────────
