@@ -224,11 +224,29 @@ window._patternListIdx = {};
 // ── TF → TradingView interval map ────────────────────────────────────────────
 const _TV_INTERVAL = { '1m':'1','5m':'5','15m':'15','30m':'30','1h':'60','2h':'120','4h':'240','1d':'D','1w':'W' };
 
+// Map ^ index tickers and FX pairs to TradingView-compatible symbols
+const _TV_INDEX_MAP = {
+  '^VIX':  'CBOE:VIX',
+  '^GSPC': 'SP:SPX',
+  '^FTSE': 'SPREADEX:FTSE',
+  '^FTMC': 'SPREADEX:FTMC',
+  '^DJI':  'DJ:DJI',
+  '^IXIC': 'NASDAQ:COMP',
+  '^RUT':  'RUSSELL:RUT',
+};
+const _TV_FX_MAP = {
+  'GBPUSD=X': 'FX:GBPUSD',
+  'EURGBP=X': 'FX:EURGBP',
+  'EURUSD=X': 'FX:EURUSD',
+};
+
 function _tvSymbol(ticker) {
   if (!ticker) return ticker;
-  if (ticker.toUpperCase().endsWith('.L')) return 'LSE:' + ticker.slice(0, -2).toUpperCase();
-  if (ticker.toUpperCase().endsWith('.l')) return 'LSE:' + ticker.slice(0, -2).toUpperCase();
-  return ticker.toUpperCase();
+  const up = ticker.toUpperCase();
+  if (_TV_INDEX_MAP[up]) return _TV_INDEX_MAP[up];
+  if (_TV_FX_MAP[up])    return _TV_FX_MAP[up];
+  if (up.endsWith('.L')) return 'LSE:' + up.slice(0, -2);
+  return up;
 }
 
 // ── Zone bar SVG ─────────────────────────────────────────────────────────────

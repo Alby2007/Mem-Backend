@@ -136,7 +136,7 @@ async def _lifespan(app: FastAPI):
         # (which includes thousands of LLM-extracted entity names that aren't valid tickers)
         try:
             from ingest.dynamic_watchlist import DynamicWatchlistManager as _DWM
-            _pattern_tickers = _DWM.get_active_tickers(db_path)
+            _pattern_tickers = _DWM.get_pattern_tickers(db_path)
         except Exception:
             _pattern_tickers = None
         _pattern = PatternAdapter(db_path=db_path, tickers=_pattern_tickers)

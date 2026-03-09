@@ -45,13 +45,13 @@ _DEFAULT_TICKERS: List[str] = [
     'STAN.L', 'IAG.L', 'PRU.L', 'EXPN.L',
     'DGE.L', 'FRES.L', 'SMT.L', 'ABDN.L', 'MNG.L',
     'IMB.L', 'SSE.L', 'SVT.L', 'SGRO.L', 'LAND.L',
-    # FTSE indices as macro proxies
+    # FTSE indices as macro proxies (yfinance/sector_rotation only — excluded from PatternAdapter)
     '^FTSE', '^FTMC',
     # UK FX
     'GBPUSD=X', 'EURGBP=X',
     # Macro proxies
     'GLD', 'TLT', 'HYG', 'SPY',
-    # US macro confirmation proxies
+    # US macro confirmation proxies (yfinance/sector_rotation only — excluded from PatternAdapter)
     '^GSPC', '^VIX',
     # US sector ETFs — required for SectorRotationAdapter to compute leaders/laggards
     'XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLC', 'XLY', 'XLP', 'XLU',
@@ -127,6 +127,16 @@ class DynamicWatchlistManager:
                 seen.add(key)
                 result.append(t)
         return result
+
+    @staticmethod
+    def get_pattern_tickers(db_path: str) -> List[str]:
+        """
+        Return tickers suitable for PatternAdapter — excludes index proxies (^)
+        and FX pairs (=X) that have no tradeable chart on TradingView.
+        """
+        all_tickers = DynamicWatchlistManager.get_active_tickers(db_path)
+        return [t for t in all_tickers
+                if not t.startswith('^') and not t.upper().endswith('=X')]
 
     @staticmethod
     def get_priority_tickers(db_path: str) -> List[str]:
