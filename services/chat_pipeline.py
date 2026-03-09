@@ -731,7 +731,7 @@ def _build_portfolio_context(user_id: Optional[str], conn) -> Optional[str]:
     try:
         holdings = ext.get_portfolio(ext.DB_PATH, user_id)
         model = ext.get_user_model(ext.DB_PATH, user_id)
-        # Always inject paper account balance if available
+        # Always inject account balance if available
         paper_balance_line = None
         try:
             from services.paper_trading import get_account as _get_paper_account
@@ -740,7 +740,7 @@ def _build_portfolio_context(user_id: Optional[str], conn) -> Optional[str]:
                 _cur = _pa.get('currency', 'GBP')
                 _sym = '£' if _cur == 'GBP' else '$'
                 paper_balance_line = (
-                    f"Paper account cash balance: {_sym}{_pa['virtual_balance']:,.2f} {_cur}"
+                    f"Account cash balance: {_sym}{_pa['virtual_balance']:,.2f} {_cur}"
                     + (f" | Account value (incl. unrealised P&L): {_sym}{_pa['account_value']:,.2f}" if _pa.get('unrealised_pnl') else '')
                     + (f" | Open positions: {_pa['open_positions']}" if _pa.get('open_positions') else '')
                     + (f" | Win rate: {_pa['win_rate_pct']}%" if _pa.get('win_rate_pct') is not None else '')

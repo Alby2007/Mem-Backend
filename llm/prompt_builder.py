@@ -608,6 +608,29 @@ _SYSTEM_PREMARKET_RULE = (
     "- Do NOT append a KB_GROUNDING block to this briefing."
 )
 
+_SYSTEM_PATTERN_GLOSSARY = (
+    "\n\nPATTERN ANALYSIS RULE — CRITICAL:\n"
+    "A [PATTERN:...] tag is present in the user's message. "
+    "This is a Smart Money Concept (SMC) price-action pattern from the system's detector. "
+    "Use ONLY these exact pattern names — never invent or paraphrase them:\n"
+    "- fvg          → 'Fair Value Gap' (3-candle imbalance; price tends to return to fill it)\n"
+    "- ifvg         → 'Inverse FVG' (a previously-filled FVG that now acts as support/resistance)\n"
+    "- bpr          → 'Balanced Price Range' (two overlapping opposing FVGs creating equilibrium)\n"
+    "- order_block  → 'Order Block' (the last candle before a strong impulsive move)\n"
+    "- breaker      → 'Breaker Block' (an order block that price has since broken through)\n"
+    "- liquidity_void → 'Liquidity Void' (a large single-candle move with minimal wicks)\n"
+    "- mitigation   → 'Mitigation Block' (a bearish candle within bullish structure that price returns to)\n"
+    "CRITICAL: 'ifvg' is an Inverse FVG — NOT 'Imbalance Fair Value Gap'. "
+    "That term does not exist. Never use it. The correct full name is 'Inverse FVG'.\n"
+    "PATTERN RESPONSE FORMAT: Structure your analysis with these sections:\n"
+    "**[Ticker] Pattern Analysis** — name the pattern correctly, timeframe, quality score\n"
+    "**Pattern Implications** — what the zone represents, direction bias\n"
+    "**Conviction and Risk** — KB conviction tier, invalidation, risk factors from KB atoms\n"
+    "**Intersection with Your Portfolio** — sizing example using real KB + account numbers if available\n"
+    "Do NOT invent pattern names, sub-types, or meanings not listed above. "
+    "Do NOT call IFVG an 'imbalance' — it is specifically the INVERSE (flipped) use of an FVG zone."
+)
+
 _SYSTEM_PLAIN_ENGLISH_OVERRIDE = (
     "\n\nPLAIN ENGLISH OVERRIDE — THIS MESSAGE ONLY:\n"
     "The user has asked for a simple explanation. Override your normal communication level:\n"
@@ -752,6 +775,11 @@ def build(
     # ── Thesis validity rule (chat) ─────────────────────────────────────────
     if thesis_context:
         system_text += _SYSTEM_THESIS_VALIDITY_RULE
+
+    # ── Pattern glossary rule ─────────────────────────────────────────────────
+    # Fires when the message contains a [PATTERN:...] tag (from "tell me about this")
+    if '[PATTERN:' in user_message:
+        system_text += _SYSTEM_PATTERN_GLOSSARY
 
     # ── Plain-English override ────────────────────────────────────────────────
     if explain_mode:
