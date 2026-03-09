@@ -685,9 +685,7 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
     )
 
     chat_id = user_prefs.get('telegram_chat_id')
-    if not chat_id:
-        _log.info('TipScheduler: user %s has no telegram_chat_id — skipping', user_id)
-        return
+    _has_telegram = bool(chat_id)
 
     tier              = user_prefs.get('tier', 'basic')
     trader_level      = user_prefs.get('trader_level') or 'developing'
@@ -813,8 +811,11 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
                 recent_alerts    = recent_alerts or None,
             )
 
-            notifier = TelegramNotifier()
-            sent = notifier.send(chat_id, message)
+            if _has_telegram:
+                notifier = TelegramNotifier()
+                sent = notifier.send(chat_id, message)
+            else:
+                sent = True  # in-app only — no Telegram needed
 
             # Auto-create watching followups for new setups
             for row, pos in pairs:
@@ -964,8 +965,11 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
                     briefing_mode       = briefing_mode,
                 )
 
-            notifier = TelegramNotifier()
-            sent = notifier.send(chat_id, message)
+            if _has_telegram:
+                notifier = TelegramNotifier()
+                sent = notifier.send(chat_id, message)
+            else:
+                sent = True
 
             log_tip_delivery(
                 db_path, user_id,
@@ -1049,10 +1053,35 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
             greeks=tip_greeks or None,
         )
 
-        notifier = TelegramNotifier()
-        sent     = notifier.send(chat_id, message)
+        if _has_telegram:
+            notifier = TelegramNotifier()
+            sent = notifier.send(chat_id, message)
+        else:
+            sent = True
 
         mark_pattern_alerted(db_path, pattern_row['id'], user_id)
+        try:
+            upsert_tip_followup(
+                db_path,
+                user_id             = user_id,
+                ticker              = sig.ticker,
+                direction           = sig.direction,
+                entry_price         = position.suggested_entry if position else None,
+                stop_loss           = position.stop_loss if position else None,
+                target_1            = position.target_1 if position else None,
+                target_2            = position.target_2 if position else None,
+                target_3            = position.target_3 if position else None,
+                pattern_type        = sig.pattern_type,
+                timeframe           = sig.timeframe,
+                zone_low            = sig.zone_low,
+                zone_high           = sig.zone_high,
+                regime_at_entry     = pattern_row.get('kb_regime'),
+                conviction_at_entry = pattern_row.get('kb_conviction'),
+                initial_status      = 'watching',
+            )
+        except Exception as _fe:
+            _log.debug('TipScheduler: followup create failed for %s: %s', sig.ticker, _fe)
+
         log_tip_delivery(
             db_path,
             user_id,
