@@ -1604,11 +1604,11 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .pm-stats-block {
   background: #09090f;
   border-top: 1px solid #1e1e2a;
-  padding: 8px 16px;
+  padding: 6px 16px;
   font-size: 11px;
   flex-shrink: 0;
 }
-.pm-stats-loading { min-height: 44px; }
+.pm-stats-loading { min-height: 0; }
 .pms-label {
   font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
   color: var(--muted); margin-bottom: 7px;
@@ -1645,20 +1645,6 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .stat-win-mid  { --wr-color: #f59e0b; }
 .stat-win-low  { --wr-color: #ef4444; }
 
-/* Pattern card grid — allow pill to sit on same line */
-.pattern-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 10px;
-}
-.pattern-card {
-  background: var(--card); border: 1px solid var(--border);
-  border-radius: 7px; padding: 14px; cursor: pointer;
-  transition: border-color .15s;
-  position: relative;
-}
-.pattern-card:hover { border-color: var(--accent); }
-
 @media (max-width: 800px) {
   .pat-modal {
     grid-template-columns: 1fr;
@@ -1667,5 +1653,4 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
     border-radius: 0;
   }
   .pm-qual { display: none; }
-  .pm-stats-block { grid-column: 1; }
 }

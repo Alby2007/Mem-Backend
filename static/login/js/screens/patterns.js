@@ -305,7 +305,7 @@ function openPatternModal(id) {
       <div class="pm-chart-placeholder" id="pm-chart-ph"><div class="spinner"></div><div class="pm-loading-text">Loading chart…</div></div>
       <iframe id="pm-iframe" src="${ifrSrc}" allowtransparency="true" frameborder="0" style="display:none;"></iframe>
       <div id="pm-zone-bar">${_buildZoneBar(p, [])}</div>
-      <div id="pm-stats-block" class="pm-stats-block pm-stats-loading"></div>
+      <div id="pm-stats-block" class="pm-stats-block" style="display:none;"></div>
     </div>
     <div class="pat-modal-right" id="pm-right">
       <div class="pat-modal-section">
@@ -370,7 +370,7 @@ async function _loadPatternStats(p) {
   const stats = await _ensurePatStats();
   const s = stats[_patStatKey(p)];
   if (!s) {
-    el.innerHTML = '<span class="pms-none">Insufficient data for this pattern type + timeframe</span>';
+    el.style.display = 'none';
     el.classList.remove('pm-stats-loading');
     return;
   }
@@ -399,6 +399,7 @@ async function _loadPatternStats(p) {
       </div>
     </div>
     <div class="pms-bar-track"><div class="pms-bar-fill ${wrCls}" style="width:${barW}%"></div></div>`;
+  el.style.display = '';
   el.classList.remove('pm-stats-loading');
 }
 
