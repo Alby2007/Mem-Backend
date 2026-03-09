@@ -169,10 +169,35 @@ async def _lifespan(app: FastAPI):
         _pos_monitor = PositionMonitor(db_path=db_path, interval_sec=300)
         _pos_monitor.start()
         app.state.position_monitor = _pos_monitor
+        ext.position_monitor = _pos_monitor
 
     except Exception as _e:
         _logger.warning('Ingest scheduler failed to start: %s', _e)
         app.state.scheduler = None
+
+    # ── Notification schedulers ────────────────────────────────────────────────
+    # Guard: skip entirely if bot token is absent — no point burning CPU on
+    # curate_snapshot() for every user when sends will silently fail anyway.
+    _tg_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    if not _tg_token:
+        _logger.warning(
+            'TELEGRAM_BOT_TOKEN not set — TipScheduler and DeliveryScheduler will NOT start. '
+            'Set the token in .env and restart to enable briefings.'
+        )
+    else:
+        try:
+            from notifications.delivery_scheduler import DeliveryScheduler
+            ext.delivery_scheduler = DeliveryScheduler(db_path=ext.DB_PATH)
+            ext.delivery_scheduler.start()
+        except Exception as _de:
+            _logger.warning('DeliveryScheduler failed to start: %s', _de)
+
+        try:
+            from notifications.tip_scheduler import TipScheduler
+            ext.tip_scheduler = TipScheduler(db_path=ext.DB_PATH)
+            ext.tip_scheduler.start()
+        except Exception as _te:
+            _logger.warning('TipScheduler failed to start: %s', _te)
 
     yield
 
@@ -188,8 +213,18 @@ async def _lifespan(app: FastAPI):
     except Exception:
         pass
     try:
-        if getattr(app.state, 'position_monitor', None):
-            app.state.position_monitor.stop()
+        if ext.position_monitor:
+            ext.position_monitor.stop()
+    except Exception:
+        pass
+    try:
+        if ext.delivery_scheduler:
+            ext.delivery_scheduler.stop()
+    except Exception:
+        pass
+    try:
+        if ext.tip_scheduler:
+            ext.tip_scheduler.stop()
     except Exception:
         pass
 
