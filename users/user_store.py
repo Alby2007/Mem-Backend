@@ -757,16 +757,34 @@ def get_open_patterns(
             params.append(timeframe)
         where = ' AND '.join(clauses)
         params.append(limit)
-        rows = conn.execute(
-            f"""SELECT id, ticker, pattern_type, direction, zone_high, zone_low,
-                       zone_size_pct, timeframe, formed_at, status, filled_at,
-                       quality_score, kb_conviction, kb_regime, kb_signal_dir,
-                       alerted_users, detected_at
-                FROM pattern_signals
-                WHERE {where}
-                ORDER BY detected_at DESC, quality_score DESC LIMIT ?""",
-            params,
-        ).fetchall()
+        if ticker:
+            # Specific ticker search — no diversity enforcement needed
+            sql = f"""SELECT id, ticker, pattern_type, direction, zone_high, zone_low,
+                             zone_size_pct, timeframe, formed_at, status, filled_at,
+                             quality_score, kb_conviction, kb_regime, kb_signal_dir,
+                             alerted_users, detected_at
+                      FROM pattern_signals
+                      WHERE {where}
+                      ORDER BY detected_at DESC, quality_score DESC LIMIT ?"""
+        else:
+            # No ticker filter — cap at 3 per ticker via window function so all
+            # tickers get representation even when a few have hundreds of patterns.
+            sql = f"""SELECT id, ticker, pattern_type, direction, zone_high, zone_low,
+                             zone_size_pct, timeframe, formed_at, status, filled_at,
+                             quality_score, kb_conviction, kb_regime, kb_signal_dir,
+                             alerted_users, detected_at
+                      FROM (
+                          SELECT *,
+                                 ROW_NUMBER() OVER (
+                                     PARTITION BY ticker
+                                     ORDER BY detected_at DESC, quality_score DESC
+                                 ) AS rn
+                          FROM pattern_signals
+                          WHERE {where}
+                      )
+                      WHERE rn <= 3
+                      ORDER BY detected_at DESC, quality_score DESC LIMIT ?"""
+        rows = conn.execute(sql, params).fetchall()
         cols = ['id', 'ticker', 'pattern_type', 'direction', 'zone_high', 'zone_low',
                 'zone_size_pct', 'timeframe', 'formed_at', 'status', 'filled_at',
                 'quality_score', 'kb_conviction', 'kb_regime', 'kb_signal_dir',
