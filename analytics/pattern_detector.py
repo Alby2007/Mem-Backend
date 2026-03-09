@@ -140,12 +140,19 @@ def _kb_scores(
     """
     Return (conviction_score, regime_score, signal_score) each 0.0 or 1.0.
     """
-    conv  = 1.0 if kb_conviction in ('high', 'strong', 'confirmed') else 0.5 if kb_conviction else 0.0
-    regime = 1.0 if kb_regime and 'risk_on' in kb_regime.lower() else 0.5 if kb_regime else 0.0
+    # When KB context is absent, use 0.5 (neutral) so pure OHLCV quality
+    # can still reach ~0.80. KB data upgrades (1.0) or downgrades (0.0) from neutral.
+    conv  = 1.0 if kb_conviction in ('high', 'strong', 'confirmed') else (
+            0.0 if kb_conviction in ('low', 'weak', 'avoid') else 0.5)
+    regime = 1.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_on', 'bullish', 'near_52w_high', 'near_high', 'mid_range')) else (
+             0.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_off', 'bearish', 'near_52w_low', 'near_low')) else 0.5)
     sig   = 1.0 if (
         (direction == 'bullish' and kb_signal_dir in ('long', 'bullish', 'buy')) or
         (direction == 'bearish' and kb_signal_dir in ('short', 'bearish', 'sell'))
-    ) else 0.0 if kb_signal_dir else 0.5
+    ) else 0.0 if (
+        (direction == 'bullish' and kb_signal_dir in ('short', 'bearish', 'sell')) or
+        (direction == 'bearish' and kb_signal_dir in ('long', 'bullish', 'buy'))
+    ) else 0.5
     return conv, regime, sig
 
 
