@@ -77,15 +77,16 @@ def _read_kb_context(conn: sqlite3.Connection, ticker: str) -> Dict[str, str]:
         rows = conn.execute(
             """SELECT predicate, object FROM facts
                WHERE LOWER(subject) = LOWER(?)
-                 AND predicate IN ('signal_confidence','signal_direction',
-                                   'market_regime','kb_conviction')
+                 AND predicate IN ('conviction_tier','signal_confidence','signal_direction',
+                                   'market_regime','kb_conviction','price_regime',
+                                   'volatility_regime')
                ORDER BY created_at DESC""",
             (ticker,),
         ).fetchall()
         for predicate, value in rows:
-            if predicate in ('signal_confidence', 'kb_conviction') and not ctx['conviction']:
+            if predicate in ('conviction_tier', 'signal_confidence', 'kb_conviction') and not ctx['conviction']:
                 ctx['conviction'] = (value or '').lower()
-            elif predicate == 'market_regime' and not ctx['regime']:
+            elif predicate in ('market_regime', 'price_regime', 'volatility_regime') and not ctx['regime']:
                 ctx['regime'] = (value or '').lower()
             elif predicate == 'signal_direction' and not ctx['signal_dir']:
                 ctx['signal_dir'] = (value or '').lower()
