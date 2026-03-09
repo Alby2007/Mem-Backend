@@ -129,13 +129,14 @@ function _setVisView(v) {
 // ── VIEW A — Bubble Map ───────────────────────────────────────────────────────
 function _renderBubble() {
   const container = document.getElementById('vis-canvas');
-  if (!container || !_visData) return;
+  if (!container || !_visData) { console.log('[VIS] _renderBubble bail: container=', !!container, '_visData=', !!_visData); return; }
   container.innerHTML = '';
 
   // clientWidth/Height can be 0 if parent is scroll-sized — fall back progressively
   const mainEl = document.getElementById('main');
   const W = container.clientWidth  || (mainEl ? mainEl.clientWidth  : 0) || (window.innerWidth  - 184);
   const H = container.clientHeight || (mainEl ? mainEl.clientHeight - 80 : 0) || (window.innerHeight - 128);
+  console.log('[VIS] _renderBubble W=', W, 'H=', H, 'tickers=', _visData?.tickers?.length, 'containerW=', container.clientWidth, 'containerH=', container.clientHeight);
 
   const tickers = _visFiltered();
   if (!tickers.length) {
