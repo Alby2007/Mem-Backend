@@ -17,8 +17,9 @@ router = APIRouter()
 
 
 @router.get("/markets/chart", response_class=HTMLResponse)
-async def markets_chart(sym: str = "AAPL", symbol: str = None):
+async def markets_chart(sym: str = "AAPL", symbol: str = None, interval: str = "D"):
     tvSym = sym if sym != "AAPL" or symbol is None else (symbol or sym)
+    tvInt = interval if interval in ("1","5","15","30","60","120","240","D","W","M") else "D"
     html = f"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
@@ -33,7 +34,7 @@ new TradingView.widget({{
   container_id: 'tv',
   autosize: true,
   symbol: '{tvSym}',
-  interval: 'D',
+  interval: '{tvInt}',
   timezone: 'Etc/UTC',
   theme: 'dark',
   style: '1',

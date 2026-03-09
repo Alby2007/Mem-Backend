@@ -250,7 +250,7 @@ function openPatternModal(id) {
 
   const tvSym  = _tvSymbol(p.ticker);
   const tvInt  = _TV_INTERVAL[p.timeframe] || 'D';
-  const ifrSrc = `https://www.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSym)}&interval=${tvInt}&theme=dark&style=1&locale=en&hide_top_toolbar=0&save_image=0&hide_legend=0`;
+  const ifrSrc = `https://api.trading-galaxy.uk/markets/chart?sym=${encodeURIComponent(tvSym)}&interval=${tvInt}`;
 
   const dirCls = (p.direction||'').toLowerCase().includes('bull') ? 'color:#22c55e' : 'color:#ef4444';
 
