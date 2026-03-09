@@ -244,6 +244,129 @@ def _build_ranked_snippet(
         return '', []
 
 
+# ── P6: Monday briefing extra sections ───────────────────────────────────────
+
+def _esc(s: str) -> str:
+    """Escape MarkdownV2 special characters."""
+    special = r'\_*[]()~`>#+-=|{}.!'
+    return ''.join('\\' + c if c in special else c for c in str(s))
+
+
+def _build_your_week_section(user_id: str, db_path: str) -> str:
+    """
+    Build the YOUR WEEK section for Monday briefings.
+    Summarises the user's trades from the past 7 days.
+    Returns a MarkdownV2-formatted string, or '' if no data.
+    """
+    try:
+        from users.user_store import get_journal_stats, get_pattern_breakdown, get_journal_closed
+        from datetime import timedelta
+
+        recent = get_journal_closed(db_path, user_id, since_days=7)
+        if not recent:
+            return ''
+
+        total  = len(recent)
+        wins   = sum(1 for t in recent if t['status'] == 'closed' and (t.get('r_multiple') or 0) > 0)
+        stops  = sum(1 for t in recent if t['status'] in ('stopped', 'expired'))
+        r_vals = [t['r_multiple'] for t in recent if t.get('r_multiple') is not None]
+        avg_r  = round(sum(r_vals) / len(r_vals), 2) if r_vals else None
+
+        # Best trade by R
+        best = max(recent, key=lambda t: t.get('r_multiple') or -99)
+        best_txt = ''
+        if best.get('r_multiple') and best['r_multiple'] > 0:
+            r = best['r_multiple']
+            best_txt = f"\nBest: {_esc(best['ticker'])} {_esc(best.get('pattern_type','').upper())} {_esc(('+' if r>=0 else '') + str(r))}R"
+
+        # Pattern of the week (most wins)
+        from collections import defaultdict as _dd
+        pat_wins  = _dd(int); pat_total = _dd(int)
+        for t in recent:
+            pt = t.get('pattern_type')
+            if pt:
+                pat_total[pt] += 1
+                if t['status'] == 'closed' and (t.get('r_multiple') or 0) > 0:
+                    pat_wins[pt] += 1
+        pow_txt = ''
+        if pat_total:
+            best_pat = max(pat_total, key=lambda p: (pat_wins[p], pat_total[p]))
+            pow_txt = f"\nPattern of the week: {_esc(best_pat.upper().replace('_',' '))} {pat_wins[best_pat]}/{pat_total[best_pat]} wins"
+
+        # Lifetime win rate
+        all_stats = get_journal_stats(db_path, user_id)
+        lifetime = f" \\(lifetime: {all_stats['win_rate']}%\\)" if all_stats.get('win_rate') is not None else ''
+        week_wr  = round(wins / total * 100) if total else 0
+        avg_r_txt = f"\nAvg R: {_esc(('+' if (avg_r or 0)>=0 else '') + str(avg_r))}R" if avg_r is not None else ''
+
+        section = (
+            f"📊 *YOUR WEEK*\n"
+            f"{_DIVIDER}\n"
+            f"{_esc(str(total))} trade{'s' if total != 1 else ''} closed · "
+            f"{_esc(str(wins))} win{'s' if wins != 1 else ''} · "
+            f"{_esc(str(stops))} stop{'s' if stops != 1 else ''}\n"
+            f"Win rate: {_esc(str(week_wr))}%{lifetime}"
+            f"{avg_r_txt}"
+            f"{best_txt}"
+            f"{pow_txt}"
+        )
+        return section
+    except Exception as e:
+        _log.debug('premarket_briefing: your_week_section failed: %s', e)
+        return ''
+
+
+def _build_kb_performance_section(db_path: str, min_samples: int = 30, max_rows: int = 4) -> str:
+    """
+    Build the KB PATTERN PERFORMANCE section for Monday briefings.
+    Shows top collective calibration hit rates from signal_calibration.
+    Returns a MarkdownV2-formatted string, or '' if no data.
+    """
+    try:
+        conn = sqlite3.connect(db_path, timeout=5)
+        rows = conn.execute(
+            """SELECT ticker, pattern_type, timeframe, market_regime,
+                      hit_rate_t1, sample_size
+               FROM signal_calibration
+               WHERE sample_size >= ?
+               ORDER BY hit_rate_t1 DESC
+               LIMIT ?""",
+            (min_samples, max_rows * 3),  # over-fetch to de-dup pattern_type
+        ).fetchall()
+        conn.close()
+
+        if not rows:
+            return ''
+
+        # De-dup: show one row per pattern_type (best regime)
+        seen_types: set = set()
+        selected = []
+        for r in rows:
+            ptype = r[1]
+            if ptype not in seen_types:
+                seen_types.add(ptype)
+                selected.append(r)
+            if len(selected) >= max_rows:
+                break
+
+        if not selected:
+            return ''
+
+        lines = [f"📈 *KB PATTERN PERFORMANCE*\n{_DIVIDER}"]
+        for _, ptype, tf, regime, hr, n in selected:
+            ptype_fmt = _esc((ptype or '').upper().replace('_', ' '))
+            tf_fmt    = _esc(tf or '')
+            regime_fmt = _esc((regime or 'all regimes').replace('_', ' '))
+            hr_pct    = _esc(str(round(hr * 100)))
+            n_fmt     = _esc(str(n))
+            lines.append(f"{ptype_fmt} {tf_fmt} \\({regime_fmt}\\): {hr_pct}% hit rate \\({n_fmt} samples\\)")
+
+        return '\n'.join(lines)
+    except Exception as e:
+        _log.debug('premarket_briefing: kb_performance_section failed: %s', e)
+        return ''
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def generate_premarket_narrative(
@@ -322,10 +445,25 @@ def generate_premarket_narrative(
         if position_list:
             parts.append(position_list)
 
+    # ── Monday-only sections (P6) ─────────────────────────────────────────────
+    # YOUR WEEK and KB PERFORMANCE are appended only on Mondays so the briefing
+    # includes a weekly review without bloating daily deliveries.
+    from datetime import datetime, timezone as _tz
+    is_monday = datetime.now(_tz.utc).weekday() == 0
+
+    if is_monday:
+        your_week = _build_your_week_section(user_id, db_path)
+        if your_week:
+            parts.append(your_week)
+
+        kb_perf = _build_kb_performance_section(db_path)
+        if kb_perf:
+            parts.append(kb_perf)
+
     result = '\n\n'.join(parts)
     _log.info(
-        'premarket_briefing: generated for user %s (%d positions, %d atoms, %d words)',
+        'premarket_briefing: generated for user %s (%d positions, %d atoms, %d words, monday=%s)',
         user_id, len(open_positions), len(ranked_atoms),
-        len(result.split()),
+        len(result.split()), is_monday,
     )
     return result
