@@ -1425,7 +1425,7 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .vis-pill.active { border-color: #f59e0b66; color: #f59e0b; background: rgba(245,158,11,.1); }
 .vis-pill:hover:not(.active) { border-color: var(--muted); color: var(--text); }
 .vis-searchbox { font-size: 11px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); width: 120px; }
-.vis-canvas { flex: 1; overflow: hidden; position: relative; }
+.vis-canvas { flex: 1; overflow: hidden; position: relative; min-height: 300px; }
 .vis-canvas svg { display: block; }
 .vis-footer { flex-shrink: 0; display: flex; justify-content: flex-end; padding: 4px 0; }
 .vis-last-updated { font-size: 9px; color: var(--muted); font-family: var(--mono); }

@@ -119,8 +119,10 @@ function _renderBubble() {
   if (!container || !_visData) return;
   container.innerHTML = '';
 
-  const W = container.clientWidth  || 900;
-  const H = container.clientHeight || 560;
+  // clientWidth/Height can be 0 if parent is scroll-sized — fall back to #main dimensions
+  const mainEl = document.getElementById('main');
+  const W = container.clientWidth  || (mainEl ? mainEl.clientWidth  : 900);
+  const H = container.clientHeight || (mainEl ? mainEl.clientHeight - 80 : 560);
 
   const tickers = _visFiltered();
   if (!tickers.length) {

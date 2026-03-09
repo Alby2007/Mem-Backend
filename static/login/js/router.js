@@ -52,6 +52,7 @@ function showScreen(name) {
   if (name === 'tips')      { loadTipsHistory(); loadTipsAccountValue(); loadTipConfig(); }
   if (name === 'portfolio') { loadPortfolioModel(); loadPortfolioHoldings(); loadTickerList(); loadSimBannerIfSet(); }
   if (name === 'markets')    initMarketsScreen();
+  if (main) main.style.overflow = (name === 'visualiser') ? 'hidden' : '';
   if (name === 'visualiser') loadVisualiser();
   if (name === 'paper')     loadPaperTrader();
   if (name === 'login')         { _injectAuthTgWidget(); _loadLoginStats(); }
