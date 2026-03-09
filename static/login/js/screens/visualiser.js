@@ -75,8 +75,8 @@ async function loadVisualiser() {
     // We'll pass the sector filter through a sector-specific approach after load
   }
 
-  // Treat a cached empty/invalid object as no data — retry
-  if (_visData && !_visData.tickers) _visData = null;
+  // Always reset stale/invalid cache
+  if (!_visData || !_visData.tickers) _visData = null;
 
   if (!_visData) {
     container.innerHTML = '<div style="color:var(--muted);padding:40px;text-align:center;"><div class="spinner"></div><div style="margin-top:12px;font-size:12px;">Loading KB data…</div></div>';
