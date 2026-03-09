@@ -751,12 +751,14 @@ def _ai_run_inner(user_id: str) -> dict:
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA busy_timeout=30000')
         conn.row_factory = sqlite3.Row
-        conn.execute('BEGIN IMMEDIATE')
 
+        # Phase 1: reads + LLM decisions happen WITHOUT a write lock so that
+        # sector_rotation and PatternAdapter can write concurrently.
         conn.execute(
             "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,100000.0,'GBP',?)",
             (user_id, now_iso)
         )
+        conn.execute('COMMIT')
 
         open_rows = conn.execute(
             "SELECT ticker FROM paper_positions WHERE user_id=? AND status='open'", (user_id,)
@@ -809,13 +811,13 @@ def _ai_run_inner(user_id: str) -> dict:
         entries = 0
         skips = 0
 
+        conn.execute('BEGIN IMMEDIATE')
         conn.execute(
             "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
             (user_id, 'scan_start', None,
              f'Scanning open patterns for {user_id} ({len(open_tickers)}/{_PAPER_MAX_OPEN_POSITIONS} slots used, {len(cooled_tickers)} on 24h cooldown)', now_iso)
         )
         conn.execute('COMMIT')
-        conn.execute('BEGIN')
 
         candidate_rows = conn.execute(
             """SELECT p.id, p.ticker, p.pattern_type, p.direction, p.zone_high, p.zone_low,
@@ -969,8 +971,8 @@ def _ai_run_inner(user_id: str) -> dict:
                 continue
 
             if action == 'ENTER' and risk > 0:
-                # Re-read open slot count from DB (within our BEGIN IMMEDIATE txn) to prevent
-                # stale-read race when two scan paths fire close together.
+                # Re-read open slot count from DB to prevent stale-read race
+                # when two scan paths fire close together.
                 _cur_open = conn.execute(
                     "SELECT COUNT(*) FROM paper_positions WHERE user_id=? AND status='open'", (user_id,)
                 ).fetchone()[0]
@@ -1053,7 +1055,6 @@ def _ai_run_inner(user_id: str) -> dict:
             )
         except Exception as _eq_e:
             _logger.warning('equity log write failed for %s: %s', user_id, _eq_e)
-        conn.execute('COMMIT')
         conn.close()
 
         # Issue 3 fix: run monitor again after entries so any positions that gap through
