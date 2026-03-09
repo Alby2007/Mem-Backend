@@ -17,9 +17,146 @@ router = APIRouter()
 
 
 @router.get("/markets/chart", response_class=HTMLResponse)
-async def markets_chart(sym: str = "AAPL", symbol: str = None, interval: str = "D"):
+async def markets_chart(
+    sym: str = "AAPL", symbol: str = None, interval: str = "D",
+    zone_high: str = None, zone_low: str = None,
+    pattern_type: str = None, direction: str = None,
+):
     tvSym = sym if sym != "AAPL" or symbol is None else (symbol or sym)
     tvInt = interval if interval in ("1","5","15","30","60","120","240","D","W","M") else "D"
+
+    # Zone overlay — only if both prices provided
+    try:
+        zh = float(zone_high) if zone_high else None
+        zl = float(zone_low)  if zone_low  else None
+    except (TypeError, ValueError):
+        zh = zl = None
+
+    has_zone   = zh is not None and zl is not None
+    zone_js    = f"const ZONE_HIGH={zh}, ZONE_LOW={zl};" if has_zone else "const ZONE_HIGH=null, ZONE_LOW=null;"
+    pat_label  = (pattern_type or "").replace("_", " ").upper() or "ZONE"
+    dir_colour = "#22c55e" if (direction or "").lower().startswith("bull") else ("#ef4444" if (direction or "").lower().startswith("bear") else "#f59e0b")
+
+    zone_overlay_html = ""
+    if has_zone:
+        zone_overlay_html = f"""
+<canvas id="ov" style="position:fixed;top:0;left:0;pointer-events:none;z-index:10;"></canvas>
+<button id="ov-toggle" title="Toggle zone overlay" style="
+  position:fixed;bottom:12px;right:12px;z-index:20;
+  background:#1a1a2a;border:1px solid #f59e0b44;color:#f59e0b;
+  font-size:10px;font-family:monospace;padding:4px 10px;border-radius:4px;
+  cursor:pointer;opacity:0.85;letter-spacing:0.05em;">
+  ◈ ZONE ON
+</button>"""
+
+    zone_script = f"""
+{zone_js}
+const PAT_LABEL  = {repr(pat_label)};
+const DIR_COLOUR = {repr(dir_colour)};
+
+let zoneVisible = true;
+let tvFrame     = null;   // TradingView iframe element
+let priceMin    = null, priceMax = null, chartTop = 0, chartBottom = 0;
+
+const canvas   = document.getElementById('ov');
+const toggleBtn = document.getElementById('ov-toggle');
+
+function drawOverlay() {{
+  if (!canvas || ZONE_HIGH === null || !zoneVisible) {{
+    if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    return;
+  }}
+  if (priceMin === null || priceMax === null) return;
+
+  const W = window.innerWidth, H = window.innerHeight;
+  canvas.width  = W;
+  canvas.height = H;
+
+  const priceRange = priceMax - priceMin;
+  if (priceRange <= 0) return;
+
+  // Map price to Y pixel (price axis: top=high, bottom=low)
+  const pxRange = chartBottom - chartTop;
+  function priceToY(p) {{
+    return chartTop + (1 - (p - priceMin) / priceRange) * pxRange;
+  }}
+
+  const yHigh = priceToY(ZONE_HIGH);
+  const yLow  = priceToY(ZONE_LOW);
+  const ctx   = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  // Amber zone band
+  ctx.fillStyle = 'rgba(245,158,11,0.13)';
+  ctx.fillRect(0, yHigh, W, yLow - yHigh);
+
+  // Top/bottom borders
+  ctx.strokeStyle = DIR_COLOUR + 'aa';
+  ctx.lineWidth   = 1;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath(); ctx.moveTo(0, yHigh); ctx.lineTo(W, yHigh); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, yLow);  ctx.lineTo(W, yLow);  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Label
+  ctx.fillStyle    = DIR_COLOUR;
+  ctx.font         = '9px monospace';
+  ctx.letterSpacing = '0.06em';
+  ctx.fillText(PAT_LABEL, 8, yHigh - 4);
+}}
+
+if (toggleBtn) {{
+  toggleBtn.addEventListener('click', () => {{
+    zoneVisible = !zoneVisible;
+    toggleBtn.textContent = zoneVisible ? '◈ ZONE ON' : '◈ ZONE OFF';
+    toggleBtn.style.opacity = zoneVisible ? '0.85' : '0.45';
+    drawOverlay();
+  }});
+}}
+
+// Poll TradingView's iframe for its visible price range via postMessage
+function requestPriceRange() {{
+  const frames = document.querySelectorAll('iframe');
+  frames.forEach(f => {{
+    try {{ f.contentWindow.postMessage({{name: 'tv-widget-range'}}, '*'); }} catch(e) {{}}
+  }});
+}}
+
+window.addEventListener('message', e => {{
+  if (!e.data) return;
+  // TradingView emits range info as {{ priceRange: {{high, low}}, timeRange: ... }}
+  const d = e.data;
+  if (d.name === 'quoteData' || d.name === 'price-scale-changed') return; // ignore noise
+  if (d.priceRange && d.priceRange.high != null) {{
+    priceMax = d.priceRange.high;
+    priceMin = d.priceRange.low;
+    const r = document.getElementById('tv')?.getBoundingClientRect();
+    if (r) {{ chartTop = r.top; chartBottom = r.bottom; }}
+    drawOverlay();
+  }}
+}});
+
+// Fallback: estimate price range from the zone itself (±40% padding)
+// so the overlay shows immediately even without TV postMessage
+setTimeout(() => {{
+  if (priceMin === null && ZONE_HIGH !== null) {{
+    const mid  = (ZONE_HIGH + ZONE_LOW) / 2;
+    const span = Math.max(ZONE_HIGH - ZONE_LOW, mid * 0.05);
+    priceMin   = ZONE_LOW  - span * 3;
+    priceMax   = ZONE_HIGH + span * 3;
+    const el   = document.getElementById('tv');
+    if (el) {{
+      const r = el.getBoundingClientRect();
+      chartTop    = r.top    + 40;   // approx toolbar height
+      chartBottom = r.bottom - 20;   // approx scale padding
+    }}
+    drawOverlay();
+  }}
+}}, 2500);
+
+window.addEventListener('resize', drawOverlay);
+"""
+
     html = f"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
@@ -28,6 +165,7 @@ async def markets_chart(sym: str = "AAPL", symbol: str = None, interval: str = "
 <style>body{{margin:0;overflow:hidden}}#tv{{width:100vw;height:100vh}}</style>
 </head><body>
 <div id="tv"></div>
+{zone_overlay_html}
 <script src="https://s3.tradingview.com/tv.js"></script>
 <script>
 new TradingView.widget({{
@@ -46,6 +184,7 @@ new TradingView.widget({{
   save_image: false,
 }});
 </script>
+{"<script>" + zone_script + "</script>" if has_zone else ""}
 </body></html>"""
     from fastapi.responses import HTMLResponse as _HR
     return _HR(
