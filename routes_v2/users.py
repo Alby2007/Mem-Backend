@@ -1254,3 +1254,62 @@ async def notify_test(data: NotifyTestRequest):
         return {"sent": sent}
     except Exception as e:
         raise HTTPException(500, detail=str(e))
+
+
+@router.post("/users/{user_id}/notify/test-briefing")
+async def notify_test_briefing(
+    user_id: str,
+    request: Request,
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Force a full Monday-style briefing delivery for the authenticated user,
+    bypassing delivery_time / day-of-week checks.
+    Used for end-to-end verification that the full tip→followup→alert loop works.
+    """
+    user_path_auth(current_user, user_id)
+    if not ext.HAS_PRODUCT_LAYER:
+        raise HTTPException(503, detail="product layer not available")
+
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        row = conn.execute(
+            """SELECT telegram_chat_id, tier, tip_delivery_timezone,
+                      tip_timeframes, tip_pattern_types, tip_markets,
+                      account_size, max_risk_per_trade_pct, account_currency,
+                      trader_level
+               FROM user_preferences WHERE user_id = ?""",
+            (user_id,),
+        ).fetchone()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(500, detail=f"DB error: {e}")
+
+    if not row:
+        raise HTTPException(404, detail="user not found")
+
+    chat_id = row[0]
+    if not chat_id:
+        raise HTTPException(400, detail="user has no telegram_chat_id — link Telegram first")
+
+    import json as _json
+    prefs = {
+        "user_id":               user_id,
+        "telegram_chat_id":      chat_id,
+        "tier":                  row[1] or "basic",
+        "tip_delivery_timezone": row[2] or "UTC",
+        "tip_timeframes":        _json.loads(row[3]) if row[3] else None,
+        "tip_pattern_types":     _json.loads(row[4]) if row[4] else None,
+        "tip_markets":           _json.loads(row[5]) if row[5] else None,
+        "account_size":          row[6],
+        "max_risk_per_trade_pct": row[7],
+        "account_currency":      row[8] or "GBP",
+        "trader_level":          row[9] or "developing",
+    }
+
+    try:
+        from notifications.tip_scheduler import _deliver_tip_to_user
+        _deliver_tip_to_user(ext.DB_PATH, user_id, prefs, weekday="monday")
+        return {"sent": True, "chat_id": chat_id, "mode": "monday_briefing"}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
