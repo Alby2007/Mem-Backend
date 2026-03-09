@@ -44,7 +44,7 @@ print(json.dumps(diag, indent=2))
 # ── Run enrichment to populate conviction_tier, signal_quality atoms ─────────
 print('\n=== RUNNING SignalEnrichmentAdapter ===')
 try:
-    from knowledge.graph import KnowledgeGraph
+    from knowledge import KnowledgeGraph
     from ingest.signal_enrichment_adapter import SignalEnrichmentAdapter
     kg = KnowledgeGraph(db_path=db)
     sea = SignalEnrichmentAdapter(db_path=db)
