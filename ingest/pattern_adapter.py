@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import asdict
+from datetime import datetime, timezone
 from ingest.base import BaseIngestAdapter, RawAtom, db_connect
 from typing import Dict, List, Optional
 
