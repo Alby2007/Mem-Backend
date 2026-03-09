@@ -333,13 +333,65 @@ class YFinanceAdapter(BaseIngestAdapter):
         PRIMARY KEY (ticker, interval, ts)
     )"""
 
+    # Browser-like headers for direct Yahoo chart API calls.
+    # /v8/finance/chart/ is NOT rate-limited like yf.download() on OCI IPs.
+    _CHART_HEADERS = {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/122.0.0.0 Safari/537.36'
+        ),
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://finance.yahoo.com',
+    }
+
+    def _fetch_chart_candles(self, sym: str, session) -> list:
+        """Fetch 6mo daily candles via Yahoo chart API. Returns list of
+        (ts_iso, open, high, low, close, volume) or empty list on error."""
+        import requests as _req
+        url = f'https://query1.finance.yahoo.com/v8/finance/chart/{sym}'
+        params = {'range': '6mo', 'interval': '1d', 'includeAdjustedClose': 'true'}
+        try:
+            r = session.get(url, params=params, headers=self._CHART_HEADERS, timeout=15)
+            if r.status_code == 429:
+                return '429'  # type: ignore[return-value]
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            result = data.get('chart', {}).get('result', [])
+            if not result:
+                return []
+            res = result[0]
+            timestamps = res.get('timestamp', [])
+            q = res.get('indicators', {}).get('quote', [{}])[0]
+            adj = res.get('indicators', {}).get('adjclose', [{}])
+            closes = (adj[0].get('adjclose') if adj else None) or q.get('close', [])
+            opens = q.get('open', []); highs = q.get('high', [])
+            lows  = q.get('low',  []); vols  = q.get('volume', [])
+            rows = []
+            for i, ts in enumerate(timestamps):
+                try:
+                    o = opens[i]; h = highs[i]; l = lows[i]; c = closes[i]
+                    if o is None or h is None or l is None or c is None:
+                        continue
+                    v = vols[i] if vols and i < len(vols) else 0
+                    ts_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+                    rows.append((ts_iso, float(o), float(h), float(l), float(c), float(v or 0)))
+                except Exception:
+                    continue
+            return rows
+        except Exception as e:
+            self._logger.debug('chart API fetch failed for %s: %s', sym, e)
+            return []
+
     def _cache_ohlcv_candles(self) -> None:
-        """Fetch 180d of daily candles for each ticker via Ticker.history()
-        (per-ticker REST, not bulk download — works on OCI rate-limited IPs)
-        and store in ohlcv_cache. Runs sequentially with a small delay to
-        stay under Yahoo's per-IP burst limit."""
+        """Fetch 180d of daily candles for each ticker via Yahoo chart API
+        (direct HTTP, not yfinance bulk download — not rate-limited on OCI IPs)
+        and store in ohlcv_cache table for use by PatternAdapter."""
         import sqlite3 as _sq
         import time as _time
+        import requests as _req
 
         try:
             conn = _sq.connect(self._db_path, timeout=15)
@@ -352,48 +404,29 @@ class YFinanceAdapter(BaseIngestAdapter):
         now_iso = datetime.now(timezone.utc).isoformat()
         cached = 0
         active_tickers = [t for t in self.tickers if t.upper() not in self._delisted_cache]
+        session = _req.Session()
 
         for sym in active_tickers:
+            _time.sleep(0.35)  # throttle — 0.35s between tickers
+            rows = self._fetch_chart_candles(sym, session)
+            if rows == '429':
+                self._logger.warning('ohlcv_cache: Yahoo chart API rate-limited at %s — stopping', sym)
+                break
+            if not rows:
+                continue
+            db_rows = [(sym, '1d', ts, o, h, l, c, v, now_iso)
+                       for ts, o, h, l, c, v in rows]
             try:
-                _time.sleep(0.4)  # throttle — 0.4s between tickers
-                hist = yf.Ticker(sym).history(period='180d', interval='1d', auto_adjust=True)
-                if hist is None or hist.empty:
-                    continue
-                rows = []
-                for ts, row in hist.iterrows():
-                    try:
-                        def _s(v):
-                            try:
-                                return float(v.iloc[0]) if hasattr(v, 'iloc') else float(v)
-                            except Exception:
-                                return None
-                        rows.append((
-                            sym, '1d', ts.isoformat(),
-                            _s(row['Open']), _s(row['High']),
-                            _s(row['Low']), _s(row['Close']),
-                            _s(row.get('Volume', 0) or 0),
-                            now_iso,
-                        ))
-                    except Exception:
-                        continue
-                if rows:
-                    conn.executemany(
-                        """INSERT OR REPLACE INTO ohlcv_cache
-                           (ticker, interval, ts, open, high, low, close, volume, cached_at)
-                           VALUES (?,?,?,?,?,?,?,?,?)""",
-                        rows,
-                    )
-                    conn.commit()
-                    cached += 1
+                conn.executemany(
+                    """INSERT OR REPLACE INTO ohlcv_cache
+                       (ticker, interval, ts, open, high, low, close, volume, cached_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                    db_rows,
+                )
+                conn.commit()
+                cached += 1
             except Exception as e:
-                err = str(e).lower()
-                if 'delist' in err or '404' in err:
-                    self._mark_delisted(sym, self._db_path)
-                elif '429' in err or 'rate' in err or 'too many' in err:
-                    self._logger.warning('ohlcv_cache rate-limited at %s — stopping cache fill', sym)
-                    break
-                else:
-                    self._logger.debug('ohlcv_cache fetch failed for %s: %s', sym, e)
+                self._logger.debug('ohlcv_cache write failed for %s: %s', sym, e)
 
         conn.close()
         self._logger.info('ohlcv_cache: cached daily candles for %d/%d tickers', cached, len(active_tickers))
