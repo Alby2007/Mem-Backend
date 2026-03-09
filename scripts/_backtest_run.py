@@ -41,7 +41,23 @@ conn.close()
 print('=== DIAGNOSTICS ===')
 print(json.dumps(diag, indent=2))
 
-# ── Run enrichment to populate conviction_tier, signal_quality atoms ─────────
+# ── Step 1: YFinanceAdapter — populates return_1m, return_1w, return_3m etc. ─
+print('\n=== RUNNING YFinanceAdapter ===')
+try:
+    from knowledge import KnowledgeGraph
+    kg = KnowledgeGraph(db_path=db)
+    from ingest.yfinance_adapter import YFinanceAdapter
+    yf = YFinanceAdapter(db_path=db)
+    yf_atoms = yf.run()
+    print('yfinance atoms generated:', len(yf_atoms) if yf_atoms else 0)
+    yf_res = yf.push(yf_atoms, kg)
+    print('yfinance push result:', yf_res)
+except Exception as e:
+    import traceback
+    print('yfinance error:', e)
+    traceback.print_exc()
+
+# ── Step 2: SignalEnrichmentAdapter — conviction_tier, signal_quality ──────────
 print('\n=== RUNNING SignalEnrichmentAdapter ===')
 try:
     from knowledge import KnowledgeGraph
@@ -49,9 +65,9 @@ try:
     kg = KnowledgeGraph(db_path=db)
     sea = SignalEnrichmentAdapter(db_path=db)
     atoms = sea.run()
-    print('atoms generated:', len(atoms) if atoms else 0)
+    print('enrichment atoms generated:', len(atoms) if atoms else 0)
     result = sea.push(atoms, kg)
-    print('push result:', result)
+    print('enrichment push result:', result)
 except Exception as e:
     import traceback
     print('enrichment error:', e)
