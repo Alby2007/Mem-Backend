@@ -61,7 +61,7 @@ function _visFiltered() {
 }
 
 // ── Load + entry point ────────────────────────────────────────────────────────
-async function loadVisualiser() {
+window.loadVisualiser = async function loadVisualiser() {
   _visWireEvents();
   const container = document.getElementById('vis-canvas');
   if (!container) return;
