@@ -4,6 +4,7 @@ let _visView      = 'bubble';
 let _visFilter    = '';   // 'bullish' | 'bearish' | 'neutral' | ''
 let _visSearch    = '';
 let _visSimActive = false;
+let _visRendering = false;
 
 // ── Sector normalisation (mirrors backend) ────────────────────────────────────
 const _VIS_SECTOR_NORM = {
@@ -101,12 +102,18 @@ window.loadVisualiser = async function loadVisualiser() {
     luEl.textContent = 'Updated: ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   }
 
-  if (window._visPrefilterSector) {
-    _setVisView('heatmap');
-    window._visPrefilterSector = null;
-  } else {
-    _setVisView(_visView);
-  }
+  // Use rAF so .active class layout is computed before D3 reads clientWidth
+  if (_visRendering) return;
+  _visRendering = true;
+  requestAnimationFrame(() => {
+    _visRendering = false;
+    if (window._visPrefilterSector) {
+      _setVisView('heatmap');
+      window._visPrefilterSector = null;
+    } else {
+      _setVisView(_visView);
+    }
+  });
 }
 
 function _setVisView(v) {
