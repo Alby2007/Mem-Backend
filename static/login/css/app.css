@@ -1600,9 +1600,8 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .pat-stat-pill.stat-win-low  { color: #ef4444; border-color: #ef444444; background: rgba(239,68,68,.08); }
 .psp-n { color: inherit; opacity: 0.55; }
 
-/* Modal stats block — spans chart column, sits below zone bar */
+/* Modal stats block — flex child inside pat-modal-chart, sits below zone bar */
 .pm-stats-block {
-  grid-column: 1;
   background: #09090f;
   border-top: 1px solid #1e1e2a;
   padding: 8px 16px;

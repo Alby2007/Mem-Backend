@@ -305,8 +305,8 @@ function openPatternModal(id) {
       <div class="pm-chart-placeholder" id="pm-chart-ph"><div class="spinner"></div><div class="pm-loading-text">Loading chart…</div></div>
       <iframe id="pm-iframe" src="${ifrSrc}" allowtransparency="true" frameborder="0" style="display:none;"></iframe>
       <div id="pm-zone-bar">${_buildZoneBar(p, [])}</div>
+      <div id="pm-stats-block" class="pm-stats-block pm-stats-loading"></div>
     </div>
-    <div id="pm-stats-block" class="pm-stats-block pm-stats-loading"></div>
     <div class="pat-modal-right" id="pm-right">
       <div class="pat-modal-section">
         <div class="pat-modal-section-title">Pattern Details</div>
