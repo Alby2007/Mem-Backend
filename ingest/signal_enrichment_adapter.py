@@ -417,16 +417,40 @@ def _compute_position_sizing_atoms(
         ct_rule += '+U2_sector_tailwind_insider'
 
     # ── Calibration-adjusted conviction (P2) ─────────────────────────────────
-    # If signal_calibration has ≥10 samples for this ticker/pattern/timeframe,
-    # apply a hit-rate multiplier to boost or penalise the conviction tier.
-    # Tier cannot be pushed below 'avoid' or above 'high'.
-    # Only applies to non-avoid tiers (conflicted/weak signals stay penalised).
+    # Uses a continuous log-ratio score to avoid sudden tier flips at small
+    # sample sizes.
+    #
+    # METHOD
+    # ------
+    # score = log(hit_rate / baseline)          ← signed; baseline = 0.50
+    #
+    # The score accumulates on a running scale [-∞, +∞] but is clamped to
+    # [-1.0, +1.0] to cap leverage.  Tier promotion only happens when the
+    # score crosses ±_CAL_THRESHOLD, and the magnitude of |score| governs
+    # whether we move 0 or 1 tier (never more than 1 step per signal, even
+    # with extreme hit-rates).
+    #
+    # Sample-size confidence weighting:
+    #   weight = 1 - exp(-n / 30)
+    # → approaches 1.0 asymptotically; at n=10 weight≈0.28, at n=30 weight≈0.63,
+    #   at n=100 weight≈0.96.  This prevents a lucky 10-sample run of hits from
+    #   claiming the same confidence as a 200-sample history.
+    #
+    # Thresholds:
+    #   weighted_score ≥ +_CAL_THRESHOLD  → upgrade tier by 1
+    #   weighted_score ≤ -_CAL_THRESHOLD  → downgrade tier by 1 (floor: avoid)
+    #   |weighted_score| < _CAL_THRESHOLD → no tier change, just label for LLM
+    #
+    # Constants
+    _CAL_BASELINE  = 0.50   # expected hit-rate with no calibration data
+    _CAL_THRESHOLD = 0.30   # |weighted_score| needed to shift a tier
+    _CAL_TIER_ORDER = ['avoid', 'low', 'medium', 'high']
+
     _cal_boost_label = ''
     if tier not in ('avoid',) and db_path:
         try:
             from analytics.signal_calibration import get_calibration as _get_cal
-            # Use regime-agnostic lookup (None) — broadest sample for calibration
-            # pattern_type mapped from signal_quality: strong/confirmed → fvg as default
+            import math as _math
             _cal = _get_cal(
                 ticker        = ticker,
                 pattern_type  = 'fvg',
@@ -438,29 +462,36 @@ def _compute_position_sizing_atoms(
             _cal = None
 
         if _cal is not None and _cal.sample_size >= 10 and _cal.hit_rate_t1 is not None:
-            hr = _cal.hit_rate_t1
-            _TIER_ORDER_CAL = ['avoid', 'low', 'medium', 'high']
-            idx = _TIER_ORDER_CAL.index(tier) if tier in _TIER_ORDER_CAL else 1
-            if hr >= 0.70:
-                # Strong historical performer — upgrade if not already high
+            hr = max(0.01, min(0.99, _cal.hit_rate_t1))   # clamp to avoid log(0)
+            n  = _cal.sample_size
+
+            # Raw log-ratio score (positive = outperforms baseline)
+            raw_score = _math.log(hr / _CAL_BASELINE)
+
+            # Clamp to [-1, +1] — no single signal can claim infinite leverage
+            raw_score = max(-1.0, min(1.0, raw_score))
+
+            # Sample-size confidence weight: approaches 1 as n → ∞
+            weight = 1.0 - _math.exp(-n / 30.0)
+
+            weighted_score = raw_score * weight
+
+            idx = _CAL_TIER_ORDER.index(tier) if tier in _CAL_TIER_ORDER else 1
+
+            if weighted_score >= _CAL_THRESHOLD:
                 if idx < 3:
-                    tier = _TIER_ORDER_CAL[idx + 1]
-                    _cal_boost_label = f'cal_boost_{hr:.2f}'
-            elif hr >= 0.55:
-                # Moderate boost — no tier change, just record
-                _cal_boost_label = f'cal_moderate_{hr:.2f}'
-            elif hr < 0.30:
-                # Poor historical performer — downgrade if above avoid
+                    tier = _CAL_TIER_ORDER[idx + 1]
+                _cal_boost_label = f'cal_boost_lr{weighted_score:+.2f}_hr{hr:.2f}_n{n}'
+            elif weighted_score <= -_CAL_THRESHOLD:
                 if idx > 0:
-                    tier = _TIER_ORDER_CAL[idx - 1]
-                    _cal_boost_label = f'cal_penalise_{hr:.2f}'
-            elif hr < 0.45:
-                # Mild penalise
-                if idx > 1:
-                    tier = _TIER_ORDER_CAL[idx - 1]
-                    _cal_boost_label = f'cal_mild_penalise_{hr:.2f}'
-        if _cal_boost_label:
-            ct_rule += f'+{_cal_boost_label}'
+                    tier = _CAL_TIER_ORDER[idx - 1]
+                _cal_boost_label = f'cal_penalise_lr{weighted_score:+.2f}_hr{hr:.2f}_n{n}'
+            else:
+                # Score present but below threshold — label only, no tier shift
+                _cal_boost_label = f'cal_watch_lr{weighted_score:+.2f}_hr{hr:.2f}_n{n}'
+
+    if _cal_boost_label:
+        ct_rule += f'+{_cal_boost_label}'
 
     # ── Macro event risk position reduction ───────────────────────────────────
     # If FOMC/CPI/NFP within 3 days, reduce position size by 30% (size adjusted below)
