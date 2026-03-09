@@ -1432,7 +1432,7 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                 short_squeeze=preds.get('short_squeeze_potential', ''),
                 macro_event_risk=market_atoms.get('macro_event_risk', ''),
                 sector_tailwind=preds.get('sector_tailwind', ''),
-                db_path=kg_db_path,
+                db_path=self._db_path,
             )
             atoms.extend(pos_atoms)
 
