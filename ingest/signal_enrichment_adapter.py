@@ -417,39 +417,58 @@ def _compute_position_sizing_atoms(
         ct_rule += '+U2_sector_tailwind_insider'
 
     # ── Calibration-adjusted conviction (P2) ─────────────────────────────────
-    # Uses a continuous log-ratio score to avoid sudden tier flips at small
-    # sample sizes.
+    # Uses a continuous log-ratio score against a *dynamic* pattern-level
+    # baseline, with Bayesian prior smoothing to stabilise early samples.
     #
-    # METHOD
-    # ------
-    # score = log(hit_rate / baseline)          ← signed; baseline = 0.50
+    # STEP 1 — Bayesian smoothing of the raw hit rate
+    # ------------------------------------------------
+    # adjusted_hr = (wins + prior_wins) / (n + prior_total)
     #
-    # The score accumulates on a running scale [-∞, +∞] but is clamped to
-    # [-1.0, +1.0] to cap leverage.  Tier promotion only happens when the
-    # score crosses ±_CAL_THRESHOLD, and the magnitude of |score| governs
-    # whether we move 0 or 1 tier (never more than 1 step per signal, even
-    # with extreme hit-rates).
+    # Prior encodes the global pattern baseline so early samples are pulled
+    # toward the population mean rather than 0 or 1:
+    #   prior_total = 10   (equivalent to 10 phantom observations)
+    #   prior_wins  = baseline * prior_total
     #
-    # Sample-size confidence weighting:
-    #   weight = 1 - exp(-n / 30)
-    # → approaches 1.0 asymptotically; at n=10 weight≈0.28, at n=30 weight≈0.63,
-    #   at n=100 weight≈0.96.  This prevents a lucky 10-sample run of hits from
-    #   claiming the same confidence as a 200-sample history.
+    # Effect: n=2, wins=2 (raw hr=1.0) → adjusted_hr ≈ baseline, not 1.0.
+    # Effect: n=200, wins=140 (raw hr=0.70) → adjusted_hr ≈ 0.698 (barely moved).
     #
-    # Thresholds:
-    #   weighted_score ≥ +_CAL_THRESHOLD  → upgrade tier by 1
-    #   weighted_score ≤ -_CAL_THRESHOLD  → downgrade tier by 1 (floor: avoid)
-    #   |weighted_score| < _CAL_THRESHOLD → no tier change, just label for LLM
+    # STEP 2 — Dynamic baseline
+    # -------------------------
+    # baseline = get_global_baseline(pattern_type, timeframe)
+    #          = sample-weighted mean hit_rate_t1 across ALL tickers (≥30 samples each)
+    # Falls back to 0.50 when the calibration table is still sparse.
+    #
+    # STEP 3 — Log-ratio score
+    # ------------------------
+    # raw_score = log(adjusted_hr / baseline)   positive = outperforms baseline
+    # clamped to [-1.0, +1.0] to cap leverage
+    #
+    # STEP 4 — Sample-size confidence weight
+    # ---------------------------------------
+    # weight = 1 - exp(-n / 30)
+    # → n=10: 0.28 · n=30: 0.63 · n=100: 0.96
+    # Prevents a 10-sample run from claiming the same confidence as 200 samples.
+    #
+    # STEP 5 — Tier decision (threshold gate)
+    # ----------------------------------------
+    # weighted_score = raw_score × weight
+    #   ≥ +_CAL_THRESHOLD  → upgrade tier by 1   (max: high)
+    #   ≤ -_CAL_THRESHOLD  → downgrade tier by 1 (min: avoid)
+    #   |score| < threshold → label only, no shift (surfaced in ct_rule for LLM)
     #
     # Constants
-    _CAL_BASELINE  = 0.50   # expected hit-rate with no calibration data
-    _CAL_THRESHOLD = 0.30   # |weighted_score| needed to shift a tier
-    _CAL_TIER_ORDER = ['avoid', 'low', 'medium', 'high']
+    _CAL_PRIOR_TOTAL = 10     # phantom sample count for Bayesian smoothing
+    _CAL_FALLBACK    = 0.50   # used when global baseline unavailable
+    _CAL_THRESHOLD   = 0.30   # |weighted_score| needed to shift a tier
+    _CAL_TIER_ORDER  = ['avoid', 'low', 'medium', 'high']
 
     _cal_boost_label = ''
     if tier not in ('avoid',) and db_path:
         try:
-            from analytics.signal_calibration import get_calibration as _get_cal
+            from analytics.signal_calibration import (
+                get_calibration as _get_cal,
+                get_global_baseline as _get_baseline,
+            )
             import math as _math
             _cal = _get_cal(
                 ticker        = ticker,
@@ -458,20 +477,28 @@ def _compute_position_sizing_atoms(
                 db_path       = db_path,
                 market_regime = None,
             )
+            _baseline = _get_baseline('fvg', '1d', db_path) or _CAL_FALLBACK
         except Exception:
-            _cal = None
+            _cal      = None
+            _baseline = _CAL_FALLBACK
 
         if _cal is not None and _cal.sample_size >= 10 and _cal.hit_rate_t1 is not None:
-            hr = max(0.01, min(0.99, _cal.hit_rate_t1))   # clamp to avoid log(0)
-            n  = _cal.sample_size
+            n        = _cal.sample_size
+            raw_hr   = _cal.hit_rate_t1
 
-            # Raw log-ratio score (positive = outperforms baseline)
-            raw_score = _math.log(hr / _CAL_BASELINE)
+            # ── Bayesian smoothing ────────────────────────────────────────────
+            # Reconstruct win count from incremental mean (best estimate),
+            # then apply prior centred on the global baseline.
+            prior_wins  = _baseline * _CAL_PRIOR_TOTAL
+            wins_est    = raw_hr * n                          # estimated win count
+            adj_hr      = (wins_est + prior_wins) / (n + _CAL_PRIOR_TOTAL)
+            adj_hr      = max(0.01, min(0.99, adj_hr))       # guard log(0)
 
-            # Clamp to [-1, +1] — no single signal can claim infinite leverage
-            raw_score = max(-1.0, min(1.0, raw_score))
+            # ── Log-ratio score ───────────────────────────────────────────────
+            raw_score = _math.log(adj_hr / _baseline)
+            raw_score = max(-1.0, min(1.0, raw_score))       # cap leverage
 
-            # Sample-size confidence weight: approaches 1 as n → ∞
+            # ── Sample-size confidence weight ─────────────────────────────────
             weight = 1.0 - _math.exp(-n / 30.0)
 
             weighted_score = raw_score * weight
@@ -481,14 +508,22 @@ def _compute_position_sizing_atoms(
             if weighted_score >= _CAL_THRESHOLD:
                 if idx < 3:
                     tier = _CAL_TIER_ORDER[idx + 1]
-                _cal_boost_label = f'cal_boost_lr{weighted_score:+.2f}_hr{hr:.2f}_n{n}'
+                _cal_boost_label = (
+                    f'cal_boost_lr{weighted_score:+.2f}'
+                    f'_ahr{adj_hr:.2f}_base{_baseline:.2f}_n{n}'
+                )
             elif weighted_score <= -_CAL_THRESHOLD:
                 if idx > 0:
                     tier = _CAL_TIER_ORDER[idx - 1]
-                _cal_boost_label = f'cal_penalise_lr{weighted_score:+.2f}_hr{hr:.2f}_n{n}'
+                _cal_boost_label = (
+                    f'cal_penalise_lr{weighted_score:+.2f}'
+                    f'_ahr{adj_hr:.2f}_base{_baseline:.2f}_n{n}'
+                )
             else:
-                # Score present but below threshold — label only, no tier shift
-                _cal_boost_label = f'cal_watch_lr{weighted_score:+.2f}_hr{hr:.2f}_n{n}'
+                _cal_boost_label = (
+                    f'cal_watch_lr{weighted_score:+.2f}'
+                    f'_ahr{adj_hr:.2f}_base{_baseline:.2f}_n{n}'
+                )
 
     if _cal_boost_label:
         ct_rule += f'+{_cal_boost_label}'

@@ -166,6 +166,53 @@ def update_calibration(
         conn.close()
 
 
+# ── get_global_baseline ───────────────────────────────────────────────────────
+
+def get_global_baseline(
+    pattern_type: str,
+    timeframe: str,
+    db_path: str,
+    min_samples: int = 30,
+) -> Optional[float]:
+    """
+    Return the sample-weighted mean hit_rate_t1 across ALL tickers for a
+    given (pattern_type, timeframe), pooling every regime.
+
+    Only rows with sample_size >= min_samples contribute to avoid noisy
+    one-trade tickers dragging the baseline.  Returns None when total
+    pooled samples < min_samples (no meaningful baseline yet).
+
+    This gives the natural hit rate for the pattern structure itself,
+    independent of which ticker is being evaluated, so the log-ratio
+    log(hr / baseline) measures genuine alpha above pattern-type expectation
+    rather than against an arbitrary 0.50.
+    """
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_table(conn)
+        rows = conn.execute(
+            """SELECT hit_rate_t1, sample_size
+               FROM signal_calibration
+               WHERE pattern_type=? AND timeframe=?
+                 AND hit_rate_t1 IS NOT NULL
+                 AND sample_size >= ?""",
+            (pattern_type, timeframe, min_samples),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return None
+
+    total_n    = sum(r[1] for r in rows)
+    if total_n < min_samples:
+        return None
+
+    # Sample-weighted mean
+    weighted   = sum(r[0] * r[1] for r in rows)
+    return weighted / total_n
+
+
 # ── get_calibration ───────────────────────────────────────────────────────────
 
 def get_calibration(
