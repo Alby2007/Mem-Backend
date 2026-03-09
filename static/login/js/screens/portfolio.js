@@ -663,14 +663,35 @@ function renderModelCard(m) {
 async function loadPortfolioHoldings() {
   if (!state.userId) return;
   try {
-    const d = await apiFetch(`/users/${state.userId}/portfolio`);
+    const [d, cashData] = await Promise.all([
+      apiFetch(`/users/${state.userId}/portfolio`),
+      apiFetch(`/users/${state.userId}/cash`).catch(() => null),
+    ]);
     const holdings = d?.holdings || [];
-    if (holdings.length) {
-      state.holdings = holdings.map(h => h.is_cash
-        ? { ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost, currency: h.currency, is_cash: true, value: h.value }
-        : { ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost, currency: h.currency, sector: h.sector || '' });
+    // Map real holdings, then append cash row if one is stored
+    const mapped = holdings.map(h => h.is_cash
+      ? { ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost, currency: h.currency, is_cash: true, value: h.value }
+      : { ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost, currency: h.currency, sector: h.sector || '' });
+    // Re-hydrate cash from user_preferences (survives refresh)
+    if (cashData?.available_cash != null) {
+      const ccy = cashData.cash_currency || 'GBP';
+      mapped.push({ ticker: 'CASH:' + ccy, quantity: 1, avg_cost: cashData.available_cash, currency: ccy, is_cash: true, value: cashData.available_cash });
+      state._availableCash    = cashData.available_cash;
+      state._accountCurrency  = ccy;
+      // Pre-fill cash input so the Save Cash form shows the current value
+      const cashInput = document.getElementById('p-cash-input');
+      const cashSel   = document.getElementById('p-cash-currency');
+      if (cashInput) cashInput.value = cashData.available_cash;
+      if (cashSel) {
+        for (let i = 0; i < cashSel.options.length; i++) {
+          if (cashSel.options[i].value === ccy) { cashSel.selectedIndex = i; break; }
+        }
+      }
+    }
+    if (mapped.length) {
+      state.holdings = mapped;
       renderHoldings();
-      ptfMarkStep2Done();
+      if (mapped.filter(h => !h.is_cash).length) ptfMarkStep2Done();
     }
   } catch { /* no holdings yet */ }
 }
