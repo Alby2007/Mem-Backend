@@ -54,8 +54,10 @@ async def _lifespan(app: FastAPI):
         from ingest.lse_flow_adapter import LSEFlowAdapter
         from ingest.acled_adapter import ACLEDAdapter
         from ingest.eia_adapter import EIAAdapter
+        from ingest.gpr_adapter import GPRAdapter
+        from ingest.alpha_vantage_adapter import AlphaVantageAdapter
+        from ingest.polymarket_adapter import PolymarketAdapter
         from ingest.pattern_adapter import PatternAdapter
-        from analytics.position_monitor import PositionMonitor
 
         db_path = ext.DB_PATH
         scheduler = IngestScheduler(ext.kg)
@@ -165,15 +167,19 @@ async def _lifespan(app: FastAPI):
         app.state.pattern_stop = _pattern_stop
         _logger.info('PatternAdapter thread started (interval=%ds)', _pattern.interval_sec)
 
-        # PositionMonitor — background thread watching open positions
-        _pos_monitor = PositionMonitor(db_path=db_path, interval_sec=300)
-        _pos_monitor.start()
-        app.state.position_monitor = _pos_monitor
-        ext.position_monitor = _pos_monitor
-
     except Exception as _e:
         _logger.warning('Ingest scheduler failed to start: %s', _e)
         app.state.scheduler = None
+
+    # PositionMonitor — independent of ingest; must start even when ingest fails
+    try:
+        from analytics.position_monitor import PositionMonitor
+        _pos_monitor = PositionMonitor(db_path=ext.DB_PATH, interval_sec=300)
+        _pos_monitor.start()
+        app.state.position_monitor = _pos_monitor
+        ext.position_monitor = _pos_monitor
+    except Exception as _pm_e:
+        _logger.warning('PositionMonitor failed to start: %s', _pm_e)
 
     # ── Notification schedulers ────────────────────────────────────────────────
     # Guard: skip entirely if bot token is absent — no point burning CPU on
