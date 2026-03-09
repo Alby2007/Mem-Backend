@@ -43,6 +43,8 @@ class PositionUpdateRequest(BaseModel):
     exit_price: Optional[float] = None
     shares_closed: Optional[float] = None
     close_method: str = "manual"
+    user_note: Optional[str] = None
+    partial_pct: Optional[int] = None
 
 
 @router.get("/patterns")
@@ -633,7 +635,31 @@ async def tip_position_update(followup_id: int, request: Request, data: Position
             bullish = pos["direction"] != "bearish"
             pnl_raw = (exit_price - entry) * position_size * (1 if bullish else -1)
             pnl_pct = ((exit_price - entry) / entry * 100) if entry else 0.0
-            update_followup_status(ext.DB_PATH, followup_id, status="closed")
+            # Auto-compute holding_hours and r_multiple server-side
+            now_iso = datetime.now(timezone.utc).isoformat()
+            _holding_hours = None
+            try:
+                _opened = pos.get("opened_at") or pos.get("created_at", "")
+                if _opened:
+                    from datetime import timedelta as _td
+                    _started = datetime.fromisoformat(_opened.replace('Z', '+00:00'))
+                    _holding_hours = int((datetime.now(timezone.utc) - _started).total_seconds() / 3600)
+            except Exception:
+                pass
+            _stop  = pos.get("stop_loss") or 0
+            _entry = entry
+            _risk  = abs(_entry - _stop) if _stop else _entry * 0.02
+            _r_mult = round((exit_price - _entry) / _risk, 2) if _risk else None
+            _partial_pct = data.partial_pct if data.partial_pct is not None else 100
+            update_followup_status(
+                ext.DB_PATH, followup_id, status="closed",
+                closed_at=now_iso,
+                holding_hours=_holding_hours,
+                r_multiple=_r_mult,
+                exit_price=exit_price,
+                partial_pct=_partial_pct,
+                user_note=data.user_note,
+            )
             if ext.HAS_PATTERN_LAYER and pos.get("pattern_id"):
                 try:
                     from analytics.prediction_ledger import PredictionLedger
@@ -663,6 +689,8 @@ async def tip_position_update(followup_id: int, request: Request, data: Position
                     from users.personal_kb import write_atom
                     write_atom(user_id, pos["ticker"], "trade_outcome", cal_outcome, ext.DB_PATH)
                     write_atom(user_id, pos["ticker"], "realised_pnl_pct", f"{pnl_pct:+.1f}%", ext.DB_PATH)
+                    if data.user_note and data.user_note.strip():
+                        write_atom(user_id, pos["ticker"], "trade_note", data.user_note.strip()[:500], ext.DB_PATH)
                 except Exception:
                     pass
             ext.log_tip_feedback(ext.DB_PATH, user_id, cal_outcome,
@@ -686,24 +714,34 @@ async def tip_position_update(followup_id: int, request: Request, data: Position
                     "message":f"Stop moved to breakeven ({new_stop}) — risk-free position. Watching for T2."}
 
         elif action == "partial":
-            shares_closed = float(data.shares_closed or 0)
+            _pct          = int(data.partial_pct or 50)
             exit_price    = float(data.exit_price or pos["entry_price"] or 0)
             orig_size     = pos["position_size"] or 0
+            shares_closed = float(data.shares_closed or round(orig_size * _pct / 100, 4))
             remainder     = max(0, orig_size - shares_closed)
             partial_pnl   = (exit_price - (pos["entry_price"] or exit_price)) * shares_closed
+            _stop  = pos.get("stop_loss") or 0
+            _entry = pos["entry_price"] or exit_price
+            _risk  = abs(_entry - _stop) if _stop else _entry * 0.02
+            _r_mult = round((exit_price - _entry) / _risk, 2) if _risk else None
             c3 = sqlite3.connect(ext.DB_PATH, timeout=5)
             try:
                 ensure_tip_followups_table(c3)
                 c3.execute(
-                    "UPDATE tip_followups SET position_size=?, status='partial', updated_at=? WHERE id=?",
-                    (remainder, datetime.now(timezone.utc).isoformat(), followup_id),
+                    "UPDATE tip_followups SET position_size=?, status='partial', partial_pct=?, "
+                    "r_multiple=?, exit_price=?, user_note=?, updated_at=? WHERE id=?",
+                    (remainder, _pct, _r_mult, exit_price,
+                     data.user_note[:500] if data.user_note else None,
+                     datetime.now(timezone.utc).isoformat(), followup_id),
                 )
                 c3.commit()
             finally:
                 c3.close()
             return {"action":"partial","ticker":pos["ticker"],"shares_closed":shares_closed,
-                    "remainder":remainder,"partial_pnl":round(partial_pnl,2),"exit_price":exit_price,
-                    "message":f"Partial exit recorded — {int(shares_closed)} shares closed at {exit_price}. "
+                    "partial_pct":_pct,"remainder":remainder,
+                    "partial_pnl":round(partial_pnl,2),"exit_price":exit_price,
+                    "r_multiple":_r_mult,
+                    "message":f"Partial exit recorded — {_pct}% closed at {exit_price}. "
                                f"{int(remainder)} shares remaining. Monitor continues."}
 
         elif action == "override":

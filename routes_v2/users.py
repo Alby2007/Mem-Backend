@@ -1256,6 +1256,74 @@ async def notify_test(data: NotifyTestRequest):
         raise HTTPException(500, detail=str(e))
 
 
+# ── Journal endpoints (P4) ────────────────────────────────────────────────────
+
+@router.get("/users/{user_id}/journal/open")
+async def journal_open(
+    user_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    user_path_auth(current_user, user_id)
+    try:
+        from users.user_store import get_journal_open
+        return {"positions": get_journal_open(ext.DB_PATH, user_id)}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
+@router.get("/users/{user_id}/journal/closed")
+async def journal_closed(
+    user_id: str,
+    since_days: int = 90,
+    current_user: str = Depends(get_current_user),
+):
+    user_path_auth(current_user, user_id)
+    try:
+        from users.user_store import get_journal_closed
+        return {"trades": get_journal_closed(ext.DB_PATH, user_id, since_days=since_days)}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
+@router.get("/users/{user_id}/journal/stats")
+async def journal_stats(
+    user_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    user_path_auth(current_user, user_id)
+    try:
+        from users.user_store import get_journal_stats
+        return get_journal_stats(ext.DB_PATH, user_id)
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
+@router.get("/users/{user_id}/journal/pattern-breakdown")
+async def journal_pattern_breakdown(
+    user_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    user_path_auth(current_user, user_id)
+    try:
+        from users.user_store import get_pattern_breakdown
+        return {"breakdown": get_pattern_breakdown(ext.DB_PATH, user_id)}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
+@router.get("/users/{user_id}/journal/regime-breakdown")
+async def journal_regime_breakdown(
+    user_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    user_path_auth(current_user, user_id)
+    try:
+        from users.user_store import get_regime_breakdown
+        return {"breakdown": get_regime_breakdown(ext.DB_PATH, user_id)}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
 @router.post("/users/{user_id}/notify/test-briefing")
 async def notify_test_briefing(
     user_id: str,

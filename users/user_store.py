@@ -1677,6 +1677,21 @@ def _ensure_tip_followups_table(conn: sqlite3.Connection) -> None:
             )
         except Exception:
             pass
+    # Journal enrichment columns (P3)
+    if 'holding_hours' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN holding_hours INTEGER")
+    if 'user_note' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN user_note TEXT")
+    if 'partial_pct' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN partial_pct INTEGER DEFAULT 100")
+    if 'r_multiple' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN r_multiple REAL")
+    if 'exit_price' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN exit_price REAL")
+    if 'pattern_id' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN pattern_id INTEGER")
+    if 'position_size' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN position_size REAL")
     # 'active' = user consciously accepted; 'watching' = auto-created at tip send
     # status column already exists in DDL with DEFAULT 'watching'
     conn.commit()
@@ -1840,8 +1855,15 @@ def update_followup_status(
     alert_level: Optional[str] = None,
     last_alert_at: Optional[str] = None,
     closed_at: Optional[str] = None,
+    tracking_target: Optional[str] = None,
+    stop_loss: Optional[float] = None,
+    holding_hours: Optional[int] = None,
+    user_note: Optional[str] = None,
+    partial_pct: Optional[int] = None,
+    r_multiple: Optional[float] = None,
+    exit_price: Optional[float] = None,
 ) -> None:
-    """Update status, alert_level, last_alert_at, or closed_at for a followup."""
+    """Update status, alert_level, last_alert_at, closed_at, and journal fields for a followup."""
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         _ensure_tip_followups_table(conn)
@@ -1855,6 +1877,20 @@ def update_followup_status(
             updates.append('last_alert_at = ?'); params.append(last_alert_at)
         if closed_at is not None:
             updates.append('closed_at = ?'); params.append(closed_at)
+        if tracking_target is not None:
+            updates.append('tracking_target = ?'); params.append(tracking_target)
+        if stop_loss is not None:
+            updates.append('stop_loss = ?'); params.append(stop_loss)
+        if holding_hours is not None:
+            updates.append('holding_hours = ?'); params.append(holding_hours)
+        if user_note is not None:
+            updates.append('user_note = ?'); params.append(user_note[:500])
+        if partial_pct is not None:
+            updates.append('partial_pct = ?'); params.append(partial_pct)
+        if r_multiple is not None:
+            updates.append('r_multiple = ?'); params.append(r_multiple)
+        if exit_price is not None:
+            updates.append('exit_price = ?'); params.append(exit_price)
         if not updates:
             return
         params.append(followup_id)
@@ -2165,3 +2201,247 @@ def get_pro_premium_users(db_path: str) -> List[str]:
         return [row[0] for row in rows]
     finally:
         conn.close()
+
+
+# ── Journal aggregation functions (P4) ────────────────────────────────────────
+
+def get_journal_open(db_path: str, user_id: str) -> List[dict]:
+    """
+    Return all open positions (status watching/active/partial) for the journal screen.
+    Joins KB last_price atom for live P&L computation.
+    """
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_tip_followups_table(conn)
+        rows = conn.execute(
+            """SELECT id, ticker, direction, pattern_type, timeframe,
+                      entry_price, stop_loss, target_1, target_2, target_3,
+                      position_size, tracking_target, status, regime_at_entry,
+                      conviction_at_entry, zone_low, zone_high, opened_at,
+                      expires_at, user_note, partial_pct, created_at
+               FROM tip_followups
+               WHERE user_id = ? AND status IN ('watching', 'active', 'partial')
+               ORDER BY created_at DESC""",
+            (user_id,),
+        ).fetchall()
+        cols = ['id', 'ticker', 'direction', 'pattern_type', 'timeframe',
+                'entry_price', 'stop_loss', 'target_1', 'target_2', 'target_3',
+                'position_size', 'tracking_target', 'status', 'regime_at_entry',
+                'conviction_at_entry', 'zone_low', 'zone_high', 'opened_at',
+                'expires_at', 'user_note', 'partial_pct', 'created_at']
+        positions = [dict(zip(cols, r)) for r in rows]
+
+        # Enrich with live KB last_price
+        if positions:
+            tickers = list({p['ticker'].lower() for p in positions if p['ticker']})
+            ph = ','.join('?' * len(tickers))
+            price_rows = conn.execute(
+                f"SELECT subject, object FROM facts WHERE predicate='last_price' AND subject IN ({ph})",
+                tickers,
+            ).fetchall()
+            prices = {r[0].upper(): float(r[1]) for r in price_rows if r[1]}
+
+            from datetime import timezone as _tz, datetime as _dt
+            now = _dt.now(_tz.utc)
+            for p in positions:
+                ticker = p['ticker'].upper()
+                current_price = prices.get(ticker)
+                p['current_price'] = current_price
+                entry = p['entry_price'] or 0
+                stop  = p['stop_loss']  or 0
+                if current_price and entry:
+                    bullish = p['direction'] != 'bearish'
+                    raw = (current_price - entry) / entry * 100
+                    p['live_pnl_pct'] = round(raw if bullish else -raw, 2)
+                    risk = abs(entry - stop) if stop else entry * 0.02
+                    p['r_multiple'] = round((current_price - entry) / risk, 2) if risk else None
+                else:
+                    p['live_pnl_pct'] = None
+                    p['r_multiple'] = None
+                # Holding duration
+                try:
+                    started = _dt.fromisoformat(p['created_at'].replace('Z', '+00:00'))
+                    hours = (now - started).total_seconds() / 3600
+                    p['holding_hours'] = int(hours)
+                except Exception:
+                    p['holding_hours'] = None
+
+        return positions
+    finally:
+        conn.close()
+
+
+def get_journal_closed(db_path: str, user_id: str, since_days: int = 90) -> List[dict]:
+    """
+    Return closed/stopped/expired positions with computed P&L, R-multiple, holding time.
+    """
+    from datetime import timedelta, timezone as _tz, datetime as _dt
+    since = (_dt.now(_tz.utc) - timedelta(days=since_days)).isoformat()
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_tip_followups_table(conn)
+        rows = conn.execute(
+            """SELECT id, ticker, direction, pattern_type, timeframe,
+                      entry_price, exit_price, stop_loss, target_1, target_2,
+                      position_size, status, regime_at_entry,
+                      holding_hours, r_multiple, user_note, partial_pct,
+                      opened_at, closed_at, created_at
+               FROM tip_followups
+               WHERE user_id = ?
+                 AND status IN ('closed', 'stopped', 'expired')
+                 AND (closed_at >= ? OR created_at >= ?)
+               ORDER BY closed_at DESC""",
+            (user_id, since, since),
+        ).fetchall()
+        cols = ['id', 'ticker', 'direction', 'pattern_type', 'timeframe',
+                'entry_price', 'exit_price', 'stop_loss', 'target_1', 'target_2',
+                'position_size', 'status', 'regime_at_entry',
+                'holding_hours', 'r_multiple', 'user_note', 'partial_pct',
+                'opened_at', 'closed_at', 'created_at']
+        trades = [dict(zip(cols, r)) for r in rows]
+        # Compute any missing P&L
+        for t in trades:
+            if t['exit_price'] and t['entry_price']:
+                bullish = t['direction'] != 'bearish'
+                raw_pct = (t['exit_price'] - t['entry_price']) / t['entry_price'] * 100
+                t['pnl_pct'] = round(raw_pct if bullish else -raw_pct, 2)
+                stop  = t['stop_loss'] or 0
+                risk  = abs(t['entry_price'] - stop) if stop else t['entry_price'] * 0.02
+                if t['r_multiple'] is None and risk:
+                    t['r_multiple'] = round((t['exit_price'] - t['entry_price']) / risk, 2)
+            else:
+                t['pnl_pct'] = None
+        return trades
+    finally:
+        conn.close()
+
+
+def get_journal_stats(db_path: str, user_id: str) -> dict:
+    """
+    Aggregate personal trading statistics for the journal stats panel.
+    """
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_tip_followups_table(conn)
+        rows = conn.execute(
+            """SELECT status, r_multiple, pattern_type, regime_at_entry
+               FROM tip_followups
+               WHERE user_id = ? AND status IN ('closed', 'stopped', 'expired')""",
+            (user_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return {'total_trades': 0, 'win_rate': None, 'avg_r': None,
+                'best_pattern': None, 'worst_pattern': None,
+                'best_regime': None, 'worst_regime': None}
+
+    wins       = sum(1 for r in rows if r[0] == 'closed' and r[1] is not None and r[1] > 0)
+    total      = len(rows)
+    r_values   = [r[1] for r in rows if r[1] is not None]
+    avg_r      = round(sum(r_values) / len(r_values), 2) if r_values else None
+    win_rate   = round(wins / total * 100, 1) if total else None
+
+    # Pattern breakdown
+    from collections import defaultdict as _dd
+    pat_wins  = _dd(int); pat_total = _dd(int)
+    reg_wins  = _dd(int); reg_total = _dd(int)
+    for status, r_mult, ptype, regime in rows:
+        if ptype:
+            pat_total[ptype] += 1
+            if status == 'closed' and r_mult and r_mult > 0:
+                pat_wins[ptype] += 1
+        if regime:
+            reg_total[regime] += 1
+            if status == 'closed' and r_mult and r_mult > 0:
+                reg_wins[regime] += 1
+
+    best_pat  = max(((p, pat_wins[p]/pat_total[p]) for p in pat_total if pat_total[p] >= 3),
+                    key=lambda x: x[1], default=(None, None))
+    worst_pat = min(((p, pat_wins[p]/pat_total[p]) for p in pat_total if pat_total[p] >= 3),
+                    key=lambda x: x[1], default=(None, None))
+    best_reg  = max(((r, reg_wins[r]/reg_total[r]) for r in reg_total if reg_total[r] >= 3),
+                    key=lambda x: x[1], default=(None, None))
+    worst_reg = min(((r, reg_wins[r]/reg_total[r]) for r in reg_total if reg_total[r] >= 3),
+                    key=lambda x: x[1], default=(None, None))
+
+    return {
+        'total_trades':  total,
+        'win_rate':      win_rate,
+        'avg_r':         avg_r,
+        'best_pattern':  best_pat[0],
+        'worst_pattern': worst_pat[0],
+        'best_regime':   best_reg[0],
+        'worst_regime':  worst_reg[0],
+    }
+
+
+def get_pattern_breakdown(db_path: str, user_id: str) -> List[dict]:
+    """Per-pattern-type: win_rate, sample_count, avg_R."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_tip_followups_table(conn)
+        rows = conn.execute(
+            """SELECT pattern_type, status, r_multiple
+               FROM tip_followups
+               WHERE user_id = ? AND status IN ('closed', 'stopped', 'expired')
+                 AND pattern_type IS NOT NULL""",
+            (user_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    from collections import defaultdict as _dd
+    buckets: dict = _dd(lambda: {'wins': 0, 'total': 0, 'r_sum': 0.0, 'r_count': 0})
+    for ptype, status, r_mult in rows:
+        b = buckets[ptype]
+        b['total'] += 1
+        if status == 'closed' and r_mult is not None and r_mult > 0:
+            b['wins'] += 1
+        if r_mult is not None:
+            b['r_sum']   += r_mult
+            b['r_count'] += 1
+
+    result = []
+    for ptype, b in sorted(buckets.items()):
+        result.append({
+            'pattern_type': ptype,
+            'sample_count': b['total'],
+            'win_rate':     round(b['wins'] / b['total'] * 100, 1) if b['total'] else None,
+            'avg_r':        round(b['r_sum'] / b['r_count'], 2) if b['r_count'] else None,
+        })
+    return result
+
+
+def get_regime_breakdown(db_path: str, user_id: str) -> List[dict]:
+    """Per-market-regime: win_rate, sample_count."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_tip_followups_table(conn)
+        rows = conn.execute(
+            """SELECT regime_at_entry, status, r_multiple
+               FROM tip_followups
+               WHERE user_id = ? AND status IN ('closed', 'stopped', 'expired')
+                 AND regime_at_entry IS NOT NULL""",
+            (user_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    from collections import defaultdict as _dd
+    buckets: dict = _dd(lambda: {'wins': 0, 'total': 0})
+    for regime, status, r_mult in rows:
+        b = buckets[regime]
+        b['total'] += 1
+        if status == 'closed' and r_mult is not None and r_mult > 0:
+            b['wins'] += 1
+
+    result = []
+    for regime, b in sorted(buckets.items()):
+        result.append({
+            'regime':       regime,
+            'sample_count': b['total'],
+            'win_rate':     round(b['wins'] / b['total'] * 100, 1) if b['total'] else None,
+        })
+    return result
