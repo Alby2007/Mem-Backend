@@ -1,14 +1,16 @@
 """
 ingest/gpr_adapter.py — Caldara-Iacoviello Geopolitical Risk (GPR) Index Adapter
 
-Downloads the Federal Reserve GPR Index Excel/CSV published by Matteo Iacoviello.
-The GPR index is derived from newspaper article counts across 10 major publications
-and is the institutional standard for geopolitical risk measurement.
+Fetches the GPR Index from FRED (St. Louis Fed API), which mirrors the
+Caldara-Iacoviello series. The GPR index is derived from newspaper article
+counts across 10 major publications and is the institutional standard for
+geopolitical risk measurement.
 
 Paper: Caldara & Iacoviello (2022), "Measuring Geopolitical Risk", AER.
-Data:  https://www.matteoiacoviello.com/gpr.htm
+FRED series: GPRH (headline), GPRT (threats), GPRA (acts)
 
-No API key required. Monthly update cadence (run daily — skips write if month unchanged).
+Requires: FRED_API_KEY env var (same key used by the existing FREDAdapter).
+Skips gracefully if no key. Monthly update cadence — idempotent.
 
 Atoms produced:
   - geopolitical_risk | gpr_index      | {float}         — headline GPR score
@@ -23,9 +25,10 @@ Schedule: 86400s (daily check, atoms only written when new month available)
 
 from __future__ import annotations
 
-import io
+import json as _json
 import logging
-import time
+import os
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
@@ -34,10 +37,12 @@ from ingest.base import BaseIngestAdapter, RawAtom
 
 _logger = logging.getLogger(__name__)
 
-# Primary URL — Excel format published by the Fed researcher
-_GPR_XLS_URL = 'https://www.matteoiacoviello.com/gpr_files/data_gpr_export.xls'
-# Fallback: direct CSV from FRED-linked mirror
-_GPR_CSV_URL = 'https://www.matteoiacoviello.com/gpr_files/data_gpr_export.csv'
+_FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations'
+
+# FRED series IDs for GPR
+_SERIES_GPR  = 'GPRH'   # Headline GPR index
+_SERIES_GPRT = 'GPRT'   # Threats sub-index (forward-looking)
+_SERIES_GPRA = 'GPRA'   # Acts sub-index (realised conflict)
 
 # Risk level thresholds (GPR index historically averages ~100; 200+ = major shock)
 _ELEVATED_THRESHOLD = 200
@@ -66,131 +71,83 @@ def _trend_label(current: float, previous: Optional[float]) -> str:
     return 'stable'
 
 
-def _fetch_gpr_csv() -> Optional[str]:
-    """Attempt to download the GPR CSV. Falls back to CSV URL if XLS fails."""
-    for url in (_GPR_XLS_URL, _GPR_CSV_URL):
-        try:
-            req = urllib.request.Request(
-                url,
-                headers={
-                    'User-Agent': 'TradingGalaxyKB/1.0 (research; admin@tradinggalaxy.dev)',
-                    'Accept': '*/*',
-                },
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                raw = resp.read()
-            # Try to decode as text — works for CSV, also works for old XLS text export
-            try:
-                return raw.decode('utf-8', errors='replace')
-            except Exception:
-                return raw.decode('latin-1', errors='replace')
-        except Exception as exc:
-            _logger.debug('GPR fetch from %s failed: %s', url, exc)
-            time.sleep(2)
-    return None
-
-
-def _parse_gpr_latest(text: str) -> Optional[Tuple[str, float, float, float]]:
+def _fetch_fred_series_latest(series_id: str, api_key: str) -> Optional[Tuple[str, float]]:
     """
-    Parse the GPR data file and return the most recent row.
-
-    Expected CSV columns (order may vary):
-      Year, Month, GPRC_GBR, ..., GPR, GPRT, GPRA, ...
-
-    Returns (period_label, gpr, gpr_threats, gpr_acts) or None.
+    Fetch the most recent observation for a FRED series.
+    Returns (date_str, value) or None.
     """
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    if not lines:
-        return None
-
-    # Find header line
-    header_idx = None
-    headers: List[str] = []
-    for i, line in enumerate(lines):
-        parts = [p.strip().strip('"').upper() for p in line.split(',')]
-        if 'GPR' in parts or 'GPRT' in parts or 'GPRA' in parts:
-            headers = parts
-            header_idx = i
-            break
-
-    if header_idx is None or not headers:
-        _logger.warning('GPR: could not find header row')
-        return None
-
-    # Column indices — try multiple naming conventions
-    def _col(*names: str) -> Optional[int]:
-        for n in names:
-            if n in headers:
-                return headers.index(n)
-        return None
-
-    col_year   = _col('YEAR', 'DATE_YEAR')
-    col_month  = _col('MONTH', 'DATE_MONTH')
-    col_gpr    = _col('GPR', 'GPRH')
-    col_gprt   = _col('GPRT', 'GPR_THREATS', 'GPRTH')
-    col_gpra   = _col('GPRA', 'GPR_ACTS', 'GPRAH')
-
-    if col_year is None or col_month is None or col_gpr is None:
-        _logger.warning('GPR: missing required columns — found: %s', headers[:10])
-        return None
-
-    # Scan data rows from the bottom to find the most recent non-empty row
-    data_lines = lines[header_idx + 1:]
-    for line in reversed(data_lines):
-        parts = [p.strip().strip('"') for p in line.split(',')]
-        if len(parts) <= max(filter(None, [col_gpr, col_gprt, col_gpra])):
-            continue
-        try:
-            year  = int(float(parts[col_year]))
-            month = int(float(parts[col_month]))
-            gpr   = float(parts[col_gpr])
-            if gpr <= 0:
+    params = urllib.parse.urlencode({
+        'series_id':  series_id,
+        'api_key':    api_key,
+        'sort_order': 'desc',
+        'limit':      3,
+        'file_type':  'json',
+    })
+    url = f'{_FRED_BASE}?{params}'
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={'User-Agent': 'TradingGalaxyKB/1.0', 'Accept': 'application/json'},
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = _json.loads(resp.read().decode('utf-8', errors='replace'))
+        for obs in data.get('observations', []):
+            val_str = obs.get('value', '.')
+            if val_str == '.' or not val_str:
                 continue
-            gprt = float(parts[col_gprt]) if col_gprt is not None and parts[col_gprt] else gpr
-            gpra = float(parts[col_gpra]) if col_gpra is not None and parts[col_gpra] else gpr
-            period = f'{year}-{month:02d}'
-            return (period, round(gpr, 2), round(gprt, 2), round(gpra, 2))
-        except (ValueError, IndexError):
-            continue
-
-    return None
+            try:
+                return (obs['date'], round(float(val_str), 2))
+            except (ValueError, KeyError):
+                continue
+        return None
+    except Exception as exc:
+        _logger.warning('GPR: FRED fetch failed for %s: %s', series_id, exc)
+        return None
 
 
 class GPRAdapter(BaseIngestAdapter):
     """
     Caldara-Iacoviello Geopolitical Risk Index adapter.
 
-    Downloads the Fed-published GPR Excel/CSV monthly and emits headline,
-    threat, and acts sub-index atoms. Idempotent — skips write if last
-    ingested period equals current month.
+    Fetches GPR series from FRED (GPRH, GPRT, GPRA) and emits headline,
+    threat, and acts sub-index atoms. Requires FRED_API_KEY env var.
+    Idempotent — skips write if last ingested period is unchanged.
     """
 
-    def __init__(self):
+    def __init__(self, api_key: Optional[str] = None):
         super().__init__(name='gpr_index')
+        self._api_key     = api_key or os.environ.get('FRED_API_KEY', '')
         self._last_period: Optional[str] = None
         self._last_gpr: Optional[float]  = None
 
     def fetch(self) -> List[RawAtom]:
+        if not self._api_key:
+            self._logger.warning(
+                'GPR: FRED_API_KEY not set — skipping. '
+                'Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html'
+            )
+            return []
+
         now_iso = datetime.now(timezone.utc).isoformat()
         source  = 'geopolitical_data_gpr'
         meta_base = {
-            'fetched_at':  now_iso,
-            'source_url':  _GPR_XLS_URL,
-            'paper':       'Caldara & Iacoviello (2022), AER',
-            'authority':   0.80,
+            'fetched_at': now_iso,
+            'source_url': _FRED_BASE,
+            'paper':      'Caldara & Iacoviello (2022), AER',
+            'authority':  0.80,
         }
 
-        text = _fetch_gpr_csv()
-        if not text:
-            self._logger.warning('GPR: failed to download data file')
+        gpr_obs  = _fetch_fred_series_latest(_SERIES_GPR,  self._api_key)
+        gprt_obs = _fetch_fred_series_latest(_SERIES_GPRT, self._api_key)
+        gpra_obs = _fetch_fred_series_latest(_SERIES_GPRA, self._api_key)
+
+        if not gpr_obs:
+            self._logger.warning('GPR: failed to fetch GPRH from FRED')
             return []
 
-        parsed = _parse_gpr_latest(text)
-        if not parsed:
-            self._logger.warning('GPR: failed to parse data file')
-            return []
-
-        period, gpr, gprt, gpra = parsed
+        period, gpr   = gpr_obs
+        gprt = gprt_obs[1] if gprt_obs else gpr
+        gpra = gpra_obs[1] if gpra_obs else gpr
 
         # Idempotency — skip if we already wrote this month's data
         if period == self._last_period:
