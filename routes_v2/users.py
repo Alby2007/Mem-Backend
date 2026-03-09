@@ -226,6 +226,37 @@ async def user_portfolio_update(user_id: str, data: PortfolioRequest, _: str = D
         raise HTTPException(500, detail=str(e))
 
 
+class SingleHoldingRequest(BaseModel):
+    ticker: str
+    quantity: Optional[float] = None
+    avg_cost: Optional[float] = None
+    sector: Optional[str] = None
+
+
+@router.post("/users/{user_id}/portfolio/holding")
+async def user_portfolio_add_holding(user_id: str, data: SingleHoldingRequest, _: str = Depends(user_path_auth)):
+    """Add or update a single holding without replacing the whole portfolio."""
+    if not ext.HAS_PRODUCT_LAYER:
+        raise HTTPException(503, detail="product layer not available")
+    ticker = data.ticker.strip().upper()
+    if not ticker:
+        raise HTTPException(400, detail="ticker is required")
+    try:
+        from users.user_store import upsert_single_holding
+        result = upsert_single_holding(
+            ext.DB_PATH, user_id, ticker,
+            quantity=data.quantity, avg_cost=data.avg_cost, sector=data.sector,
+        )
+        if ext.HAS_HYBRID:
+            try:
+                ext.infer_and_write_from_portfolio(user_id, ext.DB_PATH)
+            except Exception:
+                pass
+        return {"ok": True, "holding": result}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
 @router.get("/users/{user_id}/tip-config")
 async def user_tip_config_get(user_id: str, _: str = Depends(user_path_auth)):
     if not ext.HAS_PATTERN_LAYER:

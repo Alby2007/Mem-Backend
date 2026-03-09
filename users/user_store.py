@@ -442,6 +442,51 @@ def upsert_portfolio(
         conn.close()
 
 
+def upsert_single_holding(
+    db_path: str,
+    user_id: str,
+    ticker: str,
+    quantity: Optional[float] = None,
+    avg_cost: Optional[float] = None,
+    sector: Optional[str] = None,
+) -> dict:
+    """
+    Add or update a single holding in the user's portfolio without touching other rows.
+    If the ticker already exists, updates quantity and avg_cost (if provided).
+    Returns the updated holding dict.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    ticker = ticker.upper().strip()
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        ensure_user_tables(conn)
+        existing = conn.execute(
+            "SELECT quantity, avg_cost, sector FROM user_portfolios WHERE user_id=? AND ticker=?",
+            (user_id, ticker),
+        ).fetchone()
+        if existing:
+            new_qty  = quantity  if quantity  is not None else existing[0]
+            new_cost = avg_cost  if avg_cost  is not None else existing[1]
+            new_sec  = sector    if sector    is not None else existing[2]
+            conn.execute(
+                """UPDATE user_portfolios
+                   SET quantity=?, avg_cost=?, sector=?, submitted_at=?
+                   WHERE user_id=? AND ticker=?""",
+                (new_qty, new_cost, new_sec, now_iso, user_id, ticker),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO user_portfolios (user_id, ticker, quantity, avg_cost, sector, submitted_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (user_id, ticker, quantity, avg_cost, sector, now_iso),
+            )
+        conn.commit()
+        return {'user_id': user_id, 'ticker': ticker, 'quantity': quantity,
+                'avg_cost': avg_cost, 'sector': sector, 'submitted_at': now_iso}
+    finally:
+        conn.close()
+
+
 def get_portfolio(db_path: str, user_id: str) -> List[dict]:
     """Return all holdings for a user as a list of dicts."""
     conn = sqlite3.connect(db_path, timeout=10)

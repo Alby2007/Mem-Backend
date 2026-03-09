@@ -458,25 +458,52 @@ function bindFeedbackWidget(msgEl) {
       let html = '';
       if (d && d.entry_price != null) {
         const sym = (d.cash_after != null) ? '£' : '$';
-        html = `<div class="trade-fb-confirm">
-          <div class="trade-fb-confirm-title">✓ Position opened</div>
+        const confirmId = `ptf-confirm-${Date.now()}`;
+        html = `<div class="trade-fb-confirm" id="${confirmId}">
+          <div class="trade-fb-confirm-title">✓ Added to portfolio</div>
           <div class="tip-pos-grid">
-            <div><span class="tip-label">Entry</span><span class="mono-amber">${fmt(d.entry_price)}</span></div>
             <div><span class="tip-label">Stop</span><span class="mono-red">${fmt(d.stop_loss)}</span></div>
             <div><span class="tip-label">T1</span><span class="mono-green">${fmt(d.target_1)}</span></div>
             <div><span class="tip-label">T2</span><span class="mono-green">${fmt(d.target_2)}</span></div>
             ${d.position_size != null ? `<div><span class="tip-label">Size</span><span class="mono-amber">${Math.round(d.position_size)} shares</span></div>` : ''}
+          </div>
+          <div class="trade-fb-entry-row">
+            <span class="tip-label">Entry price</span>
+            <input class="trade-fb-entry-input" type="number" step="0.01" min="0"
+              value="${d.entry_price != null ? d.entry_price.toFixed(2) : ''}"
+              data-ticker="${escHtml(ticker)}"
+              data-size="${d.position_size != null ? Math.round(d.position_size) : ''}" />
+            <button class="trade-fb-entry-save">Save</button>
           </div>
           <div class="trade-fb-monitoring">Monitoring active — you'll be alerted when action is needed</div>
           ${d.cash_after != null ? `<div class="trade-fb-cash">Cash remaining: ${sym}${Number(d.cash_after).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>` : ''}
         </div>`;
         state.cashBalance = d.cash_after ?? state.cashBalance;
         state._cashFetchedAt = Date.now();
+        btnsRow.insertAdjacentHTML('afterend', html);
+        btnsRow.style.display = 'none';
+        // Bind the save button
+        const confirmEl = document.getElementById(confirmId);
+        confirmEl.querySelector('.trade-fb-entry-save').addEventListener('click', async function() {
+          const inp = confirmEl.querySelector('.trade-fb-entry-input');
+          const newEntry = parseFloat(inp.value);
+          if (!newEntry || newEntry <= 0) { showToast('Enter a valid price'); return; }
+          this.disabled = true;
+          try {
+            await apiFetch(`/users/${state.userId}/portfolio/holding`, { method: 'POST', body: JSON.stringify({
+              ticker: inp.dataset.ticker,
+              avg_cost: newEntry,
+              quantity: inp.dataset.size ? parseFloat(inp.dataset.size) : null,
+            })});
+            this.textContent = '✓';
+            this.style.color = 'var(--green)';
+          } catch(e) { showToast('Could not update entry: ' + e.message); this.disabled = false; }
+        });
       } else {
         html = `<div class="trade-fb-confirm"><div class="trade-fb-confirm-title">✓ ${escHtml(d?.message || 'Signal noted — monitoring active')}</div></div>`;
+        btnsRow.insertAdjacentHTML('afterend', html);
+        btnsRow.style.display = 'none';
       }
-      btnsRow.insertAdjacentHTML('afterend', html);
-      btnsRow.style.display = 'none';
     } catch(e) { showToast('Error: ' + e.message); }
   });
 

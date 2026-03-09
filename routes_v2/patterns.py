@@ -518,6 +518,20 @@ async def tip_feedback_action(tip_id: int, request: Request, data: TipFeedbackRe
                 timeframe=pattern_row.get("timeframe"),
                 zone_low=pattern_row.get("zone_low"), zone_high=pattern_row.get("zone_high"),
             )
+            # Auto-add to portfolio at the calculated entry price
+            _entry_for_portfolio = pos.suggested_entry if pos else (price_at_feedback or price_at_generation)
+            _size_for_portfolio   = int(pos.position_size_units) if (pos and pos.position_size_units) else None
+            try:
+                from users.user_store import upsert_single_holding
+                upsert_single_holding(
+                    ext.DB_PATH, user_id,
+                    ticker=pattern_row["ticker"],
+                    quantity=_size_for_portfolio,
+                    avg_cost=round(_entry_for_portfolio, 4) if _entry_for_portfolio else None,
+                )
+            except Exception:
+                pass
+
             if ext.HAS_HYBRID:
                 try:
                     from users.personal_kb import write_atom

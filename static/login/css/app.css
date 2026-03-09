@@ -1052,6 +1052,12 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .trade-fb-rej-pill:hover { border-color: var(--accent); color: var(--text); }
 .trade-fb-rej-pill:disabled { opacity: .4; cursor: default; }
 .trade-fb-noted { font-size: 11px; color: var(--muted); font-style: italic; }
+.trade-fb-entry-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.trade-fb-entry-input { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 4px 8px; width: 90px; outline: none; }
+.trade-fb-entry-input:focus { border-color: var(--accent); }
+.trade-fb-entry-save { background: none; border: 1px solid var(--accent); color: var(--accent); border-radius: 4px; padding: 4px 10px; font-size: 11px; cursor: pointer; transition: background .15s; }
+.trade-fb-entry-save:hover { background: rgba(245,158,11,.1); }
+.trade-fb-entry-save:disabled { opacity: .5; cursor: default; }
 
 /* ── Pattern card ── */
 .pattern-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 14px; cursor: pointer; transition: border-color .15s; position: relative; }
