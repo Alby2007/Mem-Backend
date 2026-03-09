@@ -320,6 +320,7 @@ def _compute_position_sizing_atoms(
     short_squeeze: str = '',
     macro_event_risk: str = '',
     sector_tailwind: str = '',
+    db_path: str = '',
 ) -> List[RawAtom]:
     """
     Compute conviction_tier, volatility_scalar, position_size_pct.
@@ -414,6 +415,52 @@ def _compute_position_sizing_atoms(
     elif st == 'positive' and ic in ('high', 'moderate') and tier == 'low':
         tier = 'medium'
         ct_rule += '+U2_sector_tailwind_insider'
+
+    # ── Calibration-adjusted conviction (P2) ─────────────────────────────────
+    # If signal_calibration has ≥10 samples for this ticker/pattern/timeframe,
+    # apply a hit-rate multiplier to boost or penalise the conviction tier.
+    # Tier cannot be pushed below 'avoid' or above 'high'.
+    # Only applies to non-avoid tiers (conflicted/weak signals stay penalised).
+    _cal_boost_label = ''
+    if tier not in ('avoid',) and db_path:
+        try:
+            from analytics.signal_calibration import get_calibration as _get_cal
+            # Use regime-agnostic lookup (None) — broadest sample for calibration
+            # pattern_type mapped from signal_quality: strong/confirmed → fvg as default
+            _cal = _get_cal(
+                ticker        = ticker,
+                pattern_type  = 'fvg',
+                timeframe     = '1d',
+                db_path       = db_path,
+                market_regime = None,
+            )
+        except Exception:
+            _cal = None
+
+        if _cal is not None and _cal.sample_size >= 10 and _cal.hit_rate_t1 is not None:
+            hr = _cal.hit_rate_t1
+            _TIER_ORDER_CAL = ['avoid', 'low', 'medium', 'high']
+            idx = _TIER_ORDER_CAL.index(tier) if tier in _TIER_ORDER_CAL else 1
+            if hr >= 0.70:
+                # Strong historical performer — upgrade if not already high
+                if idx < 3:
+                    tier = _TIER_ORDER_CAL[idx + 1]
+                    _cal_boost_label = f'cal_boost_{hr:.2f}'
+            elif hr >= 0.55:
+                # Moderate boost — no tier change, just record
+                _cal_boost_label = f'cal_moderate_{hr:.2f}'
+            elif hr < 0.30:
+                # Poor historical performer — downgrade if above avoid
+                if idx > 0:
+                    tier = _TIER_ORDER_CAL[idx - 1]
+                    _cal_boost_label = f'cal_penalise_{hr:.2f}'
+            elif hr < 0.45:
+                # Mild penalise
+                if idx > 1:
+                    tier = _TIER_ORDER_CAL[idx - 1]
+                    _cal_boost_label = f'cal_mild_penalise_{hr:.2f}'
+        if _cal_boost_label:
+            ct_rule += f'+{_cal_boost_label}'
 
     # ── Macro event risk position reduction ───────────────────────────────────
     # If FOMC/CPI/NFP within 3 days, reduce position size by 30% (size adjusted below)
@@ -1314,6 +1361,7 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                 short_squeeze=preds.get('short_squeeze_potential', ''),
                 macro_event_risk=market_atoms.get('macro_event_risk', ''),
                 sector_tailwind=preds.get('sector_tailwind', ''),
+                db_path=kg_db_path,
             )
             atoms.extend(pos_atoms)
 

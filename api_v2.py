@@ -118,6 +118,11 @@ async def _lifespan(app: FastAPI):
         # GPR Index — Caldara-Iacoviello Fed geopolitical risk index; no key needed
         scheduler.register(GPRAdapter(), interval_sec=86400)
 
+        # Historical signal calibration — nightly back-population of hit rates
+        # 20h recency guard prevents double-runs; first manual run via POST /calibrate/historical
+        from ingest.historical_calibration_adapter import HistoricalCalibrationAdapter
+        scheduler.register(HistoricalCalibrationAdapter(db_path=db_path), interval_sec=86400)
+
         # Alpha Vantage news sentiment — per-ticker AI sentiment; skips if no key
         scheduler.register(AlphaVantageAdapter(db_path=db_path), interval_sec=86400)
 

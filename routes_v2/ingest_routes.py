@@ -41,6 +41,12 @@ class RunAllRequest(BaseModel):
 
 class HistoricalRequest(BaseModel):
     tickers: Optional[list[str]] = None
+    lookback_years: int = 3
+
+
+class CalibrationRequest(BaseModel):
+    tickers: Optional[list[str]] = None
+    lookback_years: int = 3
 
 
 class RegimeHistoryRequest(BaseModel):
@@ -186,26 +192,81 @@ async def ingest_historical(data: HistoricalRequest, _: str = Depends(get_curren
         raise HTTPException(500, detail=str(e))
 
 
+# ── Calibration job tracker (in-memory, reset on restart) ─────────────────────
+_cal_job: dict = {"status": "idle", "started_at": None, "result": None, "error": None}
+
+
+@router.get("/calibrate/historical/status")
+async def calibrate_historical_status(_: str = Depends(get_current_user)):
+    """Poll the background calibration job status."""
+    conn = None
+    row_count = 0
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+        row_count = conn.execute("SELECT COUNT(*) FROM signal_calibration").fetchone()[0]
+    except Exception:
+        pass
+    finally:
+        if conn:
+            conn.close()
+    return {**_cal_job, "signal_calibration_rows": row_count}
+
+
 @router.post("/calibrate/historical")
-async def calibrate_historical(_: str = Depends(get_current_user)):
+async def calibrate_historical(
+    data: CalibrationRequest = CalibrationRequest(),
+    _: str = Depends(get_current_user),
+):
+    """
+    Trigger full historical pattern calibration in a background thread.
+    Returns immediately — poll GET /calibrate/historical/status for progress.
+    """
     if not ext.HAS_INGEST:
         raise HTTPException(503, detail="ingest not available")
     try:
         from analytics.historical_calibration import HistoricalCalibrator
     except ImportError as e:
         raise HTTPException(503, detail=f"historical_calibration not available: {e}")
-    try:
-        cal     = HistoricalCalibrator(db_path=ext.DB_PATH)
-        results = cal.run()
-        return {
-            "status": "ok",
-            "tickers_calibrated": len(results),
-            "results": {t: {"status": r.get("status"), "samples": r.get("samples")}
-                        for t, r in results.items()},
-        }
-    except Exception as e:
-        _logger.error("historical calibration failed: %s", e)
-        raise HTTPException(500, detail=str(e))
+
+    if _cal_job["status"] == "running":
+        return {"status": "already_running", "started_at": _cal_job["started_at"]}
+
+    import threading as _t
+    from datetime import datetime, timezone
+
+    _cal_job["status"]     = "running"
+    _cal_job["started_at"] = datetime.now(timezone.utc).isoformat()
+    _cal_job["result"]     = None
+    _cal_job["error"]      = None
+
+    def _run():
+        try:
+            cal     = HistoricalCalibrator(db_path=ext.DB_PATH)
+            results = cal.calibrate_watchlist(
+                tickers=data.tickers or None,
+                lookback_years=data.lookback_years,
+            )
+            total_patterns = sum(r.get("patterns_detected", 0) for r in results.values())
+            total_rows     = sum(r.get("calibration_rows_written", 0) for r in results.values())
+            _cal_job["status"] = "done"
+            _cal_job["result"] = {
+                "tickers": len(results),
+                "patterns_detected": total_patterns,
+                "calibration_rows_written": total_rows,
+            }
+            _logger.info("calibrate_historical done: %d tickers, %d rows",
+                         len(results), total_rows)
+        except Exception as e:
+            _cal_job["status"] = "error"
+            _cal_job["error"]  = str(e)
+            _logger.error("calibrate_historical failed: %s", e)
+
+    _t.Thread(target=_run, daemon=True, name="calibrate-historical").start()
+    return {
+        "status": "started",
+        "started_at": _cal_job["started_at"],
+        "message": "Calibration running in background. Poll GET /calibrate/historical/status",
+    }
 
 
 @router.post("/calibrate/regime-history")

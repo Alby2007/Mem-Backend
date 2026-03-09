@@ -452,10 +452,115 @@ def _position_keyboard(followup_id: int, alert_type: str) -> dict:
     return {'inline_keyboard': buttons}
 
 
+def _auto_resolve_calibration(pos: dict, db_path: str) -> None:
+    """
+    After a position expires without user-reported outcome, resolve its
+    outcome from OHLCV data and write to signal_calibration.
+
+    Reads ohlcv_cache first (fast), falls back to yfinance if cache misses.
+    Uses the same _check_outcome() logic as historical_calibration.py.
+    """
+    try:
+        from analytics.historical_calibration import _check_outcome
+        from analytics.pattern_detector import PatternSignal
+        from analytics.signal_calibration import update_calibration
+
+        ticker     = pos.get('ticker', '')
+        ptype      = pos.get('pattern_type', '')
+        timeframe  = pos.get('timeframe', '1d')
+        direction  = pos.get('direction', 'bullish')
+        zone_low   = pos.get('zone_low')
+        zone_high  = pos.get('zone_high')
+        created_at = pos.get('created_at', '')
+        expires_at = pos.get('expires_at', '')
+        regime     = pos.get('regime_at_entry')
+
+        if not ticker or not ptype or zone_low is None or zone_high is None:
+            return
+
+        # ── Pull OHLCV from cache ───────────────────────────────────────────
+        candles = []
+        try:
+            conn = sqlite3.connect(db_path, timeout=5)
+            rows = conn.execute(
+                """SELECT timestamp, open, high, low, close, volume
+                   FROM ohlcv_cache
+                   WHERE ticker = ? AND timestamp >= ? AND timestamp <= ?
+                   ORDER BY timestamp ASC""",
+                (ticker.upper(), created_at[:10], expires_at[:10]),
+            ).fetchall()
+            conn.close()
+            from analytics.historical_calibration import OHLCV as _OHLCV  # type: ignore
+            candles = [
+                _OHLCV(timestamp=r[0], open=r[1], high=r[2], low=r[3], close=r[4], volume=r[5] or 0)
+                for r in rows
+            ]
+        except Exception:
+            pass
+
+        # ── Fallback: yfinance ─────────────────────────────────────────────
+        if not candles:
+            try:
+                import yfinance as yf
+                from analytics.historical_calibration import HistoricalCalibrator
+                df = yf.download(ticker, start=created_at[:10], end=expires_at[:10],
+                                 interval='1d', progress=False, auto_adjust=True)
+                if not df.empty:
+                    candles = HistoricalCalibrator._df_to_ohlcv(df)
+            except Exception:
+                pass
+
+        if not candles:
+            return
+
+        sig = PatternSignal(
+            pattern_type  = ptype,
+            ticker        = ticker,
+            direction     = direction,
+            zone_high     = float(zone_high),
+            zone_low      = float(zone_low),
+            zone_size_pct = (float(zone_high) - float(zone_low)) / float(zone_low) * 100 if zone_low else 0,
+            timeframe     = timeframe,
+            formed_at     = created_at,
+            quality_score = 0.0,
+            status        = 'expired',
+        )
+
+        outcome_obj = _check_outcome(sig, candles)
+
+        if outcome_obj.stopped_out:
+            outcome = 'stopped_out'
+        elif outcome_obj.hit_t3:
+            outcome = 'hit_t3'
+        elif outcome_obj.hit_t2:
+            outcome = 'hit_t2'
+        elif outcome_obj.hit_t1:
+            outcome = 'hit_t1'
+        else:
+            outcome = 'expired'
+
+        if outcome != 'expired':
+            update_calibration(
+                ticker       = ticker,
+                pattern_type = ptype,
+                timeframe    = timeframe,
+                market_regime = regime,
+                outcome      = outcome,
+                db_path      = db_path,
+            )
+            _log.info(
+                'PositionMonitor: auto_resolve followup %d %s → %s',
+                pos['id'], ticker, outcome,
+            )
+
+    except Exception as e:
+        _log.debug('PositionMonitor: auto_resolve failed for followup %d: %s', pos['id'], e)
+
+
 def _check_expiry(pos: dict, db_path: str) -> bool:
     """
     Check if a position has passed its expires_at time.
-    If so, mark it expired in DB (no Telegram — batched to next scheduled delivery).
+    If so, mark it expired in DB, attempt outcome auto-resolution for calibration.
     Returns True if expired and handled.
     """
     expires_at = pos.get('expires_at')
@@ -480,6 +585,9 @@ def _check_expiry(pos: dict, db_path: str) -> bool:
         _log.info('PositionMonitor: expired followup %d %s', pos['id'], pos['ticker'])
     except Exception as e:
         _log.debug('PositionMonitor: expiry update failed for followup %d: %s', pos['id'], e)
+
+    # Auto-resolve outcome for calibration (best-effort, non-blocking)
+    _auto_resolve_calibration(pos, db_path)
     return True
 
 
