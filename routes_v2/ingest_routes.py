@@ -16,7 +16,7 @@ router = APIRouter()
 _logger = logging.getLogger(__name__)
 
 _SRC_PATTERNS = {
-    "yfinance":               ["exchange_feed_yahoo%", "yfinance%"],
+    "yfinance":               ["exchange_feed_yahoo%", "yfinance%", "exchange_feed_on_demand_yf%", "broker_research_on_demand_yf%"],
     "signal_enrichment":      ["derived_signal%", "signal_enrichment%"],
     "rss_news":               ["news_wire%", "rss_%"],
     "llm_extraction":         ["llm_extract%"],
@@ -69,7 +69,7 @@ async def ingest_status():
                         ).fetchone()
                         total += row[0] if row else 0
                         ts_row = conn.execute(
-                            "SELECT MAX(created_at) FROM facts WHERE source LIKE ?", (pat,)
+                            "SELECT MAX(timestamp) FROM facts WHERE source LIKE ?", (pat,)
                         ).fetchone()
                         if ts_row and ts_row[0]:
                             if last_ts is None or ts_row[0] > last_ts:
