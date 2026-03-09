@@ -119,7 +119,7 @@ def _get_watchlist_tickers(db_path: str, limit: int) -> List[str]:
         rows = conn.execute(
             """SELECT DISTINCT subject FROM facts
                WHERE predicate = 'last_price' AND subject NOT LIKE '%:%'
-               ORDER BY created_at DESC LIMIT ?""",
+               ORDER BY timestamp DESC LIMIT ?""",
             (limit * 3,),   # over-fetch, then dedupe
         ).fetchall()
         conn.close()
