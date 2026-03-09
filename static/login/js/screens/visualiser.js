@@ -77,12 +77,18 @@ async function loadVisualiser() {
 
   if (!_visData) {
     container.innerHTML = '<div style="color:var(--muted);padding:40px;text-align:center;"><div class="spinner"></div><div style="margin-top:12px;font-size:12px;">Loading KB data…</div></div>';
+    let fetched;
     try {
-      _visData = await apiFetch('/kb/visualiser');
+      fetched = await apiFetch('/kb/visualiser');
     } catch(e) {
-      container.innerHTML = `<div style="color:var(--red);padding:40px;text-align:center;">Failed to load KB data: ${escHtml(e.message)}</div>`;
+      container.innerHTML = `<div style="color:#ef4444;padding:40px;text-align:center;">Error: ${escHtml(e.message)}</div>`;
       return;
     }
+    if (!fetched) {
+      container.innerHTML = '<div style="color:#ef4444;padding:40px;text-align:center;">Failed to load KB data — auth error or network issue.</div>';
+      return;
+    }
+    _visData = fetched;
   }
 
   // Update last-updated
