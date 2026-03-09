@@ -764,7 +764,7 @@ def get_open_patterns(
                        alerted_users, detected_at
                 FROM pattern_signals
                 WHERE {where}
-                ORDER BY quality_score DESC, detected_at DESC LIMIT ?""",
+                ORDER BY detected_at DESC, quality_score DESC LIMIT ?""",
             params,
         ).fetchall()
         cols = ['id', 'ticker', 'pattern_type', 'direction', 'zone_high', 'zone_low',

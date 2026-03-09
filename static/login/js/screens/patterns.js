@@ -105,7 +105,7 @@ async function _fetchAndRenderPatterns(grid, ticker, append) {
   if (tf)     params.set('timeframe', tf);
   if (dir)    params.set('direction', dir);
   if (ticker) params.set('ticker', ticker);
-  params.set('min_quality', '0.5');
+  params.set('min_quality', '0.3');
   const PAGE = 60;
   params.set('limit',  ticker ? '100' : String(PAGE));
   params.set('offset', String(_patOffset));
