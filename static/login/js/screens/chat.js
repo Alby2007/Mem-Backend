@@ -672,6 +672,12 @@ document.querySelectorAll('.prompt-chip').forEach(btn => {
     sendChat();
   });
 });
+// Overlay toggle via icon button
+document.getElementById('overlay-btn').addEventListener('click', function() {
+  const cb = document.getElementById('overlay-toggle');
+  cb.checked = !cb.checked;
+  this.classList.toggle('active', cb.checked);
+});
 document.getElementById('chat-input').addEventListener('input', function() {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 120) + 'px';

@@ -928,25 +928,31 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
 <!-- CHAT ──────────────────────────────────────────────────────────── -->
 <div class="screen" id="screen-chat">
   <div id="chat-messages">
-    <div id="chat-prompts" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;padding:40px 20px;">
-      <div style="font-size:13px;color:var(--muted);margin-bottom:4px;">Ask the KB anything — here are some ideas:</div>
-      <div style="display:flex;flex-wrap:wrap;gap:10px;justify-content:center;">
-        <button class="btn btn-ghost btn-sm prompt-chip" data-prompt="What's the strongest setup in my portfolio right now?">What's the strongest setup in my portfolio right now?</button>
-        <button class="btn btn-ghost btn-sm prompt-chip" data-prompt="Show me high conviction FTSE signals">Show me high conviction FTSE signals</button>
-        <button class="btn btn-ghost btn-sm prompt-chip" data-prompt="What's the current market regime?">What's the current market regime?</button>
+    <div id="chat-prompts">
+      <div class="chat-empty-icon">◎</div>
+      <div class="chat-empty-title">Trading Galaxy KB</div>
+      <div class="chat-empty-sub">Ask anything about markets, your portfolio, or trade setups</div>
+      <div class="chat-prompt-pills">
+        <button class="prompt-chip" data-prompt="What's the strongest setup in my portfolio right now?">Strongest portfolio setup</button>
+        <button class="prompt-chip" data-prompt="Show me high conviction FTSE signals">High conviction FTSE signals</button>
+        <button class="prompt-chip" data-prompt="What's the current market regime?">Current market regime</button>
       </div>
     </div>
   </div>
-  <div id="chat-input-bar">
-    <div class="toggle-wrap">
-      <label class="toggle"><input type="checkbox" id="overlay-toggle"><span class="toggle-slider"></span></label>
-      <span>Overlay</span>
+  <div id="chat-input-wrap">
+    <div id="chat-input-bar">
+      <button class="chat-overlay-btn" id="overlay-btn" title="Toggle overlay mode">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+      <input type="checkbox" id="overlay-toggle" style="display:none;">
+      <div style="position:relative;flex:1;display:flex;">
+        <textarea id="chat-input" placeholder="Ask anything… (type $ for ticker suggestions)" rows="1"></textarea>
+        <div id="ticker-autocomplete" class="ticker-ac-dropdown" style="display:none;"></div>
+      </div>
+      <button class="chat-send-btn" id="chat-send-btn" title="Send message">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 13V3M8 3L3.5 7.5M8 3l4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </div>
-    <div style="position:relative;flex:1;display:flex;">
-      <textarea id="chat-input" placeholder="Ask the KB anything… (type $ for ticker suggestions)" rows="1" style="flex:1;"></textarea>
-      <div id="ticker-autocomplete" class="ticker-ac-dropdown" style="display:none;"></div>
-    </div>
-    <button class="btn btn-primary" id="chat-send-btn">Send</button>
   </div>
 </div>
 
