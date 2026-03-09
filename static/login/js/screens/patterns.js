@@ -472,6 +472,25 @@ async function _loadPatternContext(id, p) {
     html += `<div id="pm-rest-rows" style="display:none;">${rest.map(renderRow).join('')}</div>`;
   }
   evEl.innerHTML = html;
+  // Historical precedent card
+  try {
+    const precData = await apiFetch(`/patterns/${id}/precedent`);
+    if (precData && precData.match_count >= 10) {
+      const footer = document.querySelector('.pat-modal-footer');
+      if (footer && typeof renderPrecedentCard === 'function') {
+        const precWrap = document.createElement('div');
+        precWrap.style.cssText = 'padding:0 16px 12px;';
+        precWrap.innerHTML = renderPrecedentCard(precData);
+        footer.parentNode.insertBefore(precWrap, footer);
+        requestAnimationFrame(() => {
+          precWrap.querySelectorAll('.prec-bar-fill[data-width]').forEach((b, i) => {
+            setTimeout(() => { b.style.width = b.dataset.width + '%'; }, i * 120);
+          });
+        });
+      }
+    }
+  } catch(e) { /* silent — precedent is additive */ }
+
   const moreBtn = document.getElementById('pm-show-more');
   if (moreBtn) {
     moreBtn.addEventListener('click', () => {

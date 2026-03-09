@@ -100,6 +100,20 @@ Do NOT invent impact magnitudes. Do NOT say "increased volatility in the financi
 unless a KB atom states a specific volatility figure or regime label for that sector.\
 """
 
+_SYSTEM_PRECEDENT_RULE = (
+    "\n\nHISTORICAL PRECEDENT: When the retrieval context includes a "
+    "# historical-precedent section, reference it naturally in your response. "
+    "Say something like: 'This setup has occurred X times in similar conditions. "
+    "The historical hit rate is Y% with an average return of ZR.'\n"
+    "RULES:\n"
+    "- Do NOT invent precedent statistics. Only cite numbers from the "
+    "# historical-precedent section.\n"
+    "- If no # historical-precedent section is present, do not mention historical performance.\n"
+    "- When confidence is 'low' or sample count is small, qualify: "
+    "'Based on a limited sample of X instances...'\n"
+    "- Cite the precedent ONCE, naturally woven into your analysis — not as a separate paragraph."
+)
+
 _SYSTEM_SYNTHESIS_RULE = (
     "\n\nSYNTHESIS RULE — CRITICAL: When multiple atoms together imply a conclusion, "
     "you MUST state that conclusion. Do NOT refuse to answer or say the information "
@@ -706,7 +720,7 @@ def build(
         [{"role": "system", "content": ...}, {"role": "user", "content": ...}]
     """
     # ── Build dynamic system prompt ────────────────────────────────────────────
-    system_text = _SYSTEM_PROMPT_BASE + _SYSTEM_SYNTHESIS_RULE + _SYSTEM_NO_HALLUCINATION
+    system_text = _SYSTEM_PROMPT_BASE + _SYSTEM_PRECEDENT_RULE + _SYSTEM_SYNTHESIS_RULE + _SYSTEM_NO_HALLUCINATION
 
     composite = 0.0
     if stress:

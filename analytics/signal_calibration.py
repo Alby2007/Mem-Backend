@@ -84,6 +84,23 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
             UNIQUE(ticker, pattern_type, timeframe, market_regime)
         )
     """)
+    # S1: State-vector columns for Historical State Matching (idempotent)
+    for _col, _type in [
+        ('volatility_regime',    'TEXT'),
+        ('sector',               'TEXT'),
+        ('central_bank_stance',  'TEXT'),
+        ('gdelt_tension_level',  'TEXT'),
+        ('outcome_r_multiple',   'REAL'),
+    ]:
+        try:
+            conn.execute(f'ALTER TABLE signal_calibration ADD COLUMN {_col} {_type}')
+        except Exception:
+            pass  # column already exists
+    # Performance index for state-matching scan
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_calibration_pattern_tf '
+        'ON signal_calibration(pattern_type, timeframe)'
+    )
     conn.commit()
 
 

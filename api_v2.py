@@ -60,6 +60,12 @@ async def _lifespan(app: FastAPI):
         from ingest.pattern_adapter import PatternAdapter
 
         db_path = ext.DB_PATH
+        # S4: wire db_path into retrieval.py so Strategy 6 (Historical State Match) works
+        try:
+            import retrieval as _ret_mod
+            _ret_mod.set_db_path(db_path)
+        except Exception:
+            pass
         scheduler = IngestScheduler(ext.kg)
 
         # LLM extractor — drains the extraction_queue; batch size tunable via env

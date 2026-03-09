@@ -155,6 +155,52 @@ function renderKbPanel(grounding, groundingAtoms) {
   </div>`;
 }
 
+function renderPrecedentCard(precedent) {
+  if (!precedent || precedent.match_count < 10) return '';
+  const pct = v => Math.round((v || 0) * 100);
+  const confCls = precedent.confidence === 'high' ? 'prec-conf-high'
+    : precedent.confidence === 'moderate' ? 'prec-conf-mod' : 'prec-conf-low';
+  const st = precedent.current_state || {};
+  const stateDesc = [
+    st.pattern_type,
+    st.regime_label ? st.regime_label.replace(/_/g, ' ') : null,
+    st.volatility_regime ? st.volatility_regime + ' vol' : null,
+  ].filter(Boolean).join(' · ');
+  const sampleNote = precedent.match_count < 30 ? ' (small sample)' : '';
+  const avgR = precedent.avg_r != null
+    ? `<div class="prec-stat"><span class="prec-stat-label">Avg return</span><span class="prec-stat-val ${precedent.avg_r >= 0 ? 'prec-pos' : 'prec-neg'}">${precedent.avg_r >= 0 ? '+' : ''}${precedent.avg_r.toFixed(1)}R</span></div>`
+    : '';
+  const bestR  = precedent.best_regime  ? `<div class="prec-stat"><span class="prec-stat-label">Best regime</span><span class="prec-stat-val">${escHtml(precedent.best_regime.replace(/_/g,' '))}</span></div>` : '';
+  const worstR = precedent.worst_regime ? `<div class="prec-stat"><span class="prec-stat-label">Worst regime</span><span class="prec-stat-val prec-neg">${escHtml(precedent.worst_regime.replace(/_/g,' '))}</span></div>` : '';
+  const recency = precedent.recency_note ? `<div class="prec-stat"><span class="prec-stat-label">Most recent</span><span class="prec-stat-val">${escHtml(precedent.recency_note)}</span></div>` : '';
+  return `
+  <div class="precedent-card">
+    <div class="prec-header">
+      <span class="prec-title">HISTORICAL PRECEDENT</span>
+      <span class="prec-count">${precedent.match_count} matches${escHtml(sampleNote)}</span>
+    </div>
+    <div class="prec-bars">
+      <div class="prec-bar-row">
+        <div class="prec-bar-track"><div class="prec-bar-fill prec-hit" style="width:0%" data-width="${pct(precedent.hit_rate_t1)}"></div></div>
+        <span class="prec-bar-label">${pct(precedent.hit_rate_t1)}% hit T1</span>
+      </div>
+      <div class="prec-bar-row">
+        <div class="prec-bar-track"><div class="prec-bar-fill prec-hit" style="width:0%" data-width="${pct(precedent.hit_rate_t2)}"></div></div>
+        <span class="prec-bar-label">${pct(precedent.hit_rate_t2)}% hit T2</span>
+      </div>
+      <div class="prec-bar-row">
+        <div class="prec-bar-track"><div class="prec-bar-fill prec-stop" style="width:0%" data-width="${pct(precedent.stopped_rate)}"></div></div>
+        <span class="prec-bar-label">${pct(precedent.stopped_rate)}% stopped</span>
+      </div>
+    </div>
+    <div class="prec-stats">${avgR}${bestR}${worstR}${recency}</div>
+    <div class="prec-footer">
+      <span class="prec-basis">Based on similar: ${escHtml(stateDesc)}</span>
+      <span class="prec-confidence ${confCls}">Confidence: ${escHtml(precedent.confidence)}</span>
+    </div>
+  </div>`;
+}
+
 function renderCalibrationBadge(cal) {
   if (!cal) return '';
   const t1Pct = cal.hit_rate_t1 != null ? Math.round(cal.hit_rate_t1 * 100) : null;
@@ -616,6 +662,7 @@ async function sendChat() {
     const tipCardHtml = d.tip_card ? renderTipCard(d.tip_card, d.tip_card.tip_id) : '';
     const kbPanelHtml = renderKbPanel(grounding, d.grounding_atoms || null);
     const calHtml = renderCalibrationBadge(d.calibration || null);
+    const precedentHtml = d.historical_precedent ? renderPrecedentCard(d.historical_precedent) : '';
     // Build merged atoms from LLM grounding block + DB atoms for market stress fallback
     const _mergedAtoms = {};
     if (grounding) grounding.forEach(r => { const k = r.key === 'regime' ? 'price_regime' : r.key; if (r.val) _mergedAtoms[k] = r.val; });
@@ -623,8 +670,8 @@ async function sendChat() {
     const mktStress = d.market_stress || computeMarketStress(Object.keys(_mergedAtoms).length ? _mergedAtoms : null);
     const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null, mktStress);
     const bubble = thinking.querySelector('.msg-bubble');
-    bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + calHtml + epistemicHtml;
-    // Animate both stress bars (generic data-width) + calibration bars
+    bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + precedentHtml + calHtml + epistemicHtml;
+    // Animate stress bars + calibration bars + precedent bars
     requestAnimationFrame(() => {
       thinking.querySelectorAll('.stress-bar-fill[data-width]').forEach((bar, i) => {
         setTimeout(() => {
@@ -641,6 +688,10 @@ async function sendChat() {
           t2Fill.style.width = (d.calibration.hit_rate_t2 * 100) + '%';
         }
       }, 300);
+      // Animate precedent bars staggered after other cards
+      thinking.querySelectorAll('.prec-bar-fill[data-width]').forEach((bar, i) => {
+        setTimeout(() => { bar.style.width = bar.dataset.width + '%'; }, 600 + i * 120);
+      });
     });
     if (tipCardHtml) bindTipFeedback(thinking);
     const _thesis = shouldShowFeedbackWidget(d.grounding_atoms);

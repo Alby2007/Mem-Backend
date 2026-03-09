@@ -178,6 +178,13 @@ _KEYWORD_PREDICATE_BOOST: dict = {
     'squeeze':     ('short_squeeze_risk', 'days_to_cover', 'short_interest'),
     'borrow':      ('short_interest', 'days_to_cover', 'short_squeeze_risk'),
     'finra':       ('short_interest', 'days_to_cover', 'short_squeeze_risk', 'short_vs_signal'),
+    # Historical state matching — pulls state-vector atoms when user asks about precedents
+    'precedent':   ('pattern_type', 'regime_label', 'volatility_regime'),
+    'historical':  ('pattern_type', 'regime_label', 'volatility_regime'),
+    'before':      ('pattern_type', 'regime_label'),
+    'similar':     ('pattern_type', 'regime_label', 'volatility_regime'),
+    'last time':   ('pattern_type', 'regime_label', 'volatility_regime'),
+    'happened':    ('pattern_type', 'regime_label', 'volatility_regime'),
 }
 
 # Common name / forex pair → canonical KB ticker alias map
@@ -1398,4 +1405,56 @@ def retrieve(
     else:
         full_snippet = flat_snippet
 
+    # ── Strategy 6: Historical State Match ───────────────────────────────────
+    # Scores signal_calibration rows against the current KB state vector.
+    # Appends a # historical-precedent section to the snippet so the LLM can
+    # reference it naturally. The HistoricalPrecedent object is stashed in
+    # _last_precedent for chat_pipeline to pick up without changing the
+    # (snippet, atoms) return contract.
+    # db_path is set explicitly by chat_pipeline.run() via set_db_path() below.
+    global _last_precedent
+    _last_precedent = None
+    if results and _retrieval_db_path:
+        try:
+            from analytics.state_matcher import match_historical_state as _hsm
+            _prec = _hsm(results, _retrieval_db_path)
+            if _prec and _prec.match_count >= 10:
+                _last_precedent = _prec
+                _ph = [
+                    '',
+                    '# historical-precedent',
+                    f'Similar conditions: {_prec.match_count} instances '
+                    f'(avg similarity {_prec.avg_similarity:.0%})',
+                    f'Weighted hit rate T1: {_prec.weighted_hit_t1:.0%}',
+                    f'Weighted stop rate: {_prec.weighted_stopped:.0%}',
+                ]
+                if _prec.weighted_avg_r is not None:
+                    _ph.append(f'Avg R-multiple: {_prec.weighted_avg_r:+.1f}R')
+                if _prec.best_regime:
+                    _ph.append(f'Best regime: {_prec.best_regime.replace("_", " ")}')
+                if _prec.worst_regime:
+                    _ph.append(f'Worst regime: {_prec.worst_regime.replace("_", " ")}')
+                full_snippet += '\n' + '\n'.join(_ph)
+        except Exception as _hsm_exc:
+            _logger.debug('retrieval: Strategy 6 (state match) failed: %s', _hsm_exc)
+
     return full_snippet, results
+
+
+# ── Strategy 6 state: module-level db_path + last precedent ──────────────────
+# chat_pipeline calls set_db_path() once at startup so retrieval.py knows where
+# to find signal_calibration without changing retrieve()'s signature.
+
+_retrieval_db_path: str = ''
+_last_precedent = None
+
+
+def set_db_path(db_path: str) -> None:
+    """Called by chat_pipeline (or api_v2 startup) to set the DB path for Strategy 6."""
+    global _retrieval_db_path
+    _retrieval_db_path = db_path
+
+
+def get_last_precedent():
+    """Return the HistoricalPrecedent from the most recent retrieve() call, or None."""
+    return _last_precedent

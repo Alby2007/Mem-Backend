@@ -291,6 +291,70 @@ async def pattern_context(pattern_id: int, _user: str = Depends(get_current_user
     }
 
 
+@router.get("/patterns/{pattern_id}/precedent")
+async def pattern_precedent(pattern_id: int, _user: str = Depends(get_current_user)):
+    """Return historical state match precedent for a pattern."""
+    # Load pattern row
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        row = conn.execute(
+            "SELECT ticker, pattern_type, timeframe, kb_conviction, kb_regime, kb_signal_dir "
+            "FROM pattern_signals WHERE id = ?",
+            (pattern_id,),
+        ).fetchone()
+        if row is None:
+            conn.close()
+            raise HTTPException(404, detail="pattern not found")
+        ticker, pattern_type, timeframe, conviction, regime, signal_dir = row
+
+        # Load KB atoms for this ticker
+        fact_rows = conn.execute(
+            "SELECT predicate, object, confidence FROM facts "
+            "WHERE LOWER(subject) = LOWER(?) "
+            "ORDER BY confidence DESC LIMIT 40",
+            (ticker,),
+        ).fetchall()
+        conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    # Build atom list for state matching
+    atom_list = [
+        {'predicate': r[0], 'object': r[1], 'confidence': r[2], 'subject': ticker}
+        for r in fact_rows
+    ]
+    # Inject pattern-level data not always stored as atoms
+    atom_list.append({'predicate': 'pattern_type', 'object': pattern_type, 'subject': ticker, 'confidence': 0.9})
+    if regime:
+        atom_list.append({'predicate': 'regime_label', 'object': regime, 'subject': ticker, 'confidence': 0.9})
+
+    try:
+        from analytics.state_matcher import match_historical_state
+        precedent = match_historical_state(atom_list, ext.DB_PATH)
+    except Exception:
+        precedent = None
+
+    if not precedent or precedent.match_count < 10:
+        return {"match_count": 0}
+
+    return {
+        "match_count":    precedent.match_count,
+        "avg_similarity": round(precedent.avg_similarity, 2),
+        "hit_rate_t1":    round(precedent.weighted_hit_t1, 3),
+        "hit_rate_t2":    round(precedent.weighted_hit_t2, 3),
+        "stopped_rate":   round(precedent.weighted_stopped, 3),
+        "avg_r":          round(precedent.weighted_avg_r, 2) if precedent.weighted_avg_r is not None else None,
+        "best_regime":    precedent.best_regime,
+        "worst_regime":   precedent.worst_regime,
+        "best_sector":    precedent.best_sector,
+        "confidence":     precedent.confidence,
+        "recency_note":   precedent.recency_note,
+        "current_state":  precedent.current_state,
+    }
+
+
 @router.get("/patterns/{pattern_id}")
 async def pattern_detail(pattern_id: int, user_id: Optional[str] = None):
     if not ext.HAS_PATTERN_LAYER:

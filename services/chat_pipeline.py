@@ -1310,6 +1310,12 @@ def run(
         message, session_id, user_id, portfolio_wanted,
     )
     snippet, atoms = ext.retrieve(retrieve_message, conn, limit=limit, nudges=nudges)
+    # S4: capture Historical State Match precedent produced by Strategy 6
+    try:
+        import retrieval as _retrieval_mod
+        _hsm_precedent = _retrieval_mod.get_last_precedent()
+    except Exception:
+        _hsm_precedent = None
     # Layer 1: boost watchlist ticker atoms so they rank above non-watchlist atoms
     atoms = _boost_watchlist_atoms(atoms, user_id)
     # Layer 3: boost atoms matching user's preferred trading timeframe
@@ -1487,6 +1493,27 @@ def run(
         except Exception as _cal_exc:
             import logging as _cal_log
             _cal_log.getLogger(__name__).warning('calibration lookup failed: %s', _cal_exc)
+
+        # ── Historical State Match precedent (S4) ─────────────────────────────
+        try:
+            if _hsm_precedent and _hsm_precedent.match_count >= 10:
+                _p = _hsm_precedent
+                response['historical_precedent'] = {
+                    'match_count':    _p.match_count,
+                    'avg_similarity': round(_p.avg_similarity, 2),
+                    'hit_rate_t1':    round(_p.weighted_hit_t1, 3),
+                    'hit_rate_t2':    round(_p.weighted_hit_t2, 3),
+                    'stopped_rate':   round(_p.weighted_stopped, 3),
+                    'avg_r':          round(_p.weighted_avg_r, 2) if _p.weighted_avg_r is not None else None,
+                    'best_regime':    _p.best_regime,
+                    'worst_regime':   _p.worst_regime,
+                    'best_sector':    _p.best_sector,
+                    'confidence':     _p.confidence,
+                    'recency_note':   _p.recency_note,
+                    'current_state':  _p.current_state,
+                }
+        except Exception:
+            pass
 
         # ── Grounding atoms — independent try so calibration failure can't block ──
         try:
