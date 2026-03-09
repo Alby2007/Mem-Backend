@@ -244,6 +244,7 @@ async def stats():
         ("total_conflicts_detected", "SELECT COUNT(*) FROM fact_conflicts"),
         ("pending_repair_proposals",  "SELECT COUNT(*) FROM repair_proposals WHERE status = 'pending'"),
         ("domain_refresh_queue_depth","SELECT COUNT(*) FROM domain_refresh_queue WHERE processed = 0"),
+        ("open_patterns",             "SELECT COUNT(*) FROM pattern_signals WHERE status NOT IN ('filled','broken')"),
     ]:
         try:
             extras[key] = c.execute(sql).fetchone()[0]
