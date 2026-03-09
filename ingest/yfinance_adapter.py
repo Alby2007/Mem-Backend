@@ -90,7 +90,7 @@ _DEFAULT_TICKERS = [
 
 # Parallel workers for per-ticker info() calls.
 # Keep low to avoid Yahoo Finance per-IP burst rate limiting from OCI.
-_MAX_WORKERS = 3
+_MAX_WORKERS = 2
 
 # ETF quoteType values that don't carry equity fundamentals
 _ETF_QUOTE_TYPES = {'ETF', 'MUTUALFUND', 'INDEX', 'FUTURE', 'CRYPTOCURRENCY'}
@@ -278,6 +278,15 @@ class YFinanceAdapter(BaseIngestAdapter):
 
         # Clear any stale crumb/session from process startup before fetching.
         self._clear_yf_session()
+
+        # Pre-warm the crumb by fetching a single known-good ticker before
+        # launching parallel threads. This ensures all workers share a valid
+        # crumb rather than each racing to establish one simultaneously.
+        try:
+            _prewarm = yf.Ticker('SPY')
+            _ = _prewarm.fast_info.get('lastPrice')
+        except Exception:
+            pass
 
         # Apply a global socket timeout so no yfinance network call blocks indefinitely.
         # This is the primary guard against the scheduler timer chain being killed by
@@ -616,8 +625,7 @@ class YFinanceAdapter(BaseIngestAdapter):
 
         # ── Next earnings date (upsert — date changes each quarter) ───────
         try:
-            ticker = yf.Ticker(symbol)
-            cal = ticker.calendar
+            cal = yf.Ticker(symbol).calendar
             if cal is not None and isinstance(cal, dict):
                 earnings_date = cal.get('Earnings Date')
                 if isinstance(earnings_date, list) and earnings_date:
