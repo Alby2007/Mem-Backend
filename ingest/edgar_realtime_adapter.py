@@ -50,7 +50,7 @@ from typing import Optional, Set
 
 import requests
 
-from ingest.base import BaseIngestAdapter, RawAtom
+from ingest.base import BaseIngestAdapter, RawAtom, db_connect
 from ingest.rss_adapter import _ensure_extraction_queue
 
 _logger = logging.getLogger(__name__)
@@ -240,7 +240,7 @@ class EDGARRealtimeAdapter(BaseIngestAdapter):
         self._db_path = db_path
 
         # Populate in-memory seen set from DB on init (restart-safe)
-        conn = sqlite3.connect(db_path)
+        conn = db_connect(db_path)
         try:
             self._seen_ids: Set[str] = _load_seen_ids(conn)
             _ensure_extraction_queue(conn)
@@ -277,7 +277,7 @@ class EDGARRealtimeAdapter(BaseIngestAdapter):
         atoms: list = []
         new_count = 0
 
-        conn = sqlite3.connect(self._db_path)
+        conn = db_connect(self._db_path)
         try:
             for entry in entries:
                 filing_id = entry['id']

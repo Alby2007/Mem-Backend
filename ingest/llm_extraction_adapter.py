@@ -27,7 +27,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
-from ingest.base import BaseIngestAdapter, RawAtom
+from ingest.base import BaseIngestAdapter, RawAtom, db_connect
 from ingest.rss_adapter import _ensure_extraction_queue
 
 _logger = logging.getLogger(__name__)
@@ -283,7 +283,7 @@ class LLMExtractionAdapter(BaseIngestAdapter):
 
         self._logger.info('LLM extraction: using db_path=%s', self._db_path)
         try:
-            conn = sqlite3.connect(self._db_path)
+            conn = db_connect(self._db_path)
             _ensure_extraction_queue(conn)
         except Exception as e:
             self._logger.error('Cannot open extraction_queue: %s', e)

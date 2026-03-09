@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set
 
-from ingest.base import BaseIngestAdapter, RawAtom
+from ingest.base import BaseIngestAdapter, RawAtom, db_connect
 
 try:
     import feedparser
@@ -174,7 +174,7 @@ class RSSAdapter(BaseIngestAdapter):
 
         if queue_rows and self._db_path:
             try:
-                conn = sqlite3.connect(self._db_path)
+                conn = db_connect(self._db_path)
                 _ensure_extraction_queue(conn)
                 conn.executemany(
                     "INSERT INTO extraction_queue (text, url, source, fetched_at) VALUES (?,?,?,?)",

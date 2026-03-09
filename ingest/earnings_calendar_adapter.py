@@ -42,7 +42,7 @@ import sqlite3
 from datetime import date, datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
 
-from ingest.base import BaseIngestAdapter, RawAtom
+from ingest.base import BaseIngestAdapter, RawAtom, db_connect
 
 _logger = logging.getLogger(__name__)
 
@@ -236,7 +236,7 @@ class EarningsCalendarAdapter(BaseIngestAdapter):
         Returns list of (ticker, earnings_date_str, vol_30d_str_or_None).
         """
         try:
-            conn = sqlite3.connect(self._db_path)
+            conn = db_connect(self._db_path)
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """

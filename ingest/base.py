@@ -86,12 +86,25 @@ from __future__ import annotations
 
 import abc
 import logging
+import sqlite3 as _sqlite3
 import time
 from dataclasses import dataclass, field
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 _F = TypeVar('_F', bound=Callable)
+
+
+def db_connect(db_path: str, timeout: float = 30.0) -> _sqlite3.Connection:
+    """
+    Open a SQLite connection with WAL mode and a 30-second busy-timeout.
+    Use this instead of sqlite3.connect() in every adapter to prevent
+    'database is locked' errors when multiple adapters write concurrently.
+    """
+    conn = _sqlite3.connect(db_path, timeout=timeout, check_same_thread=False)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=30000')
+    return conn
 
 
 def with_retry(

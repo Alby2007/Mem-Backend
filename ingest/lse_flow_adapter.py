@@ -63,7 +63,7 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
-from ingest.base import BaseIngestAdapter, RawAtom
+from ingest.base import BaseIngestAdapter, RawAtom, db_connect
 
 _logger = logging.getLogger(__name__)
 
@@ -327,7 +327,7 @@ class LSEFlowAdapter(BaseIngestAdapter):
         """
         tickers = set(t.upper() for t in _DEFAULT_FTSE_TICKERS)
         try:
-            conn = sqlite3.connect(self._db_path)
+            conn = db_connect(self._db_path)
             rows = conn.execute(
                 "SELECT DISTINCT subject FROM facts WHERE predicate='last_price'"
             ).fetchall()
