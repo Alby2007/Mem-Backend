@@ -782,7 +782,7 @@ def get_open_patterns(
     min_quality: float = 0.0,
     limit: int = 100,
 ) -> List[dict]:
-    """Return open (non-filled, non-broken) pattern_signals rows, newest first."""
+    """Return open (non-filled, non-broken) pattern_signals rows, best quality first."""
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         ensure_user_tables(conn)
@@ -810,10 +810,10 @@ def get_open_patterns(
                              alerted_users, detected_at
                       FROM pattern_signals
                       WHERE {where}
-                      ORDER BY detected_at DESC, quality_score DESC LIMIT ?"""
+                      ORDER BY quality_score DESC, detected_at DESC LIMIT ?"""
         else:
-            # No ticker filter — cap at 3 per ticker via window function so all
-            # tickers get representation even when a few have hundreds of patterns.
+            # No ticker filter — pick best 3 per ticker by quality so all
+            # tickers get representation with their highest-conviction setups.
             sql = f"""SELECT id, ticker, pattern_type, direction, zone_high, zone_low,
                              zone_size_pct, timeframe, formed_at, status, filled_at,
                              quality_score, kb_conviction, kb_regime, kb_signal_dir,
@@ -822,13 +822,13 @@ def get_open_patterns(
                           SELECT *,
                                  ROW_NUMBER() OVER (
                                      PARTITION BY ticker
-                                     ORDER BY detected_at DESC, quality_score DESC
+                                     ORDER BY quality_score DESC, detected_at DESC
                                  ) AS rn
                           FROM pattern_signals
                           WHERE {where}
                       )
                       WHERE rn <= 3
-                      ORDER BY detected_at DESC, quality_score DESC LIMIT ?"""
+                      ORDER BY quality_score DESC, detected_at DESC LIMIT ?"""
         rows = conn.execute(sql, params).fetchall()
         cols = ['id', 'ticker', 'pattern_type', 'direction', 'zone_high', 'zone_low',
                 'zone_size_pct', 'timeframe', 'formed_at', 'status', 'filled_at',
