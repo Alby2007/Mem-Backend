@@ -1,16 +1,14 @@
 """
 ingest/gpr_adapter.py — Caldara-Iacoviello Geopolitical Risk (GPR) Index Adapter
 
-Fetches the GPR Index from FRED (St. Louis Fed API), which mirrors the
-Caldara-Iacoviello series. The GPR index is derived from newspaper article
-counts across 10 major publications and is the institutional standard for
-geopolitical risk measurement.
+Downloads the GPR Index XLS published by Matteo Iacoviello (Federal Reserve).
+The GPR index is derived from newspaper article counts across 10 major
+publications and is the institutional standard for geopolitical risk.
 
 Paper: Caldara & Iacoviello (2022), "Measuring Geopolitical Risk", AER.
-FRED series: GPRH (headline), GPRT (threats), GPRA (acts)
+Data:  https://www.matteoiacoviello.com/gpr.htm (BIFF8 .xls, parsed via xlrd)
 
-Requires: FRED_API_KEY env var (same key used by the existing FREDAdapter).
-Skips gracefully if no key. Monthly update cadence — idempotent.
+No API key required. Monthly update cadence — idempotent.
 
 Atoms produced:
   - geopolitical_risk | gpr_index      | {float}         — headline GPR score
@@ -25,10 +23,8 @@ Schedule: 86400s (daily check, atoms only written when new month available)
 
 from __future__ import annotations
 
-import json as _json
+import io
 import logging
-import os
-import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
@@ -37,19 +33,12 @@ from ingest.base import BaseIngestAdapter, RawAtom
 
 _logger = logging.getLogger(__name__)
 
-_FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations'
-
-# FRED series IDs for GPR
-_SERIES_GPR  = 'GPRH'   # Headline GPR index
-_SERIES_GPRT = 'GPRT'   # Threats sub-index (forward-looking)
-_SERIES_GPRA = 'GPRA'   # Acts sub-index (realised conflict)
+_GPR_XLS_URL = 'https://www.matteoiacoviello.com/gpr_files/data_gpr_export.xls'
 
 # Risk level thresholds (GPR index historically averages ~100; 200+ = major shock)
 _ELEVATED_THRESHOLD = 200
 _MODERATE_THRESHOLD = 130
-
-# Trend threshold (month-over-month change)
-_TREND_THRESHOLD = 15.0
+_TREND_THRESHOLD    = 15.0
 
 
 def _level_label(score: float) -> str:
@@ -71,83 +60,146 @@ def _trend_label(current: float, previous: Optional[float]) -> str:
     return 'stable'
 
 
-def _fetch_fred_series_latest(series_id: str, api_key: str) -> Optional[Tuple[str, float]]:
-    """
-    Fetch the most recent observation for a FRED series.
-    Returns (date_str, value) or None.
-    """
-    params = urllib.parse.urlencode({
-        'series_id':  series_id,
-        'api_key':    api_key,
-        'sort_order': 'desc',
-        'limit':      3,
-        'file_type':  'json',
-    })
-    url = f'{_FRED_BASE}?{params}'
+def _fetch_xls_bytes() -> Optional[bytes]:
+    """Download the GPR XLS file as raw bytes."""
     try:
         req = urllib.request.Request(
-            url,
-            headers={'User-Agent': 'TradingGalaxyKB/1.0', 'Accept': 'application/json'},
+            _GPR_XLS_URL,
+            headers={
+                'User-Agent': 'TradingGalaxyKB/1.0 (research; admin@tradinggalaxy.dev)',
+                'Accept': '*/*',
+            },
         )
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = _json.loads(resp.read().decode('utf-8', errors='replace'))
-        for obs in data.get('observations', []):
-            val_str = obs.get('value', '.')
-            if val_str == '.' or not val_str:
-                continue
-            try:
-                return (obs['date'], round(float(val_str), 2))
-            except (ValueError, KeyError):
-                continue
-        return None
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read()
     except Exception as exc:
-        _logger.warning('GPR: FRED fetch failed for %s: %s', series_id, exc)
+        _logger.warning('GPR: XLS download failed: %s', exc)
         return None
+
+
+def _parse_xls(raw: bytes) -> Optional[Tuple[str, float, float, float]]:
+    """
+    Parse the GPR XLS (BIFF8 format) using xlrd.
+    Returns (period, gpr, gprt, gpra) for the most recent non-empty row, or None.
+
+    Expected columns (order varies by sheet version):
+      year, month, ..., GPR (headline), GPRT (threats), GPRA (acts), ...
+    """
+    try:
+        import xlrd  # installed via pip on OCI; stdlib fallback not feasible for BIFF8
+    except ImportError:
+        _logger.error(
+            'GPR: xlrd not installed — run: pip install xlrd  '
+            '(required to parse BIFF8 .xls files)'
+        )
+        return None
+
+    try:
+        wb = xlrd.open_workbook(file_contents=raw)
+    except Exception as exc:
+        _logger.warning('GPR: xlrd failed to open workbook: %s', exc)
+        return None
+
+    # Try each sheet — the main data is usually on sheet 0
+    for sheet_idx in range(wb.nsheets):
+        ws = wb.sheet_by_index(sheet_idx)
+        if ws.nrows < 3:
+            continue
+
+        # Find header row — scan first 5 rows
+        headers: List[str] = []
+        header_row = -1
+        for r in range(min(5, ws.nrows)):
+            row_vals = [str(ws.cell_value(r, c)).strip().upper() for c in range(ws.ncols)]
+            # Look for Year/Month columns + GPR
+            if ('YEAR' in row_vals or 'DATE' in row_vals) and 'GPR' in row_vals:
+                headers    = row_vals
+                header_row = r
+                break
+
+        if header_row < 0 or not headers:
+            continue
+
+        def _col(*names: str) -> int:
+            for n in names:
+                if n in headers:
+                    return headers.index(n)
+            return -1
+
+        col_year  = _col('YEAR', 'DATE_YEAR')
+        col_month = _col('MONTH', 'DATE_MONTH')
+        col_gpr   = _col('GPR', 'GPRH')
+        col_gprt  = _col('GPRT', 'GPRTHREAT', 'GPR_THREATS')
+        col_gpra  = _col('GPRA', 'GPRACT', 'GPR_ACTS')
+
+        if col_year < 0 or col_month < 0 or col_gpr < 0:
+            _logger.debug('GPR sheet %d: missing key columns (headers=%s)', sheet_idx, headers[:10])
+            continue
+
+        # Scan rows from bottom to find most recent non-empty GPR value
+        for r in range(ws.nrows - 1, header_row, -1):
+            try:
+                year_val  = ws.cell_value(r, col_year)
+                month_val = ws.cell_value(r, col_month)
+                gpr_val   = ws.cell_value(r, col_gpr)
+
+                if not year_val or not month_val or not gpr_val:
+                    continue
+
+                year  = int(float(year_val))
+                month = int(float(month_val))
+                gpr   = round(float(gpr_val), 2)
+
+                if gpr <= 0 or year < 1985:
+                    continue
+
+                gprt = round(float(ws.cell_value(r, col_gprt)), 2) if col_gprt >= 0 else gpr
+                gpra = round(float(ws.cell_value(r, col_gpra)), 2) if col_gpra >= 0 else gpr
+
+                period = f'{year}-{month:02d}'
+                return (period, gpr, gprt, gpra)
+            except (ValueError, TypeError, IndexError):
+                continue
+
+    _logger.warning('GPR: no valid data rows found in XLS')
+    return None
 
 
 class GPRAdapter(BaseIngestAdapter):
     """
     Caldara-Iacoviello Geopolitical Risk Index adapter.
 
-    Fetches GPR series from FRED (GPRH, GPRT, GPRA) and emits headline,
-    threat, and acts sub-index atoms. Requires FRED_API_KEY env var.
+    Downloads BIFF8 XLS from Iacoviello's site via xlrd and emits headline,
+    threat, and acts sub-index atoms. No API key required.
     Idempotent — skips write if last ingested period is unchanged.
     """
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self):
         super().__init__(name='gpr_index')
-        self._api_key     = api_key or os.environ.get('FRED_API_KEY', '')
         self._last_period: Optional[str] = None
         self._last_gpr: Optional[float]  = None
 
     def fetch(self) -> List[RawAtom]:
-        if not self._api_key:
-            self._logger.warning(
-                'GPR: FRED_API_KEY not set — skipping. '
-                'Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html'
-            )
-            return []
-
         now_iso = datetime.now(timezone.utc).isoformat()
         source  = 'geopolitical_data_gpr'
         meta_base = {
             'fetched_at': now_iso,
-            'source_url': _FRED_BASE,
+            'source_url': _GPR_XLS_URL,
             'paper':      'Caldara & Iacoviello (2022), AER',
             'authority':  0.80,
         }
 
-        gpr_obs  = _fetch_fred_series_latest(_SERIES_GPR,  self._api_key)
-        gprt_obs = _fetch_fred_series_latest(_SERIES_GPRT, self._api_key)
-        gpra_obs = _fetch_fred_series_latest(_SERIES_GPRA, self._api_key)
-
-        if not gpr_obs:
-            self._logger.warning('GPR: failed to fetch GPRH from FRED')
+        raw = _fetch_xls_bytes()
+        if not raw:
+            self._logger.warning('GPR: failed to download XLS')
             return []
 
-        period, gpr   = gpr_obs
-        gprt = gprt_obs[1] if gprt_obs else gpr
-        gpra = gpra_obs[1] if gpra_obs else gpr
+        parsed = _parse_xls(raw)
+        if not parsed:
+            self._logger.warning('GPR: failed to parse XLS')
+            return []
+
+        period, gpr, gprt, gpra = parsed
 
         # Idempotency — skip if we already wrote this month's data
         if period == self._last_period:
