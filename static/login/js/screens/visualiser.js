@@ -85,11 +85,11 @@ window.loadVisualiser = async function loadVisualiser() {
     try {
       fetched = await apiFetch('/kb/visualiser');
     } catch(e) {
-      container.innerHTML = `<div style="color:#ef4444;padding:40px;text-align:center;">Error: ${escHtml(e.message)}</div>`;
+      container.innerHTML = `<div style="color:#ef4444;padding:40px;text-align:center;">Fetch error: ${escHtml(e.message)}</div>`;
       return;
     }
     if (!fetched || !fetched.tickers) {
-      container.innerHTML = `<div style="color:#ef4444;padding:40px;text-align:center;">Failed to load KB data — response: ${escHtml(JSON.stringify(fetched))}</div>`;
+      container.innerHTML = `<div style="color:#ef4444;padding:40px;text-align:center;">API returned no tickers — raw: ${escHtml(JSON.stringify(fetched)).slice(0,200)}</div>`;
       return;
     }
     _visData = fetched;
@@ -107,6 +107,7 @@ window.loadVisualiser = async function loadVisualiser() {
   _visRendering = true;
   requestAnimationFrame(() => {
     _visRendering = false;
+    container.innerHTML = `<div id="vis-status" style="position:absolute;top:4px;right:4px;background:#1a1a2a;color:#f59e0b;font-size:10px;padding:4px 8px;border-radius:4px;z-index:10;font-family:monospace;">rAF: tickers=${_visData?.tickers?.length} cW=${container.clientWidth} cH=${container.clientHeight}</div>`;
     if (window._visPrefilterSector) {
       _setVisView('heatmap');
       window._visPrefilterSector = null;
