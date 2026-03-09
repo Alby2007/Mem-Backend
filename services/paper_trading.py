@@ -812,7 +812,8 @@ def _ai_run_inner(user_id: str) -> dict:
             (user_id, 'scan_start', None,
              f'Scanning open patterns for {user_id} ({len(open_tickers)}/{_PAPER_MAX_OPEN_POSITIONS} slots used, {len(cooled_tickers)} on 24h cooldown)', now_iso)
         )
-        conn.commit()
+        conn.execute('COMMIT')
+        conn.execute('BEGIN')
 
         candidate_rows = conn.execute(
             """SELECT p.id, p.ticker, p.pattern_type, p.direction, p.zone_high, p.zone_low,
@@ -884,7 +885,6 @@ def _ai_run_inner(user_id: str) -> dict:
                     (user_id, 'regime_skip', ticker,
                      f'{ticker} skipped — {direction} in {regime}', now_iso)
                 )
-                conn.commit()
                 skips += 1
                 continue
 
