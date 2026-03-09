@@ -707,3 +707,73 @@ async def tip_position_update(followup_id: int, request: Request, data: Position
         raise
     except Exception as e:
         raise HTTPException(500, detail=str(e))
+
+
+@router.get("/patterns/stats")
+async def patterns_stats(
+    _user: str = Depends(get_current_user),
+    pattern_type: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    direction: Optional[str] = None,
+    min_samples: int = 10,
+):
+    """Aggregate win-rate stats per pattern_type + timeframe + direction.
+
+    Win  = status = 'filled'      (price entered the zone)
+    Loss = status = 'invalidated' (zone was invalidated)
+    Open patterns are excluded.
+    """
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        clauses = ["status IN ('filled', 'invalidated')"]
+        params: list = []
+        if pattern_type:
+            clauses.append("LOWER(pattern_type) = LOWER(?)")
+            params.append(pattern_type)
+        if timeframe:
+            clauses.append("LOWER(timeframe) = LOWER(?)")
+            params.append(timeframe)
+        if direction:
+            clauses.append("LOWER(direction) = LOWER(?)")
+            params.append(direction)
+        where = "WHERE " + " AND ".join(clauses)
+        rows = conn.execute(
+            f"""SELECT
+                  pattern_type,
+                  timeframe,
+                  direction,
+                  COUNT(*)                                              AS total,
+                  SUM(CASE WHEN status='filled'      THEN 1 ELSE 0 END) AS wins,
+                  SUM(CASE WHEN status='invalidated' THEN 1 ELSE 0 END) AS losses,
+                  ROUND(AVG(quality_score), 3)                         AS avg_quality
+               FROM pattern_signals
+               {where}
+               GROUP BY pattern_type, timeframe, direction
+               ORDER BY total DESC""",
+            params,
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    stats = []
+    for row in rows:
+        pt, tf, dirn, total, wins, losses, avg_q = row
+        if total < min_samples:
+            continue
+        win_rate = round(wins / total, 4) if total else None
+        stats.append({
+            "pattern_type": pt,
+            "timeframe":    tf,
+            "direction":    dirn,
+            "total":        total,
+            "wins":         wins,
+            "losses":       losses,
+            "win_rate":     win_rate,
+            "avg_quality":  avg_q,
+        })
+
+    return {
+        "stats":        stats,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }

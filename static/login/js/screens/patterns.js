@@ -36,6 +36,35 @@ function _zoneStatus(p, currentPrice) {
   }
 }
 
+// ── Pattern performance stats cache ─────────────────────────────────────────
+let _patStatsCache = null;  // { 'ifvg|4h|bullish': { win_rate, total, wins }, ... }
+
+async function _ensurePatStats() {
+  if (_patStatsCache) return _patStatsCache;
+  try {
+    const d = await apiFetch('/patterns/stats?min_samples=10');
+    _patStatsCache = {};
+    (d?.stats || []).forEach(s => {
+      const key = `${(s.pattern_type||'').toLowerCase()}|${(s.timeframe||'').toLowerCase()}|${(s.direction||'').toLowerCase()}`;
+      _patStatsCache[key] = s;
+    });
+  } catch(e) {
+    _patStatsCache = {};
+  }
+  return _patStatsCache;
+}
+
+function _patStatKey(p) {
+  return `${(p.pattern_type||'').toLowerCase()}|${(p.timeframe||'').toLowerCase()}|${(p.direction||'').toLowerCase()}`;
+}
+
+function _statPill(stat) {
+  if (!stat) return '';
+  const wr  = Math.round((stat.win_rate || 0) * 100);
+  const cls = wr >= 55 ? 'stat-win-high' : wr >= 45 ? 'stat-win-mid' : 'stat-win-low';
+  return `<span class="pat-stat-pill ${cls}">${wr}% <span class="psp-n">n=${stat.total}</span></span>`;
+}
+
 // Change 5 — pagination state
 let _patOffset = 0;
 let _patFilters = {};
@@ -63,6 +92,8 @@ async function loadPatterns() {
       });
     }).catch(() => {});
   }
+  // Pre-warm stats cache in background (don't block render)
+  _ensurePatStats();
   await _fetchAndRenderPatterns(grid, ticker, false);
 }
 
@@ -113,12 +144,14 @@ async function _fetchAndRenderPatterns(grid, ticker, append) {
       return;
     }
     const prices = window._snapshotPrices || {};
+    const stats = _patStatsCache || {};
     const cards = pats.map(p => {
       const formedRel  = _relTime(p.formed_at);
       const formedFull = fmtDate(p.formed_at);
       const detectedRel  = p.detected_at ? _relTime(p.detected_at) : null;
       const zs = _zoneStatus(p, prices[p.ticker]);
       const zoneTag = zs ? `<span class="zone-tag ${zs.cls}">${zs.label}</span>` : '';
+      const pill = _statPill(stats[_patStatKey(p)]);
       return `
       <div class="pattern-card" onclick="handlePatternClick(event,this,${p.id})">
         <div class="flex-center gap-8 mb-8">
@@ -129,6 +162,7 @@ async function _fetchAndRenderPatterns(grid, ticker, append) {
         <div class="flex-center gap-12 text-sm mb-8">
           <span class="text-muted">TF</span><span class="mono">${escHtml(p.timeframe||'—')}</span>
           <span class="text-muted">Q</span><span class="qual-dot ${_qualColour(p.quality_score)}"></span><span class="mono-amber">${fmt(p.quality_score)}</span>
+          ${pill}
         </div>
         <div class="text-xs text-muted">Zone: <span class="mono">${fmt(p.zone_low)} – ${fmt(p.zone_high)}</span> ${zoneTag}</div>
         <div class="text-xs text-muted mt-8" title="${escHtml(formedFull)}">Formed: ${escHtml(formedRel)}${detectedRel ? ` · detected ${escHtml(detectedRel)}` : ''}</div>
@@ -272,6 +306,7 @@ function openPatternModal(id) {
       <iframe id="pm-iframe" src="${ifrSrc}" allowtransparency="true" frameborder="0" style="display:none;"></iframe>
       <div id="pm-zone-bar">${_buildZoneBar(p, [])}</div>
     </div>
+    <div id="pm-stats-block" class="pm-stats-block pm-stats-loading"></div>
     <div class="pat-modal-right" id="pm-right">
       <div class="pat-modal-section">
         <div class="pat-modal-section-title">Pattern Details</div>
@@ -318,14 +353,53 @@ function openPatternModal(id) {
     sendPatternToChat(p);
   });
 
-  // Load context async
+  // Load context + stats async
   _loadPatternContext(id, p);
+  _loadPatternStats(p);
 }
 
 function closePatternModal(silent) {
   const el = document.getElementById('pat-modal-backdrop');
   if (el) el.remove();
   if (!silent) _modalPatId = null;
+}
+
+async function _loadPatternStats(p) {
+  const el = document.getElementById('pm-stats-block');
+  if (!el) return;
+  const stats = await _ensurePatStats();
+  const s = stats[_patStatKey(p)];
+  if (!s) {
+    el.innerHTML = '<span class="pms-none">Insufficient data for this pattern type + timeframe</span>';
+    el.classList.remove('pm-stats-loading');
+    return;
+  }
+  const wr    = Math.round((s.win_rate || 0) * 100);
+  const wrCls = wr >= 55 ? 'stat-win-high' : wr >= 45 ? 'stat-win-mid' : 'stat-win-low';
+  const barW  = Math.max(2, wr);
+  const label = `${(p.pattern_type||'').replace(/_/g,' ').toUpperCase()} · ${p.timeframe||''} · ${(p.direction||'').toLowerCase()}`;
+  el.innerHTML = `
+    <div class="pms-label">${escHtml(label)}</div>
+    <div class="pms-row">
+      <div class="pms-stat">
+        <span class="pms-val ${wrCls}">${wr}%</span>
+        <span class="pms-key">win rate</span>
+      </div>
+      <div class="pms-stat">
+        <span class="pms-val">${s.total}</span>
+        <span class="pms-key">sample size</span>
+      </div>
+      <div class="pms-stat">
+        <span class="pms-val">${s.wins}<span class="pms-sub">W</span> ${s.losses}<span class="pms-sub">L</span></span>
+        <span class="pms-key">record</span>
+      </div>
+      <div class="pms-stat">
+        <span class="pms-val">${s.avg_quality != null ? s.avg_quality : '—'}</span>
+        <span class="pms-key">avg quality</span>
+      </div>
+    </div>
+    <div class="pms-bar-track"><div class="pms-bar-fill ${wrCls}" style="width:${barW}%"></div></div>`;
+  el.classList.remove('pm-stats-loading');
 }
 
 async function _loadPatternContext(id, p) {

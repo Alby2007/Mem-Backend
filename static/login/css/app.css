@@ -1585,12 +1585,88 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 }
 .pat-discuss-btn:hover { background: #fbbf24; }
 
+/* ── Pattern performance stats ─────────────────────────────────────────────── */
+
+/* Card pill */
+.pat-stat-pill {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 9px; font-family: var(--mono);
+  padding: 1px 6px; border-radius: 10px;
+  border: 1px solid transparent;
+  white-space: nowrap; margin-left: auto;
+}
+.pat-stat-pill.stat-win-high { color: #22c55e; border-color: #22c55e44; background: rgba(34,197,94,.08); }
+.pat-stat-pill.stat-win-mid  { color: #f59e0b; border-color: #f59e0b44; background: rgba(245,158,11,.08); }
+.pat-stat-pill.stat-win-low  { color: #ef4444; border-color: #ef444444; background: rgba(239,68,68,.08); }
+.psp-n { color: inherit; opacity: 0.55; }
+
+/* Modal stats block — spans chart column, sits below zone bar */
+.pm-stats-block {
+  grid-column: 1;
+  background: #09090f;
+  border-top: 1px solid #1e1e2a;
+  padding: 8px 16px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.pm-stats-loading { min-height: 44px; }
+.pms-label {
+  font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 7px;
+}
+.pms-row {
+  display: flex; gap: 20px; align-items: flex-start; margin-bottom: 7px;
+}
+.pms-stat {
+  display: flex; flex-direction: column; gap: 1px;
+}
+.pms-val {
+  font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--text);
+}
+.pms-val.stat-win-high { color: #22c55e; }
+.pms-val.stat-win-mid  { color: #f59e0b; }
+.pms-val.stat-win-low  { color: #ef4444; }
+.pms-key { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.pms-sub { font-size: 9px; color: var(--muted); margin-left: 1px; }
+.pms-bar-track {
+  height: 3px; background: #1e1e2a; border-radius: 2px; overflow: hidden;
+}
+.pms-bar-fill {
+  height: 100%; border-radius: 2px; transition: width .4s ease;
+}
+.pms-bar-fill.stat-win-high { background: #22c55e; }
+.pms-bar-fill.stat-win-mid  { background: #f59e0b; }
+.pms-bar-fill.stat-win-low  { background: #ef4444; }
+.pms-none {
+  font-size: 10px; color: var(--muted); font-style: italic;
+}
+
+/* Win-rate colour classes shared between pill + block */
+.stat-win-high { --wr-color: #22c55e; }
+.stat-win-mid  { --wr-color: #f59e0b; }
+.stat-win-low  { --wr-color: #ef4444; }
+
+/* Pattern card grid — allow pill to sit on same line */
+.pattern-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.pattern-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 7px; padding: 14px; cursor: pointer;
+  transition: border-color .15s;
+  position: relative;
+}
+.pattern-card:hover { border-color: var(--accent); }
+
 @media (max-width: 800px) {
   .pat-modal {
     grid-template-columns: 1fr;
-    grid-template-rows: 48px 220px 1fr;
+    grid-template-rows: 48px 220px auto 1fr;
     width: 100vw; height: 100dvh;
     border-radius: 0;
   }
   .pm-qual { display: none; }
+  .pm-stats-block { grid-column: 1; }
 }
