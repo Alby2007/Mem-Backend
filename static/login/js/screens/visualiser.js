@@ -27,15 +27,23 @@ function _visNormSector(raw) {
 }
 
 // ── Colour helpers ────────────────────────────────────────────────────────────
+function _visConviction(t) {
+  const cv = (t.conviction_tier || '').toLowerCase();
+  if (cv.includes('high'))   return { opacity: 1.0, ring: 2.5, ringOp: 0.9 };
+  if (cv.includes('med'))    return { opacity: 0.65, ring: 1.5, ringOp: 0.6 };
+  if (cv.includes('low'))    return { opacity: 0.35, ring: 0,   ringOp: 0   };
+  // fallback: use macro_confirmation if no conviction_tier
+  const mc = (t.macro_confirmation || '').toLowerCase();
+  if (mc.includes('confirm')) return { opacity: 0.85, ring: 1.5, ringOp: 0.6 };
+  if (mc.includes('partial')) return { opacity: 0.55, ring: 0.5, ringOp: 0.4 };
+  return { opacity: 0.4, ring: 0, ringOp: 0 };
+}
+
 function _visColour(t) {
   const dir = (t.signal_direction || '').toLowerCase();
-  if (dir.includes('bull')) {
-    const mc = (t.macro_confirmation || '').toLowerCase();
-    const op = mc.includes('confirm') ? 1.0 : mc.includes('partial') ? 0.7 : 0.4;
-    return { hex: '#22c55e', opacity: op };
-  }
-  if (dir.includes('bear')) return { hex: '#ef4444', opacity: 0.9 };
-  return { hex: '#6b7280', opacity: 0.7 };
+  if (dir.includes('bull')) return '#22c55e';
+  if (dir.includes('bear')) return '#ef4444';
+  return '#6b7280';
 }
 
 function _visRadiusPx(upside) {
@@ -169,12 +177,14 @@ function _renderBubble() {
 
   // Build D3 nodes
   const nodes = tickers.map(t => {
-    const s = _visNormSector(t.sector);
-    const c = _visColour(t);
+    const s  = _visNormSector(t.sector);
+    const cv = _visConviction(t);
     return {
       ticker: t.ticker, sector: s, upside: t.upside_pct,
       r: _visRadiusPx(t.upside_pct),
-      fill: c.hex, opacity: c.opacity,
+      fill: _visColour(t), opacity: cv.opacity,
+      ring: cv.ring, ringOp: cv.ringOp,
+      conviction: t.conviction_tier || '',
       signal: t.signal_direction || 'neutral',
       macro: t.macro_confirmation || '',
       vol: t.volatility_regime || '',
@@ -221,9 +231,16 @@ function _renderBubble() {
     .attr('r', d => d.r)
     .attr('fill', d => d.fill)
     .attr('opacity', d => d.opacity)
+    .attr('stroke', 'none');
+
+  // Conviction ring — only drawn when ring > 0
+  node.filter(d => d.ring > 0)
+    .append('circle')
+    .attr('r', d => d.r + 2)
+    .attr('fill', 'none')
     .attr('stroke', d => d.fill)
-    .attr('stroke-width', 0.5)
-    .attr('stroke-opacity', 0.5);
+    .attr('stroke-width', d => d.ring)
+    .attr('stroke-opacity', d => d.ringOp);
 
   node.filter(d => d.r > 16)
     .append('text')
@@ -245,10 +262,12 @@ function _renderBubble() {
     const up = d.upside != null ? d.upside.toFixed(2) + '%' : '—';
     const r1m = d.r1m != null ? parseFloat(d.r1m).toFixed(2) + '%' : '—';
     const r1y = d.r1y != null ? parseFloat(d.r1y).toFixed(2) + '%' : '—';
+    const cvLabel = d.conviction ? d.conviction : '—';
     tooltip.style('display', 'block')
       .html(`<div class="vis-tt-ticker">${escHtml(d.ticker)} <span class="vis-tt-sector">· ${escHtml(d.sector)}</span></div>
 <div class="vis-tt-row"><span>Upside</span><span>${escHtml(up)}</span></div>
 <div class="vis-tt-row"><span>Signal</span><span>${escHtml(d.signal)}</span></div>
+<div class="vis-tt-row"><span>Conviction</span><span>${escHtml(cvLabel)}</span></div>
 <div class="vis-tt-row"><span>Macro</span><span>${escHtml(d.macro || '—')}</span></div>
 <div class="vis-tt-row"><span>Vol</span><span>${escHtml(d.vol || '—')}</span></div>
 <div class="vis-tt-row"><span>Return 1m</span><span>${escHtml(r1m)}</span></div>
