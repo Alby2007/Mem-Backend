@@ -41,25 +41,33 @@ conn.close()
 print('=== DIAGNOSTICS ===')
 print(json.dumps(diag, indent=2))
 
-# ── Run enrichment if conviction_tier atoms are missing ───────────────────────
-if diag.get('conviction_tier_count', 0) == 0:
-    print('\n=== RUNNING SignalEnrichmentAdapter ===')
-    try:
-        import extensions as ext  # loads DB_PATH, kg, etc.
-        from ingest.signal_enrichment_adapter import SignalEnrichmentAdapter
-        sea = SignalEnrichmentAdapter(db_path=ext.DB_PATH)
-        result = sea.run()
-        print('enrichment result length:', len(result) if result else 0)
-    except Exception as e:
-        print('enrichment error:', e)
+# ── Run enrichment to populate conviction_tier, signal_quality atoms ─────────
+print('\n=== RUNNING SignalEnrichmentAdapter ===')
+try:
+    from knowledge.graph import KnowledgeGraph
+    from ingest.signal_enrichment_adapter import SignalEnrichmentAdapter
+    kg = KnowledgeGraph(db_path=db)
+    sea = SignalEnrichmentAdapter(db_path=db)
+    atoms = sea.run()
+    print('atoms generated:', len(atoms) if atoms else 0)
+    result = sea.push(atoms, kg)
+    print('push result:', result)
+except Exception as e:
+    import traceback
+    print('enrichment error:', e)
+    traceback.print_exc()
 
-    # Re-check
-    conn3 = sqlite3.connect(db)
-    ct = conn3.execute(
-        'SELECT COUNT(*) FROM facts WHERE predicate=?', ('conviction_tier',)
-    ).fetchone()[0]
-    conn3.close()
-    print('conviction_tier atoms after enrichment:', ct)
+# Re-check
+conn3 = sqlite3.connect(db)
+ct = conn3.execute(
+    'SELECT COUNT(*) FROM facts WHERE predicate=?', ('conviction_tier',)
+).fetchone()[0]
+r1m = conn3.execute(
+    'SELECT COUNT(*) FROM facts WHERE predicate=?', ('return_1m',)
+).fetchone()[0]
+conn3.close()
+print('conviction_tier atoms after enrichment:', ct)
+print('return_1m atoms after enrichment:', r1m)
 
 # ── Take snapshot ─────────────────────────────────────────────────────────────
 print('\n=== SNAPSHOT ===')
