@@ -77,21 +77,36 @@ def _fetch_xls_bytes() -> Optional[bytes]:
         return None
 
 
+def _excel_serial_to_period(serial: float) -> Optional[str]:
+    """
+    Convert an Excel date serial number to a YYYY-MM period string.
+    Excel epoch: Jan 1 1900 = serial 1 (with the erroneous leap year 1900 bug).
+    """
+    try:
+        import xlrd
+        tup = xlrd.xldate_as_tuple(serial, 0)  # datemode=0 = 1900-based
+        return f'{tup[0]}-{tup[1]:02d}'
+    except Exception:
+        return None
+
+
 def _parse_xls(raw: bytes) -> Optional[Tuple[str, float, float, float]]:
     """
     Parse the GPR XLS (BIFF8 format) using xlrd.
     Returns (period, gpr, gprt, gpra) for the most recent non-empty row, or None.
 
-    Expected columns (order varies by sheet version):
-      year, month, ..., GPR (headline), GPRT (threats), GPRA (acts), ...
+    Actual structure (from inspection):
+      Row 0: header — quoted strings like 'month', 'GPR', 'GPRT', 'GPRA', 'GPRH', ...
+      Col 0: Excel date serial (monthly, e.g. 46054.0 = 2026-01)
+      Col 1: GPR  (headline, global)
+      Col 2: GPRT (threats sub-index)
+      Col 3: GPRA (acts sub-index)
+      Col 4: GPRH (historical headline — alternative series)
     """
     try:
-        import xlrd  # installed via pip on OCI; stdlib fallback not feasible for BIFF8
+        import xlrd
     except ImportError:
-        _logger.error(
-            'GPR: xlrd not installed — run: pip install xlrd  '
-            '(required to parse BIFF8 .xls files)'
-        )
+        _logger.error('GPR: xlrd not installed — run: pip install xlrd')
         return None
 
     try:
@@ -100,68 +115,60 @@ def _parse_xls(raw: bytes) -> Optional[Tuple[str, float, float, float]]:
         _logger.warning('GPR: xlrd failed to open workbook: %s', exc)
         return None
 
-    # Try each sheet — the main data is usually on sheet 0
-    for sheet_idx in range(wb.nsheets):
-        ws = wb.sheet_by_index(sheet_idx)
-        if ws.nrows < 3:
-            continue
+    ws = wb.sheet_by_index(0)
+    if ws.nrows < 3:
+        _logger.warning('GPR: sheet has too few rows (%d)', ws.nrows)
+        return None
 
-        # Find header row — scan first 5 rows
-        headers: List[str] = []
-        header_row = -1
-        for r in range(min(5, ws.nrows)):
-            row_vals = [str(ws.cell_value(r, c)).strip().upper() for c in range(ws.ncols)]
-            # Look for Year/Month columns + GPR
-            if ('YEAR' in row_vals or 'DATE' in row_vals) and 'GPR' in row_vals:
-                headers    = row_vals
-                header_row = r
-                break
+    # Parse header row (row 0) — strip quotes from cell values
+    headers = [str(ws.cell_value(0, c)).strip().strip("'").upper() for c in range(ws.ncols)]
+    _logger.debug('GPR headers: %s', headers[:10])
 
-        if header_row < 0 or not headers:
-            continue
+    def _col(*names: str) -> int:
+        for n in names:
+            if n in headers:
+                return headers.index(n)
+        return -1
 
-        def _col(*names: str) -> int:
-            for n in names:
-                if n in headers:
-                    return headers.index(n)
-            return -1
+    col_date = _col('MONTH', 'DATE', 'YEAR')
+    col_gpr  = _col('GPR')
+    col_gprt = _col('GPRT')
+    col_gpra = _col('GPRA')
 
-        col_year  = _col('YEAR', 'DATE_YEAR')
-        col_month = _col('MONTH', 'DATE_MONTH')
-        col_gpr   = _col('GPR', 'GPRH')
-        col_gprt  = _col('GPRT', 'GPRTHREAT', 'GPR_THREATS')
-        col_gpra  = _col('GPRA', 'GPRACT', 'GPR_ACTS')
+    if col_date < 0 or col_gpr < 0:
+        _logger.warning('GPR: required columns not found — headers=%s', headers[:10])
+        return None
 
-        if col_year < 0 or col_month < 0 or col_gpr < 0:
-            _logger.debug('GPR sheet %d: missing key columns (headers=%s)', sheet_idx, headers[:10])
-            continue
+    # Scan from bottom to find most recent row with a non-empty GPR value
+    for r in range(ws.nrows - 1, 0, -1):
+        try:
+            date_serial = ws.cell_value(r, col_date)
+            gpr_val     = ws.cell_value(r, col_gpr)
 
-        # Scan rows from bottom to find most recent non-empty GPR value
-        for r in range(ws.nrows - 1, header_row, -1):
-            try:
-                year_val  = ws.cell_value(r, col_year)
-                month_val = ws.cell_value(r, col_month)
-                gpr_val   = ws.cell_value(r, col_gpr)
-
-                if not year_val or not month_val or not gpr_val:
-                    continue
-
-                year  = int(float(year_val))
-                month = int(float(month_val))
-                gpr   = round(float(gpr_val), 2)
-
-                if gpr <= 0 or year < 1985:
-                    continue
-
-                gprt = round(float(ws.cell_value(r, col_gprt)), 2) if col_gprt >= 0 else gpr
-                gpra = round(float(ws.cell_value(r, col_gpra)), 2) if col_gpra >= 0 else gpr
-
-                period = f'{year}-{month:02d}'
-                return (period, gpr, gprt, gpra)
-            except (ValueError, TypeError, IndexError):
+            if not date_serial or not gpr_val:
                 continue
 
-    _logger.warning('GPR: no valid data rows found in XLS')
+            gpr = round(float(gpr_val), 2)
+            if gpr <= 0:
+                continue
+
+            period = _excel_serial_to_period(float(date_serial))
+            if not period:
+                continue
+
+            gprt_val = ws.cell_value(r, col_gprt) if col_gprt >= 0 else None
+            gpra_val = ws.cell_value(r, col_gpra) if col_gpra >= 0 else None
+
+            gprt = round(float(gprt_val), 2) if gprt_val else gpr
+            gpra = round(float(gpra_val), 2) if gpra_val else gpr
+
+            _logger.info('GPR: parsed period=%s gpr=%.2f gprt=%.2f gpra=%.2f (row %d)',
+                         period, gpr, gprt, gpra, r)
+            return (period, gpr, gprt, gpra)
+        except (ValueError, TypeError, IndexError):
+            continue
+
+    _logger.warning('GPR: no valid data rows found in XLS (checked %d rows)', ws.nrows)
     return None
 
 
