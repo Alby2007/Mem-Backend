@@ -668,7 +668,7 @@ async function loadPortfolioHoldings() {
     if (holdings.length) {
       state.holdings = holdings.map(h => h.is_cash
         ? { ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost, currency: h.currency, is_cash: true, value: h.value }
-        : { ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost, currency: h.currency });
+        : { ticker: h.ticker, quantity: h.quantity, avg_cost: h.avg_cost, currency: h.currency, sector: h.sector || '' });
       renderHoldings();
       ptfMarkStep2Done();
     }
@@ -687,6 +687,8 @@ async function loadPortfolioModel() {
   try {
     const ws = await apiFetch(`/users/${state.userId}/watchlist-signals`);
     const sigs = ws?.signals || [];
+    // Cache tickers for feedback widget gating
+    state.watchlistTickers = sigs.map(s => s.ticker).filter(Boolean);
     if (!sigs.length) {
       sigEl.innerHTML = `<div class="ptf-signals-empty"><span class="pse-icon">📡</span><div class="pse-title">No signals yet</div><div class="pse-sub">Signals appear here as patterns form on your holdings. Check back after the next KB update.</div></div>`;
       return;

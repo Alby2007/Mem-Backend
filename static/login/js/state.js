@@ -5,7 +5,10 @@ const state = {
   isDev: false,
   tier: 'free',
   chatQueriesUsedToday: 0,
-  holdings: [],     // pending holdings before submit
+  holdings: [],           // pending holdings before submit
+  cashBalance: 0,         // paper account free cash (60s TTL — see _cashFetchedAt)
+  _cashFetchedAt: 0,      // epoch ms timestamp of last cashBalance fetch
+  watchlistTickers: [],   // tickers from user watchlist (for feedback widget gating)
 };
 
 // ── Tier config (mirrors core/tiers.py — kept in sync manually until Stripe) ──

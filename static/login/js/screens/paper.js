@@ -57,6 +57,8 @@ async function _ptLoadAccount() {
     const d = await apiFetch(`/users/${state.userId}/paper/account`);
     if (!d) return;
     const acctVal = d.account_value ?? d.virtual_balance ?? 10000;
+    state.cashBalance = d.free_cash ?? d.virtual_balance ?? 0;
+    state._cashFetchedAt = Date.now();
     document.getElementById('pt-balance').textContent = acctVal.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
     const subEl = document.getElementById('pt-balance-sub');
     if (subEl) {

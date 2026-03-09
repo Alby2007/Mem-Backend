@@ -391,6 +391,149 @@ function bindTipFeedback(msgEl) {
   });
 }
 
+// ── Trade thesis feedback widget ──────────────────────────────────────────────
+
+async function _ensureCashBalance() {
+  if (!state.userId) return;
+  if (Date.now() - (state._cashFetchedAt || 0) < 60000) return;
+  try {
+    const d = await apiFetch(`/users/${state.userId}/paper/account`);
+    state.cashBalance = d?.free_cash ?? 0;
+    state._cashFetchedAt = Date.now();
+  } catch(e) {}
+}
+
+function shouldShowFeedbackWidget(ga) {
+  if (!ga || typeof ga !== 'object') return null;
+  const ticker     = ga.ticker;
+  const direction  = (ga.signal_direction || '').toLowerCase();
+  const conviction = (ga.conviction_tier  || '').toLowerCase();
+  if (!ticker) return null;
+  if (!['long', 'short', 'bullish', 'bearish'].includes(direction)) return null;
+  if (!['high', 'medium'].includes(conviction)) return null;
+  const t = ticker.toUpperCase();
+  const inHoldings  = (state.holdings  || []).some(h => !h.is_cash && h.ticker?.toUpperCase() === t);
+  const inWatchlist = (state.watchlistTickers || []).map(s => s.toUpperCase()).includes(t);
+  const gaSector    = (ga.sector || '').toLowerCase();
+  const sectorMatch = gaSector && (state.holdings || []).some(h => !h.is_cash && (h.sector || '').toLowerCase() === gaSector);
+  if (!inHoldings && !inWatchlist && !sectorMatch) return null;
+  if ((state.cashBalance || 0) <= 0) return null;
+  return { ticker, direction, conviction };
+}
+
+function renderFeedbackWidget(thesis, patternId, tipId) {
+  const dirWord = ['bearish', 'short'].includes(thesis.direction) ? 'BEARISH' : 'BULLISH';
+  const dirCls  = dirWord === 'BEARISH' ? 'trade-fb-dir bearish' : 'trade-fb-dir bullish';
+  return `<div class="trade-fb-widget" data-ticker="${escHtml(thesis.ticker)}" data-pattern-id="${patternId || ''}" data-tip-id="${tipId || '0'}">
+    <div class="trade-fb-header">
+      <span class="trade-fb-ticker">${escHtml(thesis.ticker.toUpperCase())}</span>
+      <span class="${dirCls}">${dirWord}</span>
+      <span class="trade-fb-conv">${escHtml(thesis.conviction.toUpperCase())}</span>
+    </div>
+    <div class="trade-fb-btns">
+      <button class="trade-fb-take">🎯 Taking it</button>
+      <button class="trade-fb-more">💬 More</button>
+      <button class="trade-fb-pass">✕ Pass</button>
+    </div>
+  </div>`;
+}
+
+function bindFeedbackWidget(msgEl) {
+  const widget = msgEl.querySelector('.trade-fb-widget');
+  if (!widget) return;
+  const ticker    = widget.dataset.ticker;
+  const patternId = widget.dataset.patternId ? parseInt(widget.dataset.patternId) : null;
+  const tipId     = widget.dataset.tipId || '0';
+  const btnsRow   = widget.querySelector('.trade-fb-btns');
+
+  const _done = () => { widget.dataset.done = '1'; btnsRow.querySelectorAll('button').forEach(b => b.disabled = true); };
+
+  btnsRow.querySelector('.trade-fb-take').addEventListener('click', async function() {
+    if (widget.dataset.done) return;
+    _done();
+    try {
+      const d = await apiFetch(`/tips/${tipId}/feedback`, { method: 'POST', body: JSON.stringify({
+        user_id: state.userId, action: 'taking_it', pattern_id: patternId
+      })});
+      let html = '';
+      if (d && d.entry_price != null) {
+        const sym = (d.cash_after != null) ? '£' : '$';
+        html = `<div class="trade-fb-confirm">
+          <div class="trade-fb-confirm-title">✓ Position opened</div>
+          <div class="tip-pos-grid">
+            <div><span class="tip-label">Entry</span><span class="mono-amber">${fmt(d.entry_price)}</span></div>
+            <div><span class="tip-label">Stop</span><span class="mono-red">${fmt(d.stop_loss)}</span></div>
+            <div><span class="tip-label">T1</span><span class="mono-green">${fmt(d.target_1)}</span></div>
+            <div><span class="tip-label">T2</span><span class="mono-green">${fmt(d.target_2)}</span></div>
+            ${d.position_size != null ? `<div><span class="tip-label">Size</span><span class="mono-amber">${Math.round(d.position_size)} shares</span></div>` : ''}
+          </div>
+          <div class="trade-fb-monitoring">Monitoring active — you'll be alerted when action is needed</div>
+          ${d.cash_after != null ? `<div class="trade-fb-cash">Cash remaining: ${sym}${Number(d.cash_after).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>` : ''}
+        </div>`;
+        state.cashBalance = d.cash_after ?? state.cashBalance;
+        state._cashFetchedAt = Date.now();
+      } else {
+        html = `<div class="trade-fb-confirm"><div class="trade-fb-confirm-title">✓ ${escHtml(d?.message || 'Signal noted — monitoring active')}</div></div>`;
+      }
+      btnsRow.insertAdjacentHTML('afterend', html);
+      btnsRow.style.display = 'none';
+    } catch(e) { showToast('Error: ' + e.message); }
+  });
+
+  btnsRow.querySelector('.trade-fb-more').addEventListener('click', async function() {
+    if (widget.dataset.done) return;
+    _done();
+    try {
+      const d = await apiFetch(`/tips/${tipId}/feedback`, { method: 'POST', body: JSON.stringify({
+        user_id: state.userId, action: 'tell_me_more', pattern_id: patternId
+      })});
+      const questions = d?.suggested_questions || [
+        "What's the risk if it breaks below the zone?",
+        "How has this pattern performed in this regime?",
+        "Does this conflict with my existing positions?",
+      ];
+      const chips = questions.map(q =>
+        `<button class="trade-fb-chip" onclick="document.getElementById('chat-input').value=${JSON.stringify(q)};document.getElementById('chat-input').focus()">${escHtml(q)}</button>`
+      ).join('');
+      btnsRow.insertAdjacentHTML('afterend', `<div class="trade-fb-more-chips">${chips}</div>`);
+      btnsRow.style.display = 'none';
+    } catch(e) { showToast('Error: ' + e.message); }
+  });
+
+  btnsRow.querySelector('.trade-fb-pass').addEventListener('click', function() {
+    if (widget.dataset.done) return;
+    widget.dataset.done = '1';
+    btnsRow.querySelectorAll('button').forEach(b => b.disabled = true);
+    const reasons = [
+      ['too_risky', 'Too risky'],
+      ['wrong_setup', 'Wrong setup'],
+      ['wrong_timing', 'Wrong timing'],
+      ['dont_know_stock', "Don't know it"],
+      ['no_reason', 'No reason'],
+    ];
+    const pills = reasons.map(([r, label]) =>
+      `<button class="trade-fb-rej-pill" data-r="${r}">${escHtml(label)}</button>`
+    ).join('');
+    const rejRow = document.createElement('div');
+    rejRow.className = 'trade-fb-rej-row';
+    rejRow.innerHTML = `<span class="trade-fb-rej-label">What put you off?</span>${pills}`;
+    btnsRow.insertAdjacentElement('afterend', rejRow);
+    btnsRow.style.display = 'none';
+    rejRow.querySelectorAll('.trade-fb-rej-pill').forEach(pill => {
+      pill.addEventListener('click', async function() {
+        rejRow.querySelectorAll('.trade-fb-rej-pill').forEach(p => p.disabled = true);
+        try {
+          await apiFetch(`/tips/${tipId}/feedback`, { method: 'POST', body: JSON.stringify({
+            user_id: state.userId, action: 'not_for_me',
+            rejection_reason: this.dataset.r, pattern_id: patternId
+          })});
+        } catch(e) {}
+        rejRow.innerHTML = '<span class="trade-fb-noted">Noted — improving future signals</span>';
+      });
+    });
+  });
+}
+
 function renderOverlay(overlay) {
   if (!overlay || typeof overlay !== 'object') return '';
   const parts = [];
@@ -420,6 +563,7 @@ function renderOverlay(overlay) {
 }
 
 async function sendChat() {
+  await _ensureCashBalance();
   const inp = document.getElementById('chat-input');
   const msg = inp.value.trim();
   if (!msg) return;
@@ -473,6 +617,14 @@ async function sendChat() {
       }, 300);
     });
     if (tipCardHtml) bindTipFeedback(thinking);
+    const _thesis = shouldShowFeedbackWidget(d.grounding_atoms);
+    if (_thesis) {
+      const _patId = d.best_pattern?.id || null;
+      const _tipId = d.tip_card?.tip_id || '0';
+      thinking.querySelector('.msg-bubble').insertAdjacentHTML('beforeend',
+        renderFeedbackWidget(_thesis, _patId, _tipId));
+      bindFeedbackWidget(thinking);
+    }
     if (d.kb_enriched && d.live_fetched?.length) {
       const badge = document.createElement('div');
       badge.className = 'msg-live-badge';

@@ -1533,6 +1533,28 @@ def run(
             import logging as _ga_log
             _ga_log.getLogger(__name__).error('grounding atoms lookup failed: %s', _ga_exc)
 
+        # ── Best open pattern for this ticker (feedback widget pattern_id) ────
+        try:
+            import sqlite3 as _sq_bp
+            _cc_bp = _sq_bp.connect(ext.DB_PATH, timeout=5)
+            _dir_filter = (_ga.get('signal_direction') or '').lower()
+            _bp_row = _cc_bp.execute(
+                """SELECT id, pattern_type, direction, zone_low, zone_high, timeframe, quality_score
+                   FROM pattern_signals
+                   WHERE LOWER(ticker)=? AND status='open'
+                     AND (? = '' OR LOWER(direction) LIKE ?)
+                   ORDER BY quality_score DESC LIMIT 1""",
+                (_tk, _dir_filter, f'%{_dir_filter}%'),
+            ).fetchone()
+            _cc_bp.close()
+            if _bp_row:
+                response['best_pattern'] = dict(zip(
+                    ['id', 'pattern_type', 'direction', 'zone_low', 'zone_high', 'timeframe', 'quality_score'],
+                    _bp_row,
+                ))
+        except Exception:
+            pass
+
     # ── Persist assistant turn + KB graduation ────────────────────────────
     _persist_assistant_and_graduate(
         answer, message, session_id, conv_session_id, user_id,
