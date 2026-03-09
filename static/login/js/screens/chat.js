@@ -397,8 +397,8 @@ async function _ensureCashBalance() {
   if (!state.userId) return;
   if (Date.now() - (state._cashFetchedAt || 0) < 60000) return;
   try {
-    const d = await apiFetch(`/users/${state.userId}/paper/account`);
-    state.cashBalance = d?.free_cash ?? 0;
+    const d = await apiFetch(`/users/${state.userId}/cash`);
+    state.cashBalance = d?.available_cash ?? 0;
     state._cashFetchedAt = Date.now();
   } catch(e) {}
 }
@@ -478,8 +478,7 @@ function bindFeedbackWidget(msgEl) {
           <div class="trade-fb-monitoring">Monitoring active — you'll be alerted when action is needed</div>
           ${d.cash_after != null ? `<div class="trade-fb-cash">Cash remaining: ${sym}${Number(d.cash_after).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>` : ''}
         </div>`;
-        state.cashBalance = d.cash_after ?? state.cashBalance;
-        state._cashFetchedAt = Date.now();
+        state._cashFetchedAt = 0; // invalidate so next sendChat re-fetches portfolio cash
         btnsRow.insertAdjacentHTML('afterend', html);
         btnsRow.style.display = 'none';
         // Bind the save button
