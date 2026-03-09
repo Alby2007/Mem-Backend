@@ -272,14 +272,16 @@ class PatternAdapter:
         self.timeframes = timeframes or _DEFAULT_TIMEFRAMES
 
     def _get_tickers(self, conn: sqlite3.Connection) -> List[str]:
-        """Return configured tickers or all unique subjects from the facts table."""
+        """Return configured tickers or subjects that have a last_price atom in the KB.
+        Using last_price as the filter ensures only yfinance-resolvable tickers are scanned
+        and skips macro/country/concept subjects that pollute the facts table."""
         if self.tickers:
             return self.tickers
         try:
             rows = conn.execute(
-                "SELECT DISTINCT subject FROM facts ORDER BY subject"
+                "SELECT DISTINCT subject FROM facts WHERE predicate='last_price' ORDER BY subject"
             ).fetchall()
-            return [r[0] for r in rows if r[0] and len(r[0]) <= 6]
+            return [r[0] for r in rows if r[0] and len(r[0]) <= 10]
         except Exception:
             return []
 
