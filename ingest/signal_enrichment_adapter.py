@@ -457,6 +457,11 @@ def _compute_position_sizing_atoms(
     #   |score| < threshold → label only, no shift (surfaced in ct_rule for LLM)
     #
     # Constants
+    # TODO(prior-scaling): once baseline_sample_count is exposed by get_global_baseline(),
+    #   replace the fixed prior with: _CAL_PRIOR_TOTAL = min(20, baseline_n // 10)
+    #   This makes the prior stronger when the global baseline is itself well-supported
+    #   (e.g. baseline built from 2000 samples → prior_total=20; from 50 → prior_total=5).
+    #   Defer until baseline_n is routinely ≥200 across pattern types.
     _CAL_PRIOR_TOTAL = 10     # phantom sample count for Bayesian smoothing
     _CAL_FALLBACK    = 0.50   # used when global baseline unavailable
     _CAL_THRESHOLD   = 0.30   # |weighted_score| needed to shift a tier

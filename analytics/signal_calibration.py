@@ -186,6 +186,14 @@ def get_global_baseline(
     independent of which ticker is being evaluated, so the log-ratio
     log(hr / baseline) measures genuine alpha above pattern-type expectation
     rather than against an arbitrary 0.50.
+
+    Future improvements (defer until sample sizes are large enough):
+    - TODO(baseline-sector): stratify by (pattern_type, timeframe, sector)
+        e.g. FVG 4h in tech vs utilities may have meaningfully different
+        natural hit rates.  Only reliable once each sector bucket has ≥100
+        pooled samples.
+    - TODO(baseline-regime): stratify by market_regime for regime-aware
+        baselines once per-regime sample counts are sufficient.
     """
     conn = sqlite3.connect(db_path, timeout=10)
     try:
