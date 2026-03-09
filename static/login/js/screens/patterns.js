@@ -118,7 +118,7 @@ async function _fetchAndRenderPatterns(grid, ticker, append) {
       const seenCounts = {};
       pats = pats.filter(p => {
         seenCounts[p.ticker] = (seenCounts[p.ticker] || 0) + 1;
-        return seenCounts[p.ticker] <= 3;
+        return seenCounts[p.ticker] <= 5;
       });
     }
     if (!append) {

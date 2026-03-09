@@ -194,13 +194,23 @@ def _resample_4h(candles_1h: List[OHLCV]) -> List[OHLCV]:
 # ── Dedup check ────────────────────────────────────────────────────────────────
 
 def _pattern_exists(conn: sqlite3.Connection, sig: PatternSignal) -> bool:
-    """Return True if an identical pattern row already exists in pattern_signals."""
+    """Return True if an identical pattern row already exists in pattern_signals.
+
+    Uses zone_high/zone_low (rounded to 2dp) as the identity key instead of
+    formed_at — the candle timestamp can drift due to DST / timezone offsets
+    between runs, producing different ISO strings for the same candle and
+    bypassing the dedup check.
+    """
+    zh = round(sig.zone_high, 2)
+    zl = round(sig.zone_low, 2)
     row = conn.execute(
         """SELECT 1 FROM pattern_signals
            WHERE ticker = ? AND pattern_type = ? AND direction = ?
-             AND formed_at = ? AND timeframe = ?
+             AND timeframe = ?
+             AND ROUND(zone_high, 2) = ? AND ROUND(zone_low, 2) = ?
+             AND status NOT IN ('filled', 'broken')
            LIMIT 1""",
-        (sig.ticker, sig.pattern_type, sig.direction, sig.formed_at, sig.timeframe),
+        (sig.ticker, sig.pattern_type, sig.direction, sig.timeframe, zh, zl),
     ).fetchone()
     return row is not None
 
