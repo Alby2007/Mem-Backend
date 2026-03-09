@@ -778,7 +778,6 @@ def _ai_run_inner(user_id: str) -> dict:
                 (user_id, 'scan_start', None,
                  f'Scan skipped — already at max {_PAPER_MAX_OPEN_POSITIONS} open positions', now_iso)
             )
-            conn.execute('COMMIT')
             conn.close()
             return {'entries': 0, 'skips': 0, 'monitor_updates': []}
 
@@ -1071,7 +1070,6 @@ def _ai_run_inner(user_id: str) -> dict:
     except Exception as e:
         _logger.error('ai_run error for %s: %s', user_id, e)
         try:
-            conn.execute('ROLLBACK')
             conn.close()
         except Exception:
             pass
