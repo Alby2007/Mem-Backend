@@ -114,8 +114,22 @@ async def _lifespan(app: FastAPI):
         scheduler.register(EIAAdapter(), interval_sec=86400)
 
         app.state.scheduler = scheduler
-        scheduler.start(startup_delay_sec=15)
-        _logger.info('Ingest scheduler started (%d adapters)', 18)
+        # Stagger startup: each adapter gets a unique delay so they don't all
+        # hammer SQLite simultaneously. Heavy writers are spread 20s apart.
+        import threading as _sched_threading
+        def _delayed_register(adapter, interval_sec, delay_sec):
+            def _run():
+                import time as _t
+                _t.sleep(delay_sec)
+                scheduler._schedule(adapter=adapter, interval_sec=interval_sec, immediate=True)
+            t = _sched_threading.Thread(target=_run, daemon=True, name=f'ingest-start-{adapter.name}')
+            t.start()
+
+        scheduler._running = True
+        for i, (adapter, interval_sec) in enumerate(scheduler._adapters):
+            _delayed_register(adapter, interval_sec, delay_sec=15 + i * 20)
+
+        _logger.info('Ingest scheduler started (%d adapters, staggered 20s apart)', len(scheduler._adapters))
 
         # PatternAdapter — not a BaseIngestAdapter; runs in its own daemon thread
         # Pass explicit tickers so it doesn't fall back to reading all facts subjects
