@@ -6,6 +6,7 @@
 /portfolio                  /login/index.html   200
 /chat                       /login/index.html   200
 /markets                    /login/index.html   200
+/visualiser                 /login/index.html   200
 /tips                       /login/index.html   200
 /patterns                   /login/index.html   200
 /network                    /login/index.html   200
@@ -19,6 +20,7 @@
 /:username/portfolio        /login/index.html   200
 /:username/chat             /login/index.html   200
 /:username/markets          /login/index.html   200
+/:username/visualiser       /login/index.html   200
 /:username/tips             /login/index.html   200
 /:username/patterns         /login/index.html   200
 /:username/network          /login/index.html   200
