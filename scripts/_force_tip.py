@@ -41,7 +41,7 @@ deleted = conn.execute(
 ).rowcount
 # Also delete from snapshot_delivery_log to bypass the week-slot dedup
 deleted2 = conn.execute(
-    'DELETE FROM snapshot_delivery_log WHERE user_id=? AND week_monday>=?',
+    'DELETE FROM snapshot_delivery_log WHERE user_id=? AND delivered_at_local_date>=?',
     (TARGET_USER, local_date_str)
 ).rowcount
 conn.commit()
