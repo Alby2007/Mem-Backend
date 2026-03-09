@@ -41,20 +41,20 @@ conn.close()
 print('=== DIAGNOSTICS ===')
 print(json.dumps(diag, indent=2))
 
-# ── Step 1: YFinanceAdapter — populates return_1m, return_1w, return_3m etc. ─
-print('\n=== RUNNING YFinanceAdapter ===')
+# ── Step 1: HistoricalBackfillAdapter — populates return_1m/1w/3m/6m/1y ──────
+print('\n=== RUNNING HistoricalBackfillAdapter ===')
 try:
     from knowledge import KnowledgeGraph
     kg = KnowledgeGraph(db_path=db)
-    from ingest.yfinance_adapter import YFinanceAdapter
-    yf = YFinanceAdapter(db_path=db)
-    yf_atoms = yf.run()
-    print('yfinance atoms generated:', len(yf_atoms) if yf_atoms else 0)
-    yf_res = yf.push(yf_atoms, kg)
-    print('yfinance push result:', yf_res)
+    from ingest.historical_adapter import HistoricalBackfillAdapter
+    hba = HistoricalBackfillAdapter(db_path=db)
+    hba_atoms = hba.run()
+    print('historical atoms generated:', len(hba_atoms) if hba_atoms else 0)
+    hba_res = hba.push(hba_atoms, kg)
+    print('historical push result:', hba_res)
 except Exception as e:
     import traceback
-    print('yfinance error:', e)
+    print('historical error:', e)
     traceback.print_exc()
 
 # ── Step 2: SignalEnrichmentAdapter — conviction_tier, signal_quality ──────────
