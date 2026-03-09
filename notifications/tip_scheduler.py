@@ -97,8 +97,20 @@ def _should_send_batch(
     local_date_obj = local_now.date()
     local_date_str = local_date_obj.strftime('%Y-%m-%d')
 
-    if local_time != delivery_time:
-        return False, ''
+    # Allow up to 2 hours catch-up after the scheduled time so server restarts
+    # don't silently miss the delivery slot.
+    try:
+        from datetime import datetime as _dt
+        _sched_h, _sched_m = map(int, delivery_time.split(':'))
+        _now_h, _now_m = map(int, local_time.split(':'))
+        _sched_mins = _sched_h * 60 + _sched_m
+        _now_mins   = _now_h * 60 + _now_m
+        _delta      = _now_mins - _sched_mins
+        if not (0 <= _delta <= 120):
+            return False, ''
+    except Exception:
+        if local_time != delivery_time:
+            return False, ''
 
     _WEEKDAY_NAMES = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
     today_name = _WEEKDAY_NAMES[local_date_obj.weekday()]
