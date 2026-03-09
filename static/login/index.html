@@ -248,6 +248,9 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
     <div class="nav-item" data-screen="history" id="nav-history">
       <span class="nav-icon">◷</span><span class="nav-label">History</span>
     </div>
+    <div class="nav-item" data-screen="journal" id="nav-journal">
+      <span class="nav-icon">◧</span><span class="nav-label">Journal</span>
+    </div>
     <div class="nav-item" data-screen="paper" id="nav-paper">
       <span class="nav-icon">◫</span><span class="nav-label">Paper Trader</span>
     </div>
@@ -1070,6 +1073,88 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
   </div>
 </div>
 
+<!-- JOURNAL ───────────────────────────────────────────────── -->
+<div class="screen" id="screen-journal">
+  <!-- Header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div style="font-size:16px;font-weight:700;">Trade Journal</div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-ghost btn-sm jnl-tab active" data-tab="open" onclick="jnlSwitchTab(this,'open')">Open</button>
+      <button class="btn btn-ghost btn-sm jnl-tab" data-tab="closed" onclick="jnlSwitchTab(this,'closed')">Closed</button>
+      <button class="btn btn-ghost btn-sm jnl-tab" data-tab="stats" onclick="jnlSwitchTab(this,'stats')">Stats</button>
+    </div>
+  </div>
+
+  <!-- Open positions tab -->
+  <div id="jnl-tab-open" class="jnl-tab-panel">
+    <div id="jnl-open-list" class="jnl-open-list"><div class="empty"><div class="spinner"></div></div></div>
+  </div>
+
+  <!-- Closed trades tab -->
+  <div id="jnl-tab-closed" class="jnl-tab-panel" style="display:none;">
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
+      <span class="text-muted text-xs">Last</span>
+      <select id="jnl-since-days" onchange="loadJournalClosed()" style="font-size:12px;padding:3px 8px;width:auto;">
+        <option value="30">30 days</option>
+        <option value="90" selected>90 days</option>
+        <option value="180">180 days</option>
+        <option value="365">1 year</option>
+      </select>
+    </div>
+    <div id="jnl-closed-list" class="jnl-closed-list"><div class="empty"><div class="spinner"></div></div></div>
+  </div>
+
+  <!-- Stats tab -->
+  <div id="jnl-tab-stats" class="jnl-tab-panel" style="display:none;">
+    <div class="jnl-stats-grid">
+      <div class="jnl-stat-card"><div class="jnl-stat-label">Total Trades</div><div class="jnl-stat-value" id="jnl-total">—</div></div>
+      <div class="jnl-stat-card"><div class="jnl-stat-label">Win Rate</div><div class="jnl-stat-value green" id="jnl-winrate">—</div></div>
+      <div class="jnl-stat-card"><div class="jnl-stat-label">Avg R</div><div class="jnl-stat-value" id="jnl-avgr">—</div></div>
+      <div class="jnl-stat-card"><div class="jnl-stat-label">Best Pattern</div><div class="jnl-stat-value amber" id="jnl-bestpat">—</div></div>
+      <div class="jnl-stat-card"><div class="jnl-stat-label">Worst Pattern</div><div class="jnl-stat-value red" id="jnl-worstpat">—</div></div>
+      <div class="jnl-stat-card"><div class="jnl-stat-label">Best Regime</div><div class="jnl-stat-value green" id="jnl-bestreg">—</div></div>
+    </div>
+    <div style="margin-top:20px;">
+      <div class="section-title">Pattern Breakdown</div>
+      <div id="jnl-pattern-bars" class="jnl-pattern-bars"></div>
+    </div>
+    <div style="margin-top:20px;">
+      <div class="section-title">Regime Breakdown</div>
+      <div id="jnl-regime-bars" class="jnl-regime-bars"></div>
+    </div>
+  </div>
+
+  <!-- Partial close modal (inline) -->
+  <div id="jnl-partial-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center;">
+    <div class="jnl-partial-popup">
+      <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Partial Exit</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Closing <span id="jnl-partial-ticker" style="color:var(--text);font-weight:600;"></span></div>
+      <div style="margin-bottom:12px;">
+        <label style="font-size:11px;color:var(--muted);">Exit %</label>
+        <input type="range" id="jnl-partial-slider" min="1" max="100" value="50" step="1" style="width:100%;margin:6px 0 4px;"
+          oninput="jnlUpdatePartialPreview()" />
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);">
+          <span>1%</span><span class="snap-hint">25 · 33 · 50 · 67 · 75 · 100</span><span>100%</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:12px;align-items:center;">
+        <input type="number" id="jnl-partial-pct-input" min="1" max="100" value="50" style="width:70px;font-size:14px;font-weight:700;text-align:center;"
+          oninput="jnlSyncSlider()" />
+        <span style="font-size:12px;color:var(--muted);">% →</span>
+        <span id="jnl-partial-preview" style="font-size:13px;font-weight:600;color:var(--green);">—</span>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px;color:var(--muted);">Exit price (optional)</label>
+        <input type="number" id="jnl-partial-price" placeholder="Leave blank for last price" step="0.01" style="width:100%;margin-top:4px;" />
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn btn-ghost btn-sm" onclick="jnlClosePartialModal()">Cancel</button>
+        <button class="btn btn-primary btn-sm" onclick="jnlConfirmPartial()">Confirm Partial</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- PAPER TRADER ──────────────────────────────────────────── -->
 <div class="screen" id="screen-paper">
 
@@ -1746,6 +1831,7 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
     <div class="mnav-item" data-screen="patterns" id="mnav-patterns"><span class="mnav-icon">⟁</span>Patterns</div>
     <div class="mnav-item" data-screen="network" id="mnav-network"><span class="mnav-icon">⬡</span>Network</div>
     <div class="mnav-item" data-screen="history" id="mnav-history"><span class="mnav-icon">◷</span>History</div>
+    <div class="mnav-item" data-screen="journal" id="mnav-journal"><span class="mnav-icon">◧</span>Journal</div>
     <div class="mnav-item" data-screen="paper" id="mnav-paper"><span class="mnav-icon">◫</span>Paper Trader</div>
     <div class="mnav-item" data-screen="subscription" id="mnav-subscription"><span class="mnav-icon">◉</span>Subscription</div>
     <div class="mnav-item" data-screen="profile" id="mnav-profile"><span class="mnav-icon">⊕</span>Profile</div>
@@ -1769,6 +1855,7 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
 <script src="js/screens/patterns.js?v=20260309d"></script>
 <script src="js/screens/network.js"></script>
 <script src="js/screens/history.js"></script>
+<script src="js/screens/journal.js?v=20260309a"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js" crossorigin="anonymous"></script>
 <script src="js/screens/visualiser.js?v=20260309h"></script>
 <script src="js/boot.js?v=20260307"></script>
