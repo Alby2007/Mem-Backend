@@ -747,7 +747,9 @@ def _ai_run_inner(user_id: str) -> dict:
     try:
         # Use isolation_level=DEFERRED (default) but with an explicit BEGIN IMMEDIATE so
         # the open-positions read is serialised against any other concurrent scan for this user.
-        conn = sqlite3.connect(ext.DB_PATH, timeout=15, isolation_level=None)
+        conn = sqlite3.connect(ext.DB_PATH, timeout=30, isolation_level=None)
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=30000')
         conn.row_factory = sqlite3.Row
         conn.execute('BEGIN IMMEDIATE')
 
