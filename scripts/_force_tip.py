@@ -24,7 +24,7 @@ if not prefs_row:
 prefs = dict(prefs_row)
 print('User prefs:', {k: prefs[k] for k in ('user_id', 'tier', 'telegram_chat_id', 'tip_delivery_time', 'tip_delivery_timezone')})
 
-# Delete today's tip log entry so the gate allows re-delivery
+# Delete today's delivery log entry so the gate allows re-delivery
 from datetime import datetime, timezone
 import pytz
 tz = prefs.get('tip_delivery_timezone') or 'UTC'
@@ -39,15 +39,27 @@ deleted = conn.execute(
     'DELETE FROM tip_delivery_log WHERE user_id=? AND delivered_at_local_date=?',
     (TARGET_USER, local_date_str)
 ).rowcount
+# Also delete from snapshot_delivery_log to bypass the week-slot dedup
+deleted2 = conn.execute(
+    'DELETE FROM snapshot_delivery_log WHERE user_id=? AND week_monday>=?',
+    (TARGET_USER, local_date_str)
+).rowcount
 conn.commit()
 conn.close()
-print(f'Deleted {deleted} existing tip log entry for today')
+print(f'Deleted {deleted} tip_delivery_log + {deleted2} snapshot_delivery_log entries')
+
+# Determine correct weekday path (premium = monday weekly batch)
+from core.tiers import TIER_CONFIG as TIER_LIMITS
+tier = prefs.get('tier', 'basic')
+limits = TIER_LIMITS.get(tier, TIER_LIMITS['basic'])
+delivery_days = limits.get('delivery_days', ['monday'])
+weekday = 'monday' if 'monday' in delivery_days else 'daily'
+print(f'Calling _deliver_tip_to_user with weekday={weekday!r}')
 
 # Now call _deliver_tip_to_user directly
 from notifications.tip_scheduler import _deliver_tip_to_user
-print('\nFiring _deliver_tip_to_user...')
 try:
-    _deliver_tip_to_user(DB, TARGET_USER, prefs, weekday='daily')
+    _deliver_tip_to_user(DB, TARGET_USER, prefs, weekday=weekday)
     print('Done.')
 except Exception as e:
     import traceback
