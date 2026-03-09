@@ -113,6 +113,15 @@ async def _lifespan(app: FastAPI):
         # EIA oil/gas prices, production, inventories, Henry Hub
         scheduler.register(EIAAdapter(), interval_sec=86400)
 
+        # GPR Index — Caldara-Iacoviello Fed geopolitical risk index; no key needed
+        scheduler.register(GPRAdapter(), interval_sec=86400)
+
+        # Alpha Vantage news sentiment — per-ticker AI sentiment; skips if no key
+        scheduler.register(AlphaVantageAdapter(db_path=db_path), interval_sec=86400)
+
+        # Polymarket prediction markets — macro/geo odds; no key needed
+        scheduler.register(PolymarketAdapter(), interval_sec=3600)
+
         app.state.scheduler = scheduler
         # Stagger startup: each adapter gets a unique delay so they don't all
         # hammer SQLite simultaneously. Heavy writers are spread 20s apart.

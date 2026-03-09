@@ -26,6 +26,7 @@ from __future__ import annotations
 import json as _json
 import logging
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
@@ -96,8 +97,9 @@ class ACLEDAdapter(BaseIngestAdapter):
     def fetch(self) -> List[RawAtom]:
         if not self._api_key or not self._email:
             self._logger.warning(
-                'ACLED_API_KEY and ACLED_EMAIL not set — skipping ACLED adapter. '
-                'Register at https://acleddata.com/register/'
+                'ACLED: ACLED_API_KEY and/or ACLED_EMAIL not set — skipping. '
+                'Register (free for research) at https://acleddata.com/register/ '
+                'then add ACLED_API_KEY and ACLED_EMAIL to your .env'
             )
             return []
 
@@ -122,13 +124,51 @@ class ACLEDAdapter(BaseIngestAdapter):
         try:
             req = urllib.request.Request(
                 url,
-                headers={'User-Agent': 'TradingKB/1.0', 'Accept': 'application/json'},
+                headers={'User-Agent': 'TradingGalaxyKB/1.0 (research; admin@tradinggalaxy.dev)',
+                         'Accept': 'application/json'},
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = _json.loads(resp.read().decode('utf-8', errors='replace'))
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    status_code = resp.status
+                    raw = resp.read()
+            except urllib.error.HTTPError as http_err:
+                status_code = http_err.code
+                if status_code == 429:
+                    retry_after = http_err.headers.get('Retry-After', '3600')
+                    self._logger.warning(
+                        'ACLED: rate limited (429) — Retry-After: %s seconds. '
+                        'Adapter will retry on next scheduled run.',
+                        retry_after,
+                    )
+                elif status_code == 401:
+                    self._logger.error(
+                        'ACLED: authentication failed (401) — check ACLED_API_KEY and ACLED_EMAIL. '
+                        'Keys must match your registered ACLED account.'
+                    )
+                elif status_code == 403:
+                    self._logger.error(
+                        'ACLED: forbidden (403) — your API key may not have access to this endpoint. '
+                        'Verify your ACLED license tier allows API access.'
+                    )
+                else:
+                    self._logger.warning('ACLED: HTTP %d error: %s', status_code, http_err)
+                return []
+
+            data = _json.loads(raw.decode('utf-8', errors='replace'))
+
+            # ACLED API returns error details in the response body even on 200
+            if data.get('status') == 0 or data.get('error'):
+                err_msg = data.get('error', data.get('message', 'unknown error'))
+                self._logger.error('ACLED: API returned error: %s', err_msg)
+                return []
+
             events = data.get('data', [])
+            if not events and data.get('count', -1) == 0:
+                self._logger.info('ACLED: API returned 0 events for the requested period/countries')
+                return []
+
         except Exception as exc:
-            self._logger.warning('ACLED fetch failed: %s', exc)
+            self._logger.warning('ACLED: fetch failed (%s: %s)', type(exc).__name__, exc)
             return []
 
         # Tally events and fatalities per country
