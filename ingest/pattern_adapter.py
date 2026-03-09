@@ -172,10 +172,25 @@ def _pattern_exists(conn: sqlite3.Connection, sig: PatternSignal) -> bool:
 
 # ── Fill tracker ───────────────────────────────────────────────────────────────
 
+def _kb_last_price(db_conn: sqlite3.Connection, ticker: str) -> Optional[float]:
+    """Read last_price atom from the KB facts table for a ticker."""
+    try:
+        row = db_conn.execute(
+            "SELECT object FROM facts WHERE LOWER(subject)=LOWER(?) AND predicate='last_price' LIMIT 1",
+            (ticker,),
+        ).fetchone()
+        if row:
+            return float(row[0])
+    except Exception:
+        pass
+    return None
+
+
 def _update_existing_patterns(db_path: str, db_conn: sqlite3.Connection) -> None:
     """
     Re-evaluate open/partially_filled pattern rows by checking the latest
     candle against their zones. Updates status in DB if changed.
+    Falls back to KB last_price when yfinance is unavailable.
     """
     open_rows = get_open_patterns(db_path)
     if not open_rows:
@@ -189,9 +204,19 @@ def _update_existing_patterns(db_path: str, db_conn: sqlite3.Connection) -> None
 
     for (ticker, timeframe), rows in groups.items():
         candles = _fetch_ohlcv(ticker, timeframe)
+
+        # Fallback: use KB last_price when yfinance is blocked
         if not candles:
-            continue
-        latest = candles[-1]
+            kb_price = _kb_last_price(db_conn, ticker)
+            if kb_price is None:
+                continue
+            latest = OHLCV(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                open=kb_price, high=kb_price, low=kb_price, close=kb_price,
+            )
+        else:
+            latest = candles[-1]
+
         now_iso = datetime.now(timezone.utc).isoformat()
 
         for row in rows:
