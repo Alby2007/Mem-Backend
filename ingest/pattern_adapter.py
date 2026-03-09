@@ -97,25 +97,58 @@ def _read_kb_context(conn: sqlite3.Connection, ticker: str) -> Dict[str, str]:
 
 # ── OHLCV helpers ──────────────────────────────────────────────────────────────
 
-def _fetch_ohlcv(ticker: str, timeframe: str) -> List[OHLCV]:
+def _read_ohlcv_cache(db_path: str, ticker: str) -> List[OHLCV]:
     """
-    Fetch OHLCV candles from yfinance for the given ticker and timeframe.
-    Returns an empty list on any error.
+    Read daily candles from the ohlcv_cache table (populated by YFinanceAdapter).
+    Returns candles sorted oldest-first.
     """
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        rows = conn.execute(
+            """SELECT ts, open, high, low, close, volume
+               FROM ohlcv_cache
+               WHERE ticker=? AND interval='1d'
+               ORDER BY ts ASC""",
+            (ticker,),
+        ).fetchall()
+        conn.close()
+        candles: List[OHLCV] = []
+        for ts, o, h, l, c, v in rows:
+            try:
+                candles.append(OHLCV(
+                    timestamp=ts,
+                    open=float(o or 0), high=float(h or 0),
+                    low=float(l or 0), close=float(c or 0),
+                    volume=float(v or 0),
+                ))
+            except Exception:
+                continue
+        return candles
+    except Exception:
+        return []
+
+
+def _fetch_ohlcv(ticker: str, timeframe: str, db_path: Optional[str] = None) -> List[OHLCV]:
+    """
+    Fetch OHLCV candles. Reads from ohlcv_cache first (populated by YFinanceAdapter
+    via Ticker.history() which works on OCI rate-limited IPs). Falls back to live
+    yfinance only when the cache is empty.
+    """
+    # Try cache first — avoids hitting yfinance bulk download endpoint
+    if db_path:
+        cached = _read_ohlcv_cache(db_path, ticker)
+        if len(cached) >= 3:
+            return cached
+
     if not HAS_YFINANCE:
         return []
     tf = _TF_MAP.get(timeframe, _TF_MAP['1h'])
     try:
-        df = yf.download(
-            ticker,
-            interval=tf['interval'],
-            period=tf['period'],
-            auto_adjust=True,
-            progress=False,
-        )
+        import yfinance as _yf
+        t = _yf.Ticker(ticker)
+        df = t.history(period=tf['period'], interval=tf['interval'], auto_adjust=True)
         if df is None or df.empty:
             return []
-        # yfinance may return MultiIndex columns; squeeze to scalar via iloc[0]
         def _scalar(v) -> float:
             try:
                 return float(v.iloc[0]) if hasattr(v, 'iloc') else float(v)
@@ -204,7 +237,7 @@ def _update_existing_patterns(db_path: str, db_conn: sqlite3.Connection) -> None
         groups.setdefault(key, []).append(row)
 
     for (ticker, timeframe), rows in groups.items():
-        candles = _fetch_ohlcv(ticker, timeframe)
+        candles = _fetch_ohlcv(ticker, timeframe, db_path=db_path)
 
         # Fallback: use KB last_price when yfinance is blocked
         if not candles:
@@ -329,10 +362,10 @@ class PatternAdapter:
     ) -> int:
         """Fetch OHLCV, detect patterns, persist new ones. Returns inserted count."""
         if timeframe == '4h':
-            raw = _fetch_ohlcv(ticker, '4h')  # fetches 1h and resamples
+            raw = _fetch_ohlcv(ticker, '4h', db_path=self.db_path)
             candles = _resample_4h(raw) if raw else []
         else:
-            candles = _fetch_ohlcv(ticker, timeframe)
+            candles = _fetch_ohlcv(ticker, timeframe, db_path=self.db_path)
 
         if len(candles) < 3:
             return 0

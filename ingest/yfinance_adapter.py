@@ -301,6 +301,13 @@ class YFinanceAdapter(BaseIngestAdapter):
             # ── 2. Parallel per-ticker info() for fundamentals + targets ──
             info_atoms = self._parallel_info_fetch(now_iso, bulk_prices)
             atoms.extend(info_atoms)
+
+            # ── 3. OHLCV cache — daily candles for pattern detection ───────
+            # Uses Ticker.history() (same per-ticker REST path as fast_info,
+            # not the blocked bulk download endpoint) so it works on OCI IPs.
+            # Only runs when a db_path is configured (i.e. in production).
+            if self._db_path:
+                self._cache_ohlcv_candles()
         finally:
             _socket.setdefaulttimeout(old_timeout)
 
@@ -309,6 +316,87 @@ class YFinanceAdapter(BaseIngestAdapter):
             len(self.tickers), len(atoms), len(bulk_prices), len(info_atoms),
         )
         return atoms
+
+    # ── OHLCV cache ────────────────────────────────────────────────────────
+
+    _OHLCV_DDL = """
+    CREATE TABLE IF NOT EXISTS ohlcv_cache (
+        ticker      TEXT NOT NULL,
+        interval    TEXT NOT NULL,
+        ts          TEXT NOT NULL,
+        open        REAL,
+        high        REAL,
+        low         REAL,
+        close       REAL,
+        volume      REAL,
+        cached_at   TEXT NOT NULL,
+        PRIMARY KEY (ticker, interval, ts)
+    )"""
+
+    def _cache_ohlcv_candles(self) -> None:
+        """Fetch 180d of daily candles for each ticker via Ticker.history()
+        (per-ticker REST, not bulk download — works on OCI rate-limited IPs)
+        and store in ohlcv_cache. Runs sequentially with a small delay to
+        stay under Yahoo's per-IP burst limit."""
+        import sqlite3 as _sq
+        import time as _time
+
+        try:
+            conn = _sq.connect(self._db_path, timeout=15)
+            conn.execute(self._OHLCV_DDL)
+            conn.commit()
+        except Exception as e:
+            self._logger.warning('ohlcv_cache table init failed: %s', e)
+            return
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        cached = 0
+        active_tickers = [t for t in self.tickers if t.upper() not in self._delisted_cache]
+
+        for sym in active_tickers:
+            try:
+                _time.sleep(0.4)  # throttle — 0.4s between tickers
+                hist = yf.Ticker(sym).history(period='180d', interval='1d', auto_adjust=True)
+                if hist is None or hist.empty:
+                    continue
+                rows = []
+                for ts, row in hist.iterrows():
+                    try:
+                        def _s(v):
+                            try:
+                                return float(v.iloc[0]) if hasattr(v, 'iloc') else float(v)
+                            except Exception:
+                                return None
+                        rows.append((
+                            sym, '1d', ts.isoformat(),
+                            _s(row['Open']), _s(row['High']),
+                            _s(row['Low']), _s(row['Close']),
+                            _s(row.get('Volume', 0) or 0),
+                            now_iso,
+                        ))
+                    except Exception:
+                        continue
+                if rows:
+                    conn.executemany(
+                        """INSERT OR REPLACE INTO ohlcv_cache
+                           (ticker, interval, ts, open, high, low, close, volume, cached_at)
+                           VALUES (?,?,?,?,?,?,?,?,?)""",
+                        rows,
+                    )
+                    conn.commit()
+                    cached += 1
+            except Exception as e:
+                err = str(e).lower()
+                if 'delist' in err or '404' in err:
+                    self._mark_delisted(sym, self._db_path)
+                elif '429' in err or 'rate' in err or 'too many' in err:
+                    self._logger.warning('ohlcv_cache rate-limited at %s — stopping cache fill', sym)
+                    break
+                else:
+                    self._logger.debug('ohlcv_cache fetch failed for %s: %s', sym, e)
+
+        conn.close()
+        self._logger.info('ohlcv_cache: cached daily candles for %d/%d tickers', cached, len(active_tickers))
 
     # ── Fast bulk price path ───────────────────────────────────────────────
 
