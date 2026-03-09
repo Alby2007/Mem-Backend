@@ -50,7 +50,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
-from ingest.base import BaseIngestAdapter, RawAtom
+from ingest.base import BaseIngestAdapter, RawAtom, db_connect
 
 _logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ _TICKER_SECTOR_FALLBACK: Dict[str, str] = {
 def _read_return_1m(db_path: str, ticker: str) -> Optional[float]:
     """Read the most recent return_1m atom for a ticker from the KB."""
     try:
-        conn = sqlite3.connect(db_path, timeout=10)
+        conn = db_connect(db_path)
         row = conn.execute(
             "SELECT object FROM facts WHERE subject=? AND predicate='return_1m' "
             "ORDER BY confidence DESC, timestamp DESC LIMIT 1",
@@ -116,7 +116,7 @@ def _read_return_1m(db_path: str, ticker: str) -> Optional[float]:
 def _read_ticker_sector(db_path: str, ticker: str) -> Optional[str]:
     """Read the sector atom for a ticker from the KB."""
     try:
-        conn = sqlite3.connect(db_path, timeout=10)
+        conn = db_connect(db_path)
         row = conn.execute(
             "SELECT object FROM facts WHERE subject=? AND predicate='sector' "
             "ORDER BY confidence DESC LIMIT 1",
@@ -139,7 +139,7 @@ def _read_ticker_sector(db_path: str, ticker: str) -> Optional[str]:
 def _read_portfolio_tickers(db_path: str) -> List[str]:
     """Read all tickers that have a last_price atom (active universe)."""
     try:
-        conn = sqlite3.connect(db_path, timeout=10)
+        conn = db_connect(db_path)
         rows = conn.execute(
             "SELECT DISTINCT subject FROM facts WHERE predicate='last_price'"
         ).fetchall()

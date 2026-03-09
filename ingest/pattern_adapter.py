@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import asdict
-from datetime import datetime, timezone
+from ingest.base import BaseIngestAdapter, RawAtom, db_connect
 from typing import Dict, List, Optional
 
 _logger = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ def _read_ohlcv_cache(db_path: str, ticker: str) -> List[OHLCV]:
     Returns candles sorted oldest-first.
     """
     try:
-        conn = sqlite3.connect(db_path, timeout=10)
+        conn = db_connect(db_path)
         rows = conn.execute(
             """SELECT ts, open, high, low, close, volume
                FROM ohlcv_cache
@@ -328,7 +328,7 @@ class PatternAdapter:
             _logger.warning('PatternAdapter: yfinance not installed — skipping')
             return 0
 
-        conn = sqlite3.connect(self.db_path, timeout=15)
+        conn = db_connect(self.db_path)
         try:
             ensure_user_tables(conn)
             tickers = self._get_tickers(conn)
