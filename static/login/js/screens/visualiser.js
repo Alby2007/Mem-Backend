@@ -92,15 +92,12 @@ async function loadVisualiser() {
     luEl.textContent = 'Updated: ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   }
 
-  // Use rAF so the screen is fully laid out before D3 reads clientWidth/clientHeight
-  requestAnimationFrame(() => {
-    if (window._visPrefilterSector) {
-      _setVisView('heatmap');
-      window._visPrefilterSector = null;
-    } else {
-      _setVisView(_visView);
-    }
-  });
+  if (window._visPrefilterSector) {
+    _setVisView('heatmap');
+    window._visPrefilterSector = null;
+  } else {
+    _setVisView(_visView);
+  }
 }
 
 function _setVisView(v) {
