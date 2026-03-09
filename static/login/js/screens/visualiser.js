@@ -119,10 +119,17 @@ function _renderBubble() {
   if (!container || !_visData) return;
   container.innerHTML = '';
 
-  // clientWidth/Height can be 0 if parent is scroll-sized — fall back to #main dimensions
+  // clientWidth/Height can be 0 if parent is scroll-sized — fall back progressively
   const mainEl = document.getElementById('main');
-  const W = container.clientWidth  || (mainEl ? mainEl.clientWidth  : 900);
-  const H = container.clientHeight || (mainEl ? mainEl.clientHeight - 80 : 560);
+  const W = container.clientWidth  || (mainEl ? mainEl.clientWidth  : 0) || (window.innerWidth  - 184);
+  const H = container.clientHeight || (mainEl ? mainEl.clientHeight - 80 : 0) || (window.innerHeight - 128);
+
+  // DEBUG: show dimensions
+  const _dbg = document.createElement('div');
+  _dbg.id = 'vis-debug';
+  _dbg.style.cssText = 'position:absolute;top:4px;right:4px;background:#1a1a2a;color:#f59e0b;font-size:10px;padding:4px 8px;border-radius:4px;z-index:10;font-family:monospace;';
+  _dbg.textContent = `W=${W} H=${H} canvas=${container.clientWidth}x${container.clientHeight}`;
+  container.appendChild(_dbg);
 
   const tickers = _visFiltered();
   if (!tickers.length) {
