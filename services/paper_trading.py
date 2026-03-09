@@ -823,15 +823,15 @@ def _ai_run_inner(user_id: str) -> dict:
                    FROM pattern_signals
                    WHERE status NOT IN ('filled','broken')
                      AND (
-                       (quality_score >= 0.75 AND LOWER(kb_conviction) IN ('high','confirmed','strong'))
-                       OR (quality_score >= 0.80 AND (kb_conviction IS NULL OR kb_conviction = ''))
+                       (quality_score >= 0.70 AND LOWER(kb_conviction) IN ('high','confirmed','strong'))
+                       OR (quality_score >= 0.65 AND (kb_conviction IS NULL OR kb_conviction = ''))
                      )
                    GROUP BY ticker
                ) best ON best.ticker = p.ticker AND best.best_q = p.quality_score
                WHERE p.status NOT IN ('filled','broken')
                  AND (
-                   (p.quality_score >= 0.75 AND LOWER(p.kb_conviction) IN ('high','confirmed','strong'))
-                   OR (p.quality_score >= 0.80 AND (p.kb_conviction IS NULL OR p.kb_conviction = ''))
+                   (p.quality_score >= 0.70 AND LOWER(p.kb_conviction) IN ('high','confirmed','strong'))
+                   OR (p.quality_score >= 0.65 AND (p.kb_conviction IS NULL OR p.kb_conviction = ''))
                  )
                ORDER BY RANDOM()
                LIMIT 100"""
