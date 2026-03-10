@@ -388,9 +388,12 @@ class BotRunner:
                         (ep, pnl_r, now_iso, pos['id'])
                     )
                     # Restore position value to bot balance
+                    # Long: receive exit_p*qty. Short: return original cost + profit = (2*entry-exit)*qty
+                    entry_p = float(pos['entry_price'])
+                    cash_return = ep * qty if pos['direction'] == 'bullish' else (2 * entry_p - ep) * qty
                     conn.execute(
                         "UPDATE paper_bot_configs SET virtual_balance = virtual_balance + ? WHERE bot_id=?",
-                        (ep * qty, bot_id)
+                        (cash_return, bot_id)
                     )
             # Mark killed
             conn.execute(
@@ -838,7 +841,8 @@ class BotRunner:
                     new_status = 't2_hit'; exit_p = price
                 elif not pos['partial_closed'] and price <= t1:
                     half_qty = round(qty / 2, 6)
-                    partial_val = round(price * half_qty, 2)
+                    # Short partial: return entry*qty + profit (entry-price)*qty = (2*entry-price)*qty
+                    partial_val = round((2 * entry - price) * half_qty, 2)
                     conn.execute(
                         'UPDATE paper_positions SET partial_closed=1, quantity=? WHERE id=?',
                         (half_qty, pos['id'])
@@ -860,9 +864,11 @@ class BotRunner:
                     "UPDATE paper_positions SET status=?, exit_price=?, pnl_r=?, closed_at=? WHERE id=?",
                     (new_status, exit_p, pnl_r, now_iso, pos['id'])
                 )
+                # Long: receive exit_p*qty. Short: return original cost + profit = (2*entry-exit)*qty
+                cash_return = exit_p * qty if direction == 'bullish' else (2 * entry - exit_p) * qty
                 conn.execute(
                     "UPDATE paper_bot_configs SET virtual_balance = virtual_balance + ? WHERE bot_id=?",
-                    (exit_p * qty, bot_id)
+                    (cash_return, bot_id)
                 )
                 conn.execute(
                     "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
