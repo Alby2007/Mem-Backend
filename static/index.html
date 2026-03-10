@@ -1283,8 +1283,8 @@
 <!-- ── PREDICTION ACCURACY ── -->
 <section class="hiw-section" id="accuracy-section" style="border-top:1px solid var(--border);padding-top:80px;">
   <div class="section-eyebrow reveal">VERIFIABLE ACCURACY</div>
-  <h2 class="section-title reveal reveal-delay-1">We publish our prediction record.<br><em style="font-style:normal;color:var(--accent)">Every signal. Every outcome.</em></h2>
-  <p class="reveal reveal-delay-2" style="font-size:16px;color:var(--text-dim);line-height:1.7;margin-bottom:48px;max-width:600px;">No retail trading platform publishes verifiable prediction accuracy. We do. Every tip issued is logged as an explicit prediction with stated probabilities. Outcomes are scored automatically when prices resolve.</p>
+  <h2 class="reveal reveal-delay-1" style="font-family:var(--sans);font-size:clamp(28px,4vw,44px);font-weight:800;letter-spacing:-0.02em;margin-bottom:20px;">We publish our prediction record.<br><em style="font-style:normal;color:var(--accent)">Every signal. Every outcome.</em></h2>
+  <p class="reveal reveal-delay-2" style="font-size:16px;color:var(--text-dim);line-height:1.7;margin-bottom:48px;max-width:580px;">No retail trading platform publishes verifiable prediction accuracy. We do. Every tip issued is logged as an explicit prediction with stated probabilities. Outcomes are scored automatically when prices resolve.</p>
 
   <div id="brier-widget" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;max-width:900px;margin-bottom:48px;">
     <div class="showcase-panel reveal" style="text-align:center;">
@@ -1311,14 +1311,18 @@
 
   <div class="showcase-panel reveal reveal-delay-2" style="max-width:900px;padding:28px 32px;" id="brier-calibration-wrap">
     <div class="showcase-label" style="margin-bottom:20px;">CALIBRATION CURVE — stated probability vs actual hit rate</div>
-    <div style="display:flex;align-items:flex-end;gap:6px;height:80px;" id="brier-bars">
+    <div style="display:flex;align-items:flex-end;gap:4px;height:100px;overflow:hidden;" id="brier-bars">
       <!-- injected by JS -->
     </div>
-    <div style="display:flex;gap:6px;margin-top:6px;" id="brier-bar-labels">
+    <div style="display:flex;gap:4px;margin-top:6px;overflow:hidden;" id="brier-bar-labels">
       <!-- injected by JS -->
     </div>
-    <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:12px;">
-      Each bar: stated probability bucket vs actual empirical hit rate. Perfect calibration = bars at stated height. Data loading…
+    <div id="brier-legend" style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:14px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;">
+      <span><span style="color:rgba(245,158,11,0.7)">■</span> Stated probability</span>
+      <span><span style="color:var(--green)">■</span> Actual (calibrated)</span>
+      <span><span style="color:#6366f1">■</span> Actual (over-stated)</span>
+      <span><span style="color:var(--red)">■</span> Actual (under-stated)</span>
+      <span style="color:var(--muted);margin-left:auto;">Awaiting resolved predictions</span>
     </div>
   </div>
 </section>
@@ -1679,15 +1683,11 @@ async function loadBrierScore() {
         labelsEl.appendChild(lbl);
       });
 
-      // Legend
-      const legendEl = barsEl.closest('.showcase-panel')?.querySelector('div:last-child');
+      // Legend — update the trailing count in the dedicated element
+      const legendEl = document.getElementById('brier-legend');
       if (legendEl) {
-        legendEl.innerHTML = `
-          <span style="color:rgba(245,158,11,0.6)">■</span> Stated &nbsp;
-          <span style="color:var(--green)">■</span> Actual (calibrated) &nbsp;
-          <span style="color:#6366f1">■</span> Actual (over-stated) &nbsp;
-          <span style="color:var(--red)">■</span> Actual (under-stated) &nbsp;·&nbsp;
-          ${d.total_predictions || 0} total signals · ${d.resolved || 0} resolved`;
+        const countSpan = legendEl.querySelector('span:last-child');
+        if (countSpan) countSpan.textContent = `${d.total_predictions || 0} signals · ${d.resolved || 0} resolved`;
       }
     }
   } catch {}
