@@ -547,6 +547,7 @@ def _auto_resolve_calibration(pos: dict, db_path: str) -> None:
                 market_regime = regime,
                 outcome      = outcome,
                 db_path      = db_path,
+                source       = 'system',
             )
             _log.info(
                 'PositionMonitor: auto_resolve followup %d %s → %s',

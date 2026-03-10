@@ -95,6 +95,8 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
         ('central_bank_stance',  'TEXT'),
         ('gdelt_tension_level',  'TEXT'),
         ('outcome_r_multiple',   'REAL'),
+        ('bot_observations',     'INTEGER DEFAULT 0'),
+        ('user_observations',    'INTEGER DEFAULT 0'),
     ]:
         if _col not in _existing_cols:
             conn.execute(f'ALTER TABLE signal_calibration ADD COLUMN {_col} {_type}')
@@ -102,6 +104,32 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         'CREATE INDEX IF NOT EXISTS idx_calibration_pattern_tf '
         'ON signal_calibration(pattern_type, timeframe)'
+    )
+    # Observation-level log for source tracking, correction factor, and auditing
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS calibration_observations (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker        TEXT NOT NULL,
+            pattern_type  TEXT NOT NULL,
+            timeframe     TEXT NOT NULL,
+            market_regime TEXT,
+            outcome       TEXT NOT NULL,
+            source        TEXT NOT NULL DEFAULT 'user',
+            bot_id        TEXT,
+            pnl_r         REAL,
+            entry_price   REAL,
+            exit_price    REAL,
+            holding_hours REAL,
+            observed_at   TEXT NOT NULL
+        )
+    """)
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_cal_obs_source '
+        'ON calibration_observations(source)'
+    )
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_cal_obs_cell '
+        'ON calibration_observations(ticker, pattern_type, timeframe)'
     )
     conn.commit()
 
@@ -115,13 +143,16 @@ def update_calibration(
     market_regime: Optional[str],
     outcome: str,
     db_path: str,
+    source: str = 'user',
+    bot_id: Optional[str] = None,
 ) -> None:
     """
     Update the calibration row for (ticker, pattern_type, timeframe, market_regime)
-    based on one new outcome from POST /feedback.
+    based on one new outcome from POST /feedback or a position close.
 
     outcome values: 'hit_t1' | 'hit_t2' | 'hit_t3' | 'stopped_out' | 'pending' | 'skipped'
     Only hit_t* and stopped_out are counted (pending/skipped ignored).
+    source: 'user' | 'paper_bot' | 'system' | 'backtest'
     """
     if outcome not in ('hit_t1', 'hit_t2', 'hit_t3', 'stopped_out'):
         return
@@ -182,7 +213,37 @@ def update_calibration(
              round(new_hr1, 4), round(new_hr2, 4), round(new_hr3, 4),
              round(new_sor, 4), round(conf_score, 4), now),
         )
+        # Increment per-source observation counter on the calibration row
+        if source == 'paper_bot':
+            conn.execute(
+                """UPDATE signal_calibration
+                   SET bot_observations = COALESCE(bot_observations, 0) + 1
+                   WHERE ticker=? AND pattern_type=? AND timeframe=?
+                     AND (market_regime=? OR (market_regime IS NULL AND ? IS NULL))""",
+                (ticker, pattern_type, timeframe, market_regime, market_regime),
+            )
+        elif source in ('user', 'user_feedback'):
+            conn.execute(
+                """UPDATE signal_calibration
+                   SET user_observations = COALESCE(user_observations, 0) + 1
+                   WHERE ticker=? AND pattern_type=? AND timeframe=?
+                     AND (market_regime=? OR (market_regime IS NULL AND ? IS NULL))""",
+                (ticker, pattern_type, timeframe, market_regime, market_regime),
+            )
         conn.commit()
+        # Write observation-level log — never let this break the main path
+        try:
+            conn.execute(
+                """INSERT INTO calibration_observations
+                   (ticker, pattern_type, timeframe, market_regime,
+                    outcome, source, bot_id, observed_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (ticker, pattern_type, timeframe, market_regime,
+                 outcome, source, bot_id, now),
+            )
+            conn.commit()
+        except Exception:
+            pass
     finally:
         conn.close()
 
@@ -244,17 +305,39 @@ def get_global_baseline(
 
 # ── get_calibration ───────────────────────────────────────────────────────────
 
+def _get_user_obs_count(
+    conn: sqlite3.Connection,
+    ticker: str,
+    pattern_type: str,
+    timeframe: str,
+    market_regime: Optional[str],
+) -> int:
+    """Return user_observations count for a calibration cell."""
+    row = conn.execute(
+        """SELECT COALESCE(user_observations, 0)
+           FROM signal_calibration
+           WHERE ticker=? AND pattern_type=? AND timeframe=?
+             AND (market_regime=? OR (market_regime IS NULL AND ? IS NULL))""",
+        (ticker, pattern_type, timeframe, market_regime, market_regime),
+    ).fetchone()
+    return row[0] if row else 0
+
+
 def get_calibration(
     ticker: str,
     pattern_type: str,
     timeframe: str,
     db_path: str,
     market_regime: Optional[str] = None,
+    corrected: bool = True,
 ) -> Optional[CalibrationResult]:
     """
     Return CalibrationResult for the given key, or None if < 10 samples.
     If market_regime is provided, tries exact match first then falls back
     to regime-agnostic row.
+    When corrected=True and the cell has no user observations, applies the
+    global correction factor from calibration_correction to adjust for
+    paper-trading optimism.
     """
     ticker = ticker.upper()
     conn = sqlite3.connect(db_path, timeout=10)
@@ -290,7 +373,7 @@ def get_calibration(
         if sample_size < 10:
             return None
 
-        return CalibrationResult(
+        result = CalibrationResult(
             ticker=row[0],
             pattern_type=row[1],
             timeframe=row[2],
@@ -305,5 +388,20 @@ def get_calibration(
             confidence_label=_confidence_label(sample_size),
             last_updated=row[11],
         )
+        if corrected and sample_size >= 10:
+            user_obs = _get_user_obs_count(conn, row[0], row[1], row[2], row[3])
+            if user_obs == 0:
+                try:
+                    from analytics.calibration_correction import get_global_correction
+                    factor = get_global_correction(db_path)
+                    if factor != 1.0:
+                        if result.hit_rate_t1 is not None:
+                            result.hit_rate_t1 = round(result.hit_rate_t1 * factor, 4)
+                        if result.hit_rate_t2 is not None:
+                            result.hit_rate_t2 = round(result.hit_rate_t2 * factor, 4)
+                        result.confidence_label += '_bot_corrected'
+                except Exception:
+                    pass
+        return result
     finally:
         conn.close()

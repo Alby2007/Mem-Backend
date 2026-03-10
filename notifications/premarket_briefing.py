@@ -507,6 +507,10 @@ def generate_premarket_narrative(
         if fleet_discoveries:
             parts.append(fleet_discoveries)
 
+        cal_update = _build_calibration_update_section(db_path)
+        if cal_update:
+            parts.append(cal_update)
+
     result = '\n\n'.join(parts)
     _log.info(
         'premarket_briefing: generated for user %s (%d positions, %d atoms, %d words, monday=%s)',
@@ -514,6 +518,102 @@ def generate_premarket_narrative(
         len(result.split()), is_monday,
     )
     return result
+
+
+def _build_calibration_update_section(db_path: str) -> str:
+    """
+    Monday-only section: calibration pipeline health and top/bottom cells.
+    Returns formatted string or '' if insufficient data.
+    """
+    try:
+        import sqlite3 as _sq
+        from datetime import timedelta as _td
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+
+        conn = _sq.connect(db_path, timeout=5)
+        conn.row_factory = _sq.Row
+        try:
+            # Check calibration_observations table exists
+            tbl = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='calibration_observations'"
+            ).fetchone()
+            if not tbl:
+                return ''
+
+            # Total observations and weekly new
+            total_obs = conn.execute(
+                "SELECT COUNT(*) FROM calibration_observations"
+            ).fetchone()[0]
+            if not total_obs:
+                return ''
+
+            week_ago = (_dt.now(_tz.utc) - _td(days=7)).isoformat()
+            weekly_new = conn.execute(
+                "SELECT COUNT(*) FROM calibration_observations WHERE observed_at >= ?",
+                (week_ago,)
+            ).fetchone()[0]
+
+            # Active bots
+            try:
+                active_bots = conn.execute(
+                    "SELECT COUNT(*) FROM paper_bot_configs WHERE active=1"
+                ).fetchone()[0]
+                max_gen = conn.execute(
+                    "SELECT COALESCE(MAX(generation),0) FROM paper_bot_configs"
+                ).fetchone()[0]
+                elite_bots = conn.execute(
+                    "SELECT COUNT(*) FROM paper_agent_log WHERE event_type='promoted' "
+                    "AND created_at >= ?", (week_ago,)
+                ).fetchone()[0]
+            except Exception:
+                active_bots = elite_bots = max_gen = None
+
+            # Top performing cell
+            top = conn.execute(
+                """SELECT pattern_type, sector, hit_rate_t1, sample_size
+                   FROM signal_calibration
+                   WHERE sample_size >= 10 AND hit_rate_t1 IS NOT NULL
+                   ORDER BY hit_rate_t1 DESC LIMIT 1"""
+            ).fetchone()
+
+            # Weakest cell (below 40% with ≥10 samples)
+            weak = conn.execute(
+                """SELECT pattern_type, sector, hit_rate_t1, sample_size
+                   FROM signal_calibration
+                   WHERE sample_size >= 10 AND hit_rate_t1 IS NOT NULL AND hit_rate_t1 < 0.4
+                   ORDER BY hit_rate_t1 ASC LIMIT 1"""
+            ).fetchone()
+        finally:
+            conn.close()
+
+        sign = '+' if weekly_new > 0 else ''
+        lines = [
+            '━━━━━━━━━━━━━━━━',
+            '📊 CALIBRATION UPDATE',
+            '━━━━━━━━━━━━━━━━',
+            f'{total_obs:,} forward observations ({sign}{weekly_new:,} this week)',
+        ]
+        if top:
+            pat  = (top['pattern_type'] or '?').upper()
+            sec  = top['sector'] or ''
+            hr   = round((top['hit_rate_t1'] or 0) * 100)
+            n    = top['sample_size']
+            desc = f'{pat} + {sec}'.strip(' +')
+            lines.append(f'Top edge: {desc} → {hr}% hit rate ({n} trades)')
+        if weak:
+            pat  = (weak['pattern_type'] or '?').upper()
+            hr   = round((weak['hit_rate_t1'] or 0) * 100)
+            n    = weak['sample_size']
+            lines.append(f'Weakest: {pat} → {hr}% hit rate ({n} trades, disproven)')
+        if active_bots is not None:
+            elite_str = f' · {elite_bots} promoted' if elite_bots else ''
+            lines.append(f'Bot fleet: {active_bots} active · Gen {max_gen}{elite_str}')
+
+        return '\n'.join(lines)
+    except Exception as e:
+        _log.debug('_build_calibration_update_section failed: %s', e)
+        return ''
 
 
 def _build_fleet_discoveries_section(user_id: str, db_path: str) -> str:

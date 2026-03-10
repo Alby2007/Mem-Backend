@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS prediction_ledger (
     outcome         TEXT,
     resolved_at     TEXT,
     resolved_price  REAL,
-    brier_t1        REAL
+    brier_t1        REAL,
+    source          TEXT    DEFAULT 'system'
 )
 """
 
@@ -123,6 +124,10 @@ class PredictionLedger:
         try:
             conn.execute(_CREATE_TABLE)
             conn.execute(_CREATE_DEDUP_INDEX)
+            # Idempotent: add source column if missing (existing DBs)
+            _cols = {r[1] for r in conn.execute('PRAGMA table_info(prediction_ledger)').fetchall()}
+            if 'source' not in _cols:
+                conn.execute("ALTER TABLE prediction_ledger ADD COLUMN source TEXT DEFAULT 'system'")
             conn.commit()
         finally:
             conn.close()
@@ -146,6 +151,7 @@ class PredictionLedger:
         p_stopped_out:  float,
         market_regime:  Optional[str],
         conviction_tier: Optional[str],
+        source:         str = 'system',
     ) -> bool:
         """
         Insert a new prediction row. Returns True if inserted, False if the
@@ -163,13 +169,13 @@ class PredictionLedger:
                     target_1, target_2, stop_loss,
                     p_hit_t1, p_hit_t2, p_stopped_out,
                     market_regime, conviction_tier,
-                    issued_at, expires_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    issued_at, expires_at, source)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (ticker.upper(), pattern_type, timeframe, entry_price,
                  target_1, target_2, stop_loss,
                  round(p_hit_t1, 4), round(p_hit_t2, 4), round(p_stopped_out, 4),
                  market_regime, conviction_tier,
-                 issued_at, expires_at),
+                 issued_at, expires_at, source),
             )
             inserted = conn.total_changes > 0
             conn.commit()

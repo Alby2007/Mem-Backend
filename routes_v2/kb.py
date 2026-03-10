@@ -405,3 +405,72 @@ async def temporal_search(
             for m in result.top_matches[:int(limit)]
         ],
     }
+
+
+@router.get("/kb/calibration-dashboard")
+async def calibration_dashboard():
+    """Public calibration statistics — no auth required. Used by landing page social proof."""
+    conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        # Ensure tables exist before querying
+        from analytics.signal_calibration import _ensure_table as _sc_ensure
+        _sc_ensure(conn)
+
+        # Total observations by source
+        obs_row = conn.execute(
+            """SELECT
+                 SUM(CASE WHEN source='paper_bot' THEN 1 ELSE 0 END) AS bot_obs,
+                 SUM(CASE WHEN source IN ('user','user_feedback') THEN 1 ELSE 0 END) AS user_obs
+               FROM calibration_observations"""
+        ).fetchone()
+        total_bot  = obs_row['bot_obs']  or 0 if obs_row else 0
+        total_user = obs_row['user_obs'] or 0 if obs_row else 0
+
+        # Calibration cells with ≥10 samples
+        established = conn.execute(
+            "SELECT COUNT(*) FROM signal_calibration WHERE sample_size >= 10"
+        ).fetchone()[0]
+
+        # Top performing cells by T1 hit rate
+        top_cells = conn.execute(
+            """SELECT ticker, pattern_type, timeframe, market_regime,
+                      sample_size, hit_rate_t1, calibration_confidence
+               FROM signal_calibration
+               WHERE sample_size >= 10 AND hit_rate_t1 IS NOT NULL
+               ORDER BY hit_rate_t1 DESC LIMIT 10"""
+        ).fetchall()
+
+        # Global correction factor
+        correction = 1.0
+        try:
+            from analytics.calibration_correction import get_global_correction
+            correction = get_global_correction(ext.DB_PATH)
+        except Exception:
+            pass
+
+        return {
+            "total_observations": total_bot + total_user,
+            "bot_observations":   total_bot,
+            "user_observations":  total_user,
+            "established_cells":  established,
+            "correction_factor":  round(correction, 3),
+            "top_cells": [
+                {
+                    "ticker":       r["ticker"],
+                    "pattern_type": r["pattern_type"],
+                    "timeframe":    r["timeframe"],
+                    "regime":       r["market_regime"],
+                    "samples":      r["sample_size"],
+                    "hit_rate":     round(r["hit_rate_t1"], 3) if r["hit_rate_t1"] else None,
+                    "confidence":   round(r["calibration_confidence"], 3) if r["calibration_confidence"] else None,
+                }
+                for r in top_cells
+            ],
+        }
+    except Exception as e:
+        _log.warning("calibration_dashboard failed: %s", e)
+        return {"total_observations": 0, "bot_observations": 0, "user_observations": 0,
+                "established_cells": 0, "correction_factor": 1.0, "top_cells": [], "error": str(e)}
+    finally:
+        conn.close()

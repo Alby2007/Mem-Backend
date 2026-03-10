@@ -854,6 +854,8 @@ class BotRunner:
                                 market_regime=pat[2],
                                 outcome=outcome,
                                 db_path=self.db_path,
+                                source='paper_bot',
+                                bot_id=bot_id,
                             )
                     except Exception as _ce:
                         _logger.debug('bot calibration update failed %s: %s', ticker, _ce)

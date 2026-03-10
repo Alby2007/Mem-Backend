@@ -1031,6 +1031,16 @@
   </div>
 </section>
 
+<!-- ── CALIBRATION WIDGET ── -->
+<section class="cal-widget-section" id="cal-widget-section" style="display:none;">
+  <div class="cal-widget-inner">
+    <div class="cal-widget-eyebrow">SIGNAL INTELLIGENCE — EMPIRICALLY TESTED</div>
+    <div class="cal-widget-summary" id="cal-widget-summary">Loading…</div>
+    <div class="cal-widget-table" id="cal-widget-table"></div>
+    <div class="cal-widget-footnote">Every signal is tested by autonomous trading agents before it reaches you. No backtested fantasies — forward results only.</div>
+  </div>
+</section>
+
 <!-- ── MARQUEE ── -->
 <div class="marquee-section">
   <div class="marquee-track" id="marquee">
@@ -1693,11 +1703,110 @@ async function loadBrierScore() {
   } catch {}
 }
 
+// ── CALIBRATION WIDGET ──
+async function loadCalibrationWidget() {
+  try {
+    const r = await fetch(`${API_BASE}/kb/calibration-dashboard`, { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.total_observations || d.total_observations < 5) return;
+
+    const section  = document.getElementById('cal-widget-section');
+    const summary  = document.getElementById('cal-widget-summary');
+    const tableEl  = document.getElementById('cal-widget-table');
+    if (!section || !summary || !tableEl) return;
+
+    const cells = d.established_cells || 0;
+    summary.textContent = `${d.total_observations.toLocaleString()} forward-tested observations across ${cells} calibrated signal cell${cells !== 1 ? 's' : ''}`;
+
+    if (d.top_cells && d.top_cells.length) {
+      const rows = d.top_cells.slice(0, 4).map(c => {
+        const hr  = c.hit_rate != null ? Math.round(c.hit_rate * 100) + '%' : '—';
+        const pat = (c.pattern_type || '').toUpperCase();
+        const sec = c.regime ? ` + ${c.regime}` : '';
+        const label = `${pat}${sec}`.trim();
+        return `<div class="cal-row"><span class="cal-row-label">${label}</span><span class="cal-row-hr">${hr} hit rate</span><span class="cal-row-n">${c.samples} obs</span></div>`;
+      }).join('');
+      tableEl.innerHTML = rows;
+    }
+
+    section.style.display = '';
+  } catch {}
+}
+
 // ── INIT ──
 loadStats();
 loadWaitlistCount();
 loadBrierScore();
+loadCalibrationWidget();
 setInterval(loadStats, 30000);
 </script>
+
+<style>
+.cal-widget-section {
+  background: rgba(245,158,11,0.04);
+  border-top: 1px solid rgba(245,158,11,0.15);
+  border-bottom: 1px solid rgba(245,158,11,0.15);
+  padding: 32px 24px;
+}
+.cal-widget-inner {
+  max-width: 720px;
+  margin: 0 auto;
+}
+.cal-widget-eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #f59e0b;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.cal-widget-summary {
+  font-size: 15px;
+  color: #e2e8f0;
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+.cal-widget-table {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+.cal-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  padding: 5px 8px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 5px;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.cal-row-label {
+  flex: 1;
+  font-family: var(--mono, monospace);
+  color: #e2e8f0;
+  font-size: 11px;
+}
+.cal-row-hr {
+  color: #4ade80;
+  font-weight: 700;
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.cal-row-n {
+  color: #64748b;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.cal-widget-footnote {
+  font-size: 11px;
+  color: #64748b;
+  font-style: italic;
+  line-height: 1.5;
+}
+</style>
 </body>
 </html>
