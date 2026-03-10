@@ -507,6 +507,43 @@ async def bot_discoveries(user_id: str, _: str = Depends(user_path_auth)):
         raise HTTPException(500, detail=str(e))
 
 
+@router.post("/users/{user_id}/bots/reseed")
+async def reseed_fleet(user_id: str, _: str = Depends(user_path_auth)):
+    """Kill all existing bots and re-seed fresh with the current balance."""
+    _tier_gate(user_id)
+    try:
+        runner = _get_runner()
+        import sqlite3 as _sq
+        conn = _sq.connect(ext.DB_PATH, timeout=10)
+        svc.ensure_paper_tables(conn)
+
+        # Stop and remove all existing bots
+        bot_ids = [r[0] for r in conn.execute(
+            "SELECT bot_id FROM paper_bot_configs WHERE user_id=?", (user_id,)
+        ).fetchall()]
+        for bid in bot_ids:
+            try:
+                runner.stop_bot(bid)
+            except Exception:
+                pass
+            conn.execute("DELETE FROM paper_bot_equity WHERE bot_id=?", (bid,))
+        conn.execute("DELETE FROM paper_bot_configs WHERE user_id=?", (user_id,))
+        conn.commit()
+
+        # Get current balance
+        acct = conn.execute(
+            "SELECT virtual_balance FROM paper_account WHERE user_id=?", (user_id,)
+        ).fetchone()
+        balance = float(acct[0]) if acct else 25000.0
+        conn.close()
+
+        # Re-seed fresh fleet
+        runner.seed_fleet(user_id, balance)
+        return {"status": "reseeded", "bots": runner.count_bots(user_id), "balance": balance}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
 @router.get("/users/{user_id}/paper/agent/log/export")
 async def paper_agent_log_export(user_id: str, _: str = Depends(user_path_auth)):
     _tier_gate(user_id)

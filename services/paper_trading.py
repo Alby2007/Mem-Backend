@@ -843,17 +843,42 @@ def get_agent_log(user_id: str, limit: int = 100) -> list[dict]:
 
 
 def reset_paper_trader(user_id: str) -> dict:
-    """Factory reset: stop scanner, delete all positions/logs/equity, re-seed account at £100k."""
+    """Factory reset: stop everything, delete all data, re-seed fresh."""
     stop_scanner(user_id)
+
+    # Stop all bot scanners for this user
+    try:
+        runner = getattr(ext, 'bot_runner', None)
+        if runner is None:
+            from services.bot_runner import BotRunner
+            runner = BotRunner(ext.DB_PATH)
+        bots = runner.list_bots(user_id)
+        for b in bots:
+            try:
+                runner.stop_bot(b['bot_id'])
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     now_iso = datetime.now(timezone.utc).isoformat()
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
     try:
+        ensure_paper_tables(conn)
         conn.execute("DELETE FROM paper_positions WHERE user_id=?", (user_id,))
         conn.execute("DELETE FROM paper_agent_log WHERE user_id=?", (user_id,))
         conn.execute("DELETE FROM paper_equity_log WHERE user_id=?", (user_id,))
         conn.execute("DELETE FROM paper_account WHERE user_id=?", (user_id,))
-        # Re-insert with default £100k balance and account_size_set=0 so onboarding modal fires
-        ensure_paper_tables(conn)
+
+        # Clear bot fleet data
+        bot_ids = [r[0] for r in conn.execute(
+            "SELECT bot_id FROM paper_bot_configs WHERE user_id=?", (user_id,)
+        ).fetchall()]
+        for bid in bot_ids:
+            conn.execute("DELETE FROM paper_bot_equity WHERE bot_id=?", (bid,))
+        conn.execute("DELETE FROM paper_bot_configs WHERE user_id=?", (user_id,))
+
+        # Re-insert with account_size_set=0 so onboarding modal fires
         conn.execute(
             "INSERT INTO paper_account (user_id, virtual_balance, currency, created_at, account_size_set) "
             "VALUES (?, 100000.0, 'GBP', ?, 0)",

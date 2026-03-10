@@ -116,6 +116,7 @@ function _ptRenderFleetHTML(fleet, disc) {
         <span class="evo-gen-pill">Gen ${gen}</span>
         <span style="color:var(--muted);font-size:12px;margin-left:8px;">${bots.filter(b=>b.active).length} active</span>
       </div>
+      <button class="btn btn-sm" style="background:var(--accent);color:#000;margin-right:6px;" onclick="_ptReseedFleet()">↺ Reseed Fleet</button>
       <button class="btn btn-primary btn-sm" onclick="_ptEvolveNow(this)">⚡ Evolve Now</button>
     </div>
     <div class="evo-fleet-stats">
@@ -160,6 +161,12 @@ function _ptRenderFleetHTML(fleet, disc) {
   // Add manual bot button
   html += `<div style="margin-top:16px;">
     <button class="btn btn-ghost btn-sm" onclick="_ptShowManualBotModal()">+ Manual Bot</button>
+  </div>`;
+
+  // Reset Everything footer
+  html += `<div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+    <button class="btn btn-ghost btn-sm" onclick="_ptResetFleet()" style="color:var(--red);font-size:12px;">↺ Reset Everything</button>
+    <span style="color:var(--muted);font-size:11px;">Clears all bots, trades &amp; equity — starts fresh</span>
   </div>`;
 
   return html;
@@ -771,6 +778,28 @@ async function _ptSyncStatus() {
 
 function _ptSetRunning(running) {}      // no-op — legacy HTML hook
 function _ptLoadAccount() {}           // no-op — handled by fleet view
+
+async function _ptResetFleet() {
+  if (!confirm('Reset the entire paper trading system? This deletes all bots, positions, equity history, and agent logs. You will need to set a new balance to restart.')) return;
+  try {
+    await apiFetch(`/users/${state.userId}/paper/reset`, { method: 'DELETE' });
+    showToast('Paper trader reset — set a new balance to restart', 'ok');
+    _ptLoadFleet();
+  } catch(e) {
+    showToast('Reset failed: ' + e.message, 'error');
+  }
+}
+
+async function _ptReseedFleet() {
+  if (!confirm('Replace all bots with fresh seed strategies? Existing bot positions will be closed. Your account balance is preserved.')) return;
+  try {
+    const r = await apiFetch(`/users/${state.userId}/bots/reseed`, { method: 'POST' });
+    showToast(`Fleet reseeded — ${r.bots} bots started with £${(r.balance||0).toLocaleString()}`, 'ok');
+    _ptLoadFleet();
+  } catch(e) {
+    showToast('Reseed failed: ' + e.message, 'error');
+  }
+}
 function _ptLoadPositions() {}         // no-op — handled by bot detail view
 function _ptLoadAgentLog() {}          // no-op — handled by bot detail view
 function _ptLoadEquity() {}            // no-op — handled by fleet view

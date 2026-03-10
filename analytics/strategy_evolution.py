@@ -69,6 +69,14 @@ class StrategyEvolution:
         mature   = [b for b in scored if b.get('total_closed', 0) >= b.get('min_trades_eval', min_eval)]
         immature = [b for b in scored if b.get('total_closed', 0) <  b.get('min_trades_eval', min_eval)]
 
+        # HARD GUARD: never evaluate a fleet with zero mature bots.
+        if not mature:
+            _logger.info('StrategyEvolution: no mature bots yet — skipping cycle for %s', user_id)
+            self._log_event(user_id, 'evolution_skip', None,
+                            f'Skipped: 0/{len(scored)} bots have >={min_eval} trades', now_iso)
+            return {'user_id': user_id, 'bots_evaluated': len(scored), 'skipped': True,
+                    'reason': 'no mature bots'}
+
         # Skip manual bots from evolution entirely
         eligible = [b for b in mature if b.get('role') != 'manual']
 
