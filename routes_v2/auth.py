@@ -421,12 +421,16 @@ async def dev_upgrade_premium(request: Request):
     """
     POST /dev/upgrade-premium — upgrade a user to premium tier.
 
-    ONLY active when DEV_UPGRADE_KEY is set in the environment.
-    Without that env var this endpoint returns 404, making it a no-op in prod.
+    ONLY active when DEV_UPGRADE_KEY is set in the environment AND the
+    request originates from localhost (127.0.0.1 or ::1).
     Used exclusively by the eval harness so quota enforcement doesn't block test users.
     """
     dev_key = os.environ.get("DEV_UPGRADE_KEY", "")
     if not dev_key:
+        raise HTTPException(404)
+
+    client_ip = request.client.host if request.client else ""
+    if client_ip not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(404)
 
     provided = request.headers.get("X-Dev-Key", "")

@@ -178,8 +178,8 @@ def create_user(
         ensure_user_tables(conn)
         conn.execute(
             """INSERT OR IGNORE INTO user_preferences
-               (user_id, telegram_chat_id, delivery_time, timezone)
-               VALUES (?, ?, ?, ?)""",
+               (user_id, telegram_chat_id, delivery_time, timezone, tier)
+               VALUES (?, ?, ?, ?, 'free')""",
             (user_id, encrypt_field(telegram_chat_id), delivery_time, timezone_str),
         )
         conn.commit()
@@ -278,7 +278,7 @@ def update_preferences(
     try:
         ensure_user_tables(conn)
         conn.execute(
-            "INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)",
+            "INSERT OR IGNORE INTO user_preferences (user_id, tier) VALUES (?, 'free')",
             (user_id,),
         )
         if selected_sectors is not None:
@@ -376,7 +376,7 @@ def update_style_prefs(
     try:
         ensure_user_tables(conn)
         conn.execute(
-            "INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)",
+            "INSERT OR IGNORE INTO user_preferences (user_id, tier) VALUES (?, 'free')",
             (user_id,),
         )
         if style_risk_tolerance is not None:

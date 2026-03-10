@@ -87,6 +87,46 @@ async def chat_history_turn(
     return result
 
 
+_CHAT_DAILY_LIMITS: dict[str, int] = {
+    'free':    5,
+    'basic':   20,
+    'pro':     200,
+    'premium': 200,
+}
+
+
+def _check_chat_quota(user_id: str) -> None:
+    """Raise 429 if user has exceeded their daily chat query limit."""
+    if not user_id:
+        return
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+        row = conn.execute(
+            "SELECT tier FROM user_preferences WHERE user_id=?", (user_id,)
+        ).fetchone()
+        tier = (row[0] if row else 'free') or 'free'
+        limit = _CHAT_DAILY_LIMITS.get(tier, 5)
+        today = __import__('datetime').date.today().isoformat()
+        count_row = conn.execute(
+            "SELECT COUNT(*) FROM conv_messages "
+            "WHERE session_id IN (SELECT session_id FROM conv_sessions WHERE user_id=?) "
+            "AND role='user' AND date(timestamp)=?",
+            (user_id, today),
+        ).fetchone()
+        conn.close()
+        used = count_row[0] if count_row else 0
+        if used >= limit:
+            raise HTTPException(
+                429,
+                detail={"error": "chat_quota_exceeded", "tier": tier,
+                        "limit": limit, "used": used},
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+
 @router.post("/chat")
 @limiter.limit(RATE_LIMITS["chat"])
 async def chat_endpoint(
@@ -94,6 +134,7 @@ async def chat_endpoint(
     data: ChatRequest,
     user_id: Optional[str] = Depends(get_current_user_optional),
 ):
+    _check_chat_quota(user_id)
     from services import chat_pipeline
 
     response, status = chat_pipeline.run(
