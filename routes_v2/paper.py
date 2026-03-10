@@ -514,30 +514,37 @@ async def reseed_fleet(user_id: str, _: str = Depends(user_path_auth)):
     try:
         runner = _get_runner()
         import sqlite3 as _sq
+
+        # Step 1: read bot_ids and balance — short read-only conn, close immediately
         conn = _sq.connect(ext.DB_PATH, timeout=10)
         svc.ensure_paper_tables(conn)
-
-        # Stop and remove all existing bots
         bot_ids = [r[0] for r in conn.execute(
             "SELECT bot_id FROM paper_bot_configs WHERE user_id=?", (user_id,)
         ).fetchall()]
-        for bid in bot_ids:
-            try:
-                runner.stop_bot(bid)
-            except Exception:
-                pass
-            conn.execute("DELETE FROM paper_bot_equity WHERE bot_id=?", (bid,))
-        conn.execute("DELETE FROM paper_bot_configs WHERE user_id=?", (user_id,))
-        conn.commit()
-
-        # Get current balance
         acct = conn.execute(
             "SELECT virtual_balance FROM paper_account WHERE user_id=?", (user_id,)
         ).fetchone()
         balance = float(acct[0]) if acct else 25000.0
         conn.close()
 
-        # Re-seed fresh fleet
+        # Step 2: stop all bot threads (each stop_bot opens its own short conn)
+        for bid in bot_ids:
+            try:
+                runner.stop_bot(bid)
+            except Exception:
+                pass
+
+        # Step 3: delete bot rows — fresh conn, no competing writers now
+        conn2 = _sq.connect(ext.DB_PATH, timeout=15)
+        try:
+            for bid in bot_ids:
+                conn2.execute("DELETE FROM paper_bot_equity WHERE bot_id=?", (bid,))
+            conn2.execute("DELETE FROM paper_bot_configs WHERE user_id=?", (user_id,))
+            conn2.commit()
+        finally:
+            conn2.close()
+
+        # Step 4: seed fresh fleet (opens its own connection)
         runner.seed_fleet(user_id, balance)
         return {"status": "reseeded", "bots": runner.count_bots(user_id), "balance": balance}
     except Exception as e:
