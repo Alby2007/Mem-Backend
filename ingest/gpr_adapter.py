@@ -172,19 +172,62 @@ def _parse_xls(raw: bytes) -> Optional[Tuple[str, float, float, float]]:
     return None
 
 
+def _db_last_gpr_period(db_path: Optional[str]) -> Optional[str]:
+    """Query the DB for the most recently ingested GPR period (survives restarts)."""
+    if not db_path:
+        return None
+    try:
+        import sqlite3 as _sqlite3
+        import json as _json
+        conn = _sqlite3.connect(db_path, timeout=5)
+        try:
+            row = conn.execute(
+                """SELECT metadata FROM facts
+                   WHERE subject='geopolitical_risk' AND predicate='gpr_index'
+                   ORDER BY id DESC LIMIT 1"""
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None
+        meta = _json.loads(row[0]) if row[0] else {}
+        return meta.get('period')
+    except Exception:
+        return None
+
+
+def _db_last_gpr_value(db_path: Optional[str]) -> Optional[float]:
+    """Query the DB for the most recently ingested GPR value (for trend calculation)."""
+    if not db_path:
+        return None
+    try:
+        import sqlite3 as _sqlite3
+        conn = _sqlite3.connect(db_path, timeout=5)
+        try:
+            row = conn.execute(
+                """SELECT object FROM facts
+                   WHERE subject='geopolitical_risk' AND predicate='gpr_index'
+                   ORDER BY id DESC LIMIT 1"""
+            ).fetchone()
+        finally:
+            conn.close()
+        return float(row[0]) if row else None
+    except Exception:
+        return None
+
+
 class GPRAdapter(BaseIngestAdapter):
     """
     Caldara-Iacoviello Geopolitical Risk Index adapter.
 
     Downloads BIFF8 XLS from Iacoviello's site via xlrd and emits headline,
     threat, and acts sub-index atoms. No API key required.
-    Idempotent — skips write if last ingested period is unchanged.
+    Idempotent — skips write if last ingested period matches DB (survives restarts).
     """
 
-    def __init__(self):
+    def __init__(self, db_path: Optional[str] = None):
         super().__init__(name='gpr_index')
-        self._last_period: Optional[str] = None
-        self._last_gpr: Optional[float]  = None
+        self._db_path = db_path
 
     def fetch(self) -> List[RawAtom]:
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -208,15 +251,15 @@ class GPRAdapter(BaseIngestAdapter):
 
         period, gpr, gprt, gpra = parsed
 
-        # Idempotency — skip if we already wrote this month's data
-        if period == self._last_period:
+        # Idempotency — check DB for last ingested period (survives server restarts)
+        last_period = _db_last_gpr_period(self._db_path)
+        if period == last_period:
             self._logger.info('GPR: no new data (period=%s, gpr=%.1f) — skipping', period, gpr)
             return []
 
-        trend = _trend_label(gpr, self._last_gpr)
+        last_gpr = _db_last_gpr_value(self._db_path)
+        trend = _trend_label(gpr, last_gpr)
         level = _level_label(gpr)
-        self._last_period = period
-        self._last_gpr    = gpr
 
         atoms: List[RawAtom] = [
             RawAtom(

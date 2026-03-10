@@ -19,7 +19,16 @@ function _pathForScreen(name) {
   return `/${state.userId || '_'}/${name}`;
 }
 
+const _SCREEN_TITLES = {
+  dashboard: 'Dashboard', portfolio: 'Portfolio', markets: 'Markets',
+  visualiser: 'Visualiser', chat: 'Chat', tips: 'Tips', patterns: 'Patterns',
+  network: 'Network', history: 'History', journal: 'Journal',
+  paper: 'Paper Trader', subscription: 'Subscription', profile: 'Profile',
+  login: 'Sign In', register: 'Create Account',
+};
+
 function showScreen(name) {
+  document.title = (_SCREEN_TITLES[name] ? _SCREEN_TITLES[name] + ' — ' : '') + 'Trading Galaxy';
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.querySelectorAll('.mnav-item').forEach(n => n.classList.remove('active'));

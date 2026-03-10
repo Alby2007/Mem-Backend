@@ -17,7 +17,7 @@ try:
 except ImportError:
     pass
 
-from flask import g, jsonify
+from fastapi import HTTPException
 from knowledge import KnowledgeGraph
 from knowledge.decay import get_decay_worker
 from retrieval import retrieve
@@ -98,32 +98,6 @@ except ImportError:
 
 try:
     from ingest.scheduler import IngestScheduler
-    from ingest.yfinance_adapter import YFinanceAdapter
-    from ingest.fred_adapter import FREDAdapter
-    from ingest.edgar_adapter import EDGARAdapter
-    from ingest.rss_adapter import RSSAdapter
-    from ingest.signal_enrichment_adapter import SignalEnrichmentAdapter
-    from ingest.historical_adapter import HistoricalBackfillAdapter
-    from ingest.llm_extraction_adapter import LLMExtractionAdapter
-    from ingest.edgar_realtime_adapter import EDGARRealtimeAdapter
-    from ingest.options_adapter import OptionsAdapter
-    from ingest.polygon_options_adapter import PolygonOptionsAdapter
-    from ingest.yield_curve_adapter import YieldCurveAdapter
-    from ingest.finra_short_interest_adapter import FINRAShortInterestAdapter
-    from ingest.boe_adapter import BoEAdapter
-    from ingest.earnings_calendar_adapter import EarningsCalendarAdapter
-    from ingest.fca_short_interest_adapter import FCAShortInterestAdapter
-    from ingest.lse_flow_adapter import LSEFlowAdapter
-    from ingest.insider_adapter import InsiderAdapter
-    from ingest.short_interest_adapter import ShortInterestAdapter
-    from ingest.sector_rotation_adapter import SectorRotationAdapter
-    from ingest.economic_calendar_adapter import EconomicCalendarAdapter
-    from ingest.discovery_pipeline import DiscoveryPipeline
-    from ingest.eia_adapter import EIAAdapter
-    from ingest.gdelt_adapter import GDELTAdapter
-    from ingest.ucdp_adapter import UCDPAdapter
-    from ingest.acled_adapter import ACLEDAdapter
-    from ingest.usgs_adapter import USGSAdapter
     HAS_INGEST = True
 except ImportError:
     HAS_INGEST = False
@@ -393,32 +367,26 @@ def get_user_tier_for_request(user_id: str) -> str:
     return 'basic'
 
 
-def require_feature(feature: str):
+def require_feature(feature: str, user_id: str | None = None):
     """
-    Decorator: gate an endpoint by tier feature.
-    Must be applied AFTER @require_auth so g.user_id is set.
-    Returns 403 with upgrade_required payload when feature is not available.
+    FastAPI dependency factory: gate an endpoint by tier feature.
+    Usage: Depends(require_feature('feature_name')).
+    Raises HTTP 403 with upgrade_required payload when feature not available.
     """
-    from functools import wraps as _wraps
-    def decorator(f):
-        @_wraps(f)
-        def wrapper(*args, **kwargs):
-            if not HAS_TIERS:
-                return f(*args, **kwargs)
-            uid  = getattr(g, 'user_id', None)
-            tier = get_user_tier_for_request(uid) if uid else 'basic'
-            if not check_feature(tier, feature):
-                next_t = next_tier_name(tier)
-                return jsonify({
-                    'error':        'upgrade_required',
-                    'feature':      feature,
-                    'current_tier': tier,
-                    'upgrade_to':   next_t,
-                    'message':      f'This feature requires {next_t} or above',
-                }), 403
-            return f(*args, **kwargs)
-        return wrapper
-    return decorator
+    def dependency(uid: str | None = user_id):
+        if not HAS_TIERS:
+            return
+        tier = get_user_tier_for_request(uid) if uid else 'basic'
+        if not check_feature(tier, feature):
+            next_t = next_tier_name(tier)
+            raise HTTPException(status_code=403, detail={
+                'error':        'upgrade_required',
+                'feature':      feature,
+                'current_tier': tier,
+                'upgrade_to':   next_t,
+                'message':      f'This feature requires {next_t} or above',
+            })
+    return dependency
 
 
 # ── Shared mutable state (initialised by create_app) ─────────────────────────

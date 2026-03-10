@@ -115,14 +115,18 @@ async def _lifespan(app: FastAPI):
         # LSE institutional order flow — block volume ratio, accumulation/distribution
         scheduler.register(LSEFlowAdapter(db_path=db_path), interval_sec=7200)
 
-        # ACLED geopolitical conflict/protest events — skips gracefully if no API key
-        scheduler.register(ACLEDAdapter(), interval_sec=86400)
+        # ACLED geopolitical conflict/protest events — requires commercial license for production use.
+        # Set ACLED_COMMERCIAL_LICENSE=1 in env to enable (free tier = non-commercial research only).
+        if os.environ.get('ACLED_COMMERCIAL_LICENSE') == '1':
+            scheduler.register(ACLEDAdapter(), interval_sec=86400)
+        else:
+            _logger.warning('ACLED adapter disabled: set ACLED_COMMERCIAL_LICENSE=1 to enable (commercial license required for paying users)')
 
         # EIA oil/gas prices, production, inventories, Henry Hub
         scheduler.register(EIAAdapter(), interval_sec=86400)
 
         # GPR Index — Caldara-Iacoviello Fed geopolitical risk index; no key needed
-        scheduler.register(GPRAdapter(), interval_sec=86400)
+        scheduler.register(GPRAdapter(db_path=db_path), interval_sec=86400)
 
         # Historical signal calibration — nightly back-population of hit rates
         # 20h recency guard prevents double-runs; first manual run via POST /calibrate/historical

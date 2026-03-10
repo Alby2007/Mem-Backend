@@ -114,6 +114,8 @@ class TradingKnowledgeGraph:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_subject ON facts(subject)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_predicate ON facts(predicate)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_object ON facts(object)")
+        # Composite index for the dominant query pattern: WHERE subject=? AND predicate=?
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_subject_predicate ON facts(subject, predicate)")
         
         # Full-text search
         cursor.execute("""

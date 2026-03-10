@@ -31,3 +31,7 @@ Thumbs.db
 
 # Large test fixtures (exceed Cloudflare Pages 25 MiB file limit)
 tests/fixtures/*.sql
+
+# Diagnostic / temporary scripts (debugging sessions)
+tmp_*.py
+scripts/_*.py

@@ -54,7 +54,7 @@ _DEFAULT_FEEDS: Dict[str, str] = {
     # CNBC earnings
     'cnbc_earnings':        'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839135',
     # Geopolitical & macro — leading indicators for defence/energy/EM tickers
-    'reuters_world':        'https://feeds.reuters.com/reuters/worldNews',
+    # 'reuters_world': disabled — Reuters RSS DNS unreachable from OCI (times out every cycle)
     'bbc_world':            'http://feeds.bbci.co.uk/news/world/rss.xml',
     'al_jazeera':           'https://www.aljazeera.com/xml/rss/all.xml',
     'defense_news':         'https://www.defensenews.com/arc/outboundfeeds/rss/',

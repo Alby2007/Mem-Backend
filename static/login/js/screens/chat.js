@@ -31,7 +31,8 @@ function computeMarketStress(ga) {
 }
 
 function extractKbGrounding(rawAnswer) {
-  const m = rawAnswer.match(/\[KB_GROUNDING\]([\s\S]*?)\[\/KB_GROUNDING\]/);
+  // Handle plain [KB_GROUNDING] and markdown-wrapped variants (**[KB_GROUNDING]**, **KB_GROUNDING**, etc.)
+  const m = rawAnswer.match(/\*{0,2}\[?KB_GROUNDING\]?\*{0,2}([\s\S]*?)\*{0,2}\[?\/?KB_GROUNDING\]?\*{0,2}(?:\s|$)/);
   if (!m) return { prose: rawAnswer, grounding: null };
   const prose = rawAnswer.replace(m[0], '').trim();
   const rows = m[1].trim().split('\n')
