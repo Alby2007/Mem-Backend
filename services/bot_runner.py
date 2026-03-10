@@ -254,7 +254,7 @@ class BotRunner:
             bot_id = 'bot_' + str(uuid.uuid4()).replace('-', '')[:12]
             try:
                 conn.execute("""
-                    INSERT OR IGNORE INTO paper_bot_configs
+                    INSERT INTO paper_bot_configs
                     (user_id, bot_id, genome_id, strategy_name, generation, parent_id,
                      pattern_types, sectors, exchanges, volatility, regimes, timeframes,
                      direction_bias, risk_pct, max_positions, min_quality,
@@ -989,12 +989,12 @@ class BotRunner:
             return {}
 
     def list_bots(self, user_id: str) -> list[dict]:
-        """Return all bots for a user with live performance metrics."""
+        """Return active bots for a user with live performance metrics."""
         try:
             conn = sqlite3.connect(self.db_path, timeout=10)
             self._ensure_tables(conn)
             rows = conn.execute(
-                "SELECT bot_id FROM paper_bot_configs WHERE user_id=? ORDER BY created_at ASC",
+                "SELECT bot_id FROM paper_bot_configs WHERE user_id=? AND active=1 ORDER BY created_at ASC",
                 (user_id,)
             ).fetchall()
             conn.close()
