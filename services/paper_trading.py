@@ -41,31 +41,103 @@ _PAPER_MAX_OPEN_POSITIONS = 12
 
 
 def _is_market_open(ticker: str) -> bool:
-    """Return True only if the primary exchange for this ticker is currently open.
+    """Return True if the primary exchange for this ticker is currently open.
 
-    US equities (default): NYSE/NASDAQ 14:30-21:00 UTC Mon-Fri
-    UK equities (.L suffix): LSE 08:00-16:30 UTC Mon-Fri
-    Futures/FX/indices: treated as always-open (24h products)
+    Exchange hours (all UTC, Mon-Fri unless noted):
+      FX / Futures / Crypto  — always open (24h/5 or 24h/7)
+      LSE (.L)               — 08:00-16:30
+      Euronext (.PA .AS .BR .LI) — 08:00-16:30
+      Xetra / Frankfurt (.DE .F) — 08:00-16:30
+      Milan (.MI)            — 08:00-16:30
+      Madrid (.MC)           — 08:00-16:30
+      Swiss (.SW)            — 08:00-16:30
+      NYSE / NASDAQ (default)— 14:30-21:00
+      TSX Canada (.TO .V)    — 14:30-21:00
+      BMV Mexico (.MX)       — 14:30-21:00
+      ASX Australia (.AX)    — 00:00-06:00 (Mon-Fri UTC, Tue-Sat local)
+      NZX New Zealand (.NZ)  — 21:00-05:45 (previous-day UTC open)
+      Tokyo / Osaka (.T)     — 00:00-06:00 UTC
+      Hong Kong (.HK)        — 01:30-08:00 UTC
+      Shanghai / Shenzhen (.SS .SZ) — 01:30-07:00 UTC
+      Singapore (.SI)        — 01:00-09:00 UTC
+      Mumbai BSE/NSE (.BO .NS)— 03:45-10:00 UTC
+      Indices (^)            — follow primary exchange; treated as always-open here
+                               since they just reflect underlying markets
     """
-    always_open_prefixes = ('GC=F', 'SI=F', 'PL=F', 'CL=F', 'BZ=F', 'NG=F',
-                            'GBPUSD=X', 'EURUSD=X', 'JPY=X', 'DX-Y.NYB')
     yf_sym = _YF_MAP.get(ticker.lower(), ticker)
-    if any(yf_sym.startswith(p) or yf_sym == p for p in always_open_prefixes):
+    t = ticker.upper()
+
+    # ── Always-open: FX, futures, crypto, indices ────────────────────────────
+    _24h_suffixes = ('=X', '=F', '-Y.NYB', 'USD', 'BTC', 'ETH')
+    _24h_prefixes = ('GC', 'SI', 'PL', 'CL', 'BZ', 'NG', 'ZC', 'ZW', 'ZS',
+                     'ES=', 'NQ=', 'YM=', 'RTY=')
+    if t.startswith('^'):
+        return True
+    if any(yf_sym.endswith(s) for s in _24h_suffixes):
+        return True
+    if any(yf_sym.startswith(p) for p in _24h_prefixes):
         return True
 
     now_utc = datetime.now(timezone.utc)
-    weekday = now_utc.weekday()  # 0=Mon, 6=Sun
+    weekday = now_utc.weekday()  # 0=Mon … 6=Sun
+    h = now_utc.hour
+    m = now_utc.minute
+    hm = h * 60 + m  # minutes since midnight UTC
+
+    def _in(open_hm: int, close_hm: int) -> bool:
+        return open_hm <= hm <= close_hm
+
+    # ── Weekend guard for equity markets ────────────────────────────────────
+    # Note: ASX/NZX/Asian sessions can span midnight so check per-exchange
     if weekday >= 5:
+        # Saturday/Sunday — no equity markets open
+        # (Crypto/FX already returned True above)
         return False
 
-    if ticker.upper().endswith('.L'):
-        market_open  = now_utc.replace(hour=8,  minute=0,  second=0, microsecond=0)
-        market_close = now_utc.replace(hour=16, minute=30, second=0, microsecond=0)
-    else:
-        market_open  = now_utc.replace(hour=14, minute=30, second=0, microsecond=0)
-        market_close = now_utc.replace(hour=21, minute=0,  second=0, microsecond=0)
+    # ── Asian-Pacific session (spans midnight UTC) ───────────────────────────
+    # ASX: Mon-Fri 00:00-06:00 UTC  (Tue-Sat 10:00-16:00 AEST)
+    if t.endswith('.AX'):
+        return _in(0, 360)  # 00:00-06:00 UTC
 
-    return market_open <= now_utc <= market_close
+    # NZX: Sun 21:00 – Fri 05:45 UTC (daily open 21:00 prev UTC)
+    if t.endswith('.NZ'):
+        return _in(21 * 60, 24 * 60 - 1) or _in(0, 5 * 60 + 45)
+
+    # Tokyo / Osaka (with lunch break 03:00-04:00 UTC)
+    if t.endswith('.T') or t.endswith('.OS'):
+        return _in(0, 180) or _in(240, 360)  # 00:00-03:00 and 04:00-06:00
+
+    # Hong Kong
+    if t.endswith('.HK'):
+        return _in(90, 480)  # 01:30-08:00 UTC
+
+    # Shanghai / Shenzhen (lunch 05:00-06:00 UTC)
+    if t.endswith('.SS') or t.endswith('.SZ'):
+        return _in(90, 300) or _in(360, 420)  # 01:30-05:00 and 06:00-07:00
+
+    # Singapore
+    if t.endswith('.SI'):
+        return _in(60, 540)  # 01:00-09:00 UTC
+
+    # Mumbai BSE / NSE
+    if t.endswith('.BO') or t.endswith('.NS'):
+        return _in(225, 600)  # 03:45-10:00 UTC
+
+    # ── European session 08:00-16:30 UTC ────────────────────────────────────
+    _eu_suffixes = ('.L', '.PA', '.AS', '.BR', '.LI', '.DE', '.F',
+                    '.MI', '.MC', '.SW', '.VI', '.CO', '.OL', '.ST',
+                    '.HE', '.LS', '.AT')
+    if any(t.endswith(s) for s in _eu_suffixes):
+        return _in(480, 990)  # 08:00-16:30 UTC
+
+    # ── Americas session 14:30-21:00 UTC ────────────────────────────────────
+    # NYSE, NASDAQ, TSX (.TO .V), BMV (.MX), B3 (.SA)
+    _americas_suffixes = ('.TO', '.V', '.MX', '.SA')
+    if any(t.endswith(s) for s in _americas_suffixes):
+        return _in(870, 1260)  # 14:30-21:00 UTC
+
+    # Default: US equities (NYSE / NASDAQ)
+    return _in(870, 1260)  # 14:30-21:00 UTC
 
 
 _PAPER_MAX_NEW_PER_SCAN = 3
