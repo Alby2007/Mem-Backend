@@ -85,6 +85,10 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
         )
     """)
     # S1: State-vector columns for Historical State Matching (idempotent)
+    # Check existing columns once via PRAGMA to avoid 5 exception-per-call overhead
+    _existing_cols = {
+        row[1] for row in conn.execute('PRAGMA table_info(signal_calibration)').fetchall()
+    }
     for _col, _type in [
         ('volatility_regime',    'TEXT'),
         ('sector',               'TEXT'),
@@ -92,10 +96,8 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
         ('gdelt_tension_level',  'TEXT'),
         ('outcome_r_multiple',   'REAL'),
     ]:
-        try:
+        if _col not in _existing_cols:
             conn.execute(f'ALTER TABLE signal_calibration ADD COLUMN {_col} {_type}')
-        except Exception:
-            pass  # column already exists
     # Performance index for state-matching scan
     conn.execute(
         'CREATE INDEX IF NOT EXISTS idx_calibration_pattern_tf '
@@ -151,8 +153,10 @@ def update_calibration(
             n, hr1, hr2, hr3, sor, atth = 0, 0.0, 0.0, 0.0, 0.0, None
 
         # Incremental mean update: new_mean = (old_mean * n + new_val) / (n + 1)
+        # T1 counts if T1, T2, or T3 was hit (T2 hit implies T1 was hit first).
+        # T2 counts if T2 or T3 was hit (T3 hit implies T2 was hit first).
         new_n = n + 1
-        new_hr1 = (hr1 * n + (1.0 if outcome == 'hit_t1' else 0.0)) / new_n
+        new_hr1 = (hr1 * n + (1.0 if outcome in ('hit_t1', 'hit_t2', 'hit_t3') else 0.0)) / new_n
         new_hr2 = (hr2 * n + (1.0 if outcome in ('hit_t2', 'hit_t3') else 0.0)) / new_n
         new_hr3 = (hr3 * n + (1.0 if outcome == 'hit_t3' else 0.0)) / new_n
         new_sor = (sor * n + (1.0 if outcome == 'stopped_out' else 0.0)) / new_n

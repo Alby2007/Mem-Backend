@@ -551,36 +551,65 @@ class HistoricalCalibrator:
                 all_tickers.append(p)
 
         _logger.info(
-            'calibration: bulk downloading %dy daily OHLCV for %d tickers + proxies',
+            'calibration: fetching %dy daily OHLCV for %d tickers + proxies (ohlcv_cache preferred)',
             lookback_years, len(tickers),
         )
 
-        try:
-            raw = yf.download(
-                tickers     = all_tickers,
-                period      = f'{lookback_years}y',
-                interval    = '1d',
-                group_by    = 'ticker',
-                auto_adjust = True,
-                progress    = False,
-                threads     = True,
-            )
-        except Exception as e:
-            _logger.error('calibration: bulk download failed: %s', e)
-            return {}
+        # ── Fetch OHLCV: prefer ohlcv_cache (no rate-limit risk on OCI IPs) ───
+        def _df_from_cache(sym: str) -> Optional['pd.DataFrame']:
+            """Read from ohlcv_cache table; return DataFrame or None."""
+            try:
+                import sqlite3 as _sq
+                conn = _sq.connect(self._db_path, timeout=10)
+                try:
+                    rows = conn.execute(
+                        """SELECT ts, open, high, low, close, volume
+                           FROM ohlcv_cache
+                           WHERE ticker=? AND interval='1d'
+                           ORDER BY ts ASC""",
+                        (sym,),
+                    ).fetchall()
+                finally:
+                    conn.close()
+                if not rows:
+                    return None
+                df = pd.DataFrame(rows, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+                df['Date'] = pd.to_datetime(df['Date'], utc=True)
+                df = df.set_index('Date').sort_index()
+                # Filter to lookback window
+                cutoff = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=lookback_years * 365)
+                df = df[df.index >= cutoff]
+                return df if not df.empty else None
+            except Exception:
+                return None
 
-        if raw is None or raw.empty:
-            _logger.warning('calibration: empty bulk download')
-            return {}
+        def _df_from_yf(sym: str) -> Optional['pd.DataFrame']:
+            """Fall back to yfinance per-ticker history (rate-limited on OCI)."""
+            try:
+                t = yf.Ticker(sym)
+                df = t.history(period=f'{lookback_years}y', interval='1d', auto_adjust=True)
+                df.index = pd.to_datetime(df.index, utc=True)
+                return df if not df.empty else None
+            except Exception as e:
+                _logger.debug('calibration: yf fallback failed for %s: %s', sym, e)
+                return None
+
+        # Fetch all tickers (proxies + targets) from cache first
+        ticker_dfs: Dict[str, Optional['pd.DataFrame']] = {}
+        for sym in all_tickers:
+            df = _df_from_cache(sym)
+            if df is None or len(df) < 30:
+                _logger.debug('calibration: cache miss for %s — trying yfinance', sym)
+                df = _df_from_yf(sym)
+            ticker_dfs[sym] = df
 
         # ── Extract proxy series ───────────────────────────────────────────────
         def _get_close(sym: str) -> Optional['pd.Series']:
+            df = ticker_dfs.get(sym)
+            if df is None or df.empty:
+                return None
             try:
-                if len(all_tickers) == 1:
-                    s = raw['Close']
-                else:
-                    s = raw[sym]['Close']
-                s = s.dropna()
+                s = df['Close'].dropna()
                 return s if not s.empty else None
             except (KeyError, TypeError):
                 return None
@@ -596,10 +625,7 @@ class HistoricalCalibrator:
         results = {}
         for ticker in tickers:
             try:
-                if len(all_tickers) == 1:
-                    df = raw.copy()
-                else:
-                    df = raw[ticker].dropna(how='all')
+                df = ticker_dfs.get(ticker)
 
                 if df is None or df.empty:
                     _logger.debug('calibration: no data for %s', ticker)

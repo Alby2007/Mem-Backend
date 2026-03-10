@@ -33,6 +33,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+# Sentinel objects for non-error non-data return paths (avoids string type violations)
+_SENTINEL_RATE_LIMITED = object()   # 429 rate limit — caller should back off
+_SENTINEL_AUTH_FAIL    = object()   # 401/crumb failure — caller should abort
+
 from ingest.base import BaseIngestAdapter, RawAtom
 
 try:
@@ -355,7 +359,7 @@ class YFinanceAdapter(BaseIngestAdapter):
         try:
             r = session.get(url, params=params, headers=self._CHART_HEADERS, timeout=15)
             if r.status_code == 429:
-                return '429'  # type: ignore[return-value]
+                return _SENTINEL_RATE_LIMITED  # type: ignore[return-value]
             if r.status_code != 200:
                 return []
             data = r.json()
@@ -409,7 +413,7 @@ class YFinanceAdapter(BaseIngestAdapter):
         for sym in active_tickers:
             _time.sleep(0.35)  # throttle — 0.35s between tickers
             rows = self._fetch_chart_candles(sym, session)
-            if rows == '429':
+            if rows is _SENTINEL_RATE_LIMITED:
                 self._logger.warning('ohlcv_cache: Yahoo chart API rate-limited at %s — stopping', sym)
                 break
             if not rows:
@@ -564,7 +568,7 @@ class YFinanceAdapter(BaseIngestAdapter):
                 sym = futures[future]
                 try:
                     result = future.result(timeout=15)
-                    if result == '__AUTH_FAIL__':
+                    if result is _SENTINEL_AUTH_FAIL:
                         _info_auth_fails += 1
                         if _info_auth_fails >= _INFO_AUTH_ABORT:
                             self._logger.warning(
@@ -607,7 +611,7 @@ class YFinanceAdapter(BaseIngestAdapter):
                 is_ratelimit = any(k in err for k in ('429', 'rate', 'too many', 'timeout'))
                 if is_crumb:
                     # Signal IP-level block to caller — no point retrying
-                    return '__AUTH_FAIL__'  # type: ignore[return-value]
+                    return _SENTINEL_AUTH_FAIL  # type: ignore[return-value]
                 if attempt == 0 and is_ratelimit:
                     time.sleep(3.0)
                     continue
