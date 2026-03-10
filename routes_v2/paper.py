@@ -471,7 +471,8 @@ async def bot_log(user_id: str, bot_id: str, limit: int = 50, _: str = Depends(u
 async def fleet_performance(user_id: str, _: str = Depends(user_path_auth)):
     tier, err = svc.paper_tier_check(user_id)
     if err:
-        raise HTTPException(403, detail={"error": err, "tier": tier})
+        return {"requires_upgrade": True, "tier": tier, "bots": [], "total_equity": 0,
+                "initial_equity": 0, "return_pct": 0, "total_trades": 0, "generation": 0}
     try:
         from analytics.strategy_evolution import StrategyEvolution
         engine = StrategyEvolution(ext.DB_PATH)
@@ -484,7 +485,7 @@ async def fleet_performance(user_id: str, _: str = Depends(user_path_auth)):
 async def evolution_history(user_id: str, _: str = Depends(user_path_auth)):
     tier, err = svc.paper_tier_check(user_id)
     if err:
-        raise HTTPException(403, detail={"error": err, "tier": tier})
+        return {"requires_upgrade": True, "tier": tier, "events": []}
     try:
         from analytics.strategy_evolution import StrategyEvolution
         engine = StrategyEvolution(ext.DB_PATH)
@@ -497,7 +498,7 @@ async def evolution_history(user_id: str, _: str = Depends(user_path_auth)):
 async def bot_discoveries(user_id: str, _: str = Depends(user_path_auth)):
     tier, err = svc.paper_tier_check(user_id)
     if err:
-        raise HTTPException(403, detail={"error": err, "tier": tier})
+        return {"requires_upgrade": True, "tier": tier, "discoveries": []}
     try:
         from analytics.strategy_evolution import StrategyEvolution
         engine = StrategyEvolution(ext.DB_PATH)
