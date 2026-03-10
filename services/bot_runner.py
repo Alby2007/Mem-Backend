@@ -945,13 +945,23 @@ class BotRunner:
                 "SELECT equity_value FROM paper_bot_equity WHERE bot_id=? ORDER BY logged_at ASC",
                 (bot_id,)
             ).fetchall()
+            # Compute open position value before closing connection
+            try:
+                pos_rows = conn.execute(
+                    "SELECT entry_price, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
+                    (bot_id,)
+                ).fetchall()
+                open_value = sum(float(r[0]) * float(r[1]) for r in pos_rows)
+            except Exception:
+                open_value = 0.0
             conn.close()
 
             total = len(closed)
             if total == 0:
                 balance = float(config.get('virtual_balance', 5000))
                 initial = float(config.get('initial_balance', 5000))
-                return_pct = round((balance - initial) / initial * 100, 2) if initial > 0 else 0.0
+                equity  = round(balance + open_value, 2)
+                return_pct = round((equity - initial) / initial * 100, 2) if initial > 0 else 0.0
                 return {
                     'bot_id': bot_id,
                     'strategy_name': config.get('strategy_name', ''),
@@ -968,6 +978,7 @@ class BotRunner:
                     'tier': 'immature',
                     'virtual_balance': balance,
                     'initial_balance': initial,
+                    'equity': equity,
                     'return_pct': return_pct,
                     'sparkline': [float(r['equity_value']) for r in equity_rows],
                 }
@@ -1012,7 +1023,8 @@ class BotRunner:
 
             balance = float(config.get('virtual_balance', 5000))
             initial = float(config.get('initial_balance', 5000))
-            return_pct = round((balance - initial) / initial * 100, 2) if initial > 0 else 0.0
+            equity  = round(balance + open_value, 2)
+            return_pct = round((equity - initial) / initial * 100, 2) if initial > 0 else 0.0
 
             return {
                 'bot_id': bot_id,
@@ -1030,6 +1042,7 @@ class BotRunner:
                 'tier': tier,
                 'virtual_balance': balance,
                 'initial_balance': initial,
+                'equity': equity,
                 'return_pct': return_pct,
             }
         except Exception as e:
