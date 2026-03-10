@@ -220,6 +220,22 @@ async def public_paper_performance():
     }
 
 
+@router.get("/users/{user_id}/paper/stress-sim")
+async def paper_stress_sim(user_id: str, _: str = Depends(user_path_auth)):
+    """
+    Probability-weighted portfolio stress simulation.
+    Combines transition engine + regime-conditional returns for open positions.
+    """
+    _tier_gate(user_id)
+    try:
+        import extensions as _ext
+        from analytics.portfolio_stress_simulator import PortfolioStressSimulator
+        sim = PortfolioStressSimulator(_ext.DB_PATH)
+        return sim.run(user_id)
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
 @router.get("/users/{user_id}/paper/agent/log/export")
 async def paper_agent_log_export(user_id: str, _: str = Depends(user_path_auth)):
     _tier_gate(user_id)

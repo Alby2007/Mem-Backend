@@ -141,6 +141,22 @@ async def _lifespan(app: FastAPI):
         from ingest.transition_builder_adapter import TransitionBuilderAdapter
         scheduler.register(TransitionBuilderAdapter(db_path=db_path), interval_sec=86400)
 
+        # Thesis generator — auto-generates theses from 4+ independent signal convergences
+        from ingest.thesis_generator_adapter import ThesisGeneratorAdapter
+        scheduler.register(ThesisGeneratorAdapter(db_path=db_path), interval_sec=21600)
+
+        # Anomaly detector — flags tickers deviating from 30-snapshot baseline
+        from ingest.anomaly_detector_adapter import AnomalyDetectorAdapter
+        scheduler.register(AnomalyDetectorAdapter(db_path=db_path), interval_sec=21600)
+
+        # Correlation discovery — pairwise lead-lag detection (daily; needs 4-6w to populate)
+        from ingest.correlation_discovery_adapter import CorrelationDiscoveryAdapter
+        scheduler.register(CorrelationDiscoveryAdapter(db_path=db_path), interval_sec=86400)
+
+        # Signal decay — estimates remaining validity of active patterns
+        from ingest.signal_decay_adapter import SignalDecayAdapter
+        scheduler.register(SignalDecayAdapter(db_path=db_path), interval_sec=21600)
+
         # Alpha Vantage news sentiment — per-ticker AI sentiment; skips if no key
         scheduler.register(AlphaVantageAdapter(db_path=db_path), interval_sec=86400)
 
@@ -189,6 +205,23 @@ async def _lifespan(app: FastAPI):
         _pt.start()
         app.state.pattern_stop = _pattern_stop
         _logger.info('PatternAdapter thread started (interval=%ds)', _pattern.interval_sec)
+
+        # Adaptive scheduler — adjusts intervals based on volatility regime + anomalies
+        try:
+            from ingest.adaptive_scheduler import AdaptiveScheduler
+            _adaptive = AdaptiveScheduler(
+                scheduler=scheduler,
+                db_path=db_path,
+                base_intervals={
+                    'yfinance_adapter': 1800,
+                    'pattern_adapter':  1800,
+                },
+            )
+            _adaptive.start()
+            app.state.adaptive_scheduler = _adaptive
+            _logger.info('AdaptiveScheduler started')
+        except Exception as _as_e:
+            _logger.warning('AdaptiveScheduler failed to start: %s', _as_e)
 
     except Exception as _e:
         _logger.warning('Ingest scheduler failed to start: %s', _e)

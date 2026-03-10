@@ -157,6 +157,39 @@ class IngestScheduler:
         """
         return {name: status.to_dict() for name, status in self._status.items()}
 
+    def update_interval(self, adapter_name: str, new_interval_sec: float) -> bool:
+        """
+        Update the run interval for a named adapter.
+        Cancels the existing scheduled timer and reschedules with the new interval.
+        Returns True if the adapter was found, False otherwise.
+        """
+        target = None
+        for i, (adapter, _) in enumerate(self._adapters):
+            if adapter.name == adapter_name:
+                target = (i, adapter)
+                break
+
+        if target is None:
+            return False
+
+        idx, adapter = target
+        # Update the stored interval
+        self._adapters[idx] = (adapter, new_interval_sec)
+        if adapter_name in self._status:
+            self._status[adapter_name].interval_sec = new_interval_sec
+
+        # Cancel existing timer and reschedule
+        with self._lock:
+            old_timer = self._timers.pop(adapter_name, None)
+        if old_timer:
+            old_timer.cancel()
+
+        if self._running and not self._status.get(adapter_name, AdapterStatus(name=adapter_name, interval_sec=new_interval_sec)).is_running:
+            self._schedule(adapter, new_interval_sec, immediate=False)
+
+        _logger.info('update_interval: %r → %.0fs', adapter_name, new_interval_sec)
+        return True
+
     def run_now(self, adapter_name: str) -> bool:
         """
         Trigger an out-of-schedule immediate run for a named adapter.

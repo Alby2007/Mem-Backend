@@ -846,11 +846,83 @@ def paper_kb_chat(ticker: str, question: str, kg_conn):
         return None, 0
 
 
-def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float) -> tuple[bool, str]:
-    """Data-driven entry decision. Returns (should_enter, reasoning).
+def _read_kb_atoms_for_ticker(ticker: str, predicates: list) -> dict:
+    """Read a set of KB facts for a ticker from the DB. Returns {predicate: value}."""
+    try:
+        import extensions as _ext
+        conn = sqlite3.connect(_ext.DB_PATH, timeout=5)
+        conn.row_factory = sqlite3.Row
+        placeholders = ','.join('?' for _ in predicates)
+        rows = conn.execute(
+            f"SELECT predicate, object FROM facts WHERE subject=? AND predicate IN ({placeholders}) "
+            f"ORDER BY timestamp DESC",
+            [ticker.lower()] + predicates,
+        ).fetchall()
+        conn.close()
+        seen = {}
+        for r in rows:
+            if r['predicate'] not in seen:
+                seen[r['predicate']] = r['object']
+        return seen
+    except Exception:
+        return {}
+
+
+def _check_lead_lag_pre_signal(ticker: str, direction: str) -> bool:
+    """
+    Return True if a leading ticker (one that leads this ticker) has recently
+    flipped to the same direction, providing a pre-signal entry advantage.
+    Ignores lead-lag atoms older than 90 days.
+    """
+    try:
+        import extensions as _ext
+        from datetime import timedelta
+        conn = sqlite3.connect(_ext.DB_PATH, timeout=5)
+        conn.row_factory = sqlite3.Row
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        rows = conn.execute(
+            """SELECT f.object as leader, f2.object as discovery_date
+               FROM facts f
+               LEFT JOIN facts f2 ON f2.subject=f.object AND f2.predicate='lead_discovery_date'
+                                  AND f2.source='correlation_discovery'
+               WHERE f.subject=? AND f.predicate='leads'
+                 AND f.source='correlation_discovery'""",
+            (ticker.lower(),),
+        ).fetchall()
+        conn.close()
+        for r in rows:
+            disc_date = r['discovery_date'] or ''
+            if disc_date and disc_date < cutoff[:10]:
+                continue  # stale lead-lag relationship
+            leader = r['leader']
+            if not leader:
+                continue
+            leader_atoms = _read_kb_atoms_for_ticker(leader, ['signal_direction'])
+            leader_dir = (leader_atoms.get('signal_direction') or '').lower()
+            dir_map = {
+                'bullish': {'bullish', 'long', 'buy', 'near_high'},
+                'bearish': {'bearish', 'short', 'sell', 'near_low'},
+            }
+            if leader_dir in dir_map.get(direction, set()):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float) -> tuple[bool, str, float]:
+    """Data-driven entry decision. Returns (should_enter, reasoning, position_size_mult).
+
+    position_size_mult: normally 1.0; reduced to 0.5 for anomalous tickers.
 
     Replaces LLM for every candidate — <1ms per call vs 13s LLM round-trip.
     LLM remains available as an optional confirmation layer (PAPER_AGENT_USE_LLM=1).
+
+    Reads atoms from the new analytics modules:
+      pattern_decay_pct   — skip if > 0.80 (SignalDecayPredictor, Part 4)
+      anomaly_severity    — 0.5× position size if > 0.7 (AnomalyDetector, Part 2)
+      auto_thesis         — quality bonus if aligned (ThesisGenerator, Part 1)
+      leads               — lower threshold if leading ticker confirms (CorrelationDiscovery, Part 3)
     """
     quality    = candidate.get('quality_score', 0) or 0
     conviction = (candidate.get('kb_conviction') or '').lower()
@@ -858,45 +930,100 @@ def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float)
     cal_n      = candidate.get('cal_samples', 0) or 0
     signal_dir = (candidate.get('kb_signal_dir') or '').lower()
     direction  = candidate.get('direction', '')
+    ticker     = candidate.get('ticker', '')
+    size_mult  = 1.0
+
+    # ── Read new analytics atoms (non-blocking, fails gracefully) ─────────────
+    kb_atoms = _read_kb_atoms_for_ticker(ticker, [
+        'pattern_decay_pct', 'anomaly_severity', 'auto_thesis',
+    ]) if ticker else {}
+
+    decay_pct = None
+    try:
+        _d = kb_atoms.get('pattern_decay_pct')
+        if _d is not None:
+            decay_pct = float(_d)
+    except Exception:
+        pass
+
+    anomaly_sev = None
+    try:
+        _a = kb_atoms.get('anomaly_severity')
+        if _a is not None:
+            anomaly_sev = float(_a)
+    except Exception:
+        pass
+
+    auto_thesis = (kb_atoms.get('auto_thesis') or '').lower()
+
+    # ── Hard rejects ──────────────────────────────────────────────────────────
+
+    # Part 4: skip patterns that are >80% expired
+    if decay_pct is not None and decay_pct > 0.80:
+        return False, f'pattern decayed: {decay_pct:.0%} past expected resolution time', 1.0
 
     # Hard reject: quality too low regardless of anything else
     if quality < 0.60:
-        return False, f'quality {quality:.2f} below 0.60'
+        return False, f'quality {quality:.2f} below 0.60', 1.0
 
     # Hard reject: insufficient cash (below minimum viable 2× risk)
     if remaining_cash < risk_per_trade * 2:
-        return False, f'insufficient cash {remaining_cash:.0f} < {risk_per_trade * 2:.0f}'
+        return False, f'insufficient cash {remaining_cash:.0f} < {risk_per_trade * 2:.0f}', 1.0
+
+    # ── Part 2: Anomaly modifier — reduce size but don't skip ────────────────
+    anomaly_note = ''
+    if anomaly_sev is not None and anomaly_sev > 0.7:
+        size_mult = 0.5
+        anomaly_note = f' [anomaly_severity={anomaly_sev:.2f} → 0.5× size]'
+
+    # ── Part 1: Auto-thesis quality bonus ────────────────────────────────────
+    thesis_bonus = 0.0
+    thesis_note = ''
+    if auto_thesis == direction:
+        thesis_bonus = 0.05
+        thesis_note = ' [auto_thesis confirms]'
+    effective_quality = quality + thesis_bonus
+
+    # ── Part 3: Lead-lag pre-signal boost — lower entry threshold ────────────
+    lead_lag_boost = False
+    if ticker and direction:
+        lead_lag_boost = _check_lead_lag_pre_signal(ticker, direction)
+
+    # ── Entry decision logic ──────────────────────────────────────────────────
 
     # Calibration-proven: enter if hit rate > 55% with ≥15 samples
     if cal_hr is not None and cal_hr > 0.55 and cal_n >= 15:
-        return True, f'calibration-proven: hr={cal_hr:.0%} n={cal_n}'
+        return True, f'calibration-proven: hr={cal_hr:.0%} n={cal_n}{anomaly_note}{thesis_note}', size_mult
 
     # Calibration negative: skip if hit rate < 40% with ≥10 samples
     if cal_hr is not None and cal_hr < 0.40 and cal_n >= 10:
-        return False, f'calibration-negative: hr={cal_hr:.0%} n={cal_n}'
+        return False, f'calibration-negative: hr={cal_hr:.0%} n={cal_n}', 1.0
 
     # High quality + strong conviction: enter
-    if quality >= 0.75 and conviction in ('high', 'confirmed', 'strong'):
-        return True, f'high quality+conviction: q={quality:.2f} {conviction}'
+    if effective_quality >= 0.75 and conviction in ('high', 'confirmed', 'strong'):
+        return True, f'high quality+conviction: q={quality:.2f} {conviction}{thesis_note}{anomaly_note}', size_mult
 
     # Quality ≥ 0.70 + signal direction alignment: enter
-    if quality >= 0.70 and signal_dir:
+    if effective_quality >= 0.70 and signal_dir:
         bull_aligned = direction == 'bullish' and signal_dir in ('bullish', 'long', 'near_high')
         bear_aligned = direction == 'bearish' and signal_dir in ('bearish', 'short', 'near_low')
         if bull_aligned or bear_aligned:
-            return True, f'quality+signal aligned: q={quality:.2f} signal={signal_dir}'
+            return True, f'quality+signal aligned: q={quality:.2f} signal={signal_dir}{anomaly_note}', size_mult
 
     # Quality ≥ 0.70 + moderate conviction: enter
-    if quality >= 0.70 and conviction in ('medium', 'moderate'):
-        return True, f'quality+moderate conviction: q={quality:.2f} {conviction}'
+    if effective_quality >= 0.70 and conviction in ('medium', 'moderate'):
+        return True, f'quality+moderate conviction: q={quality:.2f} {conviction}{anomaly_note}', size_mult
 
     # Quality ≥ 0.72 with no conviction data at all — pattern quality alone is sufficient
-    # (many signals are valid but KB enrichment hasn't populated conviction yet)
-    if quality >= 0.72 and not conviction and not signal_dir:
-        return True, f'pattern quality only: q={quality:.2f} (no KB enrichment)'
+    if effective_quality >= 0.72 and not conviction and not signal_dir:
+        return True, f'pattern quality only: q={quality:.2f} (no KB enrichment){anomaly_note}', size_mult
+
+    # Part 3: Lead-lag pre-signal — leading ticker already confirmed direction
+    if lead_lag_boost and effective_quality >= 0.65:
+        return True, f'lead-lag pre-signal: q={quality:.2f} leading ticker confirms {direction}{anomaly_note}', size_mult
 
     # Default: skip (conservative)
-    return False, f'no strong signal: q={quality:.2f} conv={conviction} cal_hr={cal_hr}'
+    return False, f'no strong signal: q={quality:.2f} conv={conviction} cal_hr={cal_hr}', 1.0
 
 
 def ai_run(user_id: str) -> dict:
@@ -1119,7 +1246,7 @@ def _ai_run_inner(user_id: str) -> dict:
 
             # Part 10: data-driven entry decision (replaces LLM for every candidate)
             # LLM used only as optional confirmation when PAPER_AGENT_USE_LLM=1 in env.
-            should_enter, data_reason = _should_enter(c, remaining_cash, risk_per_trade)
+            should_enter, data_reason, _size_mult = _should_enter(c, remaining_cash, risk_per_trade)
             reasoning = (
                 f'{pattern_type} {direction} | q={quality:.2f} {conviction} '
                 f'regime={regime or "?"} signal_dir={kb_signal_dir} | {data_reason}'
@@ -1181,9 +1308,11 @@ def _ai_run_inner(user_id: str) -> dict:
 
                 # Size by risk: qty = risk_per_trade / stop_distance
                 # Cap by notional: qty = min(risk_per_trade / risk, max_position_value / entry_p)
+                # Apply anomaly size_mult (0.5× for anomalous tickers from AnomalyDetector)
                 # This prevents tight stops (e.g. 0.5%) from producing 200%+ notional positions
-                qty_by_risk    = risk_per_trade / risk
-                qty_by_notional = max_position_value / entry_p
+                _eff_risk = risk_per_trade * _size_mult
+                qty_by_risk    = _eff_risk / risk
+                qty_by_notional = (max_position_value * _size_mult) / entry_p
                 qty = round(min(qty_by_risk, qty_by_notional), 4)
                 qty = max(qty, 0.0001)
                 position_value = round(entry_p * qty, 2)
