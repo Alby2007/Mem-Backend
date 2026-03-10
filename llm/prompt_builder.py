@@ -114,6 +114,20 @@ _SYSTEM_PRECEDENT_RULE = (
     "- Cite the precedent ONCE, naturally woven into your analysis — not as a separate paragraph."
 )
 
+_SYSTEM_TEMPORAL_SEARCH_RULE = (
+    "\n\nTEMPORAL STATE SEARCH: When the context includes a === TEMPORAL STATE SEARCH === "
+    "section, reference the findings naturally. Say something like: "
+    "'Looking at X similar historical states, this combination has led to positive "
+    "outcomes Y% of the time, with an average 1-month return of Z%.'\n"
+    "RULES:\n"
+    "- Cite the match count, outcome distribution, and best/worst performing periods.\n"
+    "- If match count is low (<10), add: 'Based on a limited historical sample.'\n"
+    "- If avg_outcome_1w or avg_outcome_1m are None, state that forward price data is "
+    "not yet available for those historical snapshots.\n"
+    "- Never invent temporal search statistics — only cite numbers from the section provided.\n"
+    "- Weave the finding into your analysis naturally — not as a separate block."
+)
+
 _SYSTEM_SYNTHESIS_RULE = (
     "\n\nSYNTHESIS RULE — CRITICAL: When multiple atoms together imply a conclusion, "
     "you MUST state that conclusion. Do NOT refuse to answer or say the information "
@@ -720,7 +734,7 @@ def build(
         [{"role": "system", "content": ...}, {"role": "user", "content": ...}]
     """
     # ── Build dynamic system prompt ────────────────────────────────────────────
-    system_text = _SYSTEM_PROMPT_BASE + _SYSTEM_PRECEDENT_RULE + _SYSTEM_SYNTHESIS_RULE + _SYSTEM_NO_HALLUCINATION
+    system_text = _SYSTEM_PROMPT_BASE + _SYSTEM_PRECEDENT_RULE + _SYSTEM_TEMPORAL_SEARCH_RULE + _SYSTEM_SYNTHESIS_RULE + _SYSTEM_NO_HALLUCINATION
 
     composite = 0.0
     if stress:

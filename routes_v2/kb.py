@@ -287,3 +287,49 @@ async def stats():
             extras[regime_key] = None
 
     return {**base, **extras}
+
+
+@router.get("/kb/temporal-search")
+async def temporal_search(
+    q: str,
+    ticker: Optional[str] = None,
+    limit: int = 50,
+    _user: str = Depends(get_current_user),
+):
+    """Search for historical market states matching a natural language query."""
+    from analytics.temporal_search import TemporalStateSearch
+    searcher = TemporalStateSearch(ext.DB_PATH)
+
+    try:
+        if ticker:
+            result = searcher.search_for_ticker(ticker.upper(), q)
+        else:
+            result = searcher.search_by_natural_language(q)
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    if not result:
+        return {"match_count": 0, "message": "No matching historical states found. Snapshots accumulate every 6h — check back after the next cycle."}
+
+    return {
+        "match_count":          result.match_count,
+        "query_state":          result.query_state,
+        "avg_similarity":       result.avg_similarity,
+        "avg_outcome_1w":       result.avg_outcome_1w,
+        "avg_outcome_1m":       result.avg_outcome_1m,
+        "outcome_distribution": result.outcome_distribution,
+        "regime_breakdown":     result.regime_breakdown,
+        "best_period":          result.best_period,
+        "worst_outcome_period": result.worst_outcome_period,
+        "top_matches": [
+            {
+                "date":       m.snapshot_at[:10],
+                "subject":    m.subject,
+                "similarity": m.similarity,
+                "outcome_1w": m.outcome_1w,
+                "outcome_1m": m.outcome_1m,
+                "state":      m.state,
+            }
+            for m in result.top_matches[:int(limit)]
+        ],
+    }

@@ -1117,6 +1117,84 @@ def _build_thesis_from_chat(message: str, user_id: str, cur_tickers: list, respo
     return None
 
 
+_TEMPORAL_SEARCH_KWS = (
+    'when has', 'when did', 'last time', 'historically when',
+    'how often', 'what happened when', 'search for situation',
+    'find past', 'similar conditions', 'has this happened',
+    'in the past when', 'historical pattern', 'happened before',
+    'seen this before', 'precedent for', 'times before',
+)
+
+
+def _detect_temporal_search_intent(message: str) -> bool:
+    msg_lower = message.lower()
+    return any(kw in msg_lower for kw in _TEMPORAL_SEARCH_KWS)
+
+
+def _run_temporal_search(message: str, ticker: Optional[str], response: Dict) -> Optional[str]:
+    """Run temporal state search and return context block for LLM prompt."""
+    try:
+        from analytics.temporal_search import TemporalStateSearch
+        searcher = TemporalStateSearch(ext.DB_PATH)
+
+        if ticker:
+            result = searcher.search_for_ticker(ticker.upper(), message)
+        else:
+            result = searcher.search_by_natural_language(message)
+
+        if not result or result.match_count < 3:
+            return None
+
+        response['temporal_search'] = {
+            'match_count':          result.match_count,
+            'avg_similarity':       result.avg_similarity,
+            'avg_outcome_1w':       result.avg_outcome_1w,
+            'avg_outcome_1m':       result.avg_outcome_1m,
+            'outcome_distribution': result.outcome_distribution,
+            'regime_breakdown':     result.regime_breakdown,
+            'best_period':          result.best_period,
+            'worst_outcome_period': result.worst_outcome_period,
+            'query_state':          result.query_state,
+            'top_matches': [
+                {
+                    'date':       m.snapshot_at[:10],
+                    'subject':    m.subject,
+                    'similarity': m.similarity,
+                    'outcome_1w': m.outcome_1w,
+                    'outcome_1m': m.outcome_1m,
+                }
+                for m in result.top_matches[:5]
+            ],
+        }
+
+        lines = ['=== TEMPORAL STATE SEARCH ===']
+        lines.append(f'Found {result.match_count} similar historical states (avg similarity {result.avg_similarity:.0%}).')
+        if result.avg_outcome_1w is not None:
+            lines.append(f'Average 1-week outcome: {result.avg_outcome_1w:+.1%}')
+        if result.avg_outcome_1m is not None:
+            lines.append(f'Average 1-month outcome: {result.avg_outcome_1m:+.1%}')
+        if result.outcome_distribution:
+            dist = result.outcome_distribution
+            lines.append(
+                f'Outcome distribution: positive {dist.get("positive", 0):.0%}, '
+                f'negative {dist.get("negative", 0):.0%}, '
+                f'flat {dist.get("flat", 0):.0%}'
+            )
+        if result.best_period:
+            lines.append(f'Best performing period: {result.best_period}')
+        if result.regime_breakdown:
+            lines.append('By regime: ' + '; '.join(
+                f'{r} ({d["count"]} matches, avg {d["avg_return"]:+.1%})' if d.get('avg_return') is not None
+                else f'{r} ({d["count"]} matches)'
+                for r, d in list(result.regime_breakdown.items())[:4]
+            ))
+        lines.append('=== END TEMPORAL SEARCH ===')
+        return '\n'.join(filter(None, lines))
+    except Exception as _e:
+        _logger.debug('temporal search failed: %s', _e)
+    return None
+
+
 def _attach_signal_forecast(response: Dict) -> None:
     """
     Attach a SignalForecaster probability distribution to the response
@@ -1581,6 +1659,12 @@ def run(
     if _detect_scenario_intent(message):
         scenario_context = _run_scenario_engine(message, response)
 
+    # ── Temporal state search ("when has this happened before") ───────────────
+    temporal_search_context: Optional[str] = None
+    if _detect_temporal_search_intent(message):
+        _lookup_ticker = cur_tickers[0] if cur_tickers else None
+        temporal_search_context = _run_temporal_search(message, _lookup_ticker, response)
+
     # ── Opportunity scan ──────────────────────────────────────────────────────
     opportunity_scan_context = _run_opportunity_scan(message, response)
 
@@ -1589,8 +1673,8 @@ def run(
         prior_context = (prior_context + '\n' if prior_context else '') + _style_tf_hint
 
     # ── Build full prompt ─────────────────────────────────────────────────
-    # Merge thesis / scenario / opportunity contexts for the prompt
-    _combined_scan_ctx = '\n\n'.join(filter(None, [thesis_build_context, scenario_context, opportunity_scan_context])) or None
+    # Merge thesis / scenario / temporal search / opportunity contexts for the prompt
+    _combined_scan_ctx = '\n\n'.join(filter(None, [thesis_build_context, scenario_context, temporal_search_context, opportunity_scan_context])) or None
 
     messages = ext.build_prompt(
         user_message=message, snippet=snippet, stress=stress_dict,

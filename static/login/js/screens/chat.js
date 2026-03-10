@@ -202,6 +202,72 @@ function renderPrecedentCard(precedent) {
   </div>`;
 }
 
+function renderTemporalSearchCard(ts) {
+  if (!ts || ts.match_count < 3) return '';
+  const fmt1m = ts.avg_outcome_1m != null
+    ? `<span class="ts-val ${ts.avg_outcome_1m >= 0 ? 'ts-pos' : 'ts-neg'}">${ts.avg_outcome_1m >= 0 ? '+' : ''}${(ts.avg_outcome_1m * 100).toFixed(1)}%</span>`
+    : '<span class="ts-val ts-dim">n/a</span>';
+  const fmt1w = ts.avg_outcome_1w != null
+    ? `<span class="ts-val ${ts.avg_outcome_1w >= 0 ? 'ts-pos' : 'ts-neg'}">${ts.avg_outcome_1w >= 0 ? '+' : ''}${(ts.avg_outcome_1w * 100).toFixed(1)}%</span>`
+    : '<span class="ts-val ts-dim">n/a</span>';
+  const dist = ts.outcome_distribution || {};
+  const posPct  = Math.round((dist.positive || 0) * 100);
+  const negPct  = Math.round((dist.negative  || 0) * 100);
+  const flatPct = Math.round((dist.flat      || 0) * 100);
+  const posBarW = posPct;
+  const negBarW = negPct;
+
+  const regimeRows = Object.entries(ts.regime_breakdown || {}).slice(0, 4).map(([r, d]) => {
+    const avgR = d.avg_return != null
+      ? `<span class="${d.avg_return >= 0 ? 'ts-pos' : 'ts-neg'}">${d.avg_return >= 0 ? '+' : ''}${(d.avg_return * 100).toFixed(1)}%</span>`
+      : '<span class="ts-dim">—</span>';
+    return `<div class="ts-regime-row"><span class="ts-regime-label">${escHtml(r.replace(/_/g, ' '))}</span><span class="ts-regime-count">${d.count} match${d.count !== 1 ? 'es' : ''}</span>${avgR}</div>`;
+  }).join('');
+
+  const topRows = (ts.top_matches || []).slice(0, 3).map(m => {
+    const o1m = m.outcome_1m != null
+      ? `<span class="${m.outcome_1m >= 0 ? 'ts-pos' : 'ts-neg'}">${m.outcome_1m >= 0 ? '+' : ''}${(m.outcome_1m * 100).toFixed(1)}%</span>`
+      : '<span class="ts-dim">—</span>';
+    return `<div class="ts-match-row"><span class="ts-match-date">${escHtml(m.date || '')}</span><span class="ts-sim">${Math.round(m.similarity * 100)}% match</span>${o1m}</div>`;
+  }).join('');
+
+  const stateDesc = Object.entries(ts.query_state || {}).slice(0, 4)
+    .map(([k, v]) => Array.isArray(v) ? v[0] : v)
+    .filter(Boolean).map(v => String(v).replace(/_/g, ' ')).join(' · ');
+
+  const sampleNote = ts.match_count < 10 ? ' <span class="ts-dim">(limited sample)</span>' : '';
+  const bestPeriod = ts.best_period ? `<div class="ts-stat-row"><span class="ts-label">Best period</span><span class="ts-val">${escHtml(ts.best_period)}</span></div>` : '';
+
+  return `
+  <div class="temporal-card">
+    <div class="ts-header">
+      <span class="ts-title">HISTORICAL STATE SEARCH</span>
+      <span class="ts-count">${ts.match_count} matches${sampleNote}</span>
+    </div>
+    <div class="ts-outcomes">
+      <div class="ts-outcome-row">
+        <span class="ts-label">1 week avg</span>
+        <div class="ts-bar-track"><div class="ts-bar-fill ts-bar-pos" style="width:0%" data-width="${posBarW}"></div></div>
+        ${fmt1w}
+      </div>
+      <div class="ts-outcome-row">
+        <span class="ts-label">1 month avg</span>
+        <div class="ts-bar-track"><div class="ts-bar-fill ts-bar-pos" style="width:0%" data-width="${posBarW}"></div></div>
+        ${fmt1m}
+      </div>
+      <div class="ts-dist-row">
+        <span class="ts-pos">${posPct}% positive</span>
+        <span class="ts-neg">${negPct}% negative</span>
+        <span class="ts-dim">${flatPct}% flat</span>
+      </div>
+    </div>
+    ${bestPeriod ? `<div class="ts-stats">${bestPeriod}</div>` : ''}
+    ${regimeRows ? `<div class="ts-regimes"><div class="ts-section-label">BY REGIME</div>${regimeRows}</div>` : ''}
+    ${topRows ? `<div class="ts-matches"><div class="ts-section-label">CLOSEST MATCHES</div>${topRows}</div>` : ''}
+    ${stateDesc ? `<div class="ts-footer">Based on: ${escHtml(stateDesc)}</div>` : ''}
+  </div>`;
+}
+
 function renderCalibrationBadge(cal) {
   if (!cal) return '';
   const t1Pct = cal.hit_rate_t1 != null ? Math.round(cal.hit_rate_t1 * 100) : null;
@@ -663,7 +729,8 @@ async function sendChat() {
     const tipCardHtml = d.tip_card ? renderTipCard(d.tip_card, d.tip_card.tip_id) : '';
     const kbPanelHtml = renderKbPanel(grounding, d.grounding_atoms || null);
     const calHtml = renderCalibrationBadge(d.calibration || null);
-    const precedentHtml = d.historical_precedent ? renderPrecedentCard(d.historical_precedent) : '';
+    const precedentHtml    = d.historical_precedent ? renderPrecedentCard(d.historical_precedent) : '';
+    const temporalHtml     = d.temporal_search ? renderTemporalSearchCard(d.temporal_search) : '';
     // Build merged atoms from LLM grounding block + DB atoms for market stress fallback
     const _mergedAtoms = {};
     if (grounding) grounding.forEach(r => { const k = r.key === 'regime' ? 'price_regime' : r.key; if (r.val) _mergedAtoms[k] = r.val; });
@@ -671,7 +738,7 @@ async function sendChat() {
     const mktStress = d.market_stress || computeMarketStress(Object.keys(_mergedAtoms).length ? _mergedAtoms : null);
     const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null, mktStress);
     const bubble = thinking.querySelector('.msg-bubble');
-    bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + precedentHtml + calHtml + epistemicHtml;
+    bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + precedentHtml + temporalHtml + calHtml + epistemicHtml;
     // Animate stress bars + calibration bars + precedent bars
     requestAnimationFrame(() => {
       thinking.querySelectorAll('.stress-bar-fill[data-width]').forEach((bar, i) => {
@@ -692,6 +759,10 @@ async function sendChat() {
       // Animate precedent bars staggered after other cards
       thinking.querySelectorAll('.prec-bar-fill[data-width]').forEach((bar, i) => {
         setTimeout(() => { bar.style.width = bar.dataset.width + '%'; }, 600 + i * 120);
+      });
+      // Animate temporal search bars staggered after precedent bars
+      thinking.querySelectorAll('.ts-bar-fill[data-width]').forEach((bar, i) => {
+        setTimeout(() => { bar.style.width = bar.dataset.width + '%'; }, 900 + i * 150);
       });
     });
     if (tipCardHtml) bindTipFeedback(thinking);

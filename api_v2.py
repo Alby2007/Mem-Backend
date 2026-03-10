@@ -133,6 +133,10 @@ async def _lifespan(app: FastAPI):
         from ingest.historical_calibration_adapter import HistoricalCalibrationAdapter
         scheduler.register(HistoricalCalibrationAdapter(db_path=db_path), interval_sec=86400)
 
+        # State snapshots — full market state vectors every 6h for temporal search
+        from ingest.state_snapshot_adapter import StateSnapshotAdapter
+        scheduler.register(StateSnapshotAdapter(db_path=db_path), interval_sec=21600)
+
         # Alpha Vantage news sentiment — per-ticker AI sentiment; skips if no key
         scheduler.register(AlphaVantageAdapter(db_path=db_path), interval_sec=86400)
 
