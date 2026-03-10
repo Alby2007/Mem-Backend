@@ -1040,8 +1040,9 @@ def _ai_run_inner(user_id: str) -> dict:
                 _c['cal_hit_rate'] = None
                 _c['cal_samples']  = 0
 
-        # Re-sort: calibration-proven patterns first, then by quality
+        # Re-sort: open markets first (tradeable now), then calibration, then quality
         all_cands.sort(key=lambda _x: (
+            1 if _is_market_open(_x['ticker']) else 0,
             _x.get('cal_hit_rate') or 0.0,
             _x.get('quality_score') or 0.0,
         ), reverse=True)
