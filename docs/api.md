@@ -4,7 +4,7 @@ Base URL: `https://api.trading-galaxy.uk` (production) · `http://localhost:5050
 
 **Framework:** FastAPI (`api_v2.py`), served by Gunicorn + UvicornWorker.
 
-**CORS:** Cross-origin requests are accepted from `https://trading-galaxy.uk`, `https://www.trading-galaxy.uk`, `https://*.pages.dev`, and `http://localhost:3000` / `http://localhost:5050`. Allowed methods: `GET POST PATCH OPTIONS`. The `Authorization` and `Content-Type` headers are allowed.
+**CORS:** Cross-origin requests are accepted from `https://trading-galaxy.uk`, `https://www.trading-galaxy.uk`, `https://app.trading-galaxy.uk`, `http://localhost:3000`, and `http://localhost:5173`. All methods and headers are allowed (`allow_methods=["*"]`, `allow_headers=["*"]`).
 
 **Rate limiting:** `slowapi` (in-memory). Exempt for `EVAL_MODE=1` and localhost. `/waitlist` is 3/hour per IP; chat and other sensitive endpoints are individually gated.
 
@@ -132,7 +132,8 @@ Smart multi-strategy retrieval for a natural-language or structured query. This 
   "session_id": "user-abc-session-1",
   "goal":       "evaluate tech long book",
   "topic":      "technology sector",
-  "turn_count": 1
+  "turn_count": 1,
+  "limit":       30
 }
 ```
 
@@ -480,12 +481,15 @@ KB-grounded conversational endpoint. Retrieves relevant atoms, builds a context-
 ```json
 {
   "message":    "Is NVDA a good entry here?",
-  "session_id": "user-abc-session-1",
-  "turn_count": 2
+  "session_id": "user-abc-session-1"
 }
 ```
 
-Only `message` is required.
+Only `message` is required. Optional fields:
+- `tickers` — explicit ticker list to focus retrieval
+- `portfolio` — holdings list for portfolio-aware context
+- `mode` — `"overlay"` to request overlay card alongside answer
+- `explain_mode` — `true` for plain-English explanation mode
 
 **Response**
 ```json
@@ -501,6 +505,46 @@ Only `message` is required.
 - Chat quota is enforced per user per day (varies by tier)
 - `kb_depth`: `thin` (<5 atoms) · `shallow` (5–14) · `deep` (≥15)
 - Returns `{"error": "quota_exceeded"}` with HTTP 429 when limit reached
+
+---
+
+## `GET /chat/history`
+
+Paginated conversation history for the authenticated user.
+
+**Query params:**
+
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `user_id` | string | from cookie | Override (fallback for query-string auth) |
+| `limit` | int | 80 | Max entries (max 200) |
+| `offset` | int | 0 | Pagination offset |
+| `search` | string | `""` | Filter by message content |
+
+**Response**
+```json
+{
+  "entries": [ { "id": 1, "role": "user", "content": "What is NVDA?", "timestamp": "..." } ],
+  "total": 142,
+  "user_id": "alice"
+}
+```
+
+---
+
+## `GET /chat/history/{message_id}`
+
+Fetch a single user turn and its paired assistant response.
+
+**Response**
+```json
+{
+  "user":      { "id": 1, "content": "What is NVDA?", "timestamp": "..." },
+  "assistant": { "id": 2, "content": "NVDA is currently...", "metadata": { "atoms_used": 12 } }
+}
+```
+
+`assistant` is `null` if no response is paired.
 
 ---
 
@@ -642,6 +686,65 @@ Stop the continuous scanner.
 ```json
 { "running": true }
 ```
+
+---
+
+---
+
+## Scenario Endpoints
+
+All scenario endpoints require authentication. Scenario execution is read-only — no KB mutations.
+
+### `GET /scenario/seeds`
+
+Return valid seed concepts grouped by category plus the alias mapping. Use for autocomplete chips in the frontend.
+
+**Response**
+```json
+{
+  "categories": { "monetary_policy": ["fed_rate_cut", "fed_rate_hike", ...], ... },
+  "aliases": { "rate cut": "fed_rate_cut", "oil spike": "energy_prices_rise", ... }
+}
+```
+
+---
+
+### `POST /scenario/run`
+
+Run a causal shock scenario through the KB causal graph. Returns chain + affected tickers in <50ms dry-run. Optionally appends a 2–3 sentence LLM narrative (~1–2s Groq).
+
+**Request**
+```json
+{
+  "shock":          "fed rate cut",
+  "max_depth":      4,
+  "min_confidence": 0.5,
+  "narrative":      false
+}
+```
+
+`shock` is free-text — resolved via alias map and edit-distance fallback. `max_depth` max is 8.
+
+**Response**
+```json
+{
+  "shock_input":      "fed rate cut",
+  "seed_concept":     "fed_rate_cut",
+  "resolved":         true,
+  "chain": [
+    { "from": "fed_rate_cut", "to": "dollar_weakens", "confidence": 0.9, "mechanism": "..." },
+    { "from": "dollar_weakens", "to": "gold_rises", "confidence": 0.85, "mechanism": "..." }
+  ],
+  "concepts_reached":  ["dollar_weakens", "gold_rises", "risk_on_equities"],
+  "affected_tickers":  ["GLD", "SHEL.L", "AZN.L"],
+  "portfolio_impact":  { "SHEL.L": "positive", "AZN.L": "neutral" },
+  "chain_confidence":  0.816,
+  "narrative":         null,
+  "elapsed_ms":        64.6
+}
+```
+
+If `resolved=false`, the chain is empty and `unresolved_message` suggests closest-matching seed concepts.
 
 ---
 

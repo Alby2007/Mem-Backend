@@ -2408,3 +2408,257 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
   margin-top: 4px;
 }
 .dsh-paper-link:hover { color: #c4b5fd; }
+
+/* ── Evolutionary Strategy Ecosystem ─────────────────────────────────────── */
+
+.evo-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.evo-loading {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
+
+.evo-section-header {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Fleet header */
+.evo-fleet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.evo-fleet-stats {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.evo-stat-big {
+  font-size: 22px;
+  font-weight: 700;
+  font-family: var(--mono);
+}
+
+.evo-stat-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.evo-fleet-chart {
+  margin-bottom: 12px;
+}
+
+/* Generation pill */
+.evo-gen-pill {
+  display: inline-block;
+  font-size: 10px;
+  font-family: var(--mono);
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--border);
+  color: var(--muted);
+  margin-left: 4px;
+}
+
+/* Leaderboard rows */
+.evo-leaderboard-row {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 4px;
+  transition: background 0.12s;
+}
+
+.evo-leaderboard-row:hover {
+  background: var(--hover, rgba(255,255,255,0.04));
+}
+
+.evo-bot-name {
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+}
+
+/* Tier badges */
+.evo-tier-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.evo-tier-elite        { background: rgba(34,197,94,0.15);  color: var(--green); }
+.evo-tier-viable       { background: rgba(234,179,8,0.15);  color: #eab308; }
+.evo-tier-immature     { background: rgba(148,163,184,0.1); color: var(--muted); }
+.evo-tier-failing      { background: rgba(239,68,68,0.15);  color: var(--red); }
+.evo-tier-killed       { background: rgba(100,116,139,0.1); color: var(--muted); opacity: 0.6; }
+
+/* Sparkline wrapper */
+.evo-sparkline {
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 0;
+}
+
+/* Genome tags */
+.evo-genome-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-family: var(--mono);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.06);
+  color: var(--muted);
+  margin: 1px 2px;
+}
+
+.evo-genome-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 4px;
+}
+
+/* Bot detail grid */
+.evo-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 600px) {
+  .evo-detail-grid { grid-template-columns: 1fr; }
+}
+
+.evo-detail-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.evo-perf-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+}
+
+.evo-stat-label {
+  color: var(--muted);
+  font-size: 11px;
+  margin-right: 4px;
+}
+
+.evo-stat-val {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* Equity chart wrapper */
+.evo-equity-chart {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+/* Position rows */
+.evo-pos-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+/* Timeline */
+.evo-timeline-gen {
+  margin-bottom: 16px;
+}
+
+.evo-timeline-gen-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.evo-timeline-event {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+/* Discoveries */
+.evo-discoveries {
+  font-size: 12px;
+  line-height: 1.8;
+  padding: 8px 0;
+}
+
+.evo-discovery-row {
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+  font-style: italic;
+}
+
+/* Form inputs in modals */
+.evo-input {
+  background: var(--input-bg, #1a1a2e);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--text);
+  font-size: 13px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.evo-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Nav tabs */
+.pt-nav-tab.active {
+  background: var(--accent) !important;
+  color: #fff !important;
+  border-color: var(--accent) !important;
+}

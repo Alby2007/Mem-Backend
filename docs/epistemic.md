@@ -13,7 +13,7 @@ The epistemic system governs how the KB reasons about the **quality, freshness, 
 | `knowledge/contradiction.py` | Conflict detection between mutually exclusive facts |
 | `knowledge/epistemic_stress.py` | Composite stress signal at retrieval time |
 | `knowledge/working_state.py` | Cross-session goal/topic memory |
-| `knowledge/epistemic_adaptation.py` | Adaptive retrieval under sustained stress (built, not yet wired) |
+| `knowledge/epistemic_adaptation.py` | Adaptive retrieval under sustained stress (Live — wired to `POST /retrieve`) |
 
 ---
 

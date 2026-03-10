@@ -503,6 +503,10 @@ def generate_premarket_narrative(
         if regime_outlook:
             parts.append(regime_outlook)
 
+        fleet_discoveries = _build_fleet_discoveries_section(user_id, db_path)
+        if fleet_discoveries:
+            parts.append(fleet_discoveries)
+
     result = '\n\n'.join(parts)
     _log.info(
         'premarket_briefing: generated for user %s (%d positions, %d atoms, %d words, monday=%s)',
@@ -510,3 +514,42 @@ def generate_premarket_narrative(
         len(result.split()), is_monday,
     )
     return result
+
+
+def _build_fleet_discoveries_section(user_id: str, db_path: str) -> str:
+    """
+    Monday-only section: surface top calibration discoveries from the bot fleet.
+    Returns a formatted string or '' if no meaningful discoveries exist.
+    """
+    try:
+        from analytics.strategy_evolution import StrategyEvolution
+        engine = StrategyEvolution(db_path)
+        data   = engine.get_discoveries(user_id)
+        discoveries = data.get('discoveries', [])
+        total_obs   = data.get('total_observations', 0)
+        n_cells     = data.get('unique_cells_tested', 0)
+        generation  = data.get('generation', 0)
+
+        active = [d for d in discoveries if d.get('status') == 'active' and d.get('sample_size', 0) >= 10]
+        if not active:
+            return ''
+
+        active.sort(key=lambda d: d.get('sample_size', 0), reverse=True)
+        top = active[:3]
+
+        lines = [
+            f'📊 FLEET DISCOVERIES (Gen {generation})',
+            f'Your fleet ran {total_obs:,} calibration observations across {n_cells} strategy cells this week.',
+            '',
+        ]
+        for i, d in enumerate(top, 1):
+            hr  = round(d.get('hit_rate', 0) * 100)
+            n   = d.get('sample_size', 0)
+            pat = d.get('pattern_type', '?')
+            by  = d.get('discovered_by', 'generalist')
+            lines.append(f'{i}. {pat.upper()} → {hr}% hit rate ({n} trades, discovered by {by})')
+
+        return '\n'.join(lines)
+    except Exception as e:
+        _log.debug('_build_fleet_discoveries_section failed: %s', e)
+        return ''

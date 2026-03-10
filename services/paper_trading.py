@@ -205,6 +205,60 @@ def ensure_paper_tables(conn):
             created_at TEXT NOT NULL
         )
     """)
+    # Idempotent: add bot_id to paper_positions and paper_agent_log
+    try:
+        conn.execute('ALTER TABLE paper_positions ADD COLUMN bot_id TEXT')
+    except Exception:
+        pass
+    try:
+        conn.execute('ALTER TABLE paper_agent_log ADD COLUMN bot_id TEXT')
+    except Exception:
+        pass
+    # Bot configs — genome table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_bot_configs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id         TEXT NOT NULL,
+            bot_id          TEXT NOT NULL UNIQUE,
+            genome_id       TEXT NOT NULL,
+            strategy_name   TEXT NOT NULL,
+            generation      INTEGER NOT NULL DEFAULT 0,
+            parent_id       TEXT,
+            pattern_types   TEXT,
+            sectors         TEXT,
+            exchanges       TEXT,
+            volatility      TEXT,
+            regimes         TEXT,
+            timeframes      TEXT,
+            direction_bias  TEXT,
+            risk_pct        REAL NOT NULL DEFAULT 1.0,
+            max_positions   INTEGER NOT NULL DEFAULT 4,
+            min_quality     REAL NOT NULL DEFAULT 0.65,
+            virtual_balance REAL NOT NULL DEFAULT 5000.0,
+            initial_balance REAL NOT NULL DEFAULT 5000.0,
+            role            TEXT NOT NULL DEFAULT 'seed',
+            active          INTEGER NOT NULL DEFAULT 1,
+            scan_interval_sec INTEGER NOT NULL DEFAULT 1800,
+            min_trades_eval INTEGER NOT NULL DEFAULT 25,
+            created_at      TEXT NOT NULL,
+            paused_at       TEXT,
+            promoted_at     TEXT,
+            killed_at       TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_bot_configs_user ON paper_bot_configs(user_id, active)")
+    # Per-bot equity log
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_bot_equity (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id          TEXT NOT NULL,
+            equity_value    REAL NOT NULL,
+            cash_balance    REAL NOT NULL,
+            open_positions  INTEGER NOT NULL DEFAULT 0,
+            logged_at       TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_bot_equity_bot ON paper_bot_equity(bot_id, logged_at)")
     conn.commit()
 
 
@@ -450,6 +504,18 @@ def update_account_size(user_id: str, virtual_balance: Optional[float], mark_set
             _logger.info('Auto-started scanner for %s after balance set: %s', user_id, _status)
         except Exception as _e:
             _logger.warning('Auto-start scanner failed for %s: %s', user_id, _e)
+        # Auto-seed evolutionary fleet on first balance set
+        try:
+            import extensions as _ext2
+            runner = getattr(_ext2, 'bot_runner', None)
+            if runner is None:
+                from services.bot_runner import BotRunner
+                runner = BotRunner(ext.DB_PATH)
+            if runner.count_bots(user_id) == 0:
+                runner.seed_fleet(user_id, virtual_balance)
+                _logger.info('Auto-seeded evolutionary fleet for %s (£%.0f)', user_id, virtual_balance)
+        except Exception as _seed_e:
+            _logger.warning('Fleet seed failed for %s: %s', user_id, _seed_e)
     return {'user_id': user_id, 'virtual_balance': virtual_balance, 'account_size_set': mark_set}
 
 

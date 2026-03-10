@@ -33,7 +33,7 @@ Reference documentation for the Trading Galaxy platform.
 ### Start the server locally
 ```powershell
 $env:FRED_API_KEY="your_key_here"
-python api.py
+uvicorn api_v2:app --host 0.0.0.0 --port 5050 --reload
 ```
 
 ### Check API health
@@ -106,7 +106,9 @@ npx wrangler pages deploy static --project-name mem-backend2 --branch master --c
 | `TELEGRAM_BOT_TOKEN` | — | Daily briefing delivery + waitlist Telegram pings |
 | `WAITLIST_TELEGRAM_CHAT_ID` | — | Personal chat ID for waitlist signup notifications |
 | `GROQ_API_KEY` | — | Groq LLM API — preferred over Ollama when set (faster, free tier) |
-| `POLYGON_API_KEY` | — | Polygon.io — enables `PolygonOptionsAdapter` (Greeks/GEX) and `YieldCurveAdapter` |
+| `POLYGON_API_KEY` | — | Polygon.io — enables `YieldCurveAdapter` (yield curve regime) |
+| `INGEST_INTERVAL_SECONDS` | `300` | LLM extraction adapter cadence (seconds) |
+| `INGEST_BATCH_SIZE` | `15` | Items per LLM extraction run |
 
 ---
 
@@ -114,31 +116,25 @@ npx wrangler pages deploy static --project-name mem-backend2 --branch master --c
 
 | Adapter | Interval | Data |
 |---|---|---|
-| `EDGARRealtimeAdapter` | 3 min | 8-K real-time filings via EDGAR full-text search |
-| `YFinanceAdapter` | 5 min | Prices, fundamentals, analyst targets, ETF data |
-| `SignalEnrichmentAdapter` | 5 min | Derived signals: conviction tier, momentum, position size |
-| `LLMExtractionAdapter` | 5 min | LLM-extracted signals from RSS headlines |
+| `LLMExtractionAdapter` | 5 min (tunable) | LLM-extracted signals from RSS `extraction_queue` (env `INGEST_INTERVAL_SECONDS`) |
 | `RSSAdapter` | 15 min | Financial news headlines (FT, CNBC, BBC, Investing.com, MarketWatch) |
-| `OptionsAdapter` | 30 min | Yahoo Finance options chains, IV rank, put/call ratio |
-| `PolygonOptionsAdapter` | 30 min | Real Greeks, IV, GEX from Polygon (requires `POLYGON_API_KEY`) |
-| `PaperAgentAdapter` | **30 min** | Autonomous paper trading agent — scans patterns, opens/monitors positions |
+| `YFinanceAdapter` | 30 min | Prices, fundamentals, analyst targets, ETF data |
+| `EDGARRealtimeAdapter` | 30 min | 8-K real-time filings via EDGAR full-text search |
+| `SectorRotationAdapter` | 60 min | Sector ETF relative performance regime |
+| `SignalEnrichmentAdapter` | 60 min | Derived signals: conviction tier, momentum, position size |
+| `InsiderAdapter` | 60 min | SEC Form 4 insider transactions |
 | `GDELTAdapter` | 60 min | Geopolitical tension tone scores (country pairs) |
 | `USGSAdapter` | 60 min | Significant earthquakes near key regions |
-| `InsiderAdapter` | 60 min | SEC Form 4 insider transactions |
-| `SectorRotationAdapter` | 60 min | Sector ETF relative performance regime |
-| `PatternAdapter` | 60 min | Chart pattern detection over rolling windows |
-| `LSEFlowAdapter` | 60 min | Institutional order flow for LSE equities |
 | `EarningsCalendarAdapter` | 60 min | Earnings proximity risk, implied move |
-| `ACLEDAdapter` | 6 hours | Protest/unrest intensity (GDELT artlist proxy) |
-| `EDGARAdapter` | 6 hours | SEC filings: 8-K, 10-Q, 10-K, Form 4 |
-| `FREDAdapter` | 24 hours | Fed funds rate, CPI, GDP, unemployment, yield curve, HY spread |
+| `PatternAdapter` | 60 min | Chart pattern detection (daemon thread, own loop) |
+| `LSEFlowAdapter` | 2 hours | Institutional order flow for LSE equities |
 | `BoEAdapter` | 24 hours | Bank of England macro indicators |
-| `YieldCurveAdapter` | 24 hours | Yield curve regime from TLT/IEF/SHY ETFs (requires `POLYGON_API_KEY`) |
-| `FINRAShortInterestAdapter` | 24 hours | US short interest from FINRA CDN (free, biweekly) |
-| `FCAShortInterestAdapter` | 24 hours | FCA short position disclosures for UK equities |
-| `EconomicCalendarAdapter` | 24 hours | FOMC/CPI/NFP upcoming event risk flags |
+| `ACLEDAdapter` | 24 hours | Protest/unrest intensity (GDELT artlist proxy) |
 | `EIAAdapter` | 24 hours | EIA crude oil inventory and production |
-| `UCDPAdapter` | 24 hours | Country conflict intensity (GDELT artlist proxy) |
+| `FINRAShortInterestAdapter` | 24 hours | US short interest from FINRA CDN (free, biweekly) |
+| `YieldCurveAdapter` | 24 hours | Yield curve regime from TLT/IEF/SHY ETFs (requires `POLYGON_API_KEY`) |
+| `FREDAdapter` | 24 hours | Fed funds rate, CPI, GDP, unemployment, yield curve, HY spread |
+| `EconomicCalendarAdapter` | 24 hours | FOMC/CPI/NFP upcoming event risk flags |
 
 ---
 
@@ -147,6 +143,12 @@ npx wrangler pages deploy static --project-name mem-backend2 --branch master --c
 The autonomous paper trading agent runs every 30 minutes for all `pro`/`premium` users via `PaperAgentAdapter`. Starting balance: £500,000 virtual GBP.
 
 ```bash
+# Run a macro shock scenario (dry-run, <50ms)
+POST /scenario/run
+
+# List valid scenario seed concepts
+GET /scenario/seeds
+
 # One-shot scan (run immediately, returns result synchronously)
 POST /users/{id}/paper/agent/run
 

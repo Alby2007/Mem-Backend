@@ -230,33 +230,30 @@ POST /kb/traverse { topic }
 
 | Adapter | Interval | Rationale |
 |---|---|---|
-| `YFinanceAdapter` | 5 min | Price + signals near-real-time |
-| `SignalEnrichmentAdapter` | 5 min | Derived signals from price + options data |
+| `LLMExtractionAdapter` | 5 min (tunable) | LLM-based entity and signal extraction from RSS queue (`INGEST_INTERVAL_SECONDS`) |
 | `RSSAdapter` | 15 min | Headlines cycle every 15–30 min |
-| `LLMExtractionAdapter` | 5 min | LLM-based entity and signal extraction from RSS |
-| `EDGARRealtimeAdapter` | 3 min | 8-K real-time filings via EDGAR full-text search |
-| `OptionsAdapter` | 30 min | Yahoo Finance options chains |
-| `PolygonOptionsAdapter` | 30 min | Real Greeks/IV/GEX from Polygon (requires `POLYGON_API_KEY`) |
+| `YFinanceAdapter` | 30 min | Price + signals, all tracked tickers |
+| `EDGARRealtimeAdapter` | 30 min | 8-K real-time filings via EDGAR full-text search |
+| `SectorRotationAdapter` | 60 min | Sector ETF relative performance regime |
+| `SignalEnrichmentAdapter` | 60 min | Derived signals from price + KB data |
+| `InsiderAdapter` | 60 min | SEC Form 4 insider transactions |
 | `GDELTAdapter` | 60 min | Geopolitical tension tone scores (country pairs) |
 | `USGSAdapter` | 60 min | Significant earthquakes near key regions |
-| `InsiderAdapter` | 60 min | SEC Form 4 insider transactions |
-| `SectorRotationAdapter` | 60 min | Sector ETF relative performance regime |
-| `PatternAdapter` | 60 min | Pattern detection over rolling windows |
-| `LSEFlowAdapter` | 60 min | Institutional microstructure flow for LSE equities |
 | `EarningsCalendarAdapter` | 60 min | Earnings proximity + implied move |
-| `ACLEDAdapter` | 6 hours | Protest/unrest intensity via GDELT artlist proxy |
-| `EDGARAdapter` | 6 hours | All SEC filing types (10-K, 10-Q, Form 4) |
-| `FREDAdapter` | 24 hours | FRED macro series update daily at most |
+| `PatternAdapter` | 60 min | Pattern detection (daemon thread, own loop) |
+| `LSEFlowAdapter` | 2 hours | Institutional microstructure flow for LSE equities |
 | `BoEAdapter` | 24 hours | Bank of England macro indicators |
-| `YieldCurveAdapter` | 24 hours | Yield curve regime from TLT/IEF/SHY ETFs (requires `POLYGON_API_KEY`) |
-| `FINRAShortInterestAdapter` | 24 hours | US short interest from FINRA CDN (free, no key) |
-| `FCAShortInterestAdapter` | 24 hours | FCA daily short position disclosures (UK) |
-| `EconomicCalendarAdapter` | 24 hours | Upcoming FOMC/CPI/NFP event risk flags |
+| `ACLEDAdapter` | 24 hours | Protest/unrest intensity via GDELT artlist proxy |
 | `EIAAdapter` | 24 hours | EIA crude oil inventory + production |
-| `UCDPAdapter` | 24 hours | Country conflict intensity (GDELT artlist proxy) |
+| `FINRAShortInterestAdapter` | 24 hours | US short interest from FINRA CDN (free, no key) |
+| `YieldCurveAdapter` | 24 hours | Yield curve regime from TLT/IEF/SHY ETFs (requires `POLYGON_API_KEY`) |
+| `FREDAdapter` | 24 hours | FRED macro series update daily at most |
+| `EconomicCalendarAdapter` | 24 hours | Upcoming FOMC/CPI/NFP event risk flags |
 | `HistoricalBackfillAdapter` | On-demand | One-shot via `POST /ingest/historical` |
 
-`SeedSyncClient` runs every hour (independent of the scheduler) to check for a newer KB seed on GitHub Releases and apply it if found.
+> **Not in live scheduler:** `OptionsAdapter`, `PolygonOptionsAdapter`, `FCAShortInterestAdapter`, `EDGARAdapter`, `UCDPAdapter` — files exist in `ingest/` but are not registered in the `api_v2.py` lifespan. `SeedSyncClient` runs hourly as an independent background thread.
+
+`SeedSyncClient` runs every hour (independent of the scheduler) as a background thread polling `Alby2007/Mem-Backend` GitHub Releases for a newer seed.
 
 ---
 
@@ -483,9 +480,9 @@ Allowed origins (configured in `api_v2.py` via FastAPI `CORSMiddleware`):
 |---|---|
 | `https://trading-galaxy.uk` | App frontend (Cloudflare Pages) |
 | `https://www.trading-galaxy.uk` | App frontend www |
-| `https://*.pages.dev` | Cloudflare Pages preview deploys |
+| `https://app.trading-galaxy.uk` | App subdomain |
 | `http://localhost:3000` | Local dev |
-| `http://localhost:5050` | Local dev |
+| `http://localhost:5173` | Vite local dev |
 
 Allowed methods: `GET POST PATCH OPTIONS`. Allowed headers: `Authorization Content-Type`.
 
@@ -513,10 +510,10 @@ The autonomous paper trader is a self-contained agent that runs on the ingest sc
 
 | Component | Location | Role |
 |---|---|---|
-| `_paper_ai_run(user_id)` | `api.py` | Single scan — fetches top patterns, filters, LLM decision, opens/monitors positions |
-| `_paper_continuous_scan(user_id, stop_event, interval_sec)` | `api.py` | Loop: calls `_paper_ai_run` every `interval_sec` seconds |
-| `PaperAgentAdapter` | `api.py` | Wraps `_paper_ai_run` as an `IngestAdapter` for the scheduler — fires every 30 min |
-| `_ensure_paper_tables()` | `api.py` | Creates `paper_account`, `paper_positions`, `paper_agent_log` on startup |
+| `_paper_ai_run(user_id)` | `services/paper_trading.py` | Single scan — fetches top patterns, filters, LLM decision, opens/monitors positions |
+| `_paper_continuous_scan(user_id, stop_event, interval_sec)` | `services/paper_trading.py` | Loop: calls `_paper_ai_run` every `interval_sec` seconds |
+| `restore_scanners()` | `services/paper_trading.py` | Re-launches continuous scan threads for users with `agent_running=1` in DB (called at startup) |
+| `ensure_paper_tables()` | `services/paper_trading.py` | Creates `paper_account`, `paper_positions`, `paper_agent_log` on startup; adds `agent_running` column idempotently |
 
 ### Scan flow
 

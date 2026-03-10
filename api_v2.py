@@ -32,6 +32,17 @@ async def _lifespan(app: FastAPI):
     except Exception as _e:
         _logger.warning('restore_scanners on startup failed: %s', _e)
 
+    # ── Bot runner: re-launch evolutionary bot threads ─────────────────────────
+    try:
+        from services.bot_runner import BotRunner
+        _bot_runner = BotRunner(ext.DB_PATH)
+        _bot_runner.restore_bots(startup_delay=90)
+        ext.bot_runner = _bot_runner
+        _logger.info('BotRunner: bot threads restored')
+    except Exception as _br_e:
+        _logger.warning('BotRunner restore failed: %s', _br_e)
+        ext.bot_runner = None
+
     # ── Ingest scheduler: continuous background data ingestion ─────────────────
     scheduler = None
     try:
@@ -156,6 +167,10 @@ async def _lifespan(app: FastAPI):
         # Signal decay — estimates remaining validity of active patterns
         from ingest.signal_decay_adapter import SignalDecayAdapter
         scheduler.register(SignalDecayAdapter(db_path=db_path), interval_sec=21600)
+
+        # Strategy evolution — fitness scoring, kill/spawn cycle every 6h
+        from ingest.strategy_evolution_adapter import StrategyEvolutionAdapter
+        scheduler.register(StrategyEvolutionAdapter(db_path=db_path), interval_sec=21600)
 
         # Alpha Vantage news sentiment — per-ticker AI sentiment; skips if no key
         scheduler.register(AlphaVantageAdapter(db_path=db_path), interval_sec=86400)

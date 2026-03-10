@@ -2,7 +2,7 @@
 
 ## Overview
 
-The ingest pipeline pulls live market data from four free external sources and converts it into typed knowledge atoms stored in the KB. All adapters run automatically on background threads managed by `IngestScheduler`.
+The ingest pipeline pulls live market data from multiple external sources and converts it into typed knowledge atoms stored in the KB. All adapters run automatically on background threads managed by `IngestScheduler`.
 
 ```
 External source
@@ -60,10 +60,11 @@ The base class handles:
 
 ```python
 scheduler = IngestScheduler(kg)
-scheduler.register(YFinanceAdapter(), interval_sec=300)
-scheduler.register(RSSAdapter(),      interval_sec=900)
-scheduler.register(EDGARAdapter(),    interval_sec=21600)
-scheduler.register(FREDAdapter(),     interval_sec=86400)
+scheduler.register(LLMExtractionAdapter(db_path=db_path), interval_sec=300)  # tunable via INGEST_INTERVAL_SECONDS
+scheduler.register(RSSAdapter(db_path=db_path),           interval_sec=900)
+scheduler.register(YFinanceAdapter(db_path=db_path),      interval_sec=1800)
+scheduler.register(EDGARRealtimeAdapter(db_path=db_path), interval_sec=1800)
+scheduler.register(FREDAdapter(),                         interval_sec=86400)
 scheduler.start()   # non-blocking, all adapters fire immediately then re-arm
 ```
 
@@ -101,7 +102,7 @@ All atoms are `upsert=True` — safe to re-run.
 ## Adapter: YFinanceAdapter
 
 **Source:** Yahoo Finance via `yfinance` library  
-**Interval:** 5 minutes  
+**Interval:** 30 minutes  
 **Requires:** None (free, no API key)
 
 ### Watchlist (~50 tickers)
@@ -227,8 +228,10 @@ All FRED atoms use `source='macro_data_fred'` (authority 0.80, half-life ~60 day
 
 ## Adapter: EDGARAdapter
 
+> **Note:** `EDGARAdapter` (all form types, 6h) is not registered in the live scheduler in `api_v2.py`. Only `EDGARRealtimeAdapter` (8-K only, 30min) runs in production. The 6h full-form adapter can be run manually via `POST /ingest/run-all`.
+
 **Source:** SEC EDGAR full-text search API (public, no key required)  
-**Interval:** 6 hours  
+**Interval:** 6 hours (manual / legacy)  
 **Requires:** `EDGAR_USER_AGENT` env var (defaults to `trading-galaxy-kb research@example.com`)
 
 ### Filing Types → Atom Mapping
@@ -463,7 +466,7 @@ Source prefix: `macro_data_eia` (authority 0.80, half-life 7d)
 ## Adapter: ACLEDAdapter
 
 **Source:** GDELT artlist proxy for ACLED-style event data (public, no key)
-**Interval:** 6 hours  
+**Interval:** 24 hours  
 **Requires:** None
 
 Fetches protest, unrest, and political instability event counts from the GDELT artlist feed as a proxy for ACLED conflict/protest data.
@@ -579,7 +582,7 @@ Fetches options chains for liquid FTSE names and computes options-regime atoms. 
 ## Adapter: SignalEnrichmentAdapter
 
 **Source:** KB atoms (cross-referencing historical, price, and options data already in the KB)
-**Interval:** 30 minutes
+**Interval:** 60 minutes
 **Requires:** None (reads from KB, no external API)
 
 Derives higher-level signal atoms by combining raw data atoms into actionable signals.
@@ -602,8 +605,8 @@ Derives higher-level signal atoms by combining raw data atoms into actionable si
 ## Adapter: LLMExtractionAdapter
 
 **Source:** `extraction_queue` table (fed by `RSSAdapter`)
-**Interval:** 60 minutes
-**Requires:** Ollama running with `OLLAMA_EXTRACTION_MODEL` (default `phi3`)
+**Interval:** 5 minutes (tunable via `INGEST_INTERVAL_SECONDS` env var, default 300s)
+**Requires:** Groq (`GROQ_API_KEY`) preferred; falls back to Ollama (`OLLAMA_EXTRACTION_MODEL`, default `phi3`). Skips gracefully if neither is available.
 
 Runs LLM extraction over queued RSS headlines to produce structured signal atoms. Falls back gracefully if Ollama is unavailable.
 
@@ -616,21 +619,21 @@ Runs LLM extraction over queued RSS headlines to produce structured signal atoms
 ## Adapter: EDGARRealtimeAdapter
 
 **Source:** SEC EDGAR full-text search API (public, no key)
-**Interval:** 30 minutes
+**Interval:** 30 minutes (registered in live scheduler)
 **Requires:** `EDGAR_USER_AGENT` env var
 
 Polls for 8-K filings specifically (material events) with a 30-minute cadence. Deduplicates via `edgar_realtime_seen` table — each filing accession number is stored so re-runs never produce duplicate atoms.
 
 **Atoms produced:** Same format as `EDGARAdapter` — `catalyst | "sec 8-k (date): title"` at confidence 0.85.
 
-**Difference from EDGARAdapter:** EDGARRealtime polls only 8-K (immediate material events) every 30 min; the base EDGAR adapter polls all form types every 6 hours.
+**Difference from EDGARAdapter:** EDGARRealtime polls only 8-K (immediate material events) every 30 min and is the only EDGAR variant running in production. The base EDGAR adapter (all form types) is not in the live scheduler.
 
 ---
 
 ## Adapter: LSEFlowAdapter
 
 **Source:** Yahoo Finance intraday OHLCV (`.L` suffix tickers)
-**Interval:** 60 minutes
+**Interval:** 2 hours
 **Requires:** None
 
 Derives institutional order-flow signals for LSE-listed equities using three microstructure proxies: block-trade volume ratio (BTVR), volume-weighted price trend (VWPT), and price-volume divergence (PVD, the Wyckoff accumulation signature).
@@ -689,31 +692,28 @@ Detects multi-factor chart and signal patterns over rolling windows. Writes `Pat
 
 | Adapter | Interval | Data source | Key atoms |
 |---|---|---|---|
-| `YFinanceAdapter` | 5 min | Yahoo Finance | `last_price`, `signal_direction`, `price_target`, `sector` |
-| `SignalEnrichmentAdapter` | 5 min | KB cross-reference | `conviction_tier`, `momentum_signal`, `position_size_pct` |
+| `LLMExtractionAdapter` | 5 min (tunable) | extraction_queue | Structured LLM-extracted signals |
 | `RSSAdapter` | 15 min | 5 financial RSS feeds | `key_finding` (headlines) |
-| `LLMExtractionAdapter` | 5 min | extraction_queue | Structured LLM-extracted signals |
-| `OptionsAdapter` | 30 min | Yahoo Finance options | `iv_rank`, `put_call_ratio`, `tail_risk` |
-| `PolygonOptionsAdapter` | 30 min | Polygon.io options API | `delta_atm`, `gamma_atm`, `iv_true`, `put_call_oi_ratio`, `gamma_exposure` |
-| `EDGARRealtimeAdapter` | 3 min | SEC EDGAR 8-K | `catalyst` (real-time filings) |
+| `YFinanceAdapter` | 30 min | Yahoo Finance | `last_price`, `signal_direction`, `price_target`, `sector` |
+| `EDGARRealtimeAdapter` | 30 min | SEC EDGAR 8-K | `catalyst` (real-time filings) |
+| `SectorRotationAdapter` | 60 min | KB sector ETF atoms | `sector_rotation`, `sector_rotation_detail` |
+| `SignalEnrichmentAdapter` | 60 min | KB cross-reference | `conviction_tier`, `momentum_signal`, `position_size_pct` |
+| `InsiderAdapter` | 60 min | SEC EDGAR Form 4 | `insider_transaction`, `risk_factor` |
 | `GDELTAdapter` | 60 min | GDELT 2.0 GKG Doc API | `gdelt_tension` (country pair tone scores) |
 | `USGSAdapter` | 60 min | USGS Earthquake API | `earthquake_event`, `geo_risk_factor` |
-| `InsiderAdapter` | 60 min | SEC EDGAR Form 4 | `insider_transaction`, `risk_factor` |
-| `SectorRotationAdapter` | 60 min | KB sector ETF atoms | `sector_rotation`, `sector_rotation_detail` |
-| `PatternAdapter` | 60 min | KB atoms | `pattern_signals` table |
-| `LSEFlowAdapter` | 60 min | yfinance intraday | `institutional_flow`, `block_volume_ratio` |
 | `EarningsCalendarAdapter` | 60 min | KB + yfinance options | `earnings_implied_move`, `pre_earnings_flag` |
-| `ACLEDAdapter` | 6 hours | GDELT artlist proxy | `protest_intensity`, `political_risk` |
-| `EDGARAdapter` | 6 hours | SEC EDGAR all forms | `catalyst`, `risk_factor` |
+| `PatternAdapter` | 60 min | KB atoms (daemon thread) | `pattern_signals` table |
+| `LSEFlowAdapter` | 2 hours | yfinance intraday | `institutional_flow`, `block_volume_ratio` |
 | `BoEAdapter` | 24 hours | BoE Statistical API | `boe_base_rate`, UK `regime_label` |
-| `FREDAdapter` | 24 hours | St. Louis Fed FRED | US `regime_label`, `central_bank_stance` |
-| `YieldCurveAdapter` | 24 hours | Polygon ETFs (TLT/IEF/SHY) | `yield_curve_regime`, `long_end_stress_level` |
-| `FINRAShortInterestAdapter` | 24 hours | FINRA CDN (free) | `short_interest`, `days_to_cover`, `short_squeeze_risk` |
-| `FCAShortInterestAdapter` | 24 hours | FCA XLSX | `fca_short_interest` |
-| `EconomicCalendarAdapter` | 24 hours | Economic calendar APIs | `macro_event_risk`, `pre_event_flag` |
+| `ACLEDAdapter` | 24 hours | GDELT artlist proxy | `protest_intensity`, `political_risk` |
 | `EIAAdapter` | 24 hours | EIA API (free) | `crude_inventory_change`, `energy_regime` |
-| `UCDPAdapter` | 24 hours | GDELT artlist proxy | `ucdp_conflict` (country conflict intensity) |
+| `FINRAShortInterestAdapter` | 24 hours | FINRA CDN (free) | `short_interest`, `days_to_cover`, `short_squeeze_risk` |
+| `YieldCurveAdapter` | 24 hours | Polygon ETFs (TLT/IEF/SHY) | `yield_curve_regime`, `long_end_stress_level` |
+| `FREDAdapter` | 24 hours | St. Louis Fed FRED | US `regime_label`, `central_bank_stance` |
+| `EconomicCalendarAdapter` | 24 hours | Economic calendar APIs | `macro_event_risk`, `pre_event_flag` |
 | `HistoricalBackfillAdapter` | On-demand | yfinance 5yr daily | `return_3y/5y`, `max_drawdown_5y`, `volatility_5y` |
+
+> **Not in live scheduler (files exist):** `OptionsAdapter`, `PolygonOptionsAdapter`, `FCAShortInterestAdapter`, `EDGARAdapter` (full forms), `UCDPAdapter`.
 
 `SeedSyncClient` runs hourly (outside the scheduler) to sync the shared KB seed from GitHub Releases.
 
@@ -724,9 +724,9 @@ Detects multi-factor chart and signal patterns over rolling windows. Writes `Pat
 1. Create `ingest/my_adapter.py` subclassing `BaseIngestAdapter`
 2. Implement `fetch() → List[RawAtom]` using the correct source prefix and confidence values from `ingest/base.py`
 3. Add a graceful import to `ingest/__init__.py`
-4. Register it in `api.py`:
+4. Register it in `api_v2.py` lifespan:
    ```python
-   _ingest_scheduler.register(MyAdapter(), interval_sec=3600)
+   scheduler.register(MyAdapter(db_path=db_path), interval_sec=3600)
    ```
 
 **Source prefix reference:** See `ingest/base.py` — `SOURCE NAMING CONVENTION` section.  
