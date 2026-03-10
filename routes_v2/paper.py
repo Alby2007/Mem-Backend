@@ -42,16 +42,20 @@ class ClosePositionRequest(BaseModel):
 
 @router.get("/users/{user_id}/paper/account")
 async def paper_account_get(user_id: str, _: str = Depends(user_path_auth)):
-    _tier_gate(user_id)
     try:
-        return svc.get_account(user_id)
+        tier, err = svc.paper_tier_check(user_id)
+        acct = svc.get_account(user_id)
+        acct['tier'] = tier
+        acct['account_size_set'] = acct.get('account_size_set', False)
+        if err:
+            acct['requires_upgrade'] = True
+        return acct
     except Exception as e:
         raise HTTPException(500, detail=str(e))
 
 
 @router.patch("/users/{user_id}/paper/account")
 async def paper_account_update(user_id: str, data: UpdateAccountRequest, _: str = Depends(user_path_auth)):
-    _tier_gate(user_id)
     result = svc.update_account_size(user_id, data.virtual_balance, data.mark_set)
     if 'error' in result:
         raise HTTPException(400, detail=result['error'])
@@ -465,7 +469,9 @@ async def bot_log(user_id: str, bot_id: str, limit: int = 50, _: str = Depends(u
 
 @router.get("/users/{user_id}/bots/fleet-performance")
 async def fleet_performance(user_id: str, _: str = Depends(user_path_auth)):
-    _tier_gate(user_id)
+    tier, err = svc.paper_tier_check(user_id)
+    if err:
+        raise HTTPException(403, detail={"error": err, "tier": tier})
     try:
         from analytics.strategy_evolution import StrategyEvolution
         engine = StrategyEvolution(ext.DB_PATH)
@@ -476,7 +482,9 @@ async def fleet_performance(user_id: str, _: str = Depends(user_path_auth)):
 
 @router.get("/users/{user_id}/bots/evolution-history")
 async def evolution_history(user_id: str, _: str = Depends(user_path_auth)):
-    _tier_gate(user_id)
+    tier, err = svc.paper_tier_check(user_id)
+    if err:
+        raise HTTPException(403, detail={"error": err, "tier": tier})
     try:
         from analytics.strategy_evolution import StrategyEvolution
         engine = StrategyEvolution(ext.DB_PATH)
@@ -487,7 +495,9 @@ async def evolution_history(user_id: str, _: str = Depends(user_path_auth)):
 
 @router.get("/users/{user_id}/bots/discoveries")
 async def bot_discoveries(user_id: str, _: str = Depends(user_path_auth)):
-    _tier_gate(user_id)
+    tier, err = svc.paper_tier_check(user_id)
+    if err:
+        raise HTTPException(403, detail={"error": err, "tier": tier})
     try:
         from analytics.strategy_evolution import StrategyEvolution
         engine = StrategyEvolution(ext.DB_PATH)

@@ -85,6 +85,7 @@ async function _ptLoadFleet() {
       apiFetch(`/users/${state.userId}/paper/account`).catch(() => null),
     ]);
     _ptFleetData = fleet;
+    if (acct?.requires_upgrade) { _ptShowUpsell(); return; }
     if (!acct || !acct.account_size_set) { _ptShowOnboarding(); return; }
     el.innerHTML = _ptRenderFleetHTML(fleet, discoveries);
   } catch(e) {
