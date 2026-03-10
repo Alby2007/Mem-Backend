@@ -26,23 +26,27 @@ _INGEST_BATCH    = int(os.environ.get('INGEST_BATCH_SIZE', '15'))          # ite
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    # ── Paper agent: re-launch threads that were running before restart ────────
-    try:
-        from services.paper_trading import restore_scanners
-        restore_scanners()
-    except Exception as _e:
-        _logger.warning('restore_scanners on startup failed: %s', _e)
-
-    # ── Bot runner: re-launch evolutionary bot threads ─────────────────────────
-    try:
-        from services.bot_runner import BotRunner
-        _bot_runner = BotRunner(ext.DB_PATH)
-        _bot_runner.restore_bots(startup_delay=90)
-        ext.bot_runner = _bot_runner
-        _logger.info('BotRunner: bot threads restored')
-    except Exception as _br_e:
-        _logger.warning('BotRunner restore failed: %s', _br_e)
-        ext.bot_runner = None
+    # ── Bot runner + scanner restore: run in background thread to avoid blocking
+    # startup if SQLite is temporarily locked by dying threads from previous process
+    import threading as _threading
+    def _restore_all():
+        import time as _time
+        _time.sleep(5)  # brief pause to let old threads fully die
+        try:
+            from services.paper_trading import restore_scanners
+            restore_scanners()
+        except Exception as _e:
+            _logger.warning('restore_scanners on startup failed: %s', _e)
+        try:
+            from services.bot_runner import BotRunner
+            _bot_runner = BotRunner(ext.DB_PATH)
+            _bot_runner.restore_bots(startup_delay=90)
+            ext.bot_runner = _bot_runner
+            _logger.info('BotRunner: bot threads restored')
+        except Exception as _br_e:
+            _logger.warning('BotRunner restore failed: %s', _br_e)
+            ext.bot_runner = None
+    _threading.Thread(target=_restore_all, daemon=True).start()
 
     # ── Ingest scheduler: continuous background data ingestion ─────────────────
     scheduler = None
