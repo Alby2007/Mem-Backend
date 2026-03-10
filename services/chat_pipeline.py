@@ -147,6 +147,13 @@ _GEN_SKIP_KEYWORDS = (
     'portfolio', 'my holdings',
 )
 
+_SCENARIO_INTENT_KWS = (
+    'what if ', 'what if the ', 'what happens if', 'what would happen if',
+    'impact of ', 'effect of ', 'if the fed', 'if boe', 'if the boe',
+    'if rates', 'if inflation', 'if oil', 'scenario where', 'scenario:',
+    'suppose ', 'assuming ', 'if cpi', 'if the market', 'hypothetically',
+)
+
 _GEN_TRIGGER_WORDS = (
     'strategy', 'strateg', 'trade', 'trading', 'opportunity', 'opportunit',
     'setup', 'setups', 'find me', 'show me', 'make me', 'give me',
@@ -1000,6 +1007,91 @@ def _detect_tip_intent(
         _logger.warning('on-demand tip failed: %s', e)
 
 
+def _detect_scenario_intent(message: str) -> bool:
+    """Return True when the message is a 'what if' / scenario query."""
+    m = message.lower()
+    return any(kw in m for kw in _SCENARIO_INTENT_KWS)
+
+
+def _run_scenario_engine(message: str, response: Dict) -> Optional[str]:
+    """
+    Detect scenario intent and run the causal scenario engine.
+    Injects scenario result into response and returns a context string for the LLM.
+    """
+    try:
+        from services.scenario_engine import run_scenario
+        result = run_scenario(message, db_path=ext.DB_PATH, narrative=False)
+        if not result.resolved:
+            return None
+        response['scenario'] = {
+            'shock':             result.shock,
+            'resolved_seed':     result.resolved_seed,
+            'chain_confidence':  result.chain_confidence,
+            'affected_tickers':  result.affected_tickers[:10],
+            'hop_count':         result.hop_count,
+        }
+        # Build a structured context block for the LLM prompt
+        lines = ['=== CAUSAL SCENARIO ANALYSIS ===']
+        lines.append(f'Shock: {result.shock} (seed: {result.resolved_seed})')
+        lines.append(f'Chain confidence: {result.chain_confidence:.2f} over {result.hop_count} hops')
+        if result.affected_tickers:
+            lines.append(f'Affected tickers: {", ".join(result.affected_tickers[:10])}')
+        if result.chain:
+            lines.append('Causal chain:')
+            for hop in result.chain[:8]:
+                lines.append(
+                    f'  {hop.get("from","?")} → {hop.get("to","?")} '
+                    f'(mechanism: {hop.get("mechanism","")}, conf: {hop.get("confidence",0):.2f})'
+                )
+        lines.append('=== END CAUSAL SCENARIO ===')
+        return '\n'.join(lines)
+    except Exception as _e:
+        _logger.warning('scenario engine failed: %s', _e)
+    return None
+
+
+def _attach_signal_forecast(response: Dict) -> None:
+    """
+    Attach a SignalForecaster probability distribution to the response
+    when we have a specific ticker + open pattern signal.
+    Called after the LLM answer is generated (non-blocking).
+    """
+    try:
+        best_pattern = response.get('best_pattern')
+        grounding    = response.get('grounding_atoms', {})
+        ticker       = grounding.get('ticker')
+        if not best_pattern or not ticker:
+            return
+
+        from analytics.signal_forecaster import SignalForecaster
+        forecaster = SignalForecaster(ext.DB_PATH)
+        result = forecaster.forecast(
+            ticker=ticker,
+            pattern_type=best_pattern.get('pattern_type', 'fvg'),
+            timeframe=best_pattern.get('timeframe', '1d'),
+        )
+        response['signal_forecast'] = {
+            'ticker':                result.ticker,
+            'pattern_type':          result.pattern_type,
+            'timeframe':             result.timeframe,
+            'p_hit_t1':              result.p_hit_t1,
+            'p_hit_t2':              result.p_hit_t2,
+            'p_stopped_out':         result.p_stopped_out,
+            'p_expired':             result.p_expired,
+            'expected_value_gbp':    result.expected_value_gbp,
+            'ci_90_low':             result.ci_90_low,
+            'ci_90_high':            result.ci_90_high,
+            'days_to_target_median': result.days_to_target_median,
+            'calibration_samples':   result.calibration_samples,
+            'used_prior':            result.used_prior,
+            'market_regime':         result.market_regime,
+            'iv_adjustment_pct':     result.iv_adjustment_pct,
+            'macro_adjustment_pct':  result.macro_adjustment_pct,
+        }
+    except Exception as _e:
+        _logger.debug('signal forecaster failed: %s', _e)
+
+
 def _run_opportunity_scan(message: str, response: Dict) -> Optional[str]:
     """Run opportunity scan if message matches trigger words. Returns context string."""
     try:
@@ -1408,7 +1500,12 @@ def run(
     # ── Tip intent ────────────────────────────────────────────────────────
     _detect_tip_intent(message, user_id, response)
 
-    # ── Opportunity scan ──────────────────────────────────────────────────
+    # ── Scenario engine ("what if" / causal queries) ──────────────────────────
+    scenario_context: Optional[str] = None
+    if _detect_scenario_intent(message):
+        scenario_context = _run_scenario_engine(message, response)
+
+    # ── Opportunity scan ──────────────────────────────────────────────────────
     opportunity_scan_context = _run_opportunity_scan(message, response)
 
     # ── Layer 3: inject TF hint into prior_context if no preferred-TF match ─
@@ -1416,6 +1513,9 @@ def run(
         prior_context = (prior_context + '\n' if prior_context else '') + _style_tf_hint
 
     # ── Build full prompt ─────────────────────────────────────────────────
+    # Merge scenario context into opportunity_scan_context for the prompt
+    _combined_scan_ctx = '\n\n'.join(filter(None, [scenario_context, opportunity_scan_context])) or None
+
     messages = ext.build_prompt(
         user_message=message, snippet=snippet, stress=stress_dict,
         kb_diagnosis=kb_diagnosis, prior_context=prior_context,
@@ -1424,7 +1524,7 @@ def run(
         resolved_aliases=resolved_aliases or None,
         web_searched=web_searched or None,
         has_history=has_prior_turns,
-        opportunity_scan_context=opportunity_scan_context,
+        opportunity_scan_context=_combined_scan_ctx,
         trader_level=trader_level,
         explain_mode=explain_mode,
         thesis_context=thesis_context,
@@ -1581,6 +1681,9 @@ def run(
                 ))
         except Exception:
             pass
+
+    # ── Signal forecast — probability distribution over pattern outcomes ─────
+    _attach_signal_forecast(response)
 
     # ── Persist assistant turn + KB graduation ────────────────────────────
     _persist_assistant_and_graduate(

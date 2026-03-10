@@ -186,6 +186,26 @@ async def _lifespan(app: FastAPI):
         _logger.warning('Ingest scheduler failed to start: %s', _e)
         app.state.scheduler = None
 
+    # ── CausalShockEngine — propagates macro shocks through causal graph ──────
+    try:
+        from analytics.causal_shock_engine import CausalShockEngine
+        _shock_engine = CausalShockEngine(ext.DB_PATH)
+        ext.kg.set_shock_engine(_shock_engine)
+        ext.shock_engine = _shock_engine
+        _logger.info('CausalShockEngine wired into KnowledgeGraph')
+    except Exception as _se_e:
+        _logger.warning('CausalShockEngine failed to start: %s', _se_e)
+
+    # ── PredictionLedger — Brier-scored prediction tracking ──────────────────
+    try:
+        from analytics.prediction_ledger import PredictionLedger
+        _ledger = PredictionLedger(ext.DB_PATH)
+        ext.kg.set_ledger(_ledger)
+        ext.prediction_ledger = _ledger
+        _logger.info('PredictionLedger wired into KnowledgeGraph (intraday resolution active)')
+    except Exception as _pl_e:
+        _logger.warning('PredictionLedger failed to start: %s', _pl_e)
+
     # PositionMonitor — independent of ingest; must start even when ingest fails
     try:
         from analytics.position_monitor import PositionMonitor
