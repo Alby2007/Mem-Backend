@@ -8,8 +8,6 @@ timeout           = 120       # kill + respawn worker if it stops responding for
 graceful_timeout  = 30        # time to finish in-flight requests on SIGTERM
 keepalive         = 5         # reuse connections for 5s
 worker_tmp_dir    = "/dev/shm"  # use tmpfs for worker heartbeat file (avoids disk I/O stall)
-# Preload app so worker recycle is fast (no re-import delay)
-preload_app       = True
 # Auto-recycle worker every 5000 requests (±200 jitter) to prevent memory leaks.
 # Raised from 500 — 8 bots + frontend polling burned through 500 in ~4 minutes.
 max_requests      = 5000
