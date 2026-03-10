@@ -76,6 +76,7 @@ function _ptToggleGeneralist(btn) {
 async function _ptLoadFleet() {
   const el = document.getElementById('pt-view-fleet');
   if (!el || !state.userId) return;
+  _ptOnboardingShown = false;
   el.innerHTML = '<div class="evo-loading">Loading fleet…</div>';
   try {
     const [fleet, discoveries, acct] = await Promise.all([
@@ -84,7 +85,7 @@ async function _ptLoadFleet() {
       apiFetch(`/users/${state.userId}/paper/account`).catch(() => null),
     ]);
     _ptFleetData = fleet;
-    if (acct?.account_size_set === false) { _ptShowOnboarding(); return; }
+    if (!acct || !acct.account_size_set) { _ptShowOnboarding(); return; }
     el.innerHTML = _ptRenderFleetHTML(fleet, discoveries);
   } catch(e) {
     if (e.message?.includes('paper_trading_requires_pro')) { _ptShowUpsell(); return; }
@@ -130,7 +131,10 @@ function _ptRenderFleetHTML(fleet, disc) {
   html += `<div class="evo-section-header" style="margin-top:16px;">LEADERBOARD</div>
     <div id="evo-leaderboard">`;
   if (!bots.length) {
-    html += '<div style="color:var(--muted);padding:16px;font-size:13px;">No bots yet — set your paper balance to auto-seed the fleet.</div>';
+    html += `<div style="padding:20px 16px;">
+      <div style="color:var(--muted);font-size:13px;margin-bottom:12px;">No bots yet — set your paper balance to auto-seed the fleet.</div>
+      <button class="btn btn-primary btn-sm" onclick="_ptShowOnboarding()">Set Balance &amp; Seed Fleet</button>
+    </div>`;
   } else {
     bots.forEach((bot, i) => { html += _ptBotRow(bot, i + 1); });
   }
