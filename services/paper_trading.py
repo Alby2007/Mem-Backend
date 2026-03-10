@@ -155,75 +155,88 @@ def paper_tier_check(user_id: str) -> tuple[str, Optional[str]]:
 # ── Live price helpers ────────────────────────────────────────────────────────
 
 def fetch_live_prices(tickers: list[str]) -> dict[str, float]:
-    """Fetch latest prices for a list of tickers via yfinance. Returns {ticker: price}.
+    """Fetch latest prices — KB first, OHLCV cache second, yfinance last resort.
 
-    Strategy (most-to-least current):
-      1. yf.download 1d/1m  — real-time during market hours
-      2. yf.download 5d/1h  — works outside market hours (last close)
-      3. yf.Ticker.fast_info.last_price — lightweight fallback per ticker
+    Priority:
+      1. KB last_price atoms (refreshed every 30 min by yfinance adapter)
+      2. ohlcv_cache latest close (refreshed every 30 min)
+      3. yf.Ticker.fast_info per-ticker (last resort, not batch — avoids rate limit)
     """
     if not tickers:
         return {}
-    try:
-        import yfinance as _yf
-    except ImportError:
-        return {}
 
     prices: dict[str, float] = {}
-    missing: list[str] = list(tickers)
+    missing: list[str] = []
 
-    # Pass 1: batch 1m download
+    # Pass 1: KB last_price atoms (fastest, no external calls)
     try:
-        data1 = _yf.download(
-            missing, period='1d', interval='1m',
-            progress=False, auto_adjust=True, threads=False
-        )
-        found = []
-        for tk in missing:
-            try:
-                if len(missing) == 1:
-                    val = float(data1['Close'].dropna().iloc[-1])
-                else:
-                    val = float(data1['Close'][tk].dropna().iloc[-1])
-                prices[tk] = val
-                found.append(tk)
-            except Exception:
-                pass
-        missing = [t for t in missing if t not in found]
+        import sqlite3 as _sq
+        _kb_conn = _sq.connect(ext.DB_PATH, timeout=5)
+        for tk in tickers:
+            _tk_lookup = _YF_MAP.get(tk.lower(), tk).lower()
+            row = _kb_conn.execute(
+                "SELECT object FROM facts WHERE subject=? AND predicate='last_price' "
+                "ORDER BY confidence DESC, timestamp DESC LIMIT 1",
+                (_tk_lookup,)
+            ).fetchone()
+            if not row:
+                # also try the original ticker key (KB stores by uppercase ticker sometimes)
+                row = _kb_conn.execute(
+                    "SELECT object FROM facts WHERE LOWER(subject)=? AND predicate='last_price' "
+                    "ORDER BY confidence DESC, timestamp DESC LIMIT 1",
+                    (tk.lower(),)
+                ).fetchone()
+            if row:
+                try:
+                    val = float(str(row[0]).split()[0].replace(',', ''))
+                    if val > 0:
+                        prices[tk] = val
+                        continue
+                except (ValueError, IndexError):
+                    pass
+            missing.append(tk)
+        _kb_conn.close()
     except Exception:
-        pass
+        missing = list(tickers)
 
-    # Pass 2: batch 5d/1h for anything still missing (market closed)
+    # Pass 2: ohlcv_cache latest close
+    if missing:
+        still_missing: list[str] = []
+        try:
+            import sqlite3 as _sq2
+            _oc_conn = _sq2.connect(ext.DB_PATH, timeout=5)
+            for tk in missing:
+                yf_sym = _YF_MAP.get(tk.lower(), tk)
+                row = _oc_conn.execute(
+                    "SELECT close FROM ohlcv_cache WHERE ticker=? AND interval='1d' "
+                    "ORDER BY ts DESC LIMIT 1",
+                    (yf_sym,)
+                ).fetchone()
+                if row and row[0] and float(row[0]) > 0:
+                    prices[tk] = float(row[0])
+                else:
+                    still_missing.append(tk)
+            _oc_conn.close()
+        except Exception:
+            still_missing = missing
+        missing = still_missing
+
+    # Pass 3: per-ticker fast_info (last resort, not batch — avoids rate limit)
     if missing:
         try:
-            data2 = _yf.download(
-                missing, period='5d', interval='1h',
-                progress=False, auto_adjust=True, threads=False
-            )
-            found = []
-            for tk in missing:
-                try:
-                    if len(missing) == 1:
-                        val = float(data2['Close'].dropna().iloc[-1])
-                    else:
-                        val = float(data2['Close'][tk].dropna().iloc[-1])
-                    prices[tk] = val
-                    found.append(tk)
-                except Exception:
-                    pass
-            missing = [t for t in missing if t not in found]
-        except Exception:
-            pass
-
-    # Pass 3: per-ticker fast_info for anything still missing
-    for tk in missing:
-        try:
-            t = _yf.Ticker(tk)
-            val = t.fast_info.last_price
-            if val and val > 0:
-                prices[tk] = float(val)
-        except Exception:
-            pass
+            import yfinance as _yf
+        except ImportError:
+            return prices
+        for tk in missing[:10]:  # cap at 10 to avoid hammering Yahoo
+            try:
+                import time as _t
+                _t.sleep(0.3)
+                fi = _yf.Ticker(_YF_MAP.get(tk.lower(), tk)).fast_info
+                val = getattr(fi, 'last_price', None) or getattr(fi, 'regularMarketPrice', None)
+                if val and float(val) > 0:
+                    prices[tk] = float(val)
+            except Exception:
+                pass
 
     return prices
 
@@ -346,9 +359,9 @@ def update_account_size(user_id: str, virtual_balance: Optional[float], mark_set
         conn.commit()
         conn.close()
         return {'status': 'dismissed'}
-    if virtual_balance < 1000 or virtual_balance > 100000:
+    if virtual_balance < 100 or virtual_balance > 10_000_000:
         conn.close()
-        return {'error': 'account size must be between 1000 and 100000'}
+        return {'error': 'account size must be between 100 and 10,000,000'}
     conn.execute(
         'INSERT INTO paper_account (user_id, virtual_balance, currency, created_at, account_size_set) '
         'VALUES (?, ?, \'GBP\', ?, ?) '
@@ -358,6 +371,13 @@ def update_account_size(user_id: str, virtual_balance: Optional[float], mark_set
     )
     conn.commit()
     conn.close()
+    # Auto-start scanner when balance is set — user walks away, agent runs
+    if mark_set:
+        try:
+            _status, _ = start_scanner(user_id)
+            _logger.info('Auto-started scanner for %s after balance set: %s', user_id, _status)
+        except Exception as _e:
+            _logger.warning('Auto-start scanner failed for %s: %s', user_id, _e)
     return {'user_id': user_id, 'virtual_balance': virtual_balance, 'account_size_set': mark_set}
 
 
@@ -539,6 +559,25 @@ def monitor_positions(user_id: str) -> dict:
                      now_iso)
                 )
                 updates.append({'id': pos['id'], 'ticker': ticker, 'event': 't1_hit', 'price': price, 'pnl_r': t1_pnl_r})
+                # Calibration feedback for T1 partial close
+                if pos['pattern_id']:
+                    try:
+                        from analytics.signal_calibration import update_calibration as _upd_cal_t1
+                        _pat_t1 = conn.execute(
+                            "SELECT pattern_type, timeframe, kb_regime FROM pattern_signals WHERE id=?",
+                            (pos['pattern_id'],)
+                        ).fetchone()
+                        if _pat_t1:
+                            _upd_cal_t1(
+                                ticker=ticker,
+                                pattern_type=(_pat_t1[0] or 'unknown'),
+                                timeframe=(_pat_t1[1] or '4h'),
+                                market_regime=_pat_t1[2],
+                                outcome='hit_t1',
+                                db_path=ext.DB_PATH,
+                            )
+                    except Exception as _cal_t1_e:
+                        _logger.debug('t1 calibration feedback failed for %s: %s', ticker, _cal_t1_e)
         else:
             if price >= stop:
                 new_status = 'stopped_out'; exit_p = price
@@ -576,6 +615,28 @@ def monitor_positions(user_id: str) -> dict:
                 (exit_p * qty, user_id)
             )
             updates.append({'id': pos['id'], 'ticker': ticker, 'event': new_status, 'price': price, 'pnl_r': pnl_r})
+            # Calibration feedback — write outcome so conviction tiers improve
+            if pos['pattern_id']:
+                try:
+                    from analytics.signal_calibration import update_calibration as _upd_cal
+                    _cal_outcome_map = {'stopped_out': 'stopped_out', 't1_hit': 'hit_t1', 't2_hit': 'hit_t2'}
+                    _cal_outcome = _cal_outcome_map.get(new_status)
+                    if _cal_outcome:
+                        _pat = conn.execute(
+                            "SELECT pattern_type, timeframe, kb_regime FROM pattern_signals WHERE id=?",
+                            (pos['pattern_id'],)
+                        ).fetchone()
+                        if _pat:
+                            _upd_cal(
+                                ticker=ticker,
+                                pattern_type=(_pat[0] or 'unknown'),
+                                timeframe=(_pat[1] or '4h'),
+                                market_regime=_pat[2],
+                                outcome=_cal_outcome,
+                                db_path=ext.DB_PATH,
+                            )
+                except Exception as _cal_e:
+                    _logger.debug('calibration feedback failed for %s: %s', ticker, _cal_e)
     conn.commit()
     conn.close()
     return {'checked': len(open_pos), 'updates': updates}
@@ -713,6 +774,54 @@ def paper_kb_chat(ticker: str, question: str, kg_conn):
         return None, 0
 
 
+def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float) -> tuple[bool, str]:
+    """Data-driven entry decision. Returns (should_enter, reasoning).
+
+    Replaces LLM for every candidate — <1ms per call vs 13s LLM round-trip.
+    LLM remains available as an optional confirmation layer (PAPER_AGENT_USE_LLM=1).
+    """
+    quality    = candidate.get('quality_score', 0) or 0
+    conviction = (candidate.get('kb_conviction') or '').lower()
+    cal_hr     = candidate.get('cal_hit_rate')
+    cal_n      = candidate.get('cal_samples', 0) or 0
+    signal_dir = (candidate.get('kb_signal_dir') or '').lower()
+    direction  = candidate.get('direction', '')
+
+    # Hard reject: quality too low regardless of anything else
+    if quality < 0.60:
+        return False, f'quality {quality:.2f} below 0.60'
+
+    # Hard reject: insufficient cash (below minimum viable 2× risk)
+    if remaining_cash < risk_per_trade * 2:
+        return False, f'insufficient cash {remaining_cash:.0f} < {risk_per_trade * 2:.0f}'
+
+    # Calibration-proven: enter if hit rate > 55% with ≥15 samples
+    if cal_hr is not None and cal_hr > 0.55 and cal_n >= 15:
+        return True, f'calibration-proven: hr={cal_hr:.0%} n={cal_n}'
+
+    # Calibration negative: skip if hit rate < 40% with ≥10 samples
+    if cal_hr is not None and cal_hr < 0.40 and cal_n >= 10:
+        return False, f'calibration-negative: hr={cal_hr:.0%} n={cal_n}'
+
+    # High quality + strong conviction: enter
+    if quality >= 0.75 and conviction in ('high', 'confirmed', 'strong'):
+        return True, f'high quality+conviction: q={quality:.2f} {conviction}'
+
+    # Quality ≥ 0.70 + signal direction alignment: enter
+    if quality >= 0.70 and signal_dir:
+        bull_aligned = direction == 'bullish' and signal_dir in ('bullish', 'long', 'near_high')
+        bear_aligned = direction == 'bearish' and signal_dir in ('bearish', 'short', 'near_low')
+        if bull_aligned or bear_aligned:
+            return True, f'quality+signal aligned: q={quality:.2f} signal={signal_dir}'
+
+    # Quality ≥ 0.70 + moderate conviction: enter
+    if quality >= 0.70 and conviction in ('medium', 'moderate'):
+        return True, f'quality+moderate conviction: q={quality:.2f} {conviction}'
+
+    # Default: skip (conservative)
+    return False, f'no strong signal: q={quality:.2f} conv={conviction} cal_hr={cal_hr}'
+
+
 def ai_run(user_id: str) -> dict:
     """Core autonomous paper trading agent for one user.
 
@@ -799,13 +908,10 @@ def _ai_run_inner(user_id: str) -> dict:
         # Hard cap: no single position may exceed 20% of account notional
         max_position_value = balance * 0.20
 
-        committed_rows = conn.execute(
-            "SELECT SUM(entry_price * quantity) FROM paper_positions WHERE user_id=? AND status='open'",
-            (user_id,)
-        ).fetchone()
-        committed_capital = float(committed_rows[0] or 0.0)
-        # remaining_cash tracks cash available within this scan; re-read from DB before each entry
-        remaining_cash = max(balance - committed_capital, 0.0)
+        # balance (virtual_balance) already has position costs deducted on entry
+        # and position proceeds restored on close — it IS the free cash.
+        # DO NOT subtract committed capital again (that causes double-deduction).
+        remaining_cash = balance
 
         entries = 0
         skips = 0
@@ -842,13 +948,30 @@ def _ai_run_inner(user_id: str) -> dict:
         ).fetchall()
 
         all_cands = [dict(r) for r in candidate_rows]
-        high_band = [c for c in all_cands if c['quality_score'] >= 0.85]
-        mid_band  = [c for c in all_cands if 0.80 <= c['quality_score'] < 0.85]
-        low_band  = [c for c in all_cands if c['quality_score'] < 0.80]
-        random.shuffle(high_band)
-        random.shuffle(mid_band)
-        random.shuffle(low_band)
-        candidates = (high_band + mid_band + low_band)[:50]
+
+        # Part 9: enrich each candidate with calibration hit rate for sorting
+        for _c in all_cands:
+            try:
+                from analytics.signal_calibration import get_calibration as _get_cal
+                _cal = _get_cal(
+                    ticker=_c['ticker'],
+                    pattern_type=_c.get('pattern_type', ''),
+                    timeframe='4h',
+                    db_path=ext.DB_PATH,
+                )
+                _c['cal_hit_rate'] = _cal.hit_rate_t1 if _cal else None
+                _c['cal_samples']  = _cal.sample_size  if _cal else 0
+            except Exception:
+                _c['cal_hit_rate'] = None
+                _c['cal_samples']  = 0
+
+        # Re-sort: calibration-proven patterns first, then by quality
+        all_cands.sort(key=lambda _x: (
+            _x.get('cal_hit_rate') or 0.0,
+            _x.get('quality_score') or 0.0,
+        ), reverse=True)
+
+        candidates = all_cands[:50]
 
         conn.row_factory = None
         scanned = len(candidates)
@@ -913,57 +1036,58 @@ def _ai_run_inner(user_id: str) -> dict:
                 skips += 1
                 continue
 
-            action = 'ENTER'
             pattern_type = c.get('pattern_type', '?')
             kb_signal_dir = (c.get('kb_signal_dir') or '').lower() or '?'
+            cal_hr  = c.get('cal_hit_rate')
+            cal_n   = c.get('cal_samples', 0)
+
+            # Part 10: data-driven entry decision (replaces LLM for every candidate)
+            # LLM used only as optional confirmation when PAPER_AGENT_USE_LLM=1 in env.
+            should_enter, data_reason = _should_enter(c, remaining_cash, risk_per_trade)
             reasoning = (
                 f'{pattern_type} {direction} | q={quality:.2f} {conviction} '
-                f'regime={regime or "?"} signal_dir={kb_signal_dir}'
+                f'regime={regime or "?"} signal_dir={kb_signal_dir} | {data_reason}'
             )
+            action = 'ENTER' if should_enter else 'SKIP'
 
-            # KB-aware LLM decision
-            try:
-                kb_question = (
-                    f"Paper trading decision for {ticker}: should I enter a {direction} position? "
-                    f"Pattern type: {pattern_type}. Quality: {quality:.2f}. Conviction: {conviction}. "
-                    f"Regime: {regime or '?'}. Signal direction: {c.get('kb_signal_dir','?')}. "
-                    f"Zone: {zone_low}–{zone_high}. "
-                    f"Entry: {entry_p:.4f}, stop: {stop_p:.4f}, t1: {t1_p:.4f}, t2: {t2_p:.4f}. "
-                    f"Reply with JSON only."
-                )
-                kg_conn = ext.kg.thread_local_conn()
-                raw, atom_count = paper_kb_chat(ticker, kb_question, kg_conn)
-                kb_depth = 'deep' if atom_count >= 15 else 'shallow' if atom_count >= 5 else 'thin'
-                if raw:
-                    raw = raw.strip()
-                    start = raw.find('{')
-                    end = raw.rfind('}') + 1
-                    if start >= 0 and end > start:
-                        parsed = json.loads(raw[start:end])
-                        action = parsed.get('action', 'SKIP').upper()
-                        llm_reasoning = parsed.get('reasoning', reasoning)[:200]
-                        reasoning = f'{llm_reasoning} | kb_depth={kb_depth} ({atom_count} atoms)'
-                        if action == 'ENTER':
-                            _llm_entry = float(parsed.get('entry', entry_p))
-                            _llm_stop  = float(parsed.get('stop', stop_p))
-                            _zone_stop_ref = stop_p
-                            if _zone_stop_ref > 0 and abs(_llm_stop - _zone_stop_ref) / _zone_stop_ref > 0.05:
-                                _logger.warning(
-                                    'LLM stop %.6f deviates >5%% from zone stop %.6f for %s — ignoring LLM prices',
-                                    _llm_stop, _zone_stop_ref, ticker
-                                )
-                            else:
-                                entry_p = _llm_entry
-                                stop_p  = _llm_stop
-                                t1_p = float(parsed.get('t1', t1_p))
-                                t2_p = float(parsed.get('t2', t2_p))
-                            risk = abs(entry_p - stop_p)
-                else:
-                    action = 'SKIP'
-                    reasoning = f'{reasoning} | llm_no_response kb_depth={kb_depth}'
-            except Exception as llm_err:
-                action = 'SKIP'
-                _logger.warning('KB-chat paper agent error for %s: %s — defaulting to SKIP', ticker, llm_err)
+            # Optional LLM confirmation (env-gated; skipped by default for speed)
+            import os as _os
+            if action == 'ENTER' and _os.environ.get('PAPER_AGENT_USE_LLM') == '1':
+                try:
+                    kb_question = (
+                        f"Paper trading decision for {ticker}: should I enter a {direction} position? "
+                        f"Pattern type: {pattern_type}. Quality: {quality:.2f}. Conviction: {conviction}. "
+                        f"Regime: {regime or '?'}. Signal direction: {c.get('kb_signal_dir','?')}. "
+                        f"Zone: {zone_low}\u2013{zone_high}. "
+                        f"Entry: {entry_p:.4f}, stop: {stop_p:.4f}, t1: {t1_p:.4f}, t2: {t2_p:.4f}. "
+                        f"Reply with JSON only."
+                    )
+                    kg_conn = ext.kg.thread_local_conn()
+                    raw, atom_count = paper_kb_chat(ticker, kb_question, kg_conn)
+                    kb_depth = 'deep' if atom_count >= 15 else 'shallow' if atom_count >= 5 else 'thin'
+                    if raw:
+                        raw = raw.strip()
+                        _s = raw.find('{')
+                        _e = raw.rfind('}') + 1
+                        if _s >= 0 and _e > _s:
+                            parsed = json.loads(raw[_s:_e])
+                            action = parsed.get('action', 'SKIP').upper()
+                            llm_reasoning = parsed.get('reasoning', reasoning)[:200]
+                            reasoning = f'{llm_reasoning} | {data_reason} | kb={kb_depth}({atom_count})'
+                            if action == 'ENTER':
+                                _llm_entry = float(parsed.get('entry', entry_p))
+                                _llm_stop  = float(parsed.get('stop', stop_p))
+                                if _llm_stop > 0 and abs(_llm_stop - stop_p) / stop_p <= 0.05:
+                                    entry_p = _llm_entry
+                                    stop_p  = _llm_stop
+                                    t1_p = float(parsed.get('t1', t1_p))
+                                    t2_p = float(parsed.get('t2', t2_p))
+                                risk = abs(entry_p - stop_p)
+                    else:
+                        action = 'SKIP'
+                        reasoning = f'{reasoning} | llm_no_response'
+                except Exception as _llm_err:
+                    _logger.debug('LLM confirmation skipped for %s: %s', ticker, _llm_err)
 
             if action == 'ENTER' and entries >= _PAPER_MAX_NEW_PER_SCAN:
                 skips += 1
@@ -1167,12 +1291,15 @@ def scanner_running(user_id: str) -> bool:
 
 
 def restore_scanners() -> None:
-    """Re-launch scanners for users who had agent_running=1 before server restart."""
+    """Re-launch scanners for all users with paper accounts configured.
+    Starts for agent_running=1 (was running before restart) AND account_size_set=1
+    (set a balance but may never have clicked Start Agent).
+    """
     try:
         conn = sqlite3.connect(ext.DB_PATH, timeout=5)
         ensure_paper_tables(conn)
         rows = conn.execute(
-            'SELECT user_id FROM paper_account WHERE agent_running=1'
+            'SELECT user_id FROM paper_account WHERE agent_running=1 OR account_size_set=1'
         ).fetchall()
         conn.close()
         for (uid,) in rows:

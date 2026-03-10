@@ -405,7 +405,88 @@ async function loadDashboardBottomRow() {
 
   // Regime Outlook widget
   loadRegimeOutlookWidget();
+
+  // Paper Performance widget
+  loadPaperPerformanceWidget();
 }
+
+async function loadPaperPerformanceWidget() {
+  const el = document.getElementById('dsh-paper-performance');
+  if (!el) return;
+  try {
+    const userId = window._currentUserId || (window._auth && window._auth.userId);
+    if (!userId) { el.innerHTML = `<div class="dsh-outlook-empty">Sign in to view</div>`; return; }
+
+    const [acct, pub] = await Promise.allSettled([
+      apiFetch(`/users/${userId}/paper/account`),
+      apiFetch('/paper/public-performance'),
+    ]);
+
+    const a = acct.status === 'fulfilled' ? acct.value : null;
+    const p = pub.status  === 'fulfilled' ? pub.value  : null;
+
+    if (!a || a.error || !a.virtual_balance) {
+      el.innerHTML = `<div class="dsh-outlook-empty">Set a balance in Paper Trader to start</div>`;
+      return;
+    }
+
+    const balance    = a.virtual_balance || 0;
+    const initial    = a.initial_balance || balance;
+    const pnlPct     = initial > 0 ? ((balance - initial) / initial * 100) : 0;
+    const pnlPos     = pnlPct >= 0;
+    const balFmt     = '£' + Number(balance).toLocaleString('en-GB', {maximumFractionDigits: 0});
+    const pnlFmt     = (pnlPos ? '+' : '') + pnlPct.toFixed(2) + '%';
+
+    // Stats from public endpoint
+    const winRate   = p?.win_rate_pct != null ? p.win_rate_pct + '%' : '—';
+    const avgR      = p?.avg_r       != null ? p.avg_r.toFixed(2) + 'R' : '—';
+    const total     = p?.total_trades ?? 0;
+    const active    = p?.active_agents ?? 0;
+
+    // Mini equity SVG — fetch last 20 equity log points
+    let svgHtml = '';
+    try {
+      const eq = await apiFetch(`/users/${userId}/paper/equity?days=30`);
+      const pts = (eq || []).filter(r => r.equity_value > 0).slice(-20);
+      if (pts.length >= 2) {
+        const vals = pts.map(r => r.equity_value);
+        const mn = Math.min(...vals), mx = Math.max(...vals);
+        const rng = mx - mn || 1;
+        const W = 200, H = 40;
+        const coords = vals.map((v, i) => {
+          const x = Math.round(i / (vals.length - 1) * W);
+          const y = Math.round(H - ((v - mn) / rng) * H);
+          return `${x},${y}`;
+        }).join(' ');
+        const lineColor = pnlPos ? '#22c55e' : '#ef4444';
+        svgHtml = `<svg class="dsh-paper-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+          <polyline points="${coords}" fill="none" stroke="${lineColor}" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg>`;
+      }
+    } catch { /* no equity curve yet */ }
+
+    el.innerHTML = `
+      <div class="dsh-paper-header">
+        <span class="dsh-paper-title">PAPER PERFORMANCE</span>
+        <span class="dsh-paper-live">live</span>
+      </div>
+      <div class="dsh-paper-balance">
+        <span class="dsh-paper-bal-val">${escHtml(balFmt)}</span>
+        <span class="dsh-paper-pnl ${pnlPos ? 'pos' : 'neg'}">${escHtml(pnlFmt)}</span>
+      </div>
+      ${svgHtml}
+      <div class="dsh-paper-stats">
+        <span>Win rate: ${escHtml(winRate)}</span>
+        <span>Avg R: ${escHtml(avgR)}</span>
+        <span>${total} trades</span>
+      </div>
+      ${active > 0 ? `<div class="dsh-paper-agents">${active} active agent${active !== 1 ? 's' : ''}</div>` : ''}
+      <div class="dsh-paper-link" onclick="navigate('paper')">→ Paper Trader</div>`;
+  } catch {
+    el.innerHTML = `<div class="dsh-outlook-empty">Paper performance unavailable</div>`;
+  }
+}
+
 
 async function loadRegimeOutlookWidget() {
   const el = document.getElementById('dsh-regime-outlook');

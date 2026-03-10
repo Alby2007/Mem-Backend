@@ -180,6 +180,46 @@ async def paper_reset(user_id: str, _: str = Depends(user_path_auth)):
         raise HTTPException(500, detail=str(e))
 
 
+@router.get("/paper/public-performance")
+async def public_paper_performance():
+    """Aggregate paper trading performance across all users. No auth required.
+    Used by the landing page and dashboard to show social proof / track record.
+    """
+    import sqlite3 as _sq
+    conn = _sq.connect(ext.DB_PATH, timeout=5)
+    try:
+        svc.ensure_paper_tables(conn)
+        total = conn.execute(
+            "SELECT COUNT(*) FROM paper_positions WHERE status != 'open'"
+        ).fetchone()[0]
+        wins = conn.execute(
+            "SELECT COUNT(*) FROM paper_positions WHERE pnl_r > 0 AND status != 'open'"
+        ).fetchone()[0]
+        avg_r_row = conn.execute(
+            "SELECT AVG(pnl_r) FROM paper_positions WHERE pnl_r IS NOT NULL AND status != 'open'"
+        ).fetchone()
+        avg_r = avg_r_row[0] if avg_r_row else None
+        equity_rows = conn.execute(
+            """SELECT user_id, equity_value FROM paper_equity_log
+               WHERE id IN (SELECT MAX(id) FROM paper_equity_log GROUP BY user_id)"""
+        ).fetchall()
+        active = conn.execute(
+            "SELECT COUNT(*) FROM paper_account WHERE agent_running=1"
+        ).fetchone()[0]
+    except Exception as _e:
+        conn.close()
+        return {"total_trades": 0, "error": str(_e)}
+    conn.close()
+    win_rate = round(wins / total * 100, 1) if total > 0 else None
+    return {
+        "total_trades": total,
+        "win_rate_pct": win_rate,
+        "avg_r": round(avg_r, 2) if avg_r is not None else None,
+        "active_agents": active,
+        "total_agents": len(equity_rows),
+    }
+
+
 @router.get("/users/{user_id}/paper/agent/log/export")
 async def paper_agent_log_export(user_id: str, _: str = Depends(user_path_auth)):
     _tier_gate(user_id)
