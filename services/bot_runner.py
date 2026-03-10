@@ -917,11 +917,27 @@ class BotRunner:
 
             total = len(closed)
             if total == 0:
+                balance = float(config.get('virtual_balance', 5000))
+                initial = float(config.get('initial_balance', 5000))
+                return_pct = round((balance - initial) / initial * 100, 2) if initial > 0 else 0.0
                 return {
-                    'bot_id': bot_id, 'total_closed': 0, 'win_rate': 0.0,
-                    'avg_r': 0.0, 'sharpe': 0.0, 'profit_factor': 0.0,
-                    'max_drawdown_pct': 0.0, 'fitness': 0.0,
-                    'tier': 'immature', 'strategy_name': config.get('strategy_name', ''),
+                    'bot_id': bot_id,
+                    'strategy_name': config.get('strategy_name', ''),
+                    'role': config.get('role', 'seed'),
+                    'generation': config.get('generation', 0),
+                    'active': bool(config.get('active', 1)),
+                    'total_closed': 0,
+                    'win_rate': 0.0,
+                    'avg_r': 0.0,
+                    'sharpe': 0.0,
+                    'profit_factor': 0.0,
+                    'max_drawdown_pct': 0.0,
+                    'fitness': 0.0,
+                    'tier': 'immature',
+                    'virtual_balance': balance,
+                    'initial_balance': initial,
+                    'return_pct': return_pct,
+                    'sparkline': [float(r['equity_value']) for r in equity_rows],
                 }
 
             pnls = [float(r['pnl_r']) for r in closed]

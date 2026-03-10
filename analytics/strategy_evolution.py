@@ -490,7 +490,6 @@ class StrategyEvolution:
             if not bots:
                 return {'user_id': user_id, 'bots': [], 'total_equity': 0.0}
 
-            total_equity = sum(b.get('virtual_balance', 0) for b in bots)
             initial_eq   = sum(b.get('initial_balance', 0) for b in bots)
             total_trades = sum(b.get('total_closed', 0) for b in bots)
             max_gen      = max((b.get('generation', 0) for b in bots), default=0)
@@ -500,11 +499,21 @@ class StrategyEvolution:
             best  = sorted_bots[0] if sorted_bots else None
             worst = sorted_bots[-1] if sorted_bots else None
 
-            return_pct = round((total_equity - initial_eq) / initial_eq * 100, 2) if initial_eq > 0 else 0.0
-
-            # Add equity sparklines (last 6 points)
+            # Add equity sparklines (last 6 points) and compute true equity (cash + open positions)
             conn = sqlite3.connect(self.db_path, timeout=10)
+            total_equity = 0.0
             for b in bots:
+                cash = b.get('virtual_balance', 0)
+                try:
+                    pos_rows = conn.execute(
+                        "SELECT entry_price, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
+                        (b['bot_id'],)
+                    ).fetchall()
+                    open_value = sum(float(r[0]) * float(r[1]) for r in pos_rows)
+                except Exception:
+                    open_value = 0.0
+                b['equity'] = round(cash + open_value, 2)
+                total_equity += b['equity']
                 try:
                     eq_rows = conn.execute(
                         "SELECT equity_value FROM paper_bot_equity WHERE bot_id=? ORDER BY logged_at DESC LIMIT 6",
@@ -514,6 +523,8 @@ class StrategyEvolution:
                 except Exception:
                     b['sparkline'] = []
             conn.close()
+
+            return_pct = round((total_equity - initial_eq) / initial_eq * 100, 2) if initial_eq > 0 else 0.0
 
             return {
                 'user_id':       user_id,
