@@ -50,6 +50,7 @@ function _ptRenderShell() {
 }
 
 function _ptSwitchView(view) {
+  if (!document.getElementById('pt-shell')) _ptRenderShell();
   _ptCurrentView = view;
   ['fleet','bot','timeline'].forEach(v => {
     const el = document.getElementById(`pt-view-${v}`);
@@ -74,6 +75,7 @@ function _ptToggleGeneralist(btn) {
 // ── VIEW 1: Fleet Overview ────────────────────────────────────────────────────
 
 async function _ptLoadFleet() {
+  if (!document.getElementById('pt-shell')) _ptRenderShell();
   const el = document.getElementById('pt-view-fleet');
   if (!el || !state.userId) return;
   _ptOnboardingShown = false;
@@ -264,13 +266,15 @@ async function _ptRefreshBotDetail() {
   const el    = document.getElementById('pt-view-bot');
   if (!el) return;
   try {
-    const [perf, equity, positions, log, fleetBots] = await Promise.all([
-      apiFetch(`/users/${state.userId}/bots/fleet-performance`).then(d => (d?.bots||[]).find(b=>b.bot_id===botId) || bot),
+    const [fleetData, equity, positions, log] = await Promise.all([
+      apiFetch(`/users/${state.userId}/bots/fleet-performance`),
       apiFetch(`/users/${state.userId}/bots/${botId}/equity?days=90`),
       apiFetch(`/users/${state.userId}/bots/${botId}/positions`),
       apiFetch(`/users/${state.userId}/bots/${botId}/log?limit=20`),
-      apiFetch(`/users/${state.userId}/bots/fleet-performance`).then(d => d?.bots||[]).catch(()=>[]),
     ]);
+    const fleetBots = fleetData?.bots || [];
+    const perf = fleetBots.find(b => b.bot_id === botId) || bot;
+    _ptFleetData = fleetData;
     _ptCurrentBot = perf;
     el.innerHTML = _ptRenderBotDetailHTML(perf, equity, positions, log, fleetBots);
   } catch(e) {
