@@ -98,6 +98,7 @@ def generate_random_genome() -> dict:
 def _make_seed_templates() -> list[dict]:
     templates = [
         {
+            # Broadest filter — fvg/ifvg dominate mid-quality range; lower floor to catch them
             'strategy_name': 'FVG Scanner',
             'pattern_types':  json.dumps(['fvg', 'ifvg']),
             'sectors':        None,
@@ -108,7 +109,7 @@ def _make_seed_templates() -> list[dict]:
             'direction_bias': None,
             'risk_pct':       1.0,
             'max_positions':  4,
-            'min_quality':    0.65,
+            'min_quality':    0.55,
             'role':           'seed',
             'generation':     0,
             'parent_id':      None,
@@ -124,23 +125,24 @@ def _make_seed_templates() -> list[dict]:
             'direction_bias': None,
             'risk_pct':       1.0,
             'max_positions':  4,
-            'min_quality':    0.70,
+            'min_quality':    0.65,
             'role':           'seed',
             'generation':     0,
             'parent_id':      None,
         },
         {
+            # Vol filter uses actual atom values (low_volatility / high_volatility); regime stripped (sparse atoms)
             'strategy_name': 'Tech Momentum',
             'pattern_types':  json.dumps(['fvg', 'order_block']),
             'sectors':        json.dumps(['technology']),
             'exchanges':      None,
-            'volatility':     json.dumps(['high', 'extreme']),
-            'regimes':        json.dumps(['risk_on_expansion', 'recovery']),
+            'volatility':     json.dumps(['high_volatility']),
+            'regimes':        None,
             'timeframes':     None,
             'direction_bias': 'bullish',
             'risk_pct':       1.5,
             'max_positions':  4,
-            'min_quality':    0.65,
+            'min_quality':    0.60,
             'role':           'seed',
             'generation':     0,
             'parent_id':      None,
@@ -156,23 +158,24 @@ def _make_seed_templates() -> list[dict]:
             'direction_bias': None,
             'risk_pct':       1.0,
             'max_positions':  4,
-            'min_quality':    0.65,
+            'min_quality':    0.60,
             'role':           'seed',
             'generation':     0,
             'parent_id':      None,
         },
         {
+            # Regime stripped (sparse atoms); vol uses correct atom name
             'strategy_name': 'Risk-Off Shorts',
             'pattern_types':  json.dumps(['breaker', 'mitigation']),
             'sectors':        None,
             'exchanges':      None,
-            'volatility':     json.dumps(['high', 'extreme']),
-            'regimes':        json.dumps(['risk_off_contraction', 'stagflation']),
+            'volatility':     json.dumps(['high_volatility']),
+            'regimes':        None,
             'timeframes':     None,
             'direction_bias': 'bearish',
             'risk_pct':       1.0,
             'max_positions':  3,
-            'min_quality':    0.65,
+            'min_quality':    0.60,
             'role':           'seed',
             'generation':     0,
             'parent_id':      None,
@@ -188,17 +191,46 @@ def _make_seed_templates() -> list[dict]:
             'direction_bias': None,
             'risk_pct':       1.0,
             'max_positions':  4,
-            'min_quality':    0.65,
+            'min_quality':    0.55,
+            'role':           'seed',
+            'generation':     0,
+            'parent_id':      None,
+        },
+        {
+            # mitigation: 46k signals, broad coverage across all sectors
+            'strategy_name': 'Mitigation Hunter',
+            'pattern_types':  json.dumps(['mitigation']),
+            'sectors':        None,
+            'exchanges':      None,
+            'volatility':     None,
+            'regimes':        None,
+            'timeframes':     None,
+            'direction_bias': None,
+            'risk_pct':       1.0,
+            'max_positions':  4,
+            'min_quality':    0.55,
+            'role':           'seed',
+            'generation':     0,
+            'parent_id':      None,
+        },
+        {
+            # liquidity_void: 16k signals, sector-focused on financials + industrials
+            'strategy_name': 'Liquidity Void',
+            'pattern_types':  json.dumps(['liquidity_void']),
+            'sectors':        json.dumps(['financial_services', 'financial services', 'industrials']),
+            'exchanges':      None,
+            'volatility':     None,
+            'regimes':        None,
+            'timeframes':     None,
+            'direction_bias': None,
+            'risk_pct':       1.0,
+            'max_positions':  4,
+            'min_quality':    0.55,
             'role':           'seed',
             'generation':     0,
             'parent_id':      None,
         },
     ]
-    # Two random explorers
-    for _ in range(2):
-        g = generate_random_genome()
-        g['role'] = 'explore'
-        templates.append(g)
     # Assign genome_ids and names where missing
     for t in templates:
         if 'genome_id' not in t:
