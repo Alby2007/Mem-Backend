@@ -156,7 +156,13 @@ def _read_kb_atoms(
                 'skew_regime', 'iv_skew_ratio',
                 'tail_risk', 'spy_skew_regime', 'spy_skew_ratio',
                 'insider_conviction', 'short_squeeze_potential',
-                'macro_event_risk', 'sector_tailwind', 'risk_appetite'
+                'macro_event_risk', 'sector_tailwind', 'risk_appetite',
+                'causal_signal', 'signal_conflicted',
+                'best_regime', 'worst_regime',
+                'return_in_risk_on_expansion', 'return_in_risk_off_contraction',
+                'return_in_stagflation', 'return_in_recovery',
+                'regime_hit_rate_risk_on_expansion', 'regime_hit_rate_risk_off_contraction',
+                'regime_hit_rate_stagflation', 'regime_hit_rate_recovery'
             )
             ORDER BY subject, predicate, confidence DESC
         """)
@@ -1346,6 +1352,30 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
             sig_quality  = _classify_signal_quality(
                 signal_dir, vol_regime, price_regime, upside_pct_val
             )
+
+            # ── Cross-engine input 1: signal_conflicted → force 'conflicted' ──
+            # Written by contradiction.py when signal_direction conflicts are detected.
+            # Overrides any quality computed above — resolves on next enrichment cycle
+            # once the stale atom decays or new evidence breaks the tie.
+            if preds.get('signal_conflicted'):
+                sig_quality = 'conflicted'
+
+            # ── Cross-engine input 2: causal_signal → boost direction quality ─
+            # CausalShockEngine writes causal_signal atoms when a macro shock
+            # propagates through the causal graph to this ticker.
+            # If the causal direction matches the existing signal, upgrade quality.
+            causal_sig = preds.get('causal_signal', '')
+            if causal_sig and sig_quality not in ('conflicted',):
+                causal_lower = causal_sig.lower()
+                sig_is_bull = signal_dir in _BULLISH_SIGNALS
+                sig_is_bear = signal_dir in _BEARISH_SIGNALS
+                causal_bull = any(kw in causal_lower for kw in ('bullish', 'positive', 'expand', 'upside', 'boost'))
+                causal_bear = any(kw in causal_lower for kw in ('bearish', 'negative', 'contract', 'downside', 'drag'))
+                _TIER_Q = ['weak', 'confirmed', 'strong']
+                if (sig_is_bull and causal_bull) or (sig_is_bear and causal_bear):
+                    idx_q = _TIER_Q.index(sig_quality) if sig_quality in _TIER_Q else 1
+                    sig_quality = _TIER_Q[min(idx_q + 1, len(_TIER_Q) - 1)]
+
             macro_conf   = _classify_macro_confirmation(signal_dir, macro_signals)
 
             src_base = f'derived_signal_{ticker}'
@@ -1434,6 +1464,68 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                 sector_tailwind=preds.get('sector_tailwind', ''),
                 db_path=self._db_path,
             )
+
+            # ── Cross-engine input 3: regime-conditional conviction modulation ─
+            # RegimeHistoryClassifier writes best_regime / worst_regime atoms.
+            # If current regime matches best_regime → upgrade tier by 1.
+            # If current regime matches worst_regime → downgrade tier by 1.
+            # Also reads regime_hit_rate_{current_regime} for position size scalar.
+            if pos_atoms:
+                current_regime = ticker_atoms.get('market', {}).get('market_regime', '')
+                best_r  = preds.get('best_regime', '')
+                worst_r = preds.get('worst_regime', '')
+                _TIER_O = ['avoid', 'low', 'medium', 'high']
+                _ct_atom = next((a for a in pos_atoms if a.predicate == 'conviction_tier'), None)
+                if _ct_atom and current_regime and current_regime not in ('no_data', ''):
+                    ct_val = _ct_atom.object
+                    if ct_val in _TIER_O:
+                        ct_idx = _TIER_O.index(ct_val)
+                        if best_r and current_regime == best_r and ct_idx < 3:
+                            _ct_atom.object = _TIER_O[ct_idx + 1]
+                            if _ct_atom.metadata:
+                                _ct_atom.metadata['ct_rule'] = _ct_atom.metadata.get('ct_rule', '') + '+RH_best_regime'
+                        elif worst_r and current_regime == worst_r and ct_idx > 0:
+                            _ct_atom.object = _TIER_O[ct_idx - 1]
+                            if _ct_atom.metadata:
+                                _ct_atom.metadata['ct_rule'] = _ct_atom.metadata.get('ct_rule', '') + '+RH_worst_regime'
+
+            # ── Cross-engine input 4: epistemic stress → conviction penalty ────
+            # High composite stress = conflicting sources, stale data, authority
+            # disagreement. Degrades conviction so the system self-corrects when
+            # its own data quality is poor.
+            # compute_stress() takes retrieved_atoms (list of fact dicts) and
+            # message_key_terms (list of str). Build both from the already-loaded preds.
+            if pos_atoms:
+                try:
+                    from knowledge.epistemic_stress import compute_stress as _compute_stress
+                    _ticker_fact_dicts = [
+                        {'confidence': 0.7, 'source': f'kb_{pred}', 'predicate': pred, 'object': obj}
+                        for pred, obj in preds.items()
+                    ]
+                    _stress = _compute_stress(
+                        retrieved_atoms   = _ticker_fact_dicts,
+                        message_key_terms = [ticker],
+                    )
+                    if _stress and getattr(_stress, 'composite_stress', 0.0) > 0.5:
+                        _stress_penalty = (_stress.composite_stress - 0.5) * 0.4
+                        _ct_atom2 = next((a for a in pos_atoms if a.predicate == 'conviction_tier'), None)
+                        _ps_atom  = next((a for a in pos_atoms if a.predicate == 'position_size_pct'), None)
+                        if _ct_atom2 and _ct_atom2.object in ('high', 'medium'):
+                            _TIER_ES = ['avoid', 'low', 'medium', 'high']
+                            _es_idx = _TIER_ES.index(_ct_atom2.object)
+                            if _stress_penalty > 0.15 and _es_idx > 0:
+                                _ct_atom2.object = _TIER_ES[_es_idx - 1]
+                                if _ct_atom2.metadata:
+                                    _ct_atom2.metadata['ct_rule'] = _ct_atom2.metadata.get('ct_rule', '') + f'+ES_stress{_stress.composite_stress:.2f}'
+                        if _ps_atom:
+                            try:
+                                _ps_val = float(_ps_atom.object)
+                                _ps_atom.object = str(round(_ps_val * (1.0 - _stress_penalty), 2))
+                            except (ValueError, TypeError):
+                                pass
+                except Exception:
+                    pass
+
             atoms.extend(pos_atoms)
 
             # ── Earnings proximity atom ────────────────────────────────────

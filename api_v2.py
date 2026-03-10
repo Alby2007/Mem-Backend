@@ -235,6 +235,28 @@ async def _lifespan(app: FastAPI):
     except Exception as _pl_e:
         _logger.warning('PredictionLedger failed to start: %s', _pl_e)
 
+    # RegimeHistoryClassifier — run once at startup then daily via scheduled thread
+    # Classifies 5 years of monthly data into 4 regimes; writes regime-conditional
+    # performance atoms (return_in_{regime}, best_regime, worst_regime, etc.)
+    # These feed conviction upgrades, chat answers, and transition engine context.
+    try:
+        import threading as _rh_threading
+        def _run_regime_history() -> None:
+            import time as _rh_time
+            _rh_time.sleep(45)   # let heavier adapters settle first
+            try:
+                from analytics.regime_history import RegimeHistoryClassifier
+                clf = RegimeHistoryClassifier(db_path=ext.DB_PATH)
+                clf.run(lookback_years=5)
+                _logger.info('RegimeHistoryClassifier: initial run complete')
+            except Exception as _rh_e:
+                _logger.warning('RegimeHistoryClassifier failed: %s', _rh_e)
+        _rh_threading.Thread(
+            target=_run_regime_history, daemon=True, name='regime-history-init'
+        ).start()
+    except Exception as _rh_outer:
+        _logger.warning('RegimeHistoryClassifier thread failed to start: %s', _rh_outer)
+
     # PositionMonitor — independent of ingest; must start even when ingest fails
     try:
         from analytics.position_monitor import PositionMonitor
