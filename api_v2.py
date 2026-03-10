@@ -186,6 +186,17 @@ async def _lifespan(app: FastAPI):
         _logger.warning('Ingest scheduler failed to start: %s', _e)
         app.state.scheduler = None
 
+    # ── Causal graph seed edges — must run before ShockEngine + Scenario engine ──
+    try:
+        import sqlite3 as _sq_cg
+        from knowledge.causal_graph import ensure_causal_edges_table
+        _cg_conn = _sq_cg.connect(ext.DB_PATH, timeout=10)
+        ensure_causal_edges_table(_cg_conn)
+        _cg_conn.close()
+        _logger.info('Causal graph seed edges ensured')
+    except Exception as _cg_e:
+        _logger.warning('Causal graph seeding failed: %s', _cg_e)
+
     # ── CausalShockEngine — propagates macro shocks through causal graph ──────
     try:
         from analytics.causal_shock_engine import CausalShockEngine
@@ -195,6 +206,16 @@ async def _lifespan(app: FastAPI):
         _logger.info('CausalShockEngine wired into KnowledgeGraph')
     except Exception as _se_e:
         _logger.warning('CausalShockEngine failed to start: %s', _se_e)
+
+    # ── ThesisMonitor — proactive thesis invalidation alerts ─────────────────
+    try:
+        from knowledge.thesis_builder import ThesisMonitor
+        _thesis_monitor = ThesisMonitor(ext.DB_PATH)
+        ext.kg.set_thesis_monitor(_thesis_monitor)
+        ext.thesis_monitor = _thesis_monitor
+        _logger.info('ThesisMonitor wired into KnowledgeGraph')
+    except Exception as _tm_e:
+        _logger.warning('ThesisMonitor failed to start: %s', _tm_e)
 
     # ── PredictionLedger — Brier-scored prediction tracking ──────────────────
     try:

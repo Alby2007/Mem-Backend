@@ -1052,6 +1052,71 @@ def _run_scenario_engine(message: str, response: Dict) -> Optional[str]:
     return None
 
 
+def _build_thesis_from_chat(message: str, user_id: str, cur_tickers: list, response: Dict) -> Optional[str]:
+    """
+    Detect thesis intent, extract ticker + direction, build a formal thesis
+    via ThesisBuilder, and inject into response['thesis'] + return a context
+    block for the LLM prompt.
+    """
+    try:
+        from knowledge.thesis_builder import ThesisBuilder
+
+        # Ticker: prefer carry-forward, else extract from message
+        ticker = None
+        if cur_tickers:
+            ticker = cur_tickers[0].upper()
+        else:
+            import re as _re
+            m = _re.search(r'\b([A-Z]{1,5}(?:\.[A-Z]{1,2})?)\b', message)
+            if m:
+                ticker = m.group(1)
+
+        if not ticker:
+            return None
+
+        # Direction: look for bull/bear keywords
+        msg_lo = message.lower()
+        if any(w in msg_lo for w in ('bull', 'long', 'buy', 'rise', 'rally', 'upside', 'benefit')):
+            direction = 'bullish'
+        elif any(w in msg_lo for w in ('bear', 'short', 'sell', 'fall', 'drop', 'downside', 'risk')):
+            direction = 'bearish'
+        else:
+            direction = 'bullish'
+
+        builder = ThesisBuilder(ext.DB_PATH)
+        result  = builder.build(
+            ticker    = ticker,
+            premise   = message,
+            direction = direction,
+            user_id   = user_id or 'anonymous',
+        )
+
+        response['thesis'] = {
+            'thesis_id':              result.thesis_id,
+            'ticker':                 result.ticker,
+            'direction':              result.direction,
+            'thesis_status':          result.thesis_status,
+            'thesis_score':           result.thesis_score,
+            'supporting_evidence':    result.supporting_evidence[:5],
+            'contradicting_evidence': result.contradicting_evidence[:3],
+            'invalidation_condition': result.invalidation_condition,
+            'created_at':             result.created_at,
+        }
+
+        lines = ['=== THESIS FORMALISED ===']
+        lines.append(f'Ticker: {result.ticker} | Direction: {result.direction} | Status: {result.thesis_status} | Score: {result.thesis_score:.2f}')
+        lines.append(f'Invalidation: {result.invalidation_condition}')
+        if result.supporting_evidence:
+            lines.append('Supporting: ' + '; '.join(result.supporting_evidence[:3]))
+        if result.contradicting_evidence:
+            lines.append('Contradicting: ' + '; '.join(result.contradicting_evidence[:2]))
+        lines.append('=== END THESIS ===')
+        return '\n'.join(lines)
+    except Exception as _e:
+        _logger.warning('thesis builder failed: %s', _e)
+    return None
+
+
 def _attach_signal_forecast(response: Dict) -> None:
     """
     Attach a SignalForecaster probability distribution to the response
@@ -1502,6 +1567,15 @@ def run(
     # ── Tip intent ────────────────────────────────────────────────────────
     _detect_tip_intent(message, user_id, response)
 
+    # ── Thesis builder (formalise investment thesis from chat) ────────────────
+    thesis_build_context: Optional[str] = None
+    try:
+        from knowledge.thesis_builder import ThesisBuilder as _ThesisBuilder
+        if _ThesisBuilder.detect_thesis_intent(message):
+            thesis_build_context = _build_thesis_from_chat(message, user_id, cur_tickers, response)
+    except Exception as _tb_e:
+        _logger.debug('thesis builder intent check failed: %s', _tb_e)
+
     # ── Scenario engine ("what if" / causal queries) ──────────────────────────
     scenario_context: Optional[str] = None
     if _detect_scenario_intent(message):
@@ -1515,8 +1589,8 @@ def run(
         prior_context = (prior_context + '\n' if prior_context else '') + _style_tf_hint
 
     # ── Build full prompt ─────────────────────────────────────────────────
-    # Merge scenario context into opportunity_scan_context for the prompt
-    _combined_scan_ctx = '\n\n'.join(filter(None, [scenario_context, opportunity_scan_context])) or None
+    # Merge thesis / scenario / opportunity contexts for the prompt
+    _combined_scan_ctx = '\n\n'.join(filter(None, [thesis_build_context, scenario_context, opportunity_scan_context])) or None
 
     messages = ext.build_prompt(
         user_message=message, snippet=snippet, stress=stress_dict,
