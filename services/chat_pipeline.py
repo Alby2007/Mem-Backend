@@ -1023,24 +1023,26 @@ def _run_scenario_engine(message: str, response: Dict) -> Optional[str]:
         result = run_scenario(message, db_path=ext.DB_PATH, narrative=False)
         if not result.resolved:
             return None
+        # affected_tickers is Dict[concept → List[ticker]]
+        all_affected = list({t for tickers in result.affected_tickers.values() for t in tickers})
         response['scenario'] = {
-            'shock':             result.shock,
-            'resolved_seed':     result.resolved_seed,
-            'chain_confidence':  result.chain_confidence,
-            'affected_tickers':  result.affected_tickers[:10],
-            'hop_count':         result.hop_count,
+            'shock':            result.shock_input,
+            'resolved_seed':    result.seed_concept,
+            'chain_confidence': result.chain_confidence,
+            'affected_tickers': all_affected[:10],
+            'hop_count':        len(result.chain),
         }
         # Build a structured context block for the LLM prompt
         lines = ['=== CAUSAL SCENARIO ANALYSIS ===']
-        lines.append(f'Shock: {result.shock} (seed: {result.resolved_seed})')
-        lines.append(f'Chain confidence: {result.chain_confidence:.2f} over {result.hop_count} hops')
-        if result.affected_tickers:
-            lines.append(f'Affected tickers: {", ".join(result.affected_tickers[:10])}')
+        lines.append(f'Shock: {result.shock_input} (seed: {result.seed_concept})')
+        lines.append(f'Chain confidence: {result.chain_confidence:.2f} over {len(result.chain)} hops')
+        if all_affected:
+            lines.append(f'Affected tickers: {", ".join(all_affected[:10])}')
         if result.chain:
             lines.append('Causal chain:')
             for hop in result.chain[:8]:
                 lines.append(
-                    f'  {hop.get("from","?")} → {hop.get("to","?")} '
+                    f'  {hop.get("cause","?")} → {hop.get("effect","?")} '
                     f'(mechanism: {hop.get("mechanism","")}, conf: {hop.get("confidence",0):.2f})'
                 )
         lines.append('=== END CAUSAL SCENARIO ===')
