@@ -1280,6 +1280,49 @@
   </div>
 </section>
 
+<!-- ── PREDICTION ACCURACY ── -->
+<section class="hiw-section" id="accuracy-section" style="border-top:1px solid var(--border);padding-top:80px;">
+  <div class="section-eyebrow reveal">VERIFIABLE ACCURACY</div>
+  <h2 class="section-title reveal reveal-delay-1">We publish our prediction record.<br><em style="font-style:normal;color:var(--accent)">Every signal. Every outcome.</em></h2>
+  <p class="reveal reveal-delay-2" style="font-size:16px;color:var(--text-dim);line-height:1.7;margin-bottom:48px;max-width:600px;">No retail trading platform publishes verifiable prediction accuracy. We do. Every tip issued is logged as an explicit prediction with stated probabilities. Outcomes are scored automatically when prices resolve.</p>
+
+  <div id="brier-widget" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;max-width:900px;margin-bottom:48px;">
+    <div class="showcase-panel reveal" style="text-align:center;">
+      <div class="showcase-label">SIGNALS ISSUED</div>
+      <div style="font-family:var(--mono);font-size:42px;font-weight:700;color:var(--text);margin:12px 0 4px;" id="brier-total">—</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted2);">distinct predictions logged</div>
+    </div>
+    <div class="showcase-panel reveal reveal-delay-1" style="text-align:center;">
+      <div class="showcase-label">BRIER SCORE</div>
+      <div style="font-family:var(--mono);font-size:42px;font-weight:700;margin:12px 0 4px;" id="brier-score">—</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted2);">lower is better · random = 0.25</div>
+    </div>
+    <div class="showcase-panel reveal reveal-delay-2" style="text-align:center;">
+      <div class="showcase-label">vs BENCHMARK</div>
+      <div style="font-family:var(--mono);font-size:42px;font-weight:700;margin:12px 0 4px;" id="brier-vs">—</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted2);">vs random guessing baseline</div>
+    </div>
+    <div class="showcase-panel reveal reveal-delay-3" style="text-align:center;">
+      <div class="showcase-label">RESOLVED</div>
+      <div style="font-family:var(--mono);font-size:42px;font-weight:700;color:var(--text);margin:12px 0 4px;" id="brier-resolved">—</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted2);">outcomes confirmed</div>
+    </div>
+  </div>
+
+  <div class="showcase-panel reveal reveal-delay-2" style="max-width:900px;padding:28px 32px;" id="brier-calibration-wrap">
+    <div class="showcase-label" style="margin-bottom:20px;">CALIBRATION CURVE — stated probability vs actual hit rate</div>
+    <div style="display:flex;align-items:flex-end;gap:6px;height:80px;" id="brier-bars">
+      <!-- injected by JS -->
+    </div>
+    <div style="display:flex;gap:6px;margin-top:6px;" id="brier-bar-labels">
+      <!-- injected by JS -->
+    </div>
+    <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:12px;">
+      Each bar: stated probability bucket vs actual empirical hit rate. Perfect calibration = bars at stated height. Data loading…
+    </div>
+  </div>
+</section>
+
 <!-- ── BOTTOM CTA ── -->
 <section class="cta-section">
   <div class="section-eyebrow reveal" style="justify-content:center;margin-bottom:24px">EARLY ACCESS</div>
@@ -1571,9 +1614,89 @@ document.getElementById('bottom-email').addEventListener('keydown', e => {
   if (e.key === 'Enter') joinWaitlist(e, 'bottom');
 });
 
+// ── BRIER SCORE / PREDICTION ACCURACY ──
+async function loadBrierScore() {
+  try {
+    const r = await fetch(`${API_BASE}/ledger/performance`, { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return;
+    const d = await r.json();
+
+    const totalEl    = document.getElementById('brier-total');
+    const scoreEl    = document.getElementById('brier-score');
+    const vsEl       = document.getElementById('brier-vs');
+    const resolvedEl = document.getElementById('brier-resolved');
+
+    if (totalEl && d.total_predictions != null) {
+      totalEl.textContent = d.total_predictions.toLocaleString();
+    }
+    if (resolvedEl && d.resolved != null) {
+      resolvedEl.textContent = d.resolved.toLocaleString();
+    }
+    if (scoreEl && d.brier_score != null) {
+      scoreEl.textContent = d.brier_score.toFixed(3);
+      scoreEl.style.color = d.brier_score < 0.25 ? 'var(--green)' : 'var(--red)';
+    } else if (scoreEl) {
+      scoreEl.textContent = 'n/a';
+      scoreEl.style.color = 'var(--muted2)';
+    }
+    if (vsEl && d.vs_benchmark != null) {
+      const better = d.vs_benchmark < 0;
+      vsEl.textContent = (better ? '' : '+') + d.vs_benchmark.toFixed(3);
+      vsEl.style.color = better ? 'var(--green)' : 'var(--red)';
+    } else if (vsEl) {
+      vsEl.textContent = 'n/a';
+      vsEl.style.color = 'var(--muted2)';
+    }
+
+    // Calibration curve bars
+    const curve = d.calibration_curve || [];
+    const barsEl   = document.getElementById('brier-bars');
+    const labelsEl = document.getElementById('brier-bar-labels');
+    if (barsEl && curve.length) {
+      barsEl.innerHTML = '';
+      labelsEl.innerHTML = '';
+      const maxH = 80;
+      curve.forEach(bucket => {
+        const stated = bucket.stated || 0;
+        const actual = bucket.actual;
+        const n      = bucket.n || 0;
+        const barW   = Math.max(1, Math.floor((barsEl.offsetWidth || 860) / curve.length) - 6);
+
+        // Stated bar (amber, semi-transparent)
+        const statedH = Math.round(stated * maxH);
+        const statedBar = document.createElement('div');
+        statedBar.style.cssText = `position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;`;
+        statedBar.innerHTML = `
+          <div style="width:100%;display:flex;align-items:flex-end;gap:2px;height:${maxH}px;position:relative;">
+            <div title="Stated: ${(stated*100).toFixed(0)}%" style="flex:1;height:${statedH}px;background:rgba(245,158,11,0.25);border:1px solid rgba(245,158,11,0.4);border-radius:2px 2px 0 0;"></div>
+            <div title="Actual: ${actual != null ? (actual*100).toFixed(0)+'%' : 'n/a'} (n=${n})" style="flex:1;height:${actual != null ? Math.round(actual*maxH) : 0}px;background:${actual != null ? (Math.abs(actual-stated) < 0.1 ? 'var(--green)' : actual > stated ? '#6366f1' : 'var(--red)') : '#333'};border-radius:2px 2px 0 0;opacity:0.85;"></div>
+          </div>`;
+        barsEl.appendChild(statedBar);
+
+        const lbl = document.createElement('div');
+        lbl.style.cssText = `flex:1;font-family:var(--mono);font-size:9px;color:var(--muted);text-align:center;`;
+        lbl.textContent = bucket.bucket || '';
+        labelsEl.appendChild(lbl);
+      });
+
+      // Legend
+      const legendEl = barsEl.closest('.showcase-panel')?.querySelector('div:last-child');
+      if (legendEl) {
+        legendEl.innerHTML = `
+          <span style="color:rgba(245,158,11,0.6)">■</span> Stated &nbsp;
+          <span style="color:var(--green)">■</span> Actual (calibrated) &nbsp;
+          <span style="color:#6366f1">■</span> Actual (over-stated) &nbsp;
+          <span style="color:var(--red)">■</span> Actual (under-stated) &nbsp;·&nbsp;
+          ${d.total_predictions || 0} total signals · ${d.resolved || 0} resolved`;
+      }
+    }
+  } catch {}
+}
+
 // ── INIT ──
 loadStats();
 loadWaitlistCount();
+loadBrierScore();
 setInterval(loadStats, 30000);
 </script>
 </body>
