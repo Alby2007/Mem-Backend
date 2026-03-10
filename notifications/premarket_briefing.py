@@ -367,6 +367,45 @@ def _build_kb_performance_section(db_path: str, min_samples: int = 30, max_rows:
         return ''
 
 
+def _build_regime_outlook_section(db_path: str, min_observations: int = 5) -> str:
+    """
+    Build the REGIME OUTLOOK section for Monday briefings.
+    Shows current state + top 2 most likely transitions with probabilities.
+    Only included when transition data has >= min_observations for the current state.
+    Returns a MarkdownV2-formatted string, or '' if no data.
+    """
+    try:
+        from analytics.state_transitions import TransitionEngine
+        engine = TransitionEngine(db_path)
+        forecast = engine.get_current_state_forecast(scope='global', subject='market')
+
+        if not forecast or forecast.total_observations < min_observations:
+            return ''
+
+        cs = forecast.current_state
+        state_str = cs.label() or cs.state_id.replace('_', ' ')
+        avg_days = round(forecast.avg_persistence_hours / 24, 1) if forecast.avg_persistence_hours else None
+
+        lines = [f"🔮 *REGIME OUTLOOK*\n{_DIVIDER}"]
+        lines.append(f"Current: {_esc(state_str)}")
+        if avg_days:
+            lines.append(f"Avg persistence: {_esc(str(avg_days))} days")
+
+        top2 = [t for t in forecast.transitions[:2] if t.probability > 0.05]
+        for t in top2:
+            t_days = round(t.avg_hours_to_transition / 24, 1) if t.avg_hours_to_transition else None
+            pct    = round(t.probability * 100)
+            label  = t.to_state.label() or t.to_state_id.replace('_', ' ')
+            day_str = f" avg {_esc(str(t_days))} days" if t_days else ''
+            lines.append(f"→ {_esc(str(pct))}% chance of {_esc(label)}{day_str}")
+
+        lines.append(f"Based on {_esc(str(forecast.total_observations))} similar historical periods\\.")
+        return '\n'.join(lines)
+    except Exception as e:
+        _log.debug('premarket_briefing: regime_outlook_section failed: %s', e)
+        return ''
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def generate_premarket_narrative(
@@ -459,6 +498,10 @@ def generate_premarket_narrative(
         kb_perf = _build_kb_performance_section(db_path)
         if kb_perf:
             parts.append(kb_perf)
+
+        regime_outlook = _build_regime_outlook_section(db_path)
+        if regime_outlook:
+            parts.append(regime_outlook)
 
     result = '\n\n'.join(parts)
     _log.info(

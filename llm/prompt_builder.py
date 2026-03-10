@@ -128,6 +128,21 @@ _SYSTEM_TEMPORAL_SEARCH_RULE = (
     "- Weave the finding into your analysis naturally — not as a separate block."
 )
 
+_SYSTEM_TRANSITION_FORECAST_RULE = (
+    "\n\nMARKET TRANSITION FORECAST: When the context includes a === MARKET TRANSITION FORECAST === "
+    "section, narrate the transition probabilities naturally. Say something like: "
+    "'Based on X historical observations of this market state, the most likely next development "
+    "is a shift to [state] ([probability]%, typically within Y days).' "
+    "Reference the current state name, the top 2-3 transitions with probabilities, "
+    "typical time horizons, and expected returns where available. "
+    "Add context: 'The current state has historically persisted for X days on average' "
+    "when persistence data is available.\n"
+    "RULES:\n"
+    "- If confidence is 'low' (<10 observations), qualify with: 'Based on limited historical observations...'\n"
+    "- Never invent transition statistics — only cite numbers from the section provided.\n"
+    "- Weave the forecast naturally into your analysis — not as a standalone paragraph."
+)
+
 _SYSTEM_SYNTHESIS_RULE = (
     "\n\nSYNTHESIS RULE — CRITICAL: When multiple atoms together imply a conclusion, "
     "you MUST state that conclusion. Do NOT refuse to answer or say the information "
@@ -734,7 +749,7 @@ def build(
         [{"role": "system", "content": ...}, {"role": "user", "content": ...}]
     """
     # ── Build dynamic system prompt ────────────────────────────────────────────
-    system_text = _SYSTEM_PROMPT_BASE + _SYSTEM_PRECEDENT_RULE + _SYSTEM_TEMPORAL_SEARCH_RULE + _SYSTEM_SYNTHESIS_RULE + _SYSTEM_NO_HALLUCINATION
+    system_text = _SYSTEM_PROMPT_BASE + _SYSTEM_PRECEDENT_RULE + _SYSTEM_TEMPORAL_SEARCH_RULE + _SYSTEM_TRANSITION_FORECAST_RULE + _SYSTEM_SYNTHESIS_RULE + _SYSTEM_NO_HALLUCINATION
 
     composite = 0.0
     if stress:

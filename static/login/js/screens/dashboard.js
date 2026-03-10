@@ -402,5 +402,42 @@ async function loadDashboardBottomRow() {
       }
     }
   } catch { /* keep dashes */ }
+
+  // Regime Outlook widget
+  loadRegimeOutlookWidget();
+}
+
+async function loadRegimeOutlookWidget() {
+  const el = document.getElementById('dsh-regime-outlook');
+  if (!el) return;
+  try {
+    const d = await apiFetch('/kb/transition-forecast');
+    if (!d || d.message || !d.transitions || d.transitions.length === 0) {
+      el.innerHTML = `<div class="dsh-outlook-empty">Accumulating data…<br>Check back after a few days of snapshots.</div>`;
+      return;
+    }
+    const cs       = d.current_state || {};
+    const avgDays  = d.avg_persistence_hours ? (d.avg_persistence_hours / 24).toFixed(1) : null;
+    const stateStr = cs.label || [cs.regime, cs.volatility ? cs.volatility + ' vol' : '', cs.fed_stance].filter(v => v && v !== 'unknown').join(' · ');
+    const transRows = (d.transitions || []).slice(0, 3).map(t => {
+      const pct   = Math.round((t.probability || 0) * 100);
+      const label = (t.to_state && t.to_state.label) ? t.to_state.label : t.to_state_id || '';
+      return `<div class="dsh-outlook-row">
+        <span class="dsh-outlook-arrow">→</span>
+        <span>${escHtml(label)}</span>
+        <span class="dsh-outlook-pct">(${pct}%)</span>
+      </div>`;
+    }).join('');
+    el.innerHTML = `
+      <div class="dsh-outlook-state">${escHtml(stateStr)}</div>
+      ${avgDays ? `<div class="dsh-outlook-persist">Persistence: ${avgDays} days avg</div>` : ''}
+      <div class="dsh-outlook-transitions">
+        <div class="tfc-section-label" style="margin-top:0;margin-bottom:4px;">NEXT LIKELY</div>
+        ${transRows}
+      </div>
+      <div class="dsh-outlook-obs">○ ${d.total_observations || 0} historical observations</div>`;
+  } catch {
+    el.innerHTML = `<div class="dsh-outlook-empty">Regime outlook unavailable</div>`;
+  }
 }
 

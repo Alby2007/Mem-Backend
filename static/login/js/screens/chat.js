@@ -268,6 +268,74 @@ function renderTemporalSearchCard(ts) {
   </div>`;
 }
 
+function renderTransitionCard(tf) {
+  if (!tf || !tf.transitions || tf.transitions.length === 0) return '';
+  const cs = tf.current_state || {};
+  const totalObs = tf.total_observations || 0;
+  const avgDays  = tf.avg_persistence_hours ? (tf.avg_persistence_hours / 24).toFixed(1) : null;
+  const selfPct  = tf.self_transition_rate != null ? Math.round(tf.self_transition_rate * 100) : null;
+  const confCls  = tf.confidence === 'high' ? 'tfc-conf-high'
+    : tf.confidence === 'moderate' ? 'tfc-conf-mod' : 'tfc-conf-low';
+
+  const _pill = (text, cls) => text && text !== 'unknown'
+    ? `<span class="tfc-pill ${cls}">${escHtml(text.replace(/_/g,' '))}</span>` : '';
+  const regimeCls = { recovery: 'tfc-pill-green', risk_on: 'tfc-pill-green', risk_off: 'tfc-pill-red', stagflation: 'tfc-pill-amber', unknown: 'tfc-pill-grey' };
+  const volCls    = { low: 'tfc-pill-green', medium: 'tfc-pill-grey', high: 'tfc-pill-amber', extreme: 'tfc-pill-red', unknown: 'tfc-pill-grey' };
+  const fedCls    = { dovish: 'tfc-pill-green', neutral: 'tfc-pill-grey', restrictive: 'tfc-pill-red', unknown: 'tfc-pill-grey' };
+
+  const statePills = [
+    _pill(cs.regime,     regimeCls[cs.regime]    || 'tfc-pill-grey'),
+    _pill(cs.volatility + ' vol', volCls[cs.volatility] || 'tfc-pill-grey'),
+    _pill(cs.fed_stance, fedCls[cs.fed_stance]   || 'tfc-pill-grey'),
+    cs.sector && cs.sector !== 'unknown' ? _pill(cs.sector, 'tfc-pill-grey') : '',
+  ].filter(Boolean).join('');
+
+  const transRows = tf.transitions.slice(0, 4).map((t, i) => {
+    const pct   = Math.round((t.probability || 0) * 100);
+    const barW  = pct;
+    const days  = t.avg_hours ? (t.avg_hours / 24).toFixed(1) : null;
+    const ret1m = t.avg_return_1m != null
+      ? `<span class="tfc-ret ${t.avg_return_1m >= 0 ? 'tfc-pos' : 'tfc-neg'}">${t.avg_return_1m >= 0 ? '+' : ''}${(t.avg_return_1m * 100).toFixed(1)}%</span>`
+      : '';
+    const label = (t.to_state && t.to_state.label) ? escHtml(t.to_state.label) : escHtml(t.to_state_id || '');
+    return `<div class="tfc-trans-row">
+      <div class="tfc-trans-bar-wrap">
+        <div class="tfc-trans-bar-track">
+          <div class="tfc-trans-bar-fill" style="width:0%" data-width="${barW}"></div>
+        </div>
+        <span class="tfc-trans-pct">${pct}%</span>
+      </div>
+      <div class="tfc-trans-detail">
+        <span class="tfc-trans-label">→ ${label}</span>
+        <span class="tfc-trans-meta">${days ? '~' + days + ' days' : ''}${ret1m ? '  ' + ret1m : ''}</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  const sampleNote = totalObs < 10 ? ` <span class="tfc-conf-low">(limited sample)</span>` : '';
+
+  return `
+  <div class="transition-card">
+    <div class="tfc-header">
+      <span class="tfc-title">REGIME TRANSITION FORECAST</span>
+      <span class="tfc-obs">${totalObs} observations${sampleNote}</span>
+    </div>
+    <div class="tfc-current">
+      <div class="tfc-current-label">Current state</div>
+      <div class="tfc-pills">${statePills}</div>
+      ${avgDays ? `<div class="tfc-persist">Avg persistence: ${avgDays} days</div>` : ''}
+    </div>
+    <div class="tfc-transitions">
+      <div class="tfc-section-label">MOST LIKELY NEXT STATES</div>
+      ${transRows}
+    </div>
+    <div class="tfc-footer">
+      ${selfPct != null ? `<span class="tfc-self">Stays same: ${selfPct}%</span>` : ''}
+      <span class="tfc-confidence ${confCls}">Confidence: ${escHtml(tf.confidence || 'low')}</span>
+    </div>
+  </div>`;
+}
+
 function renderCalibrationBadge(cal) {
   if (!cal) return '';
   const t1Pct = cal.hit_rate_t1 != null ? Math.round(cal.hit_rate_t1 * 100) : null;
@@ -731,6 +799,7 @@ async function sendChat() {
     const calHtml = renderCalibrationBadge(d.calibration || null);
     const precedentHtml    = d.historical_precedent ? renderPrecedentCard(d.historical_precedent) : '';
     const temporalHtml     = d.temporal_search ? renderTemporalSearchCard(d.temporal_search) : '';
+    const transitionHtml   = d.transition_forecast ? renderTransitionCard(d.transition_forecast) : '';
     // Build merged atoms from LLM grounding block + DB atoms for market stress fallback
     const _mergedAtoms = {};
     if (grounding) grounding.forEach(r => { const k = r.key === 'regime' ? 'price_regime' : r.key; if (r.val) _mergedAtoms[k] = r.val; });
@@ -738,7 +807,7 @@ async function sendChat() {
     const mktStress = d.market_stress || computeMarketStress(Object.keys(_mergedAtoms).length ? _mergedAtoms : null);
     const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null, mktStress);
     const bubble = thinking.querySelector('.msg-bubble');
-    bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + precedentHtml + temporalHtml + calHtml + epistemicHtml;
+    bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + precedentHtml + temporalHtml + transitionHtml + calHtml + epistemicHtml;
     // Animate stress bars + calibration bars + precedent bars
     requestAnimationFrame(() => {
       thinking.querySelectorAll('.stress-bar-fill[data-width]').forEach((bar, i) => {
@@ -763,6 +832,10 @@ async function sendChat() {
       // Animate temporal search bars staggered after precedent bars
       thinking.querySelectorAll('.ts-bar-fill[data-width]').forEach((bar, i) => {
         setTimeout(() => { bar.style.width = bar.dataset.width + '%'; }, 900 + i * 150);
+      });
+      // Animate transition forecast bars
+      thinking.querySelectorAll('.tfc-trans-bar-fill[data-width]').forEach((bar, i) => {
+        setTimeout(() => { bar.style.width = bar.dataset.width + '%'; }, 1100 + i * 150);
       });
     });
     if (tipCardHtml) bindTipFeedback(thinking);

@@ -1195,6 +1195,92 @@ def _run_temporal_search(message: str, ticker: Optional[str], response: Dict) ->
     return None
 
 
+_TRANSITION_INTENT_KWS = (
+    "what's next", "what comes next", "what usually follows",
+    "where is this heading", "where are we heading",
+    "next regime", "regime forecast", "likely transition",
+    "what's the outlook", "market outlook", "market direction",
+    "what follows", "what typically happens after",
+    "regime change", "will the regime", "how long will",
+    "how long does this", "when will it change",
+    "predict the", "forecast the regime",
+)
+
+
+def _detect_transition_intent(message: str) -> bool:
+    msg_lower = message.lower()
+    return any(kw in msg_lower for kw in _TRANSITION_INTENT_KWS)
+
+
+def _run_transition_forecast(message: str, ticker: Optional[str], response: Dict) -> Optional[str]:
+    """Run transition engine forecast and return context block for LLM prompt."""
+    try:
+        from analytics.state_transitions import TransitionEngine
+        engine = TransitionEngine(ext.DB_PATH)
+
+        if ticker:
+            forecast = engine.get_current_state_forecast(scope='ticker', subject=ticker.upper())
+        else:
+            forecast = engine.get_current_state_forecast(scope='global', subject='market')
+
+        if not forecast or forecast.total_observations < 3:
+            return None
+
+        cs = forecast.current_state
+        response['transition_forecast'] = {
+            'current_state_id':      forecast.current_state_id,
+            'current_state': {
+                'regime':      cs.regime,
+                'volatility':  cs.volatility,
+                'fed_stance':  cs.fed_stance,
+                'sector':      cs.dominant_sector,
+                'tension':     cs.tension,
+                'signal_bias': cs.signal_bias,
+                'label':       cs.label(),
+            },
+            'total_observations':    forecast.total_observations,
+            'avg_persistence_hours': forecast.avg_persistence_hours,
+            'self_transition_rate':  forecast.self_transition_rate,
+            'confidence':            forecast.confidence,
+            'transitions': [
+                {
+                    'to_state_id':  t.to_state_id,
+                    'to_state': {
+                        'regime':     t.to_state.regime,
+                        'volatility': t.to_state.volatility,
+                        'fed_stance': t.to_state.fed_stance,
+                        'sector':     t.to_state.dominant_sector,
+                        'label':      t.to_state.label(),
+                    },
+                    'probability':   t.probability,
+                    'observations':  t.observation_count,
+                    'avg_hours':     t.avg_hours_to_transition,
+                    'avg_return_1w': t.avg_forward_return_1w,
+                    'avg_return_1m': t.avg_forward_return_1m,
+                    'confidence':    t.confidence,
+                }
+                for t in forecast.transitions[:5]
+            ],
+        }
+
+        avg_days = round(forecast.avg_persistence_hours / 24, 1)
+        lines = ['=== MARKET TRANSITION FORECAST ===']
+        lines.append(f'Current state: {cs.label()}')
+        lines.append(f'(observed {forecast.total_observations} times historically, avg persistence: {avg_days} days)')
+        lines.append('')
+        lines.append('Most likely next states:')
+        for i, t in enumerate(forecast.transitions[:3], 1):
+            avg_t_days = round(t.avg_hours_to_transition / 24, 1)
+            ret_str = f', avg return {t.avg_forward_return_1m:+.1%}' if t.avg_forward_return_1m is not None else ''
+            lines.append(f'{i}. {t.to_state.label()} ({t.probability:.0%}, avg {avg_t_days} days{ret_str})')
+        lines.append(f'Self-transition rate: {forecast.self_transition_rate:.0%} (state tends to {"persist" if forecast.self_transition_rate > 0.4 else "change"})')
+        lines.append('=== END TRANSITION FORECAST ===')
+        return '\n'.join(lines)
+    except Exception as _e:
+        _logger.debug('transition forecast failed: %s', _e)
+    return None
+
+
 def _attach_signal_forecast(response: Dict) -> None:
     """
     Attach a SignalForecaster probability distribution to the response
@@ -1665,6 +1751,12 @@ def run(
         _lookup_ticker = cur_tickers[0] if cur_tickers else None
         temporal_search_context = _run_temporal_search(message, _lookup_ticker, response)
 
+    # ── Transition forecast ("what comes next" / regime outlook) ─────────────────
+    transition_context: Optional[str] = None
+    if _detect_transition_intent(message):
+        _tf_ticker = cur_tickers[0] if cur_tickers else None
+        transition_context = _run_transition_forecast(message, _tf_ticker, response)
+
     # ── Opportunity scan ──────────────────────────────────────────────────────
     opportunity_scan_context = _run_opportunity_scan(message, response)
 
@@ -1674,7 +1766,7 @@ def run(
 
     # ── Build full prompt ─────────────────────────────────────────────────
     # Merge thesis / scenario / temporal search / opportunity contexts for the prompt
-    _combined_scan_ctx = '\n\n'.join(filter(None, [thesis_build_context, scenario_context, temporal_search_context, opportunity_scan_context])) or None
+    _combined_scan_ctx = '\n\n'.join(filter(None, [thesis_build_context, scenario_context, temporal_search_context, transition_context, opportunity_scan_context])) or None
 
     messages = ext.build_prompt(
         user_message=message, snippet=snippet, stress=stress_dict,

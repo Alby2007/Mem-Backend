@@ -289,6 +289,78 @@ async def stats():
     return {**base, **extras}
 
 
+@router.get("/kb/transition-forecast")
+async def transition_forecast(
+    ticker: Optional[str] = None,
+    _user: str = Depends(get_current_user),
+):
+    """Get the current market state transition forecast."""
+    from analytics.state_transitions import TransitionEngine
+    engine = TransitionEngine(ext.DB_PATH)
+    try:
+        if ticker:
+            forecast = engine.get_current_state_forecast(scope='ticker', subject=ticker.upper())
+        else:
+            forecast = engine.get_current_state_forecast(scope='global', subject='market')
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    if not forecast:
+        return {"transitions": [], "message": "Insufficient snapshot data. Accumulating — check back in a few days."}
+
+    cs = forecast.current_state
+    return {
+        "current_state_id": forecast.current_state_id,
+        "current_state": {
+            "regime":      cs.regime,
+            "volatility":  cs.volatility,
+            "fed_stance":  cs.fed_stance,
+            "sector":      cs.dominant_sector,
+            "tension":     cs.tension,
+            "signal_bias": cs.signal_bias,
+            "label":       cs.label(),
+        },
+        "total_observations":    forecast.total_observations,
+        "avg_persistence_hours": round(forecast.avg_persistence_hours, 1),
+        "self_transition_rate":  round(forecast.self_transition_rate, 3),
+        "confidence":            forecast.confidence,
+        "transitions": [
+            {
+                "to_state_id": t.to_state_id,
+                "to_state": {
+                    "regime":     t.to_state.regime,
+                    "volatility": t.to_state.volatility,
+                    "fed_stance": t.to_state.fed_stance,
+                    "sector":     t.to_state.dominant_sector,
+                    "label":      t.to_state.label(),
+                },
+                "probability":   round(t.probability, 3),
+                "observations":  t.observation_count,
+                "avg_hours":     round(t.avg_hours_to_transition, 1),
+                "avg_return_1w": round(t.avg_forward_return_1w, 4) if t.avg_forward_return_1w is not None else None,
+                "avg_return_1m": round(t.avg_forward_return_1m, 4) if t.avg_forward_return_1m is not None else None,
+                "confidence":    t.confidence,
+            }
+            for t in forecast.transitions[:5]
+        ],
+    }
+
+
+@router.get("/kb/transition-stats")
+async def transition_stats(
+    scope: str = "global",
+    _user: str = Depends(get_current_user),
+):
+    """Return full transition graph statistics."""
+    from analytics.state_transitions import TransitionEngine
+    engine = TransitionEngine(ext.DB_PATH)
+    try:
+        stats = engine.get_state_statistics(scope=scope)
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+    return stats
+
+
 @router.get("/kb/temporal-search")
 async def temporal_search(
     q: str,

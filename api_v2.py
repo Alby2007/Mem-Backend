@@ -137,6 +137,10 @@ async def _lifespan(app: FastAPI):
         from ingest.state_snapshot_adapter import StateSnapshotAdapter
         scheduler.register(StateSnapshotAdapter(db_path=db_path), interval_sec=21600)
 
+        # Transition builder — daily, processes snapshots into state_transitions table
+        from ingest.transition_builder_adapter import TransitionBuilderAdapter
+        scheduler.register(TransitionBuilderAdapter(db_path=db_path), interval_sec=86400)
+
         # Alpha Vantage news sentiment — per-ticker AI sentiment; skips if no key
         scheduler.register(AlphaVantageAdapter(db_path=db_path), interval_sec=86400)
 
