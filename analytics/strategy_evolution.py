@@ -121,6 +121,9 @@ class StrategyEvolution:
 
         # Kill failing bots
         for bot in kills:
+            # NEVER kill immature bots — they haven't had a chance to trade
+            if bot.get('total_closed', 0) < bot.get('min_trades_eval', 25):
+                continue
             bot_id = bot['bot_id']
             runner.kill_bot(bot_id, reason=f'fitness={bot.get("fitness",0):.3f} dd={bot.get("max_drawdown_pct",0):.1%}')
             self._log_event(user_id, 'evolution_kill', bot_id,
@@ -144,7 +147,7 @@ class StrategyEvolution:
                                     now_iso)
                     summary['spawned'] += 1
 
-        # Maintain minimum fleet size
+        # Maintain minimum fleet size (immature bots already count — don't over-spawn)
         active_count = self._count_active(user_id)
         while active_count < _MIN_FLEET_SIZE:
             from services.bot_runner import generate_random_genome
