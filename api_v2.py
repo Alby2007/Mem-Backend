@@ -10,8 +10,9 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -369,18 +370,34 @@ async def _lifespan(app: FastAPI):
         pass
 
 
+_ALLOWED_ORIGINS = frozenset([
+    "https://trading-galaxy.uk",
+    "https://www.trading-galaxy.uk",
+    "https://app.trading-galaxy.uk",
+    "http://localhost:3000",
+    "http://localhost:5173",
+])
+
+_CSRF_SAFE_METHODS = frozenset(["GET", "HEAD", "OPTIONS"])
+
+
 def create_fastapi_app() -> FastAPI:
     app = FastAPI(title="Trading Galaxy API", version="2.0", lifespan=_lifespan)
 
+    @app.middleware("http")
+    async def csrf_origin_check(request: Request, call_next):
+        if request.method not in _CSRF_SAFE_METHODS:
+            origin = request.headers.get("origin", "")
+            if origin and origin not in _ALLOWED_ORIGINS:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "forbidden: origin not allowed"},
+                )
+        return await call_next(request)
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "https://trading-galaxy.uk",
-            "https://www.trading-galaxy.uk",
-            "https://app.trading-galaxy.uk",
-            "http://localhost:3000",
-            "http://localhost:5173",
-        ],
+        allow_origins=list(_ALLOWED_ORIGINS),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
