@@ -890,6 +890,11 @@ def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float)
     if quality >= 0.70 and conviction in ('medium', 'moderate'):
         return True, f'quality+moderate conviction: q={quality:.2f} {conviction}'
 
+    # Quality ≥ 0.72 with no conviction data at all — pattern quality alone is sufficient
+    # (many signals are valid but KB enrichment hasn't populated conviction yet)
+    if quality >= 0.72 and not conviction and not signal_dir:
+        return True, f'pattern quality only: q={quality:.2f} (no KB enrichment)'
+
     # Default: skip (conservative)
     return False, f'no strong signal: q={quality:.2f} conv={conviction} cal_hr={cal_hr}'
 
