@@ -1450,6 +1450,27 @@ def _ai_run_inner(user_id: str) -> dict:
                 )
                 open_tickers.add(ticker)
                 entries += 1
+                try:
+                    if hasattr(ext, 'prediction_ledger') and ext.prediction_ledger:
+                        _cal = float(cal_hr) if cal_hr is not None else float(quality or 0.5)
+                        _cal = max(0.05, min(0.95, _cal))
+                        ext.prediction_ledger.record_prediction(
+                            ticker=ticker,
+                            pattern_type=pattern_type,
+                            timeframe=c.get('timeframe', '4h'),
+                            entry_price=entry_p,
+                            target_1=t1_p,
+                            target_2=t2_p,
+                            stop_loss=stop_p,
+                            p_hit_t1=round(_cal, 4),
+                            p_hit_t2=round(_cal * 0.6, 4),
+                            p_stopped_out=round(1.0 - _cal, 4),
+                            market_regime=regime or None,
+                            conviction_tier=conviction.lower() or None,
+                            source='paper_generalist',
+                        )
+                except Exception as _pl_e:
+                    _logger.debug('prediction ledger write failed for %s: %s', ticker, _pl_e)
             else:
                 skips += 1
 

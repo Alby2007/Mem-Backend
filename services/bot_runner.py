@@ -757,6 +757,27 @@ class BotRunner:
                      f'{c.get("pattern_type","?")} {direction} entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} value=£{pos_value:,.2f} | {reason}',
                      bot_id, now_iso)
                 )
+                try:
+                    if hasattr(ext, 'prediction_ledger') and ext.prediction_ledger:
+                        cal_hr = float(c.get('cal_hit_rate') or quality or 0.5)
+                        cal_hr = max(0.05, min(0.95, cal_hr))
+                        ext.prediction_ledger.record_prediction(
+                            ticker=ticker,
+                            pattern_type=c.get('pattern_type', 'unknown'),
+                            timeframe=c.get('timeframe', '4h'),
+                            entry_price=entry_p,
+                            target_1=t1_p,
+                            target_2=t2_p,
+                            stop_loss=stop_p,
+                            p_hit_t1=round(cal_hr, 4),
+                            p_hit_t2=round(cal_hr * 0.6, 4),
+                            p_stopped_out=round(1.0 - cal_hr, 4),
+                            market_regime=regime or None,
+                            conviction_tier=(c.get('kb_conviction') or '').lower() or None,
+                            source='paper_bot',
+                        )
+                except Exception as _pl_e:
+                    _logger.debug('prediction ledger write failed for %s: %s', ticker, _pl_e)
 
             # Write equity snapshot
             fresh_bal = conn.execute(
