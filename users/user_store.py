@@ -535,6 +535,8 @@ def get_portfolio_with_signals(db_path: str, user_id: str) -> List[dict]:
                 if lp and ac and ac > 0:
                     pnl_pct = round((lp - ac) / ac * 100, 2)
                     pnl_val = round((lp - ac) * qty, 2) if qty else None
+                    if pnl_val is not None and h.get('ticker', '').upper().endswith('.L'):
+                        pnl_val = round(pnl_val / 100, 2)
                     h['unrealized_pnl_pct'] = pnl_pct
                     h['unrealized_pnl']     = pnl_val
                 else:
