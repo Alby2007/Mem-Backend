@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +27,13 @@ _INGEST_BATCH    = int(os.environ.get('INGEST_BATCH_SIZE', '15'))          # ite
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    # Debug: Write to a file to verify execution
+    try:
+        with open('/tmp/lifespan_debug.log', 'w') as f:
+            f.write('Lifespan started at: ' + str(datetime.now()))
+    except:
+        pass
+    
     print('=== LIFESPAN STARTING ===')
     _logger.info('=== LIFESPAN STARTING ===')
     
