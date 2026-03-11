@@ -423,7 +423,16 @@ _CSRF_SAFE_METHODS = frozenset(["GET", "HEAD", "OPTIONS"])
 
 
 def create_fastapi_app() -> FastAPI:
-    app = FastAPI(title="Trading Galaxy API", version="2.0", lifespan=_lifespan)
+    # Test: Create a simple lifespan first
+    @asynccontextmanager
+    async def test_lifespan(app: FastAPI):
+        print('=== TEST LIFESPAN STARTING ===')
+        with open('/tmp/test_lifespan.log', 'w') as f:
+            f.write('Test lifespan worked!')
+        yield
+        print('=== TEST LIFESPAN SHUTDOWN ===')
+    
+    app = FastAPI(title="Trading Galaxy API", version="2.0", lifespan=test_lifespan)
 
     @app.middleware("http")
     async def csrf_origin_check(request: Request, call_next):
