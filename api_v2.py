@@ -26,15 +26,15 @@ _INGEST_BATCH    = int(os.environ.get('INGEST_BATCH_SIZE', '15'))          # ite
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    # ── PredictionLedger ─────────────────────────────────────────────────────
+    # ── PredictionLedger — already initialized in extensions.py; just wire into KG ─
     try:
-        from analytics.prediction_ledger import PredictionLedger
-        _ledger = PredictionLedger(ext.DB_PATH)
-        ext.kg.set_ledger(_ledger)
-        ext.prediction_ledger = _ledger
-        _logger.info('PredictionLedger wired into KnowledgeGraph (intraday resolution active)')
+        if ext.prediction_ledger is not None:
+            ext.kg.set_ledger(ext.prediction_ledger)
+            _logger.info('PredictionLedger wired into KnowledgeGraph (intraday resolution active)')
+        else:
+            _logger.warning('PredictionLedger is None at lifespan — intraday resolution disabled')
     except Exception as e:
-        _logger.warning('PredictionLedger failed to start: %s', e)
+        _logger.warning('PredictionLedger kg.set_ledger failed: %s', e)
     
     # ── Bot runner + scanner restore: run in background thread to avoid blocking
     # startup if SQLite is temporarily locked by dying threads from previous process

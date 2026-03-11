@@ -398,7 +398,13 @@ delivery_scheduler = None
 tip_scheduler = None
 position_monitor = None
 shock_engine = None
-prediction_ledger = None
+try:
+    from analytics.prediction_ledger import PredictionLedger as _PredictionLedger
+    prediction_ledger = _PredictionLedger(DB_PATH)
+    _logger.info('PredictionLedger initialized in extensions.py')
+except Exception as _pl_init_e:
+    prediction_ledger = None
+    _logger.warning('PredictionLedger init failed in extensions.py: %s', _pl_init_e)
 thesis_monitor = None
 conv_store = None
 seed_sync = None
