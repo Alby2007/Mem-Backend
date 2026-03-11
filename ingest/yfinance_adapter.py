@@ -141,10 +141,13 @@ _UPSERT_PREDICATES = {'last_price', 'price_target', 'signal_direction', 'volatil
 # US tickers now handled by PolygonPriceAdapter (grouped daily call).
 # Excluded from _bulk_download_prices() and _parallel_info_fetch() to avoid
 # duplicate last_price atoms.  _cache_ohlcv_candles() still runs for these.
-try:
-    from ingest.polygon_price_adapter import US_POLYGON_TICKERS as _US_POLYGON_TICKERS
-except ImportError:
-    _US_POLYGON_TICKERS: set = set()  # type: ignore[assignment]
+# Loaded lazily at fetch-time so the DB is available and the set is current.
+def _get_us_polygon_tickers(db_path: Optional[str] = None) -> set:
+    try:
+        from ingest.polygon_price_adapter import get_us_polygon_tickers
+        return get_us_polygon_tickers(db_path)
+    except Exception:
+        return set()
 
 
 def _market_cap_tier(market_cap: Optional[float]) -> str:
@@ -480,12 +483,13 @@ class YFinanceAdapter(BaseIngestAdapter):
         discovered ones are persisted to the DB denylist.
         """
         atoms: List[RawAtom] = []
+        _us_poly = _get_us_polygon_tickers(self._db_path)
         active_tickers = [
             t for t in self.tickers
             if t.upper() not in self._delisted_cache
-            and t.upper() not in _US_POLYGON_TICKERS
+            and t.upper() not in _us_poly
         ]
-        _polygon_skipped = sum(1 for t in self.tickers if t.upper() in _US_POLYGON_TICKERS)
+        _polygon_skipped = sum(1 for t in self.tickers if t.upper() in _us_poly)
         if len(active_tickers) < len(self.tickers):
             self._logger.info(
                 'Skipping %d delisted + %d polygon-covered tickers, %d active',
@@ -582,10 +586,11 @@ class YFinanceAdapter(BaseIngestAdapter):
 
         all_atoms: List[RawAtom] = []
         ex = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix='yf-info')
+        _us_poly = _get_us_polygon_tickers(self._db_path)
         futures = {
             ex.submit(self._fetch_info_atoms, sym, now_iso, bulk_prices): sym
             for sym in self.tickers
-            if sym.upper() not in _US_POLYGON_TICKERS
+            if sym.upper() not in _us_poly
         }
         # Total budget for all info() calls: 120s regardless of ticker count
         _info_auth_fails = 0
