@@ -592,13 +592,9 @@ function shouldShowFeedbackWidget(ga) {
   if (!ticker) return null;
   if (!['long', 'short', 'bullish', 'bearish'].includes(direction)) return null;
   if (!['high', 'medium'].includes(conviction)) return null;
-  const t = ticker.toUpperCase();
-  const inHoldings  = (state.holdings  || []).some(h => !h.is_cash && h.ticker?.toUpperCase() === t);
-  const inWatchlist = (state.watchlistTickers || []).map(s => s.toUpperCase()).includes(t);
-  const gaSector    = (ga.sector || '').toLowerCase();
-  const sectorMatch = gaSector && (state.holdings || []).some(h => !h.is_cash && (h.sector || '').toLowerCase() === gaSector);
-  if (!inHoldings && !inWatchlist && !sectorMatch) return null;
-  if ((state.cashBalance || 0) <= 0) return null;
+  const hasHoldings = (state.holdings || []).some(h => !h.is_cash);
+  const hasCash     = (state.cashBalance || 0) > 0;
+  if (!hasHoldings && !hasCash) return null;
   return { ticker, direction, conviction };
 }
 
