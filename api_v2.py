@@ -427,6 +427,20 @@ print('=== MODULE LEVEL STARTUP ===')
 with open('/tmp/module_startup.log', 'w') as f:
     f.write('Module startup worked!')
 
+# Initialize PredictionLedger at module level
+try:
+    from analytics.prediction_ledger import PredictionLedger
+    _ledger = PredictionLedger(ext.DB_PATH)
+    ext.kg.set_ledger(_ledger)
+    ext.prediction_ledger = _ledger
+    print('PredictionLedger initialized at module level')
+    with open('/tmp/prediction_ledger_init.log', 'w') as f:
+        f.write('PredictionLedger initialized successfully!')
+except Exception as e:
+    print(f'PredictionLedger initialization failed: {e}')
+    with open('/tmp/prediction_ledger_error.log', 'w') as f:
+        f.write(f'PredictionLedger failed: {e}')
+
 def create_fastapi_app() -> FastAPI:
     # No lifespan for now - use module-level startup
     app = FastAPI(title="Trading Galaxy API", version="2.0")
