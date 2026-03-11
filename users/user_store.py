@@ -519,10 +519,13 @@ def get_portfolio_with_signals(db_path: str, user_id: str) -> List[dict]:
         for h in holdings:
             tk_lower = h['ticker'].lower()
             rows = conn.execute(
-                f'SELECT predicate, object FROM facts WHERE subject=? AND predicate IN ({placeholders})',
+                f'SELECT predicate, object FROM facts WHERE subject=? AND predicate IN ({placeholders}) ORDER BY confidence DESC',
                 (tk_lower, *_PORTFOLIO_SIGNAL_PREDS)
             ).fetchall()
-            atoms = {p: v for p, v in rows}
+            atoms = {}
+            for p, v in rows:
+                if p not in atoms:  # first row is highest confidence
+                    atoms[p] = v
             h['signal_direction'] = atoms.get('signal_direction')
             h['conviction_tier'] = atoms.get('conviction_tier')
             h['last_price'] = atoms.get('last_price')
