@@ -208,7 +208,8 @@ def _detect_fvg(
         if left.high < right.low:
             zh = right.low
             zl = left.high
-            if zh > zl:
+            # Guard: reject zero/negative zones (e.g. .KS partial candle data)
+            if zh > 0 and zl > 0 and zh > zl:
                 q = _quality('fvg', 'bullish', zh, zl, i, n, atr_val,
                              kb_conviction, kb_regime, kb_signal_dir)
                 signals.append(PatternSignal(
@@ -232,7 +233,8 @@ def _detect_fvg(
         if left.low > right.high:
             zh = left.low
             zl = right.high
-            if zh > zl:
+            # Guard: reject zero/negative zones (e.g. .KS partial candle data)
+            if zh > 0 and zl > 0 and zh > zl:
                 q = _quality('fvg', 'bearish', zh, zl, i, n, atr_val,
                              kb_conviction, kb_regime, kb_signal_dir)
                 signals.append(PatternSignal(
@@ -289,14 +291,18 @@ def _update_fvg_status(
     return updated
 
 
-def _detect_ifvg(fvg_signals: List[PatternSignal]) -> List[PatternSignal]:
+def _detect_ifvg(fvg_signals: List[PatternSignal]) -> Tuple[List[PatternSignal], List[PatternSignal]]:
     """
     Inverse FVG — a partially-filled FVG becomes an IFVG acting as S/R.
-    The unfilled portion of the zone is the IFVG zone.
+    Returns (ifvgs, partially_filled_ids) where partially_filled_ids is the
+    set of _candle_idx values for FVGs that were promoted to IFVG so the
+    caller can suppress the parent FVG from the output pool.
     """
     ifvgs = []
+    promoted_idxs: List[int] = []
     for sig in fvg_signals:
         if sig.status == 'partially_filled':
+            promoted_idxs.append(sig._candle_idx)
             ifvg = PatternSignal(
                 pattern_type  = 'ifvg',
                 ticker        = sig.ticker,
@@ -314,7 +320,7 @@ def _detect_ifvg(fvg_signals: List[PatternSignal]) -> List[PatternSignal]:
                 _candle_idx   = sig._candle_idx,
             )
             ifvgs.append(ifvg)
-    return ifvgs
+    return ifvgs, promoted_idxs
 
 
 def _detect_bpr(
@@ -507,8 +513,18 @@ def _detect_liquidity_voids(
                 c.body_size > body_threshold and
                 c.total_range > 0):
             direction = 'bullish' if c.is_bullish else 'bearish'
-            zh = c.high
-            zl = c.low
+            # Tradeable zone = unfilled range between body edge and wick tip.
+            # Bullish void: price launched from body_open upward, unfilled gap is
+            # from open (body bottom) down to candle low (wick).
+            # Bearish void: unfilled gap is from open (body top) up to candle high.
+            if direction == 'bullish':
+                zh = max(c.open, c.close)  # body top (open of a bullish candle = bottom)
+                zl = c.low                 # wick low — that's the unfilled pullback zone
+            else:
+                zh = c.high                # wick high — unfilled pullback zone
+                zl = min(c.open, c.close)  # body bottom
+            if zh <= zl or zl <= 0:
+                continue
             q = _quality('liquidity_void', direction, zh, zl, i, n, atr_val,
                          kb_conviction, kb_regime, kb_signal_dir)
             signals.append(PatternSignal(
@@ -530,6 +546,10 @@ def _detect_liquidity_voids(
     return signals
 
 
+_MIT_SWING_MIN      = 5    # minimum candles of confirmed swing before mitigation candidate
+_MIT_BODY_RATIO_MIN = 0.4  # mitigation candle body must be >=40% of its total range
+
+
 def _detect_mitigation_blocks(
     candles:      List[OHLCV],
     ticker:       str,
@@ -541,65 +561,106 @@ def _detect_mitigation_blocks(
     kb_signal_dir: str,
 ) -> List[PatternSignal]:
     """
-    Mitigation Block — bearish candle within a bullish swing structure that
-    price subsequently returns to from above.
+    Mitigation Block — a counter-swing candle embedded in a confirmed trend that
+    price returns to from the trend side.
 
-    Detection:
-    1. Identify a bullish swing: N consecutive candles trending up (≥3 higher lows)
-    2. A bearish candle within that swing is the mitigation candidate
-    3. If a later candle's low enters the bearish candle's range, it's a mitigation block
+    Bullish mitigation (long setup):
+      1. Confirmed bullish swing: >= _MIT_SWING_MIN candles with ALL higher lows
+         (every candle's low >= previous candle's low), ensuring we're in a real
+         uptrend not a 3-candle bounce in ranging price.
+      2. A bearish candle within that swing with meaningful body (body_ratio >= 0.40)
+         — filters out doji wicks and near-doji candles that aren't real pullbacks.
+      3. A later candle must revisit the zone FROM ABOVE:
+         - candle's high must be above zone_high before touching (approaching from above)
+         - candle must close WITHIN the zone or bounce off zone_low (not blow through)
+         - must be at least 2 candles after formation (no immediate-next-candle revisit)
+
+    Bearish mitigation (short setup, symmetric):
+      1. Confirmed bearish swing: >= _MIT_SWING_MIN candles with ALL lower highs
+      2. A bullish candle within that swing with meaningful body
+      3. A later candle revisits the zone from BELOW with close within/bouncing off zone_high
     """
     signals = []
     n = len(candles)
-    swing_min = 3
 
-    # Find bearish candles embedded in locally bullish swings
-    for i in range(swing_min, n - 1):
+    for i in range(_MIT_SWING_MIN, n - 1):
         c = candles[i]
-        if not c.is_bearish:
-            continue
 
-        # Check for bullish swing context: preceding candles show rising lows
-        preceding = candles[max(0, i - swing_min):i]
-        if len(preceding) < 2:
-            continue
-        rising_lows = all(
-            preceding[j + 1].low >= preceding[j].low
-            for j in range(len(preceding) - 1)
-        )
-        if not rising_lows:
-            continue
+        # ── Bullish mitigation ────────────────────────────────────────────────
+        if c.is_bearish and c.body_ratio >= _MIT_BODY_RATIO_MIN:
+            preceding = candles[i - _MIT_SWING_MIN:i]
+            # All higher lows across the full swing window
+            if all(preceding[k + 1].low >= preceding[k].low
+                   for k in range(len(preceding) - 1)):
+                zh = c.high
+                zl = c.low
+                if zh <= 0 or zl <= 0 or zh <= zl:
+                    continue
+                # Revisit check: must approach from above, close inside zone
+                # Skip candle immediately after formation (j >= i + 2)
+                for j in range(i + 2, n):
+                    later = candles[j]
+                    # Price must have been above zone before touching (approaching from above)
+                    if later.high < zh:
+                        continue
+                    # Close must be inside the zone (not blow through)
+                    if zl <= later.close <= zh:
+                        q = _quality('mitigation', 'bullish', zh, zl, i, n, atr_val,
+                                     kb_conviction, kb_regime, kb_signal_dir)
+                        signals.append(PatternSignal(
+                            pattern_type  = 'mitigation',
+                            ticker        = ticker,
+                            direction     = 'bullish',
+                            zone_high     = round(zh, 6),
+                            zone_low      = round(zl, 6),
+                            zone_size_pct = round(_zone_size_pct(zh, zl), 4),
+                            timeframe     = timeframe,
+                            formed_at     = c.timestamp,
+                            quality_score = q,
+                            status        = 'open',
+                            kb_conviction = kb_conviction,
+                            kb_regime     = kb_regime,
+                            kb_signal_dir = kb_signal_dir,
+                            _candle_idx   = i,
+                        ))
+                        break
 
-        zh = c.high
-        zl = c.low
+        # ── Bearish mitigation ────────────────────────────────────────────────
+        elif c.is_bullish and c.body_ratio >= _MIT_BODY_RATIO_MIN:
+            preceding = candles[i - _MIT_SWING_MIN:i]
+            # All lower highs across the full swing window
+            if all(preceding[k + 1].high <= preceding[k].high
+                   for k in range(len(preceding) - 1)):
+                zh = c.high
+                zl = c.low
+                if zh <= 0 or zl <= 0 or zh <= zl:
+                    continue
+                # Revisit from below: close must be inside zone
+                for j in range(i + 2, n):
+                    later = candles[j]
+                    if later.low > zl:
+                        continue
+                    if zl <= later.close <= zh:
+                        q = _quality('mitigation', 'bearish', zh, zl, i, n, atr_val,
+                                     kb_conviction, kb_regime, kb_signal_dir)
+                        signals.append(PatternSignal(
+                            pattern_type  = 'mitigation',
+                            ticker        = ticker,
+                            direction     = 'bearish',
+                            zone_high     = round(zh, 6),
+                            zone_low      = round(zl, 6),
+                            zone_size_pct = round(_zone_size_pct(zh, zl), 4),
+                            timeframe     = timeframe,
+                            formed_at     = c.timestamp,
+                            quality_score = q,
+                            status        = 'open',
+                            kb_conviction = kb_conviction,
+                            kb_regime     = kb_regime,
+                            kb_signal_dir = kb_signal_dir,
+                            _candle_idx   = i,
+                        ))
+                        break
 
-        # Check if a later candle revisits the zone from above
-        revisited = False
-        for j in range(i + 1, n):
-            later = candles[j]
-            if later.low <= zh and later.high >= zl:
-                revisited = True
-                break
-
-        if revisited:
-            q = _quality('mitigation', 'bullish', zh, zl, i, n, atr_val,
-                         kb_conviction, kb_regime, kb_signal_dir)
-            signals.append(PatternSignal(
-                pattern_type  = 'mitigation',
-                ticker        = ticker,
-                direction     = 'bullish',
-                zone_high     = round(zh, 6),
-                zone_low      = round(zl, 6),
-                zone_size_pct = round(_zone_size_pct(zh, zl), 4),
-                timeframe     = timeframe,
-                formed_at     = c.timestamp,
-                quality_score = q,
-                status        = 'open',
-                kb_conviction = kb_conviction,
-                kb_regime     = kb_regime,
-                kb_signal_dir = kb_signal_dir,
-                _candle_idx   = i,
-            ))
     return signals
 
 
@@ -642,7 +703,10 @@ def detect_all_patterns(
     fvgs = _update_fvg_status(raw_fvgs, candles)
 
     # ── IFVG (from partially-filled FVGs) ─────────────────────────────────────
-    ifvgs = _detect_ifvg(fvgs)
+    # promoted_idxs: parent FVGs at these candle indices have been converted to
+    # IFVGs — suppress the parent from the output to avoid duplicate zone coverage.
+    ifvgs, promoted_idxs = _detect_ifvg(fvgs)
+    promoted_set = set(promoted_idxs)
 
     # ── BPR (overlapping open FVGs) ───────────────────────────────────────────
     bprs = _detect_bpr(fvgs, ticker, timeframe)
@@ -661,8 +725,9 @@ def detect_all_patterns(
                                             kb_conviction, kb_regime, kb_signal_dir)
 
     # ── Combine, filter filled, sort ──────────────────────────────────────────
+    # Exclude parent FVGs that were promoted to IFVGs (duplicate zone coverage)
     all_signals: List[PatternSignal] = (
-        [s for s in fvgs if s.status != 'filled'] +
+        [s for s in fvgs if s.status != 'filled' and s._candle_idx not in promoted_set] +
         ifvgs +
         bprs +
         [s for s in obs if s.status != 'broken'] +
