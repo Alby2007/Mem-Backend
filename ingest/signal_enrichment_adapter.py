@@ -1659,4 +1659,58 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
             '[signal_enrichment] enriched %d tickers (%d atoms), skipped %d subjects',
             enriched, len(atoms), skipped,
         )
+
+        # ── Retroactive pattern enrichment ────────────────────────────────────
+        # Backfill kb_conviction/kb_regime/kb_signal_dir on open patterns that
+        # were created before their enrichment atoms existed (99.7% of patterns).
+        try:
+            _pconn = sqlite3.connect(self._db_path, timeout=30)
+            _pconn.execute('PRAGMA journal_mode=WAL')
+            _pconn.execute('PRAGMA busy_timeout=30000')
+            _pconn.row_factory = sqlite3.Row
+
+            _unenriched = _pconn.execute("""
+                SELECT DISTINCT ticker FROM pattern_signals
+                WHERE status NOT IN ('filled','broken','expired')
+                  AND (kb_conviction IS NULL OR kb_conviction = '')
+            """).fetchall()
+
+            _pat_updated = 0
+            for (_pticker,) in _unenriched:
+                _patoms: dict = {}
+                for _prow in _pconn.execute(
+                    "SELECT predicate, object FROM facts WHERE LOWER(subject)=? "
+                    "AND predicate IN ('conviction_tier','signal_direction','price_regime') "
+                    "ORDER BY timestamp DESC",
+                    (_pticker.lower(),)
+                ).fetchall():
+                    if _prow[0] not in _patoms:
+                        _patoms[_prow[0]] = _prow[1]
+
+                _conviction = _patoms.get('conviction_tier', '')
+                _signal_dir = _patoms.get('signal_direction', '')
+                _regime     = _patoms.get('price_regime', '')
+
+                if _conviction or _signal_dir or _regime:
+                    _n = _pconn.execute("""
+                        UPDATE pattern_signals
+                        SET kb_conviction = COALESCE(NULLIF(kb_conviction,''), ?),
+                            kb_signal_dir = COALESCE(NULLIF(kb_signal_dir,''), ?),
+                            kb_regime     = COALESCE(NULLIF(kb_regime,''), ?)
+                        WHERE ticker = ?
+                          AND status NOT IN ('filled','broken','expired')
+                          AND (kb_conviction IS NULL OR kb_conviction = '')
+                    """, (_conviction, _signal_dir, _regime, _pticker)).rowcount
+                    _pat_updated += _n
+
+            _pconn.commit()
+            _pconn.close()
+            if _pat_updated:
+                _logger.info(
+                    '[signal_enrichment] retroactively enriched %d patterns across %d tickers',
+                    _pat_updated, len(_unenriched),
+                )
+        except Exception as _pe:
+            _logger.warning('[signal_enrichment] retroactive pattern enrichment failed: %s', _pe)
+
         return atoms
