@@ -52,7 +52,7 @@ _log = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 _MIN_PEARSON_R    = 0.60    # minimum |r| to write a relationship
-_MIN_SAMPLES      = 20      # minimum overlapping observation pairs
+_MIN_SAMPLES      = 10      # minimum overlapping observation pairs (was 20; raise to 20 after 30d of snapshots)
 _MAX_LAG_SNAPS    = 3       # check lags 0, 1, 2, 3 snapshots
 _DISCOVERY_DECAY_DAYS = 90  # max age of valid lead-lag atom
 

@@ -46,7 +46,7 @@ _log = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-_MIN_SNAPSHOTS       = 20     # warm-up guard: skip tickers below this
+_MIN_SNAPSHOTS       = 10     # warm-up guard: skip tickers below this (was 20; matches CorrelationDiscovery)
 _BASELINE_WINDOW     = 30     # number of snapshots for baseline
 _DEVIATION_DIMS      = 2      # dimensions that must differ for anomaly
 _GLOBAL_PCT_THRESH   = 0.40   # >40% of watchlist = global anomaly
@@ -258,9 +258,15 @@ class AnomalyDetector:
                         # Classify: company-specific vs sector/market
                         anomaly_type = 'company_specific'
 
+                        is_first = not conn.execute(
+                            "SELECT 1 FROM facts WHERE subject=? AND predicate='anomaly_severity' AND source='anomaly_detector'",
+                            (ticker.lower(),)
+                        ).fetchone()
                         self._write_atom(conn, ticker, 'anomaly_detected', anomaly_type, sev)
                         self._write_atom(conn, ticker, 'anomaly_severity', str(sev), sev)
                         self._write_atom(conn, ticker, 'anomaly_description', description, sev)
+                        if is_first:
+                            _log.info('AnomalyDetector: first atom for %s — sev=%.2f %s', ticker, sev, description)
 
                         anomalous.append({
                             'ticker':        ticker,

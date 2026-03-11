@@ -140,19 +140,21 @@ def _kb_scores(
     """
     Return (conviction_score, regime_score, signal_score) each 0.0 or 1.0.
     """
-    # When KB context is absent, use 0.5 (neutral) so pure OHLCV quality
-    # can still reach ~0.80. KB data upgrades (1.0) or downgrades (0.0) from neutral.
+    # Neutral (absent KB) → 0.2 penalty weight, not 0.5 neutral.
+    # 0.5 allowed an unenriched pattern (gap=1.0, recency=0.95) to score ~0.74,
+    # above every bot floor and the 0.72 quality-only gate. 0.2 puts it at ~0.53.
+    # KB data upgrades (1.0) or downgrades (0.0) from this low baseline.
     conv  = 1.0 if kb_conviction in ('high', 'strong', 'confirmed') else (
-            0.0 if kb_conviction in ('low', 'weak', 'avoid') else 0.5)
+            0.0 if kb_conviction in ('low', 'weak', 'avoid') else 0.2)
     regime = 1.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_on', 'bullish', 'near_52w_high', 'near_high', 'mid_range')) else (
-             0.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_off', 'bearish', 'near_52w_low', 'near_low')) else 0.5)
+             0.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_off', 'bearish', 'near_52w_low', 'near_low')) else 0.2)
     sig   = 1.0 if (
         (direction == 'bullish' and kb_signal_dir in ('long', 'bullish', 'buy')) or
         (direction == 'bearish' and kb_signal_dir in ('short', 'bearish', 'sell'))
     ) else 0.0 if (
         (direction == 'bullish' and kb_signal_dir in ('short', 'bearish', 'sell')) or
         (direction == 'bearish' and kb_signal_dir in ('long', 'bullish', 'buy'))
-    ) else 0.5
+    ) else 0.2
     return conv, regime, sig
 
 

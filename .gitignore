@@ -35,3 +35,6 @@ tests/fixtures/*.sql
 # Diagnostic / temporary scripts (debugging sessions)
 tmp_*.py
 scripts/_*.py
+
+# Root-level test scaffolding (dev/debug only — not tracked)
+test_*.py

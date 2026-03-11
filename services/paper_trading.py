@@ -192,9 +192,15 @@ def ensure_paper_tables(conn):
             exit_price REAL,
             pnl_r REAL,
             note TEXT,
-            ai_reasoning TEXT
+            ai_reasoning TEXT,
+            is_test INTEGER DEFAULT 0
         )
     """)
+    # Migration: add is_test if missing from existing DB
+    try:
+        conn.execute('ALTER TABLE paper_positions ADD COLUMN is_test INTEGER DEFAULT 0')
+    except Exception:
+        pass
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_agent_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -403,7 +409,7 @@ def get_account(user_id: str) -> dict:
         "SELECT COUNT(*) FROM paper_positions WHERE user_id=? AND status='open'", (user_id,)
     ).fetchone()[0]
     closed_rows = conn.execute(
-        "SELECT pnl_r, status FROM paper_positions WHERE user_id=? AND status IN ('t1_hit','t2_hit','stopped_out','closed') AND pnl_r IS NOT NULL",
+        "SELECT pnl_r, status FROM paper_positions WHERE user_id=? AND status IN ('t1_hit','t2_hit','stopped_out','closed') AND pnl_r IS NOT NULL AND (is_test=0 OR is_test IS NULL)",
         (user_id,)
     ).fetchall()
     wins = sum(1 for r in closed_rows if r[0] > 0)
@@ -804,6 +810,7 @@ def get_stats(user_id: str) -> dict:
            FROM paper_positions p
            LEFT JOIN pattern_signals ps ON p.pattern_id = ps.id
            WHERE p.user_id=? AND p.status NOT IN ('open') AND p.pnl_r IS NOT NULL
+             AND (p.is_test=0 OR p.is_test IS NULL)
            ORDER BY p.closed_at DESC""",
         (user_id,)
     ).fetchall()
@@ -1128,9 +1135,16 @@ def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float)
     if effective_quality >= 0.70 and conviction in ('medium', 'moderate'):
         return True, f'quality+moderate conviction: q={quality:.2f} {conviction}{anomaly_note}', size_mult
 
-    # Quality ≥ 0.72 with no conviction data at all — pattern quality alone is sufficient
+    # Quality ≥ 0.72 with no conviction data at all — only if KB enrichment present
     if effective_quality >= 0.72 and not conviction and not signal_dir:
-        return True, f'pattern quality only: q={quality:.2f} (no KB enrichment){anomaly_note}', size_mult
+        _has_kb = bool(
+            candidate.get('kb_regime') or
+            candidate.get('kb_signal_dir') or
+            (conviction and conviction not in ('', 'none'))
+        )
+        if not _has_kb:
+            return False, f'quality {quality:.2f} but no KB enrichment — skipped', 1.0
+        return True, f'pattern quality only: q={quality:.2f}{anomaly_note}', size_mult
 
     # Part 3: Lead-lag pre-signal — leading ticker already confirmed direction
     if lead_lag_boost and effective_quality >= 0.65:

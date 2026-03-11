@@ -98,7 +98,7 @@ _BEARISH_VALUES = {
     'institutional_flow':     {'distributing', 'bearish', 'net_sell'},
 }
 
-_MIN_CATEGORIES = 4
+_MIN_CATEGORIES = 3  # was 4; news/causal adapters not live yet, 3 is meaningful convergence
 
 
 # ── Invalidation helpers ───────────────────────────────────────────────────────
