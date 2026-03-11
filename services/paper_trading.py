@@ -1540,7 +1540,7 @@ def _ai_run_inner(user_id: str) -> dict:
                             source='paper_generalist',
                         )
                 except Exception as _pl_e:
-                    _logger.debug('prediction ledger write failed for %s: %s', ticker, _pl_e)
+                    _logger.warning('prediction ledger write failed for %s: %s', ticker, _pl_e, exc_info=True)
             else:
                 skips += 1
 
