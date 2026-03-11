@@ -1172,12 +1172,19 @@ def _ai_run_inner(user_id: str) -> dict:
         ).fetchall()
         open_tickers = {r['ticker'] for r in open_rows}
 
-        _cooldown_cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-        _cooldown_rows = conn.execute(
+        # 24h cooldown on stopped_out positions (prevents re-entering a blown trade)
+        _cooldown_cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        _stopped_rows = conn.execute(
             "SELECT DISTINCT ticker FROM paper_positions WHERE user_id=? AND status='stopped_out' AND closed_at > ?",
-            (user_id, _cooldown_cutoff)
+            (user_id, _cooldown_cutoff_24h)
         ).fetchall()
-        cooled_tickers = {r['ticker'] for r in _cooldown_rows}
+        # 4h cooldown on ALL closed positions (prevents KB/JPM repeating every 2 min)
+        _cooldown_cutoff_4h = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+        _recent_rows = conn.execute(
+            "SELECT DISTINCT ticker FROM paper_positions WHERE user_id=? AND status != 'open' AND closed_at > ?",
+            (user_id, _cooldown_cutoff_4h)
+        ).fetchall()
+        cooled_tickers = {r['ticker'] for r in _stopped_rows} | {r['ticker'] for r in _recent_rows}
 
         if len(open_tickers) >= _PAPER_MAX_OPEN_POSITIONS:
             conn.execute(
@@ -1333,6 +1340,67 @@ def _ai_run_inner(user_id: str) -> dict:
             if risk <= 0:
                 skips += 1
                 continue
+
+            # ── Pre-entry live price validation ───────────────────────────────
+            # Fetch live price and verify it hasn't already breached the stop.
+            # Also use live price as entry if it's within the zone or within 2%
+            # of midpoint — produces more realistic fills than zone midpoint.
+            _live_prices = fetch_live_prices([ticker])
+            _live_price = _live_prices.get(ticker)
+            if _live_price and _live_price > 0:
+                if direction == 'bullish':
+                    if _live_price <= stop_p:
+                        skips += 1
+                        conn.execute(
+                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                            (user_id, 'skip', ticker,
+                             f'Price ${_live_price:.2f} already below stop ${stop_p:.2f} — would instant stop', now_iso)
+                        )
+                        continue
+                    if abs(_live_price - entry_p) / entry_p > 0.05:
+                        skips += 1
+                        conn.execute(
+                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                            (user_id, 'skip', ticker,
+                             f'Price ${_live_price:.2f} is >{5:.0f}% from zone midpoint ${entry_p:.2f} — stale pattern', now_iso)
+                        )
+                        continue
+                else:  # bearish
+                    if _live_price >= stop_p:
+                        skips += 1
+                        conn.execute(
+                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                            (user_id, 'skip', ticker,
+                             f'Price ${_live_price:.2f} already above stop ${stop_p:.2f} — would instant stop', now_iso)
+                        )
+                        continue
+                    if abs(_live_price - entry_p) / entry_p > 0.05:
+                        skips += 1
+                        conn.execute(
+                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
+                            (user_id, 'skip', ticker,
+                             f'Price ${_live_price:.2f} is >{5:.0f}% from zone midpoint ${entry_p:.2f} — stale pattern', now_iso)
+                        )
+                        continue
+                # Fix 3: Use live price as entry for realistic fills
+                if zone_low <= _live_price <= zone_high:
+                    entry_p = _live_price
+                elif abs(_live_price - midpoint) / midpoint <= 0.02:
+                    entry_p = _live_price
+                # Recalculate levels from new entry
+                if direction == 'bullish':
+                    stop_p = round(zone_low * 0.995, 6)
+                    risk   = entry_p - stop_p
+                    t1_p   = round(entry_p + risk * 2, 6)
+                    t2_p   = round(entry_p + risk * 3, 6)
+                else:
+                    stop_p = round(zone_high * 1.005, 6)
+                    risk   = stop_p - entry_p
+                    t1_p   = round(entry_p - risk * 2, 6)
+                    t2_p   = round(entry_p - risk * 3, 6)
+                if risk <= 0:
+                    skips += 1
+                    continue
 
             pattern_type = c.get('pattern_type', '?')
             kb_signal_dir = (c.get('kb_signal_dir') or '').lower() or '?'

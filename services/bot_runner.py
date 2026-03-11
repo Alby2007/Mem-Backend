@@ -734,6 +734,70 @@ class BotRunner:
                     skips += 1
                     continue
 
+                # ── Pre-entry live price validation ───────────────────────────
+                # Skip if live price already past stop (instant stop-out) or
+                # >5% from zone midpoint (stale pattern / price moved away).
+                _live_prices = fetch_live_prices([ticker])
+                _live_price = _live_prices.get(ticker)
+                if _live_price and _live_price > 0:
+                    if direction == 'bullish':
+                        if _live_price <= stop_p:
+                            skips += 1
+                            conn.execute(
+                                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                                (user_id, 'skip', ticker,
+                                 f'Price ${_live_price:.2f} already below stop ${stop_p:.2f} — would instant stop',
+                                 bot_id, now_iso)
+                            )
+                            continue
+                        if abs(_live_price - entry_p) / entry_p > 0.05:
+                            skips += 1
+                            conn.execute(
+                                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                                (user_id, 'skip', ticker,
+                                 f'Price ${_live_price:.2f} is >5% from zone midpoint ${entry_p:.2f} — stale pattern',
+                                 bot_id, now_iso)
+                            )
+                            continue
+                    else:  # bearish
+                        if _live_price >= stop_p:
+                            skips += 1
+                            conn.execute(
+                                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                                (user_id, 'skip', ticker,
+                                 f'Price ${_live_price:.2f} already above stop ${stop_p:.2f} — would instant stop',
+                                 bot_id, now_iso)
+                            )
+                            continue
+                        if abs(_live_price - entry_p) / entry_p > 0.05:
+                            skips += 1
+                            conn.execute(
+                                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                                (user_id, 'skip', ticker,
+                                 f'Price ${_live_price:.2f} is >5% from zone midpoint ${entry_p:.2f} — stale pattern',
+                                 bot_id, now_iso)
+                            )
+                            continue
+                    # Fix 3: Use live price as entry for realistic fills
+                    if zone_low <= _live_price <= zone_high:
+                        entry_p = _live_price
+                    elif abs(_live_price - midpoint) / midpoint <= 0.02:
+                        entry_p = _live_price
+                    # Recalculate levels from new entry
+                    if direction == 'bullish':
+                        stop_p = round(zone_low * 0.995, 6)
+                        risk   = entry_p - stop_p
+                        t1_p   = round(entry_p + risk * 2, 6)
+                        t2_p   = round(entry_p + risk * 3, 6)
+                    else:
+                        stop_p = round(zone_high * 1.005, 6)
+                        risk   = stop_p - entry_p
+                        t1_p   = round(entry_p - risk * 2, 6)
+                        t2_p   = round(entry_p - risk * 3, 6)
+                    if risk <= 0:
+                        skips += 1
+                        continue
+
                 should_enter, reason, size_mult = _should_enter(c, remaining_cash, risk_per_trade)
                 if not should_enter:
                     skips += 1
