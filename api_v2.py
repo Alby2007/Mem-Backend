@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,31 +26,14 @@ _INGEST_BATCH    = int(os.environ.get('INGEST_BATCH_SIZE', '15'))          # ite
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    try:
-        # Debug: Write to a file to verify execution
-        with open('/tmp/lifespan_debug.log', 'w') as f:
-            f.write('Lifespan started at: ' + str(datetime.now()))
-        
-        print('=== LIFESPAN STARTING ===')
-        _logger.info('=== LIFESPAN STARTING ===')
-    except Exception as e:
-        print(f'LIFESPAN STARTUP ERROR: {e}')
-        _logger.error('LIFESPAN STARTUP ERROR: %s', e)
-        raise
-    
-    # Simple test - try to initialize PredictionLedger here
+    # ── PredictionLedger ─────────────────────────────────────────────────────
     try:
         from analytics.prediction_ledger import PredictionLedger
-        print('PredictionLedger import successful')
         _ledger = PredictionLedger(ext.DB_PATH)
-        print('PredictionLedger instantiation successful')
         ext.kg.set_ledger(_ledger)
-        print('PredictionLedger set in KnowledgeGraph')
         ext.prediction_ledger = _ledger
-        print('PredictionLedger set in extensions')
         _logger.info('PredictionLedger wired into KnowledgeGraph (intraday resolution active)')
     except Exception as e:
-        print(f'PredictionLedger error: {e}')
         _logger.warning('PredictionLedger failed to start: %s', e)
     
     # ── Bot runner + scanner restore: run in background thread to avoid blocking
@@ -306,24 +288,6 @@ async def _lifespan(app: FastAPI):
     except Exception as _tm_e:
         _logger.warning('ThesisMonitor failed to start: %s', _tm_e)
 
-    # ── PredictionLedger — Brier-scored prediction tracking ──────────────────
-    try:
-        _logger.info('Attempting to initialize PredictionLedger...')
-        from analytics.prediction_ledger import PredictionLedger
-        _logger.info('PredictionLedger import successful')
-        _ledger = PredictionLedger(ext.DB_PATH)
-        _logger.info('PredictionLedger instantiation successful')
-        ext.kg.set_ledger(_ledger)
-        _logger.info('PredictionLedger set in KnowledgeGraph')
-        ext.prediction_ledger = _ledger
-        _logger.info('PredictionLedger wired into KnowledgeGraph (intraday resolution active)')
-    except Exception as _pl_e:
-        _logger.warning('PredictionLedger failed to start: %s', _pl_e)
-        import traceback
-        _logger.warning('PredictionLedger traceback: %s', traceback.format_exc())
-    
-    _logger.info('=== PREDICTION LEDGER INITIALIZATION COMPLETE ===')
-
     # RegimeHistoryClassifier — run once at startup then daily via scheduled thread
     # Classifies 5 years of monthly data into 4 regimes; writes regime-conditional
     # performance atoms (return_in_{regime}, best_regime, worst_regime, etc.)
@@ -380,7 +344,6 @@ async def _lifespan(app: FastAPI):
         except Exception as _te:
             _logger.warning('TipScheduler failed to start: %s', _te)
 
-    print('=== LIFESPAN YIELDING - APP READY ===')
     yield
 
     # ── Shutdown ───────────────────────────────────────────────────────────────
@@ -422,28 +385,8 @@ _ALLOWED_ORIGINS = frozenset([
 _CSRF_SAFE_METHODS = frozenset(["GET", "HEAD", "OPTIONS"])
 
 
-# Module-level startup - run when app is imported
-print('=== MODULE LEVEL STARTUP ===')
-with open('/tmp/module_startup.log', 'w') as f:
-    f.write('Module startup worked!')
-
-# Initialize PredictionLedger at module level
-try:
-    from analytics.prediction_ledger import PredictionLedger
-    _ledger = PredictionLedger(ext.DB_PATH)
-    ext.kg.set_ledger(_ledger)
-    ext.prediction_ledger = _ledger
-    print('PredictionLedger initialized at module level')
-    with open('/tmp/prediction_ledger_init.log', 'w') as f:
-        f.write('PredictionLedger initialized successfully!')
-except Exception as e:
-    print(f'PredictionLedger initialization failed: {e}')
-    with open('/tmp/prediction_ledger_error.log', 'w') as f:
-        f.write(f'PredictionLedger failed: {e}')
-
 def create_fastapi_app() -> FastAPI:
-    # No lifespan for now - use module-level startup
-    app = FastAPI(title="Trading Galaxy API", version="2.0")
+    app = FastAPI(title="Trading Galaxy API", version="2.0", lifespan=_lifespan)
 
     @app.middleware("http")
     async def csrf_origin_check(request: Request, call_next):
