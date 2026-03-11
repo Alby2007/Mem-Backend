@@ -280,13 +280,19 @@ async def _lifespan(app: FastAPI):
 
     # ── PredictionLedger — Brier-scored prediction tracking ──────────────────
     try:
+        _logger.info('Attempting to initialize PredictionLedger...')
         from analytics.prediction_ledger import PredictionLedger
+        _logger.info('PredictionLedger import successful')
         _ledger = PredictionLedger(ext.DB_PATH)
+        _logger.info('PredictionLedger instantiation successful')
         ext.kg.set_ledger(_ledger)
+        _logger.info('PredictionLedger set in KnowledgeGraph')
         ext.prediction_ledger = _ledger
         _logger.info('PredictionLedger wired into KnowledgeGraph (intraday resolution active)')
     except Exception as _pl_e:
         _logger.warning('PredictionLedger failed to start: %s', _pl_e)
+        import traceback
+        _logger.warning('PredictionLedger traceback: %s', traceback.format_exc())
 
     # RegimeHistoryClassifier — run once at startup then daily via scheduled thread
     # Classifies 5 years of monthly data into 4 regimes; writes regime-conditional
