@@ -44,9 +44,6 @@ async def _lifespan(app: FastAPI):
         print(f'PredictionLedger error: {e}')
         _logger.warning('PredictionLedger failed to start: %s', e)
     
-    print('=== LIFESPAN YIELDING ===')
-    yield
-    
     # ── Bot runner + scanner restore: run in background thread to avoid blocking
     # startup if SQLite is temporarily locked by dying threads from previous process
     import threading as _threading
@@ -372,6 +369,9 @@ async def _lifespan(app: FastAPI):
             ext.tip_scheduler.start()
         except Exception as _te:
             _logger.warning('TipScheduler failed to start: %s', _te)
+
+    print('=== LIFESPAN YIELDING - APP READY ===')
+    yield
 
     # ── Shutdown ───────────────────────────────────────────────────────────────
     if scheduler is not None:
