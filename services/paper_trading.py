@@ -1573,15 +1573,6 @@ def _ai_run_inner(user_id: str) -> dict:
         conn.commit()
         conn.close()
 
-        # Issue 3 fix: run monitor again after entries so any positions that gap through
-        # their stop during LLM-decision latency are caught in the same cycle.
-        if entries > 0:
-            try:
-                _mon2 = monitor_positions(user_id)
-                _monitor_updates.extend(_mon2.get('updates', []))
-            except Exception as _mon2_e:
-                _logger.warning('post-entry monitor_positions failed for %s: %s', user_id, _mon2_e)
-
         return {'entries': entries, 'skips': skips, 'monitor_updates': _monitor_updates}
 
     except Exception as e:
