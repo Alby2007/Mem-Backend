@@ -149,6 +149,7 @@ def _read_kb_atoms(
             FROM facts
             WHERE predicate IN (
                 'last_price', 'price_target', 'signal_direction',
+                'conviction_tier',
                 'volatility_regime', 'market_cap_tier', 'sector',
                 'earnings_quality', 'low_52w', 'volatility_30d',
                 'signal_quality', 'thesis_risk_level', 'macro_confirmation',
