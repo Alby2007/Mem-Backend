@@ -58,6 +58,7 @@ _CATEGORY_MAP: Dict[str, str] = {
     'market_regime':           'macro',
     'growth_environment':      'macro',
     'dominant_driver':         'macro',
+    'inflation_environment':   'macro',
     'insider_conviction':      'insider',
     'insider_flow':            'insider',
     'institutional_flow':      'insider',
@@ -70,7 +71,7 @@ _MACRO_SUBJECTS = ('us_macro', 'us_yields', 'us_labor')
 # Fix B: expanded to match actual adapter output values (FRED, market-state snapshots).
 _BULLISH_VALUES = {
     'signal_direction':       {'bullish', 'long', 'buy', 'near_high'},
-    'conviction_tier':        {'high', 'confirmed', 'strong'},
+    'conviction_tier':        {'high', 'confirmed', 'strong', 'medium', 'moderate'},  # medium = positive confirmation
     'news_sentiment':         {'positive', 'bullish', 'optimistic'},
     'llm_sentiment':          {'positive', 'bullish'},
     'news_bias':              {'bullish', 'positive'},
@@ -78,7 +79,8 @@ _BULLISH_VALUES = {
     'sector_tailwind':        {'strong', 'tailwind', 'bullish', 'positive'},
     'sector_rotation_signal': {'bullish', 'inflow', 'positive'},
     # FRED emits: 'confirmed', 'supportive', 'positive_growth'
-    'macro_confirmation':     {'confirmed', 'positive', 'supportive', 'positive_growth'},
+    'macro_confirmation':     {'confirmed', 'positive', 'supportive', 'positive_growth', 'improving'},
+    'inflation_environment':  {'low_inflation', 'target_inflation', 'disinflation'},  # low inflation = equity bullish
     # FRED central_bank_stance: 'restrictive'/'neutral_to_restrictive' = equity headwind (bearish),
     # 'accommodative'/'easy policy' = equity tailwind (bullish)
     'central_bank_stance':    {'accommodative', 'dovish', 'easy policy'},
@@ -110,7 +112,8 @@ _BEARISH_VALUES = {
     'causal_signal':          {'bearish', 'negative_shock', 'negative'},
     'sector_tailwind':        {'headwind', 'bearish', 'negative', 'weak'},
     'sector_rotation_signal': {'bearish', 'outflow', 'negative'},
-    'macro_confirmation':     {'unconfirmed', 'negative', 'adverse'},
+    'macro_confirmation':     {'unconfirmed', 'negative', 'adverse', 'no_data'},  # no_data = treat as unconfirmed
+    'inflation_environment':  {'high_inflation', 'above_target_inflation'},  # inflation headwind = equity bearish
     # FRED: restrictive/neutral_to_restrictive = rate headwind for equities
     'central_bank_stance':    {
         'restrictive', 'hawkish',

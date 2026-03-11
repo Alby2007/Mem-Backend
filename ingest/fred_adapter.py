@@ -210,17 +210,19 @@ class FREDAdapter(BaseIngestAdapter):
         inflation_label = None
         cpi = _get_latest_value(self._api_key, _SERIES['cpi_yoy'])
         if cpi is not None:
-            # CPIAUCSL is an index — approximate YoY from the level isn't
-            # ideal, but for regime classification it's sufficient.
-            # We store the raw index and classify.
-            # For proper YoY we'd need 12-month-ago value — keep it simple.
+            # CPIAUCSL is an index level; we classify direction for KB matching.
+            # CPI index 327+ ≈ 2.5–3%+ YoY → above_target_inflation (headwind for equities).
+            # Threshold: >320 = above_target, >310 = target, else low.
+            inflation_label = _classify_inflation(
+                3.0 if cpi > 320 else (2.0 if cpi > 310 else 1.0)
+            )
             atoms.append(RawAtom(
                 subject='us_macro',
                 predicate='inflation_environment',
-                object=f'CPI index: {cpi:.1f}',
+                object=inflation_label,
                 confidence=0.85,
                 source=source,
-                metadata={'series': _SERIES['cpi_yoy'], 'as_of': now_iso},
+                metadata={'series': _SERIES['cpi_yoy'], 'cpi_index': cpi, 'as_of': now_iso},
             ))
 
         # ── GDP Growth ────────────────────────────────────────────────────
