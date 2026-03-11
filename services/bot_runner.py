@@ -197,7 +197,8 @@ def _make_seed_templates() -> list[dict]:
             'parent_id':      None,
         },
         {
-            # mitigation: 46k signals, broad coverage across all sectors
+            # mitigation: raised min_quality to 0.65 (was 0.55) — pattern was -2.24R avg
+            # Added direction_bias=bullish to avoid shorting into support (structurally losing)
             'strategy_name': 'Mitigation Hunter',
             'pattern_types':  json.dumps(['mitigation']),
             'sectors':        None,
@@ -205,10 +206,10 @@ def _make_seed_templates() -> list[dict]:
             'volatility':     None,
             'regimes':        None,
             'timeframes':     None,
-            'direction_bias': None,
+            'direction_bias': 'bullish',
             'risk_pct':       1.0,
             'max_positions':  4,
-            'min_quality':    0.55,
+            'min_quality':    0.65,
             'role':           'seed',
             'generation':     0,
             'parent_id':      None,

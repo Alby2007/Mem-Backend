@@ -589,6 +589,11 @@ def open_position(user_id: str, data: dict) -> tuple[dict, int]:
         "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,100000.0,'GBP',?)",
         (user_id, now_iso)
     )
+    position_cost = entry * qty
+    conn.execute(
+        'UPDATE paper_account SET virtual_balance = virtual_balance - ? WHERE user_id=?',
+        (position_cost, user_id)
+    )
     cur = conn.execute(
         """INSERT INTO paper_positions
            (user_id, pattern_id, ticker, direction, entry_price, stop, t1, t2,
