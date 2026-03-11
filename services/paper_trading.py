@@ -382,7 +382,9 @@ def compute_pnl_r(direction: str, entry: float, exit_p: float, stop: float) -> f
 
 def get_account(user_id: str) -> dict:
     """Fetch paper account summary with live unrealised PnL."""
-    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=30)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=30000')
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(
         "INSERT OR IGNORE INTO paper_account (user_id, virtual_balance, currency, created_at) VALUES (?,100000.0,'GBP',?)",
