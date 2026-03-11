@@ -1,6 +1,14 @@
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 let dashInterval = null;
 
+function _fmtPrice(raw, ticker) {
+  if (raw == null) return '—';
+  const v = typeof raw === 'string' ? parseFloat(raw) : raw;
+  if (isNaN(v)) return '—';
+  const gbp = ticker && ticker.toUpperCase().endsWith('.L') ? v / 100 : v;
+  return '£' + gbp.toFixed(2);
+}
+
 async function loadDashboard() {
   clearInterval(dashInterval);
   await refreshDashboard();
@@ -248,13 +256,13 @@ async function loadDashboardPositions() {
       el.innerHTML = holdings.slice(0, 6).map(h => {
         const sym  = { GBP:'£', USD:'$', EUR:'€' }[h.currency || 'GBP'] || '£';
         const qty  = h.quantity ? h.quantity.toLocaleString() + ' shares' : '';
-        const cost = h.avg_cost != null ? `avg ${sym}${Number(h.avg_cost).toFixed(2)}` : '';
+        const cost = h.avg_cost != null ? `avg ${_fmtPrice(h.avg_cost, h.ticker)}` : '';
         const dir = (h.signal_direction || '').toLowerCase();
         const hasSig = !!h.signal_direction;
-        const sigClr = dir === 'bullish' ? 'var(--green)' : dir === 'bearish' ? 'var(--red)' : 'var(--muted)';
-        const conv = h.conviction_tier ? ` · ${h.conviction_tier}` : '';
-        const sigTxt = hasSig ? (dir.charAt(0).toUpperCase() + dir.slice(1)) + conv : 'No KB signal';
-        const price = h.last_price ? `${sym}${parseFloat(h.last_price).toFixed(2)}` : '';
+        const sigClr = dir === 'bullish' ? 'var(--green)' : dir === 'bearish' ? 'var(--red)' : h.conviction_tier === 'low' ? 'var(--muted)' : 'var(--muted)';
+        const conv = h.conviction_tier && hasSig ? ` · ${h.conviction_tier}` : '';
+        const sigTxt = hasSig ? (dir.charAt(0).toUpperCase() + dir.slice(1)) + conv : h.conviction_tier === 'low' ? 'Low conviction' : 'No KB signal';
+        const price = h.last_price ? _fmtPrice(h.last_price, h.ticker) : '';
         const upside = h.upside_pct ? ` · ${parseFloat(h.upside_pct) >= 0 ? '+' : ''}${parseFloat(h.upside_pct).toFixed(1)}% upside` : '';
         return `<div class="dsh-pos-item" onclick="navigate('portfolio')">
           <div class="dsh-pos-meta" style="width:72px;flex-shrink:0;">
@@ -281,7 +289,7 @@ async function loadDashboardPositions() {
       const pnlPct = p.unrealized_pnl_pct;
       const sym    = { GBP:'£', USD:'$', EUR:'€' }[p.currency || 'GBP'] || '';
       const qty    = p.quantity ? p.quantity.toLocaleString() + ' shares' : '';
-      const cost   = p.avg_cost != null ? `avg ${sym}${Number(p.avg_cost).toFixed(2)}` : '';
+      const cost   = p.avg_cost != null ? `avg ${_fmtPrice(p.avg_cost, p.ticker)}` : '';
       return `<div class="dsh-pos-item" onclick="navigate('portfolio')">
         <div class="dsh-pos-meta" style="width:72px;flex-shrink:0;">
           <div class="dsh-pos-ticker">${escHtml(p.ticker||'')}</div>

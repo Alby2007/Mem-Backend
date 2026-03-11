@@ -87,6 +87,60 @@ async def chat_history_turn(
     return result
 
 
+@router.get("/chat/atoms")
+async def get_chat_atoms(
+    user_id: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, le=500),
+    auth_user: Optional[str] = Depends(get_current_user_optional),
+):
+    uid = auth_user or user_id
+    if not uid:
+        raise HTTPException(401, detail="authentication required")
+    from knowledge.conversation_store import session_id_for_user
+    session_id = session_id_for_user(uid)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        total_row = conn.execute(
+            "SELECT COUNT(*) FROM conv_atoms WHERE session_id=?", (session_id,)
+        ).fetchone()
+        graduated_row = conn.execute(
+            "SELECT COUNT(*) FROM conv_atoms WHERE session_id=? AND graduated_at IS NOT NULL",
+            (session_id,),
+        ).fetchone()
+        rows = conn.execute(
+            """SELECT subject, predicate, object, atom_type, source,
+                      salience_score, source_weight, graduated_at
+               FROM conv_atoms
+               WHERE session_id=?
+               ORDER BY salience_score * source_weight DESC
+               LIMIT ?""",
+            (session_id, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+    total     = total_row[0] if total_row else 0
+    graduated = graduated_row[0] if graduated_row else 0
+    atoms = [
+        {
+            "subject":            r["subject"],
+            "predicate":          r["predicate"],
+            "object":             r["object"],
+            "atom_type":          r["atom_type"],
+            "source":             r["source"],
+            "effective_salience": round((r["salience_score"] or 0) * (r["source_weight"] or 1), 4),
+            "graduated":          r["graduated_at"] is not None,
+        }
+        for r in rows
+    ]
+    return {
+        "total_atoms":     total,
+        "graduated_to_kb": graduated,
+        "pending":         total - graduated,
+        "atoms":           atoms,
+    }
+
+
 _CHAT_DAILY_LIMITS: dict[str, int] = {
     'free':    5,
     'basic':   20,
