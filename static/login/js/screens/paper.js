@@ -88,7 +88,6 @@ async function _ptLoadFleet() {
     _ptFleetData = fleet;
     if (acct?.requires_upgrade || fleet?.requires_upgrade) { _ptShowUpsell(); return; }
     if (!acct || !acct.account_size_set) {
-      _ptOnboardingShown = false;
       _ptShowOnboarding();
       return;
     }
@@ -661,7 +660,7 @@ async function _ptShowOnboarding() {
       } catch(e) { /* best effort */ }
     }
     overlay.remove();
-    _ptOnboardingShown = false;  // allow _ptLoadFleet to reset it normally
+    if (!save) _ptOnboardingShown = false;  // dismissed — allow re-show next load
     _ptLoadFleet();
   };
   document.getElementById('pt-acct-confirm').addEventListener('click', () => close(true));
