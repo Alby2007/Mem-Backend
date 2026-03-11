@@ -240,12 +240,35 @@ const _TV_FX_MAP = {
   'EURUSD=X': 'FX:EURUSD',
 };
 
+const _TV_SUFFIX_MAP = {
+  '.L':  'LSE:',
+  '.TW': 'TWSE:',
+  '.T':  'TSE:',
+  '.KS': 'KRX:',
+  '.KQ': 'KOSDAQ:',
+  '.HK': 'HKEX:',
+  '.DE': 'XETR:',
+  '.PA': 'EURONEXT:',
+  '.AS': 'EURONEXT:',
+  '.MI': 'MIL:',
+  '.MC': 'BME:',
+  '.ST': 'OMX:',
+  '.OL': 'OSL:',
+  '.CO': 'OMXCOP:',
+  '.HE': 'OMXHEX:',
+  '.AX': 'ASX:',
+  '.TO': 'TSX:',
+  '.V':  'TSXV:',
+};
+
 function _tvSymbol(ticker) {
   if (!ticker) return ticker;
   const up = ticker.toUpperCase();
   if (_TV_INDEX_MAP[up]) return _TV_INDEX_MAP[up];
   if (_TV_FX_MAP[up])    return _TV_FX_MAP[up];
-  if (up.endsWith('.L')) return 'LSE:' + up.slice(0, -2);
+  for (const [suffix, prefix] of Object.entries(_TV_SUFFIX_MAP)) {
+    if (up.endsWith(suffix)) return prefix + up.slice(0, -suffix.length);
+  }
   return up;
 }
 

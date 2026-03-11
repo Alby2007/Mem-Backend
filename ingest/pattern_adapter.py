@@ -198,23 +198,58 @@ def _resample_4h(candles_1h: List[OHLCV]) -> List[OHLCV]:
 def _pattern_exists(conn: sqlite3.Connection, sig: PatternSignal) -> bool:
     """Return True if an identical pattern row already exists in pattern_signals.
 
-    Uses zone_high/zone_low (rounded to 2dp) as the identity key instead of
-    formed_at — the candle timestamp can drift due to DST / timezone offsets
-    between runs, producing different ISO strings for the same candle and
-    bypassing the dedup check.
+    Intentionally omits timeframe from the key — the same zone detected on
+    both 1h and 4h is a duplicate and the first/highest-quality row wins.
+    Uses zone_high/zone_low (rounded to 2dp) as the identity key.
     """
     zh = round(sig.zone_high, 2)
     zl = round(sig.zone_low, 2)
     row = conn.execute(
         """SELECT 1 FROM pattern_signals
            WHERE ticker = ? AND pattern_type = ? AND direction = ?
-             AND timeframe = ?
              AND ROUND(zone_high, 2) = ? AND ROUND(zone_low, 2) = ?
              AND status NOT IN ('filled', 'broken')
            LIMIT 1""",
-        (sig.ticker, sig.pattern_type, sig.direction, sig.timeframe, zh, zl),
+        (sig.ticker, sig.pattern_type, sig.direction, zh, zl),
     ).fetchone()
     return row is not None
+
+
+def _dedup_existing_patterns(conn: sqlite3.Connection) -> int:
+    """One-time cleanup: for each duplicate group (same ticker/type/direction/zone)
+    keep the row with the highest quality_score (oldest detected_at if tied),
+    expire the rest by setting status='broken'.
+    Returns number of rows expired.
+    """
+    rows = conn.execute(
+        """SELECT ticker, pattern_type, direction,
+                  ROUND(zone_high,2) as zh, ROUND(zone_low,2) as zl,
+                  COUNT(*) as cnt
+           FROM pattern_signals
+           WHERE status NOT IN ('filled','broken')
+           GROUP BY ticker, pattern_type, direction, zh, zl
+           HAVING cnt > 1"""
+    ).fetchall()
+    expired = 0
+    for (ticker, ptype, direction, zh, zl, _cnt) in rows:
+        candidates = conn.execute(
+            """SELECT id, quality_score, detected_at FROM pattern_signals
+               WHERE ticker=? AND pattern_type=? AND direction=?
+                 AND ROUND(zone_high,2)=? AND ROUND(zone_low,2)=?
+                 AND status NOT IN ('filled','broken')
+               ORDER BY quality_score DESC, detected_at ASC""",
+            (ticker, ptype, direction, zh, zl),
+        ).fetchall()
+        # Keep the first row (highest quality / oldest); expire the rest
+        for row_id, _qs, _dt in candidates[1:]:
+            conn.execute(
+                "UPDATE pattern_signals SET status='broken' WHERE id=?", (row_id,)
+            )
+            expired += 1
+    if expired:
+        conn.commit()
+        _logger.info('PatternAdapter dedup: expired %d duplicate pattern rows', expired)
+    return expired
 
 
 # ── Fill tracker ───────────────────────────────────────────────────────────────
@@ -348,6 +383,9 @@ class PatternAdapter:
             if not tickers:
                 _logger.info('PatternAdapter: no tickers found')
                 return 0
+
+            # One-time cleanup of pre-existing cross-timeframe duplicates
+            _dedup_existing_patterns(conn)
 
             # Update fill status for existing open patterns first
             _update_existing_patterns(self.db_path, conn)
