@@ -1131,6 +1131,13 @@ def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float)
     if lead_lag_boost and effective_quality >= 0.65:
         return True, f'lead-lag pre-signal: q={quality:.2f} leading ticker confirms {direction}{anomaly_note}', size_mult
 
+    # Cold-start fallback: no calibration yet (cal_hr=None) + quality ≥ 0.65.
+    # Bots accumulate calibration only after trades close; without this branch,
+    # uncalibrated cells with low KB conviction are permanently locked out.
+    # Half-size position (0.5×) to limit cold-start risk exposure.
+    if cal_hr is None and effective_quality >= 0.65:
+        return True, f'cold-start entry: q={quality:.2f} no cal yet (0.5× size){anomaly_note}', 0.5
+
     # Default: skip (conservative)
     return False, f'no strong signal: q={quality:.2f} conv={conviction} cal_hr={cal_hr}', 1.0
 
@@ -1374,12 +1381,19 @@ def _ai_run_inner(user_id: str) -> dict:
                              f'Price ${_live_price:.2f} already below stop ${stop_p:.2f} — would instant stop', now_iso)
                         )
                         continue
-                    if abs(_live_price - entry_p) / entry_p > 0.05:
+                    # Widen staleness threshold for volatile asset classes
+                    _ticker_upper = ticker.upper()
+                    _stale_pct = 0.08 if (
+                        _ticker_upper.endswith('=F') or _ticker_upper.endswith('=X')
+                        or '.KS' in _ticker_upper or '.HK' in _ticker_upper
+                        or 'BTC' in _ticker_upper or 'ETH' in _ticker_upper
+                    ) else 0.05
+                    if abs(_live_price - entry_p) / entry_p > _stale_pct:
                         skips += 1
                         conn.execute(
                             "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
                             (user_id, 'skip', ticker,
-                             f'Price ${_live_price:.2f} is >{5:.0f}% from zone midpoint ${entry_p:.2f} — stale pattern', now_iso)
+                             f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern', now_iso)
                         )
                         continue
                 else:  # bearish
@@ -1391,12 +1405,19 @@ def _ai_run_inner(user_id: str) -> dict:
                              f'Price ${_live_price:.2f} already above stop ${stop_p:.2f} — would instant stop', now_iso)
                         )
                         continue
-                    if abs(_live_price - entry_p) / entry_p > 0.05:
+                    # Widen staleness threshold for volatile asset classes
+                    _ticker_upper = ticker.upper()
+                    _stale_pct = 0.08 if (
+                        _ticker_upper.endswith('=F') or _ticker_upper.endswith('=X')
+                        or '.KS' in _ticker_upper or '.HK' in _ticker_upper
+                        or 'BTC' in _ticker_upper or 'ETH' in _ticker_upper
+                    ) else 0.05
+                    if abs(_live_price - entry_p) / entry_p > _stale_pct:
                         skips += 1
                         conn.execute(
                             "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
                             (user_id, 'skip', ticker,
-                             f'Price ${_live_price:.2f} is >{5:.0f}% from zone midpoint ${entry_p:.2f} — stale pattern', now_iso)
+                             f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern', now_iso)
                         )
                         continue
                 # Fix 3: Use live price as entry for realistic fills

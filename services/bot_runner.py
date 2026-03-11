@@ -746,6 +746,12 @@ class BotRunner:
                 _live_prices = fetch_live_prices([ticker])
                 _live_price = _live_prices.get(ticker)
                 if _live_price and _live_price > 0:
+                    _ticker_upper = ticker.upper()
+                    _stale_pct = 0.08 if (
+                        _ticker_upper.endswith('=F') or _ticker_upper.endswith('=X')
+                        or '.KS' in _ticker_upper or '.HK' in _ticker_upper
+                        or 'BTC' in _ticker_upper or 'ETH' in _ticker_upper
+                    ) else 0.05
                     if direction == 'bullish':
                         if _live_price <= stop_p:
                             skips += 1
@@ -756,12 +762,12 @@ class BotRunner:
                                  bot_id, now_iso)
                             )
                             continue
-                        if abs(_live_price - entry_p) / entry_p > 0.05:
+                        if abs(_live_price - entry_p) / entry_p > _stale_pct:
                             skips += 1
                             conn.execute(
                                 "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
                                 (user_id, 'skip', ticker,
-                                 f'Price ${_live_price:.2f} is >5% from zone midpoint ${entry_p:.2f} — stale pattern',
+                                 f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern',
                                  bot_id, now_iso)
                             )
                             continue
@@ -775,12 +781,12 @@ class BotRunner:
                                  bot_id, now_iso)
                             )
                             continue
-                        if abs(_live_price - entry_p) / entry_p > 0.05:
+                        if abs(_live_price - entry_p) / entry_p > _stale_pct:
                             skips += 1
                             conn.execute(
                                 "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
                                 (user_id, 'skip', ticker,
-                                 f'Price ${_live_price:.2f} is >5% from zone midpoint ${entry_p:.2f} — stale pattern',
+                                 f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern',
                                  bot_id, now_iso)
                             )
                             continue
