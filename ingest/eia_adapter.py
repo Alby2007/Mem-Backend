@@ -119,7 +119,8 @@ class EIAAdapter(BaseIngestAdapter):
         meta_base = {'fetched_at': now_iso, 'source_url': 'https://api.eia.gov/v2'}
 
         # ── WTI crude spot price ───────────────────────────────────────────────
-        wti_data = _eia_fetch(self._api_key, 'petroleum/pri/spt/data', {'product': ['EPCWTI']}, 2)
+        wti_data = (_eia_fetch(self._api_key, 'petroleum/pri/spt/data', {'product': ['EPCWTI']}, 2)
+                    or _eia_fetch(self._api_key, 'petroleum/pri/spt/data', {'series': ['RWTC']}, 2))
         wti_cur = wti_prev = None
         if wti_data and len(wti_data) >= 1:
             try:
@@ -137,7 +138,8 @@ class EIAAdapter(BaseIngestAdapter):
                 self._logger.warning('WTI parse error: %s', e)
 
         # ── Brent crude spot price ─────────────────────────────────────────────
-        brent_data = _eia_fetch(self._api_key, 'petroleum/pri/spt/data', {'product': ['EPBRENT']}, 2)
+        brent_data = (_eia_fetch(self._api_key, 'petroleum/pri/spt/data', {'product': ['EPBRENT']}, 2)
+                      or _eia_fetch(self._api_key, 'petroleum/pri/spt/data', {'series': ['RBRTE']}, 2))
         brent_cur = brent_prev = None
         if brent_data and len(brent_data) >= 1:
             try:
@@ -179,7 +181,8 @@ class EIAAdapter(BaseIngestAdapter):
             ))
 
         # ── US crude production ────────────────────────────────────────────────
-        prod_data = _eia_fetch(self._api_key, 'petroleum/crd/crpdn/agg/mbbl/a/data', {'duoarea': ['NUS']}, 2)
+        prod_data = (_eia_fetch(self._api_key, 'petroleum/crd/crpdn/agg/mbbl/a/data', {'duoarea': ['NUS']}, 2)
+                     or _eia_fetch(self._api_key, 'petroleum/crd/crpdn/data', {'duoarea': ['NUS'], 'process': ['FPD']}, 2))
         prod_cur = prod_prev = None
         if prod_data and len(prod_data) >= 1:
             try:
@@ -209,7 +212,8 @@ class EIAAdapter(BaseIngestAdapter):
             ))
 
         # ── Inventory level (vs 5-year average baseline) ──────────────────────
-        inv_data = _eia_fetch(self._api_key, 'petroleum/stoc/wstk/data', {'product': ['EPC0']}, 1)
+        inv_data = (_eia_fetch(self._api_key, 'petroleum/stoc/wstk/data', {'product': ['EPC0']}, 1)
+                    or _eia_fetch(self._api_key, 'petroleum/stoc/wstk/data', {'product': ['EPC0'], 'duoarea': ['NUS']}, 1))
         if inv_data and len(inv_data) >= 1:
             try:
                 inv_cur = float(inv_data[0].get('value', 0))
@@ -279,7 +283,8 @@ class EIAAdapter(BaseIngestAdapter):
                     ))
 
         # ── Henry Hub natural gas spot price ──────────────────────────────────
-        gas_data = _eia_fetch(self._api_key, 'natural-gas/pri/sum/data', {'process': ['PUS']}, 2)
+        gas_data = (_eia_fetch(self._api_key, 'natural-gas/pri/sum/data', {'process': ['PUS']}, 2)
+                    or _eia_fetch(self._api_key, 'natural-gas/pri/sum/data', {'series': ['RNGWHHD']}, 2))
         if gas_data and len(gas_data) >= 1:
             try:
                 gas_cur = float(gas_data[0].get('value', 0))

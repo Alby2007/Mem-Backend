@@ -31,12 +31,8 @@ from typing import List, Optional
 
 from ingest.base import BaseIngestAdapter, RawAtom
 
-try:
-    from fredapi import Fred
-    HAS_FREDAPI = True
-except ImportError:
-    HAS_FREDAPI = False
-    Fred = None  # type: ignore
+import json as _json
+import urllib.request as _urllib
 
 _logger = logging.getLogger(__name__)
 
@@ -114,17 +110,36 @@ class _FredAuthError(Exception):
     """Raised when FRED returns a 400 invalid-key response."""
 
 
-def _get_latest_value(fred: 'Fred', series_id: str) -> Optional[float]:
-    """Fetch the most recent non-null value from a FRED series."""
+def _get_latest_value(api_key: str, series_id: str) -> Optional[float]:
+    """Fetch the most recent non-null observation from a FRED series via direct HTTP."""
+    url = (
+        f'https://api.stlouisfed.org/fred/series/observations'
+        f'?series_id={series_id}'
+        f'&api_key={api_key}'
+        f'&file_type=json'
+        f'&sort_order=desc'
+        f'&limit=10'
+        f'&observation_start=2020-01-01'
+    )
     try:
-        data = fred.get_series(series_id, observation_start='2020-01-01')
-        if data is not None and len(data) > 0:
-            latest = data.dropna().iloc[-1]
-            return float(latest)
+        req = _urllib.Request(url, headers={'User-Agent': 'TradingGalaxyKB/1.0'})
+        with _urllib.urlopen(req, timeout=15) as resp:
+            body = resp.read()
+        data = _json.loads(body)
+        if 'error_code' in data:
+            msg = data.get('error_message', str(data))
+            if data.get('error_code') in (400, 401, 403) or 'not registered' in msg:
+                raise _FredAuthError(msg)
+            _logger.warning('FRED API error for %s: %s', series_id, msg)
+            return None
+        observations = data.get('observations', [])
+        for obs in observations:
+            val = obs.get('value', '.')
+            if val != '.':
+                return float(val)
+    except _FredAuthError:
+        raise
     except Exception as e:
-        msg = str(e)
-        if 'not registered' in msg or ('400' in msg and 'api_key' in msg):
-            raise _FredAuthError(msg)
         _logger.warning('Failed to fetch FRED series %s: %s', series_id, e)
     return None
 
@@ -143,12 +158,6 @@ class FREDAdapter(BaseIngestAdapter):
         self._api_key_invalid = False  # set True after first 400 to suppress repeat logs
 
     def fetch(self) -> List[RawAtom]:
-        if not HAS_FREDAPI:
-            self._logger.error(
-                'fredapi not installed — pip install fredapi'
-            )
-            return []
-
         if not self._api_key:
             self._logger.warning(
                 'FRED_API_KEY not set — skipping FRED adapter. '
@@ -164,19 +173,18 @@ class FREDAdapter(BaseIngestAdapter):
         except _FredAuthError as e:
             self._api_key_invalid = True
             self._logger.error(
-                'FRED API key rejected (400 Bad Request) — disabling FRED adapter. '
+                'FRED API key rejected — disabling FRED adapter. '
                 'Re-register at https://fred.stlouisfed.org/docs/api/api_key.html. Error: %s', e
             )
             return []
 
     def _fetch_atoms(self) -> List[RawAtom]:
-        fred = Fred(api_key=self._api_key)
         atoms: List[RawAtom] = []
         now_iso = datetime.now(timezone.utc).isoformat()
         source = 'macro_data_fred'
 
         # ── Fed Funds Rate ────────────────────────────────────────────────
-        fed_funds = _get_latest_value(fred, _SERIES['fed_funds'])
+        fed_funds = _get_latest_value(self._api_key, _SERIES['fed_funds'])
         stance = None
         if fed_funds is not None:
             atoms.append(RawAtom(
@@ -200,7 +208,7 @@ class FREDAdapter(BaseIngestAdapter):
 
         # ── CPI (inflation) ──────────────────────────────────────────────
         inflation_label = None
-        cpi = _get_latest_value(fred, _SERIES['cpi_yoy'])
+        cpi = _get_latest_value(self._api_key, _SERIES['cpi_yoy'])
         if cpi is not None:
             # CPIAUCSL is an index — approximate YoY from the level isn't
             # ideal, but for regime classification it's sufficient.
@@ -217,7 +225,7 @@ class FREDAdapter(BaseIngestAdapter):
 
         # ── GDP Growth ────────────────────────────────────────────────────
         growth_label = None
-        gdp = _get_latest_value(fred, _SERIES['gdp_growth'])
+        gdp = _get_latest_value(self._api_key, _SERIES['gdp_growth'])
         if gdp is not None:
             growth_label = _classify_growth(gdp)
             atoms.append(RawAtom(
@@ -230,7 +238,7 @@ class FREDAdapter(BaseIngestAdapter):
             ))
 
         # ── Unemployment ──────────────────────────────────────────────────
-        unemp = _get_latest_value(fred, _SERIES['unemployment'])
+        unemp = _get_latest_value(self._api_key, _SERIES['unemployment'])
         if unemp is not None:
             atoms.append(RawAtom(
                 subject='us_labor',
@@ -242,8 +250,8 @@ class FREDAdapter(BaseIngestAdapter):
             ))
 
         # ── Yield Curve (10Y - 2Y spread) ────────────────────────────────
-        y10 = _get_latest_value(fred, _SERIES['yield_10y'])
-        y2 = _get_latest_value(fred, _SERIES['yield_2y'])
+        y10 = _get_latest_value(self._api_key, _SERIES['yield_10y'])
+        y2 = _get_latest_value(self._api_key, _SERIES['yield_2y'])
         if y10 is not None and y2 is not None:
             spread_bps = round((y10 - y2) * 100)
             curve_state = 'inverted' if spread_bps < 0 else 'normal'
@@ -260,9 +268,9 @@ class FREDAdapter(BaseIngestAdapter):
             ))
 
         # ── TIPS real yield + breakeven inflation ─────────────────────────
-        tips_10y = _get_latest_value(fred, _SERIES['tips_10y'])
-        breakeven_10y = _get_latest_value(fred, _SERIES['breakeven_10y'])
-        breakeven_5y  = _get_latest_value(fred, _SERIES['breakeven_5y'])
+        tips_10y = _get_latest_value(self._api_key, _SERIES['tips_10y'])
+        breakeven_10y = _get_latest_value(self._api_key, _SERIES['breakeven_10y'])
+        breakeven_5y  = _get_latest_value(self._api_key, _SERIES['breakeven_5y'])
 
         if tips_10y is not None:
             real_yield_regime = (

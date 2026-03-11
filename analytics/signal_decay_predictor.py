@@ -169,10 +169,10 @@ class SignalDecayPredictor:
     def _get_active_patterns(self, conn: sqlite3.Connection) -> List[dict]:
         """Return all active (not filled/broken) pattern signals."""
         rows = conn.execute(
-            """SELECT id, ticker, pattern_type, direction, created_at, quality_score
+            """SELECT id, ticker, pattern_type, direction, formed_at AS created_at, quality_score
                FROM pattern_signals
                WHERE status NOT IN ('filled', 'broken', 'expired')
-               ORDER BY created_at ASC"""
+               ORDER BY formed_at ASC"""
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -201,7 +201,7 @@ class SignalDecayPredictor:
             for pat in patterns:
                 ticker = pat['ticker']
                 pattern_type = (pat.get('pattern_type') or '').lower()
-                created_at_str = pat.get('created_at', '')
+                created_at_str = pat.get('created_at') or pat.get('formed_at') or ''
 
                 try:
                     created_at = datetime.fromisoformat(
@@ -214,7 +214,7 @@ class SignalDecayPredictor:
                 expected_h = self._expected_hours(conn, ticker, pattern_type, vol_regime)
                 decay_pct  = min(round(hours_open / expected_h, 3), 1.0)
                 hours_remaining = max(round(expected_h - hours_open, 1), 0.0)
-                expiry_dt  = created_at + timedelta(hours=expected_h)
+                expiry_dt  = created_at + timedelta(hours=expected_h)  # noqa: F841
                 expiry_iso = expiry_dt.isoformat()
 
                 processed += 1
