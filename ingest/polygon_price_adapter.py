@@ -64,22 +64,58 @@ _logger = logging.getLogger(__name__)
 _POLYGON_BASE = 'https://api.polygon.io'
 
 # ── US watchlist tickers handled by this adapter ──────────────────────────────
+# Dynamically loaded from universe_tickers on init.
 # These are removed from yfinance's _bulk_download_prices() and
 # _parallel_info_fetch() to avoid duplicate atoms.
 # _cache_ohlcv_candles() in yfinance still runs for these (OHLCV history).
-US_POLYGON_TICKERS: Set[str] = {
-    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'MA',
-    'ARKK', 'COIN', 'HOOD', 'MSTR', 'PLTR',
-    'SPY', 'HYG', 'TLT', 'GLD',
+
+# Known ETF tickers — excluded from financials (Pass 3)
+_ETF_TICKERS: Set[str] = {
+    'SPY', 'QQQ', 'DIA', 'IWM', 'HYG', 'TLT', 'GLD', 'GDX', 'XBI', 'SMH',
+    'ARKK', 'EEM', 'EFA', 'VWO', 'IBIT', 'ETHA', 'GBTC',
     'XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLC', 'XLY', 'XLP', 'XLU', 'XLRE', 'XLB',
 }
 
-# Tickers in US_POLYGON_TICKERS that are pure equities (not ETFs/funds)
-# Only these get financials (Pass 3)
-_US_EQUITY_TICKERS: Set[str] = {
-    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'MA',
-    'COIN', 'HOOD', 'MSTR', 'PLTR',
-}
+
+def _load_us_tickers(db_path: Optional[str] = None) -> Set[str]:
+    """Load all US equity tickers from universe_tickers.
+    US tickers = no '.' suffix, no '^' prefix, no '=' in name."""
+    if not db_path:
+        try:
+            import extensions as ext
+            db_path = getattr(ext, 'DB_PATH', None)
+        except Exception:
+            pass
+    if not db_path:
+        return set()
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        rows = conn.execute(
+            "SELECT ticker FROM universe_tickers "
+            "WHERE ticker NOT LIKE '%.%' AND ticker NOT LIKE '^%' AND ticker NOT LIKE '%=%'"
+        ).fetchall()
+        conn.close()
+        return {r[0] for r in rows}
+    except Exception as exc:
+        _logger.warning('[polygon_price] failed to load US tickers: %s', exc)
+        return set()
+
+
+# Module-level set for yfinance_adapter to import
+# Populated lazily on first access
+_us_polygon_cache: Optional[Set[str]] = None
+
+
+def get_us_polygon_tickers(db_path: Optional[str] = None) -> Set[str]:
+    """Get the set of US tickers handled by Polygon. Cached after first call."""
+    global _us_polygon_cache
+    if _us_polygon_cache is None:
+        _us_polygon_cache = _load_us_tickers(db_path)
+    return _us_polygon_cache
+
+
+# Backwards compat: yfinance imports this name
+US_POLYGON_TICKERS = _load_us_tickers()
 
 # Sleep between per-ticker calls to stay within 5 req/min on Starter plan
 _RATE_SLEEP = 12.0
@@ -122,7 +158,11 @@ class PolygonPriceAdapter(BaseIngestAdapter):
     ):
         super().__init__(name='polygon_price')
         self._db_path = db_path
-        self._tickers = tickers if tickers is not None else set(US_POLYGON_TICKERS)
+        self._tickers = tickers if tickers is not None else _load_us_tickers(db_path)
+        self._equity_tickers = self._tickers - _ETF_TICKERS  # Equities only for financials
+        _logger.info('[polygon_price] loaded %d US tickers (%d equities, %d ETFs)',
+                     len(self._tickers), len(self._equity_tickers),
+                     len(self._tickers) - len(self._equity_tickers))
         # In-memory last-run timestamps for each slow pass
         self._last_run: Dict[str, Optional[datetime]] = {
             'details':    None,
