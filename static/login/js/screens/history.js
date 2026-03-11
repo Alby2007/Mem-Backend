@@ -13,6 +13,7 @@ async function loadHistory() {
     const entries = d?.entries || [];
     document.getElementById('hist-turn-count').textContent =
       `${d?.total ?? entries.length} turn${d?.total !== 1 ? 's' : ''}`;
+    loadHistoryStats();
     if (!entries.length) {
       tl.innerHTML = '<div class="empty text-sm text-muted" style="padding:24px;">No conversation history yet.<br>Start chatting to build your history.</div>';
       return;
@@ -111,6 +112,26 @@ async function loadHistoryAtoms() {
   } catch(e) {
     stats.innerHTML = `<span style="color:var(--red)">${escHtml(e.message)}</span>`;
   }
+}
+
+async function loadHistoryStats() {
+  if (!state.userId) return;
+  try {
+    const d = await apiFetch(`/chat/stats?user_id=${state.userId}`);
+    if (!d) return;
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('hst-turns',   d.total_turns   ?? '—');
+    set('hst-atoms',   d.total_atoms   ?? '—');
+    set('hst-grad',    d.graduated     ?? '—');
+    set('hst-pending', d.pending       ?? '—');
+    set('hst-7d',      d.last_7d       ?? '—');
+    const subjEl = document.getElementById('hst-subjects');
+    if (subjEl && d.top_subjects?.length) {
+      subjEl.innerHTML = 'Top: ' + d.top_subjects.slice(0, 4)
+        .map(s => `<span class="mono-amber" style="background:rgba(245,158,11,0.08);padding:1px 5px;border-radius:4px;margin-left:4px;">${escHtml(s.subject)}</span>`)
+        .join('');
+    }
+  } catch { /* stats non-critical, fail silently */ }
 }
 
 document.getElementById('hist-search-btn').addEventListener('click', loadHistory);

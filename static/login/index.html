@@ -875,6 +875,13 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
     <div id="kb-panel"><div class="kb-title">KB Intelligence</div><div style="color:var(--muted);font-size:12px;">Select a symbol to load KB data.</div></div>
   </div>
   <div id="mkt-sector-pulse" class="mkt-sector-pulse-row" style="display:none;"></div>
+  <div id="mkt-opportunities" style="margin-top:18px;">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;">
+      High Conviction Opportunities
+      <span id="mkt-regime-badge" style="margin-left:8px;font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;background:rgba(245,158,11,0.12);color:var(--accent);text-transform:capitalize;"></span>
+    </div>
+    <div id="mkt-opp-list"></div>
+  </div>
 </div>
 
 <!-- VISUALISER ────────────────────────────────────────────────────── -->
@@ -912,7 +919,15 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
     <button class="btn btn-outline btn-sm" id="hist-search-btn">Search</button>
     <button class="btn btn-ghost btn-sm" id="hist-atoms-btn" title="View extracted signals">⚛ Signals</button>
   </div>
-  <div style="display:grid;grid-template-columns:340px 1fr;gap:14px;height:calc(100vh - var(--topbar-h) - 110px);">
+  <div id="hist-stats-bar" style="display:flex;gap:16px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;margin-bottom:10px;font-size:11px;color:var(--muted);flex-wrap:wrap;">
+    <span>Turns: <strong id="hst-turns" class="mono-amber">—</strong></span>
+    <span>Atoms: <strong id="hst-atoms" class="mono-amber">—</strong></span>
+    <span>Graduated: <strong id="hst-grad" style="color:var(--green);">—</strong></span>
+    <span>Pending: <strong id="hst-pending" class="mono-amber">—</strong></span>
+    <span>Last 7d: <strong id="hst-7d" class="mono-amber">—</strong></span>
+    <span id="hst-subjects" style="margin-left:auto;"></span>
+  </div>
+  <div style="display:grid;grid-template-columns:340px 1fr;gap:14px;height:calc(100vh - var(--topbar-h) - 150px);">
     <!-- Timeline list -->
     <div style="overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);">
       <div id="hist-timeline"><div class="empty"><div class="spinner"></div></div></div>

@@ -432,6 +432,44 @@ window._mktSectorClick = function(sector) {
   navigate('visualiser');
 };
 
+async function loadOpportunities() {
+  const el = document.getElementById('mkt-opp-list');
+  const badgeEl = document.getElementById('mkt-regime-badge');
+  if (!el) return;
+  el.innerHTML = '<div class="empty"><div class="spinner"></div></div>';
+  try {
+    const d = await apiFetch('/opportunities');
+    const opps = d?.opportunities || [];
+    const regime = d?.regime || '';
+    if (badgeEl && regime && regime !== 'no_data') {
+      badgeEl.textContent = regime.replace(/_/g, ' ');
+    }
+    if (!opps.length) {
+      el.innerHTML = '<div class="text-muted text-sm" style="padding:12px 0;">No high-conviction setups detected.</div>';
+      return;
+    }
+    el.innerHTML = opps.slice(0, 10).map(o => {
+      const cs      = o.conviction_score != null ? Math.round(o.conviction_score * 100) : null;
+      const aligned = o.regime_aligned;
+      const preview = o.thesis_preview || '';
+      const sector  = (o.sector || '').replace(/_/g, ' ');
+      const upside  = o.upside_pct != null ? `${parseFloat(o.upside_pct) >= 0 ? '+' : ''}${parseFloat(o.upside_pct).toFixed(1)}%` : null;
+      return `<div class="mkt-opp-card" onclick="_loadMarketSymbol('${escHtml(o.ticker)}')"> 
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <span class="mono-amber" style="font-size:13px;font-weight:700;">${escHtml(o.ticker)}</span>
+          ${cs != null ? `<span style="font-size:10px;font-family:var(--mono);color:var(--muted);">CV ${cs}%</span>` : ''}
+          ${aligned ? `<span style="font-size:9px;padding:1px 5px;border-radius:8px;background:rgba(34,197,94,0.12);color:var(--green);">regime ✓</span>` : ''}
+          ${upside ? `<span style="font-size:10px;color:${parseFloat(o.upside_pct)>=0?'var(--green)':'var(--red)'};margin-left:auto;">${upside} upside</span>` : ''}
+        </div>
+        ${preview ? `<div style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(preview)}</div>` : ''}
+        ${sector ? `<div style="font-size:10px;color:var(--muted);margin-top:2px;text-transform:capitalize;">${escHtml(sector)}</div>` : ''}
+      </div>`;
+    }).join('');
+  } catch(e) {
+    el.innerHTML = `<div style="color:var(--red);font-size:12px;">${escHtml(e.message)}</div>`;
+  }
+}
+
 function initMarketsScreen() {
   if (!_marketsInited) {
     document.querySelectorAll('.mcat-tab').forEach(tab => {
@@ -457,5 +495,6 @@ function initMarketsScreen() {
   _renderChips(_marketsCat);
   _loadMarketSymbol(_tvCurrentSym, _tvCurrentKb);
   _loadSectorPulse();
+  loadOpportunities();
 }
 

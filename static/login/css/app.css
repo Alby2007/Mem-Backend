@@ -1456,6 +1456,8 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .ticker-ac-match { color: #f59e0b; font-weight: 700; }
 
 /* ── F3: Markets Sector Pulse ── */
+.mkt-opp-card { padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; background: var(--surface); cursor: pointer; transition: background .12s; }
+.mkt-opp-card:hover { background: var(--card); }
 .mkt-sector-pulse-row { display: flex; gap: 10px; overflow-x: auto; padding: 12px 0 4px; scrollbar-width: thin; }
 .mkt-sector-pulse-row::-webkit-scrollbar { height: 4px; }
 .mkt-sector-pulse-row::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
