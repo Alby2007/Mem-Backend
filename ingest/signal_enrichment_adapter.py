@@ -953,15 +953,31 @@ def _classify_market_regime(
     str — one of: risk_on_expansion | risk_off_contraction |
                   stagflation | recovery | no_data
     """
-    # Build extended proxy signals (macro_signals has SPY/HYG/TLT; add GLD/USD)
-    spy_sig = macro_signals.get(_MARKET_PROXY, '')
-    hyg_sig = macro_signals.get(_CREDIT_PROXY, '')
-    tlt_sig = macro_signals.get(_RATES_PROXY, '')
-    gld_sig = ticker_atoms.get(_GOLD_PROXY, {}).get('signal_direction', '')
-    uup_sig = ticker_atoms.get(_USD_PROXY,  {}).get('signal_direction', '')
+    def _sig_from_atoms(proxy: str) -> str:
+        """Get signal direction, falling back to conviction_tier derivation."""
+        atoms = ticker_atoms.get(proxy, {})
+        sig = atoms.get('signal_direction', '')
+        if sig:
+            return sig
+        ct = atoms.get('conviction_tier', '')
+        if ct in ('high', 'confirmed', 'strong', 'medium'):
+            return 'bullish'
+        if ct in ('avoid',):
+            return 'bearish'
+        return ''
+
+    # Build extended proxy signals — prefer signal_direction, fall back to conviction_tier
+    spy_sig = macro_signals.get(_MARKET_PROXY) or _sig_from_atoms(_MARKET_PROXY)
+    hyg_sig = macro_signals.get(_CREDIT_PROXY) or _sig_from_atoms(_CREDIT_PROXY)
+    tlt_sig = macro_signals.get(_RATES_PROXY)  or _sig_from_atoms(_RATES_PROXY)
+    gld_sig = _sig_from_atoms(_GOLD_PROXY)
+    uup_sig = _sig_from_atoms(_USD_PROXY)
 
     if not spy_sig and not hyg_sig:
-        return _REGIME_NO_DATA
+        # Only true no_data if conviction_tier also absent for both proxies
+        if not ticker_atoms.get(_MARKET_PROXY) and not ticker_atoms.get(_CREDIT_PROXY):
+            return _REGIME_NO_DATA
+        # Partial data — fall through to classification
 
     spy_bull = spy_sig in _BULLISH_SIGNALS
     spy_bear = spy_sig in _BEARISH_SIGNALS

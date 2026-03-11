@@ -188,6 +188,19 @@ def build_portfolio_summary(db_path: str) -> dict:
             'macro_confirmation': td.get('macro_confirmation'),
         })
 
+    # Read current market regime atom (written by SignalEnrichmentAdapter)
+    macro_regime = None
+    try:
+        conn2 = sqlite3.connect(db_path, timeout=5)
+        row = conn2.execute(
+            "SELECT object FROM facts WHERE subject='market' AND predicate='market_regime' "
+            "ORDER BY confidence DESC, timestamp DESC LIMIT 1"
+        ).fetchone()
+        conn2.close()
+        macro_regime = row[0] if row else None
+    except Exception:
+        pass
+
     return {
         'as_of':          now_iso,
         'long_book':      long_book_summary,
@@ -196,4 +209,5 @@ def build_portfolio_summary(db_path: str) -> dict:
         'macro_alignment': macro_counts,
         'top_conviction': top_conviction,
         'all_tickers':    all_tickers_out,
+        'macro_regime':   macro_regime,
     }

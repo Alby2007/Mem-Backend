@@ -16,6 +16,20 @@ import extensions as ext
 router = APIRouter()
 
 
+def _get_market_regime(db_path: str):
+    """Read the current market_regime atom directly from DB (subject='market')."""
+    try:
+        conn = sqlite3.connect(db_path, timeout=5)
+        row = conn.execute(
+            "SELECT object FROM facts WHERE subject='market' AND predicate='market_regime' "
+            "ORDER BY confidence DESC, timestamp DESC LIMIT 1"
+        ).fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
 @router.get("/markets/chart", response_class=HTMLResponse)
 async def markets_chart(
     sym: str = "AAPL", symbol: str = None, interval: str = "D",
@@ -439,7 +453,7 @@ async def markets_overview():
             }
             for t in summary.get("top_conviction", [])[:3]
         ]
-        result["regime"]        = summary.get("macro_regime")
+        result["regime"]        = _get_market_regime(ext.DB_PATH)
         result["macro_summary"] = summary.get("macro_summary")
     except Exception:
         result["top_conviction"] = []
@@ -459,6 +473,20 @@ async def markets_overview():
             result["kb_stress"] = ext.compute_stress(atoms, [], None).composite_stress
         except Exception:
             result["kb_stress"] = None
+
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+        r_atoms = dict(conn.execute(
+            "SELECT predicate, object FROM facts WHERE subject='market' "
+            "AND predicate IN ('volatility_regime','sector_lead','regime_confidence') "
+            "ORDER BY confidence DESC"
+        ).fetchall())
+        conn.close()
+        result["regime_volatility"]    = r_atoms.get("volatility_regime")
+        result["regime_sector_lead"]   = r_atoms.get("sector_lead")
+        result["regime_kb_confidence"] = r_atoms.get("regime_confidence")
+    except Exception:
+        result["regime_volatility"] = result["regime_sector_lead"] = result["regime_kb_confidence"] = None
 
     try:
         result["unread_alerts"] = len(ext.get_alerts(ext.DB_PATH, unseen_only=True, limit=500))
@@ -544,7 +572,7 @@ async def opportunities():
         return {
             "opportunities": summary.get("top_conviction", []),
             "count":         len(summary.get("top_conviction", [])),
-            "regime":        summary.get("macro_regime"),
+            "regime":        _get_market_regime(ext.DB_PATH),
         }
     except Exception as e:
         raise HTTPException(500, detail=str(e))
