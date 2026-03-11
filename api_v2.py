@@ -27,15 +27,17 @@ _INGEST_BATCH    = int(os.environ.get('INGEST_BATCH_SIZE', '15'))          # ite
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    # Debug: Write to a file to verify execution
     try:
+        # Debug: Write to a file to verify execution
         with open('/tmp/lifespan_debug.log', 'w') as f:
             f.write('Lifespan started at: ' + str(datetime.now()))
-    except:
-        pass
-    
-    print('=== LIFESPAN STARTING ===')
-    _logger.info('=== LIFESPAN STARTING ===')
+        
+        print('=== LIFESPAN STARTING ===')
+        _logger.info('=== LIFESPAN STARTING ===')
+    except Exception as e:
+        print(f'LIFESPAN STARTUP ERROR: {e}')
+        _logger.error('LIFESPAN STARTUP ERROR: %s', e)
+        raise
     
     # Simple test - try to initialize PredictionLedger here
     try:
