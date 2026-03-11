@@ -963,7 +963,7 @@ def _classify_market_regime(
         ct = atoms.get('conviction_tier', '')
         if ct in ('high', 'confirmed', 'strong', 'medium'):
             return 'bullish'
-        if ct in ('avoid',):
+        if ct in ('avoid', 'low'):  # low = weak/not-tradeable = bearish lean for regime
             return 'bearish'
         return ''
 
