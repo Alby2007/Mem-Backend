@@ -422,17 +422,14 @@ _ALLOWED_ORIGINS = frozenset([
 _CSRF_SAFE_METHODS = frozenset(["GET", "HEAD", "OPTIONS"])
 
 
+# Module-level startup - run when app is imported
+print('=== MODULE LEVEL STARTUP ===')
+with open('/tmp/module_startup.log', 'w') as f:
+    f.write('Module startup worked!')
+
 def create_fastapi_app() -> FastAPI:
-    # Test: Create a simple lifespan first
-    @asynccontextmanager
-    async def test_lifespan(app: FastAPI):
-        print('=== TEST LIFESPAN STARTING ===')
-        with open('/tmp/test_lifespan.log', 'w') as f:
-            f.write('Test lifespan worked!')
-        yield
-        print('=== TEST LIFESPAN SHUTDOWN ===')
-    
-    app = FastAPI(title="Trading Galaxy API", version="2.0", lifespan=test_lifespan)
+    # No lifespan for now - use module-level startup
+    app = FastAPI(title="Trading Galaxy API", version="2.0")
 
     @app.middleware("http")
     async def csrf_origin_check(request: Request, call_next):
