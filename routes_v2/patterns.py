@@ -181,11 +181,12 @@ async def patterns_live(
             min_quality=min_quality,
             limit=limit,
         )
-        # Filter out stale patterns whose age exceeds their timeframe's expiry window.
-        # This handles the case where yfinance is blocked and status updates haven't run.
+        # Filter out stale patterns whose zone age exceeds the timeframe's expiry window.
+        # Use formed_at (when the zone was created on the chart) — not detected_at.
+        # A pattern formed 74d ago is stale regardless of when the system detected it.
         now = datetime.now(timezone.utc)
         def _is_fresh(p: dict) -> bool:
-            ts = p.get("detected_at") or p.get("formed_at")
+            ts = p.get("formed_at") or p.get("detected_at")
             if not ts:
                 return True
             try:
