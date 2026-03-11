@@ -145,6 +145,7 @@ def update_calibration(
     db_path: str,
     source: str = 'user',
     bot_id: Optional[str] = None,
+    conn=None,
 ) -> None:
     """
     Update the calibration row for (ticker, pattern_type, timeframe, market_regime)
@@ -159,9 +160,12 @@ def update_calibration(
 
     now = datetime.now(timezone.utc).isoformat()
     ticker = ticker.upper()
-    conn = sqlite3.connect(db_path, timeout=10)
+    _owns_conn = conn is None
+    if _owns_conn:
+        conn = sqlite3.connect(db_path, timeout=10)
     try:
-        _ensure_table(conn)
+        if _owns_conn:
+            _ensure_table(conn)
 
         # Fetch existing row
         row = conn.execute(
@@ -230,7 +234,8 @@ def update_calibration(
                      AND (market_regime=? OR (market_regime IS NULL AND ? IS NULL))""",
                 (ticker, pattern_type, timeframe, market_regime, market_regime),
             )
-        conn.commit()
+        if _owns_conn:
+            conn.commit()
         # Write observation-level log — never let this break the main path
         try:
             conn.execute(
@@ -241,11 +246,13 @@ def update_calibration(
                 (ticker, pattern_type, timeframe, market_regime,
                  outcome, source, bot_id, now),
             )
-            conn.commit()
+            if _owns_conn:
+                conn.commit()
         except Exception:
             pass
     finally:
-        conn.close()
+        if _owns_conn:
+            conn.close()
 
 
 # ── get_global_baseline ───────────────────────────────────────────────────────

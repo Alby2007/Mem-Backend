@@ -576,6 +576,14 @@ class BotRunner:
                 (bot_id, _cutoff)
             ).fetchall()}
 
+            # Fix 2: 4-hour cooldown after ANY close (not just stops)
+            _recent_cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+            recently_traded = {r['ticker'] for r in conn.execute(
+                "SELECT DISTINCT ticker FROM paper_positions "
+                "WHERE bot_id=? AND status != 'open' AND closed_at > ?",
+                (bot_id, _recent_cutoff)
+            ).fetchall()}
+
             # Build filtered candidate query
             filter_sql, filter_params = self._build_filtered_query(config)
             quality_floor = max(min_qual - 0.05, 0.55)
@@ -633,9 +641,20 @@ class BotRunner:
             else:
                 reg_list = None
 
-            risk_per_trade = balance * risk_pct / 100.0
-            max_pos_value  = balance * 0.20
-            remaining_cash = balance
+            # Fix 3: Equity-based risk sizing
+            # Compute total equity (cash + open position cost basis)
+            open_pos_rows = conn.execute(
+                "SELECT entry_price, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
+                (bot_id,)
+            ).fetchall()
+            open_value = sum(float(r[0]) * float(r[1]) for r in open_pos_rows)
+            equity = balance + open_value
+
+            # Fix 1: Use initial_balance for consistent caps (not depleted virtual_balance)
+            initial = float(config['initial_balance'])
+            risk_per_trade = equity * risk_pct / 100.0  # Fix 3: equity-based risk
+            max_pos_value  = initial * 0.15  # Fix 1: Tighter 15% of initial per position (was 20% of current cash)
+            remaining_cash = balance  # still use free cash for affordability checks
             entries = 0
             skips   = 0
 
@@ -655,6 +674,10 @@ class BotRunner:
                 if entries >= _PAPER_MAX_NEW_PER_SCAN:
                     break
                 if ticker in open_tickers or ticker in cooled:
+                    skips += 1
+                    continue
+                # Fix 2: Per-ticker concentration check
+                if ticker in recently_traded:
                     skips += 1
                     continue
                 if not _is_market_open(ticker):
@@ -905,7 +928,8 @@ class BotRunner:
                             (pos['pattern_id'],)
                         ).fetchone()
                         if pat:
-                            outcome = 'hit_t2' if new_status == 't2_hit' else 'stopped_out'
+                            _outcome_map = {'t1_hit': 'hit_t1', 't2_hit': 'hit_t2', 'stopped_out': 'stopped_out'}
+                            outcome = _outcome_map.get(new_status, 'stopped_out')
                             update_calibration(
                                 ticker=ticker,
                                 pattern_type=(pat[0] or 'unknown'),
@@ -915,6 +939,7 @@ class BotRunner:
                                 db_path=self.db_path,
                                 source='paper_bot',
                                 bot_id=bot_id,
+                                conn=conn,
                             )
                     except Exception as _ce:
                         _logger.debug('bot calibration update failed %s: %s', ticker, _ce)
@@ -1008,6 +1033,7 @@ class BotRunner:
                     'equity': equity,
                     'return_pct': return_pct,
                     'sparkline': [float(r['equity_value']) for r in equity_rows],
+                    'ev': 0.0,  # Fix 4: Expected value
                 }
 
             pnls = [float(r['pnl_r']) for r in closed]
@@ -1016,7 +1042,12 @@ class BotRunner:
             avg_r      = sum(pnls) / total
             gross_pos  = sum(p for p in pnls if p > 0) or 0.0
             gross_neg  = abs(sum(p for p in pnls if p < 0)) or 1e-9
-            profit_factor = gross_pos / gross_neg
+            profit_factor = min(gross_pos / gross_neg, 99.9)  # Fix 5: Cap profit factor display
+            
+            # Fix 4: Add EV (expected value) to bot performance display
+            avg_win = sum(p for p in pnls if p > 0) / max(wins, 1)
+            avg_loss = abs(sum(p for p in pnls if p < 0)) / max(total - wins, 1)
+            ev = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
 
             import statistics as _stats
             std_r = _stats.stdev(pnls) if len(pnls) > 1 else 0.0
@@ -1071,6 +1102,8 @@ class BotRunner:
                 'initial_balance': initial,
                 'equity': equity,
                 'return_pct': return_pct,
+                'sparkline': [float(r['equity_value']) for r in equity_rows],
+                'ev': round(ev, 3),  # Fix 4: Expected value
             }
         except Exception as e:
             _logger.warning('get_bot_performance error for %s: %s', bot_id, e)
