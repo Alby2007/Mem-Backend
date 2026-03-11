@@ -416,7 +416,12 @@ class YFinanceAdapter(BaseIngestAdapter):
 
         now_iso = datetime.now(timezone.utc).isoformat()
         cached = 0
-        active_tickers = [t for t in self.tickers if t.upper() not in self._delisted_cache]
+        # Skip tickers that never have OHLCV data on Yahoo (spot FX derivatives)
+        _ohlcv_skip = {'XPTUSD=X', 'XAUUSD=X', 'XAGUSD=X'}
+        active_tickers = [
+            t for t in self.tickers
+            if t.upper() not in self._delisted_cache and t.upper() not in _ohlcv_skip
+        ]
         session = _req.Session()
 
         for sym in active_tickers:
