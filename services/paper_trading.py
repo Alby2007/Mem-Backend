@@ -1451,7 +1451,7 @@ def _ai_run_inner(user_id: str) -> dict:
                 open_tickers.add(ticker)
                 entries += 1
                 try:
-                    if hasattr(ext, 'prediction_ledger') and ext.prediction_ledger:
+                    if hasattr(ext, 'prediction_ledger') and ext.prediction_ledger is not None:
                         _cal = float(cal_hr) if cal_hr is not None else float(quality or 0.5)
                         _cal = max(0.05, min(0.95, _cal))
                         ext.prediction_ledger.record_prediction(

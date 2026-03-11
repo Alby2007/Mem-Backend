@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -14,6 +16,8 @@ import extensions as ext
 from middleware.fastapi_auth import get_current_user
 
 router = APIRouter()
+
+_log = logging.getLogger(__name__)
 
 
 class IngestAtom(BaseModel):

@@ -781,7 +781,7 @@ class BotRunner:
                      bot_id, now_iso)
                 )
                 try:
-                    if hasattr(ext, 'prediction_ledger') and ext.prediction_ledger:
+                    if hasattr(ext, 'prediction_ledger') and ext.prediction_ledger is not None:
                         cal_hr = float(c.get('cal_hit_rate') or quality or 0.5)
                         cal_hr = max(0.05, min(0.95, cal_hr))
                         ext.prediction_ledger.record_prediction(
