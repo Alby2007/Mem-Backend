@@ -283,8 +283,10 @@ class EIAAdapter(BaseIngestAdapter):
                     ))
 
         # ── Henry Hub natural gas spot price ──────────────────────────────────
-        gas_data = (_eia_fetch(self._api_key, 'natural-gas/pri/sum/data', {'process': ['PUS']}, 2)
-                    or _eia_fetch(self._api_key, 'natural-gas/pri/sum/data', {'series': ['RNGWHHD']}, 2))
+        # Note: 'process' facet on natural-gas/pri/sum returns 400 on EIA APIv2.
+        # Use series facet (RNGWHHD) or the ng/cons/sum endpoint as primary.
+        gas_data = (_eia_fetch(self._api_key, 'natural-gas/pri/sum/data', {'series': ['RNGWHHD']}, 2)
+                    or _eia_fetch(self._api_key, 'natural-gas/pri/fut/data', {'series': ['RNGC1']}, 2))
         if gas_data and len(gas_data) >= 1:
             try:
                 gas_cur = float(gas_data[0].get('value', 0))

@@ -83,7 +83,7 @@ _DEFAULT_TICKERS = [
     'SPY', 'HYG', 'TLT',
     # User portfolio holdings — ensure live price + signal enrichment every cycle
     'ARKK', 'COIN', 'HOOD', 'MSTR', 'PLTR', 'NVDA',
-    'XYZ',      # Block Inc. (NYSE: XYZ — rebranded from SQ in 2022)
+    'XYZ',      # Block Inc. (NYSE: XYZ — rebranded from SQ in 2024)
     # High-conviction watchlist — US mega-cap with strong KB coverage
     'AMZN', 'META', 'GOOGL', 'AAPL', 'MSFT', 'MA',
     # Additional FTSE names common in UK ISA portfolios
@@ -106,6 +106,19 @@ _NO_FUNDAMENTALS_TICKERS = {
     'GBPUSD=X', 'EURGBP=X', 'EURUSD=X', 'USDJPY=X', 'USDCHF=X',  # FX pairs
     '^FTSE', '^FTMC', '^GSPC', '^VIX', '^DJI', '^IXIC', '^RUT',   # indices
     'GC=F', 'SI=F', 'CL=F', 'NG=F', 'HG=F', 'ZC=F', 'ZS=F',      # futures
+    'LBS=F', 'CT=F',                                                # lumber/cotton futures — 404 on yf
+}
+
+# Tickers confirmed dead/delisted/404 on yfinance — skip OHLCV and price fetch entirely.
+# These are added here rather than the DB denylist so they're filtered pre-request.
+_STATIC_DEAD_TICKERS = {
+    'XPTUSD',       # not a valid yf symbol (platinum is XPTUSD=X or PL=F)
+    'RYA.L',        # Ryanair — listed on Dublin/NASDAQ as RYAAY, not RYA.L on LSE
+    'TATAMOTORS.NS',# Indian NSE — yf 404s from OCI IP (geo-restricted)
+    'SQ',           # Block Inc. rebranded ticker to XYZ in 2024
+    '0011.HK',      # HK-listed — yf 404s from OCI
+    'LBS=F',        # Lumber futures — extremely low liquidity, frequent 404
+    'CT=F',         # Cotton futures — frequent 404 on free yf tier
 }
 
 # Fallback category labels for well-known ETFs when yfinance returns empty category
@@ -428,7 +441,7 @@ class YFinanceAdapter(BaseIngestAdapter):
         now_iso = datetime.now(timezone.utc).isoformat()
         cached = 0
         # Skip tickers that never have OHLCV data on Yahoo (spot FX derivatives)
-        _ohlcv_skip = {'XPTUSD=X', 'XAUUSD=X', 'XAGUSD=X'}
+        _ohlcv_skip = {'XPTUSD=X', 'XAUUSD=X', 'XAGUSD=X'} | {t.upper() for t in _STATIC_DEAD_TICKERS}
         active_tickers = [
             t for t in self.tickers
             if t.upper() not in self._delisted_cache and t.upper() not in _ohlcv_skip
@@ -484,10 +497,12 @@ class YFinanceAdapter(BaseIngestAdapter):
         """
         atoms: List[RawAtom] = []
         _us_poly = _get_us_polygon_tickers(self._db_path)
+        _dead = {t.upper() for t in _STATIC_DEAD_TICKERS}
         active_tickers = [
             t for t in self.tickers
             if t.upper() not in self._delisted_cache
             and t.upper() not in _us_poly
+            and t.upper() not in _dead
         ]
         _polygon_skipped = sum(1 for t in self.tickers if t.upper() in _us_poly)
         if len(active_tickers) < len(self.tickers):
