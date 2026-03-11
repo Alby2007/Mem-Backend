@@ -1538,6 +1538,7 @@ def _ai_run_inner(user_id: str) -> dict:
                             market_regime=regime or None,
                             conviction_tier=conviction.lower() or None,
                             source='paper_generalist',
+                            conn=conn,
                         )
                 except Exception as _pl_e:
                     _logger.warning('prediction ledger write failed for %s: %s', ticker, _pl_e, exc_info=True)

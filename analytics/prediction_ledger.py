@@ -152,6 +152,7 @@ class PredictionLedger:
         market_regime:  Optional[str],
         conviction_tier: Optional[str],
         source:         str = 'system',
+        conn=None,
     ) -> bool:
         """
         Insert a new prediction row. Returns True if inserted, False if the
@@ -161,9 +162,10 @@ class PredictionLedger:
         issued_at = now.isoformat()
         expires_at = _add_trading_days(now, _EXPIRY_TRADING_DAYS).isoformat()
 
-        conn = self._connect()
+        _own_conn = conn is None
+        _conn = self._connect() if _own_conn else conn
         try:
-            conn.execute(
+            _conn.execute(
                 """INSERT OR IGNORE INTO prediction_ledger
                    (ticker, pattern_type, timeframe, entry_price,
                     target_1, target_2, stop_loss,
@@ -177,8 +179,9 @@ class PredictionLedger:
                  market_regime, conviction_tier,
                  issued_at, expires_at, source),
             )
-            inserted = conn.total_changes > 0
-            conn.commit()
+            inserted = _conn.total_changes > 0
+            if _own_conn:
+                _conn.commit()
             if inserted:
                 _log.info(
                     'PredictionLedger: recorded %s %s %s p_t1=%.2f p_t2=%.2f',
@@ -186,7 +189,8 @@ class PredictionLedger:
                 )
             return inserted
         finally:
-            conn.close()
+            if _own_conn:
+                _conn.close()
 
     # ── Intraday resolution hook ─────────────────────────────────────────────
 

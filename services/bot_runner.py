@@ -862,6 +862,7 @@ class BotRunner:
                             market_regime=regime or None,
                             conviction_tier=(c.get('kb_conviction') or '').lower() or None,
                             source='paper_bot',
+                            conn=conn,
                         )
                 except Exception as _pl_e:
                     _logger.warning('prediction ledger write failed for %s: %s', ticker, _pl_e, exc_info=True)
