@@ -528,6 +528,21 @@ def get_portfolio_with_signals(db_path: str, user_id: str) -> List[dict]:
             h['last_price'] = atoms.get('last_price')
             h['price_target'] = atoms.get('price_target')
             h['upside_pct'] = atoms.get('upside_pct')
+            try:
+                lp  = float(h['last_price']) if h.get('last_price') else None
+                ac  = float(h['avg_cost'])   if h.get('avg_cost')   else None
+                qty = float(h.get('quantity') or 0)
+                if lp and ac and ac > 0:
+                    pnl_pct = round((lp - ac) / ac * 100, 2)
+                    pnl_val = round((lp - ac) * qty, 2) if qty else None
+                    h['unrealized_pnl_pct'] = pnl_pct
+                    h['unrealized_pnl']     = pnl_val
+                else:
+                    h['unrealized_pnl_pct'] = None
+                    h['unrealized_pnl']     = None
+            except (TypeError, ValueError):
+                h['unrealized_pnl_pct'] = None
+                h['unrealized_pnl']     = None
     finally:
         conn.close()
     return holdings
