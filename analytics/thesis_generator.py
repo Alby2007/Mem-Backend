@@ -134,7 +134,7 @@ _BEARISH_VALUES = {
     'dominant_driver':        set(),
 }
 
-_MIN_CATEGORIES = 3  # was 4; news/causal adapters not live yet, 3 is meaningful convergence
+_MIN_CATEGORIES = 2  # was 4→3; broker_research + FRED only live adapters; raise to 3 when news/causal/sector active
 
 
 # ── Invalidation helpers ───────────────────────────────────────────────────────
