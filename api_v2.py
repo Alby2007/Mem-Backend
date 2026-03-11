@@ -26,6 +26,7 @@ _INGEST_BATCH    = int(os.environ.get('INGEST_BATCH_SIZE', '15'))          # ite
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    _logger.info('=== LIFESPAN STARTING ===')
     # ── Bot runner + scanner restore: run in background thread to avoid blocking
     # startup if SQLite is temporarily locked by dying threads from previous process
     import threading as _threading
@@ -293,6 +294,8 @@ async def _lifespan(app: FastAPI):
         _logger.warning('PredictionLedger failed to start: %s', _pl_e)
         import traceback
         _logger.warning('PredictionLedger traceback: %s', traceback.format_exc())
+    
+    _logger.info('=== PREDICTION LEDGER INITIALIZATION COMPLETE ===')
 
     # RegimeHistoryClassifier — run once at startup then daily via scheduled thread
     # Classifies 5 years of monthly data into 4 regimes; writes regime-conditional
