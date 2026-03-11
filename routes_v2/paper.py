@@ -42,6 +42,8 @@ class ClosePositionRequest(BaseModel):
 
 @router.get("/users/{user_id}/paper/account")
 async def paper_account_get(user_id: str, _: str = Depends(user_path_auth)):
+    import logging as _log
+    _log.getLogger('paper.account').warning('paper_account_get called for %s', user_id)
     try:
         tier, err = svc.paper_tier_check(user_id)
         acct = svc.get_account(user_id)
@@ -51,6 +53,8 @@ async def paper_account_get(user_id: str, _: str = Depends(user_path_auth)):
             acct['requires_upgrade'] = True
         return acct
     except Exception as e:
+        import traceback as _tb
+        _log.getLogger('paper.account').error('paper_account_get 500 for %s: %s\n%s', user_id, e, _tb.format_exc())
         raise HTTPException(500, detail=str(e))
 
 

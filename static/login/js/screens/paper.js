@@ -78,7 +78,6 @@ async function _ptLoadFleet() {
   if (!document.getElementById('pt-shell')) _ptRenderShell();
   const el = document.getElementById('pt-view-fleet');
   if (!el || !state.userId) return;
-  _ptOnboardingShown = false;
   el.innerHTML = '<div class="evo-loading">Loading fleet…</div>';
   try {
     const [fleet, discoveries, acct] = await Promise.all([
@@ -88,7 +87,12 @@ async function _ptLoadFleet() {
     ]);
     _ptFleetData = fleet;
     if (acct?.requires_upgrade || fleet?.requires_upgrade) { _ptShowUpsell(); return; }
-    if (!acct || !acct.account_size_set) { _ptShowOnboarding(); return; }
+    if (!acct || !acct.account_size_set) {
+      _ptOnboardingShown = false;
+      _ptShowOnboarding();
+      return;
+    }
+    _ptOnboardingShown = false;
     el.innerHTML = _ptRenderFleetHTML(fleet, discoveries);
   } catch(e) {
     if (e.message?.includes('paper_trading_requires_pro')) { _ptShowUpsell(); return; }
@@ -647,6 +651,7 @@ async function _ptShowOnboarding() {
   const close = async (save) => {
     if (save) {
       const val = parseFloat(document.getElementById('pt-acct-input').value);
+      _ptOnboardingShown = true;  // block re-show while PATCH is in flight
       try {
         await apiFetch(`/users/${state.userId}/paper/account`, {
           method: 'PATCH',
@@ -656,6 +661,7 @@ async function _ptShowOnboarding() {
       } catch(e) { /* best effort */ }
     }
     overlay.remove();
+    _ptOnboardingShown = false;  // allow _ptLoadFleet to reset it normally
     _ptLoadFleet();
   };
   document.getElementById('pt-acct-confirm').addEventListener('click', () => close(true));
