@@ -26,6 +26,7 @@ _INGEST_BATCH    = int(os.environ.get('INGEST_BATCH_SIZE', '15'))          # ite
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    print('=== LIFESPAN STARTING (PRINT) ===')
     _logger.info('=== LIFESPAN STARTING ===')
     # ── Bot runner + scanner restore: run in background thread to avoid blocking
     # startup if SQLite is temporarily locked by dying threads from previous process
