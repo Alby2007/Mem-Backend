@@ -56,12 +56,18 @@ _CATEGORY_MAP: Dict[str, str] = {
     'central_bank_stance':     'macro',
     'regime_label':            'macro',
     'market_regime':           'macro',
+    'growth_environment':      'macro',
+    'dominant_driver':         'macro',
     'insider_conviction':      'insider',
     'insider_flow':            'insider',
     'institutional_flow':      'insider',
 }
 
-# Values considered bullish / bearish per predicate
+# Shared macro subjects written by FRED/macro adapters (not ticker-specific)
+_MACRO_SUBJECTS = ('us_macro', 'us_yields', 'us_labor')
+
+# Values considered bullish / bearish per predicate.
+# Fix B: expanded to match actual adapter output values (FRED, market-state snapshots).
 _BULLISH_VALUES = {
     'signal_direction':       {'bullish', 'long', 'buy', 'near_high'},
     'conviction_tier':        {'high', 'confirmed', 'strong'},
@@ -71,13 +77,28 @@ _BULLISH_VALUES = {
     'causal_signal':          {'bullish', 'positive_shock', 'positive'},
     'sector_tailwind':        {'strong', 'tailwind', 'bullish', 'positive'},
     'sector_rotation_signal': {'bullish', 'inflow', 'positive'},
-    'macro_confirmation':     {'confirmed', 'positive', 'supportive'},
-    'central_bank_stance':    {'restrictive', 'hawkish'},  # bullish for financials; handled generically
-    'regime_label':           {'risk_on_expansion', 'recovery'},
-    'market_regime':          {'risk_on_expansion', 'recovery'},
+    # FRED emits: 'confirmed', 'supportive', 'positive_growth'
+    'macro_confirmation':     {'confirmed', 'positive', 'supportive', 'positive_growth'},
+    # FRED central_bank_stance: 'restrictive'/'neutral_to_restrictive' = equity headwind (bearish),
+    # 'accommodative'/'easy policy' = equity tailwind (bullish)
+    'central_bank_stance':    {'accommodative', 'dovish', 'easy policy'},
+    # FRED regime_label: 'tight policy, expansion', 'moderate_growth', 'gaining_momentum', etc.
+    'regime_label':           {
+        'risk_on_expansion', 'recovery',
+        'gaining_momentum', 'risk_on', 'expansion', 'moderate_growth',
+        'strong_growth',
+    },
+    'market_regime':          {
+        'risk_on_expansion', 'recovery',
+        'gaining_momentum', 'risk_on', 'expansion', 'moderate_growth',
+    },
     'insider_conviction':     {'accumulating', 'bullish', 'buying'},
     'insider_flow':           {'net_buy', 'accumulating', 'bullish'},
     'institutional_flow':     {'accumulating', 'bullish', 'net_buy'},
+    # FRED growth_environment predicate
+    'growth_environment':     {'strong_growth', 'moderate_growth'},
+    # FRED dominant_driver is free-text; scored via keyword matching in _score_convergence
+    'dominant_driver':        set(),
 }
 
 _BEARISH_VALUES = {
@@ -90,12 +111,24 @@ _BEARISH_VALUES = {
     'sector_tailwind':        {'headwind', 'bearish', 'negative', 'weak'},
     'sector_rotation_signal': {'bearish', 'outflow', 'negative'},
     'macro_confirmation':     {'unconfirmed', 'negative', 'adverse'},
-    'central_bank_stance':    {'accommodative', 'dovish'},
-    'regime_label':           {'risk_off_contraction', 'stagflation'},
-    'market_regime':          {'risk_off_contraction', 'stagflation'},
+    # FRED: restrictive/neutral_to_restrictive = rate headwind for equities
+    'central_bank_stance':    {
+        'restrictive', 'hawkish',
+        'neutral_to_restrictive', 'tight policy',
+    },
+    'regime_label':           {
+        'risk_off_contraction', 'stagflation',
+        'contraction', 'recession risk', 'slowing growth',
+        'tight policy',  # FRED composite regime string
+    },
+    'market_regime':          {
+        'risk_off_contraction', 'stagflation', 'contraction',
+    },
     'insider_conviction':     {'distributing', 'bearish', 'selling'},
     'insider_flow':           {'net_sell', 'distributing', 'bearish'},
     'institutional_flow':     {'distributing', 'bearish', 'net_sell'},
+    'growth_environment':     {'stagnation', 'contraction'},
+    'dominant_driver':        set(),
 }
 
 _MIN_CATEGORIES = 3  # was 4; news/causal adapters not live yet, 3 is meaningful convergence
@@ -221,16 +254,28 @@ class ThesisGenerator:
         bull_cats: Dict[str, Tuple[str, float]] = {}
         bear_cats: Dict[str, Tuple[str, float]] = {}
 
+        # Predicates that may emit composite/multi-word strings (e.g. FRED regime_label
+        # emits "tight policy, elevated inflation") — use substring keyword matching.
+        _substr_preds = {
+            'regime_label', 'central_bank_stance',
+            'growth_environment', 'market_regime', 'dominant_driver',
+        }
         for pred, (val, conf) in signals.items():
             cat = _CATEGORY_MAP.get(pred)
             if not cat:
                 continue
             bull_vals = _BULLISH_VALUES.get(pred, set())
             bear_vals = _BEARISH_VALUES.get(pred, set())
-            if val in bull_vals:
+            if pred in _substr_preds:
+                is_bull = any(kw in val for kw in bull_vals)
+                is_bear = any(kw in val for kw in bear_vals)
+            else:
+                is_bull = val in bull_vals
+                is_bear = val in bear_vals
+            if is_bull:
                 if cat not in bull_cats or conf > bull_cats[cat][1]:
                     bull_cats[cat] = (val, conf)
-            elif val in bear_vals:
+            elif is_bear:
                 if cat not in bear_cats or conf > bear_cats[cat][1]:
                     bear_cats[cat] = (val, conf)
 
@@ -261,9 +306,24 @@ class ThesisGenerator:
         except Exception:
             return False
 
+    def _get_macro_overlay(self, conn: sqlite3.Connection) -> Dict[str, Tuple[str, float]]:
+        """Fix A: pull shared macro atoms from us_macro/us_yields/us_labor subjects.
+
+        Returns merged {predicate: (value, confidence)} — lowest confidence wins
+        so per-ticker signals always dominate when merged (ticker signals are
+        applied after the overlay via dict update).
+        """
+        overlay: Dict[str, Tuple[str, float]] = {}
+        for subj in _MACRO_SUBJECTS:
+            subj_signals = self._get_ticker_signals(conn, subj)
+            for pred, (val, conf) in subj_signals.items():
+                if pred not in overlay or conf > overlay[pred][1]:
+                    overlay[pred] = (val, conf)
+        return overlay
+
     def run(self) -> List[dict]:
         """
-        Scan all tickers, emit auto-theses where ≥4 source categories converge.
+        Scan all tickers, emit auto-theses where ≥3 source categories converge.
         Returns list of {ticker, direction, n_categories, thesis_id}.
         """
         conn = self._conn()
@@ -272,16 +332,26 @@ class ThesisGenerator:
             tickers = self._get_all_tickers(conn)
             _log.info('ThesisGenerator: scanning %d tickers', len(tickers))
 
+            # Fix A: load shared macro overlay once, reuse for every ticker
+            macro_overlay = self._get_macro_overlay(conn)
+            _log.debug(
+                'ThesisGenerator: macro overlay has %d signals: %s',
+                len(macro_overlay),
+                {p: v for p, (v, _) in macro_overlay.items()},
+            )
+
             for ticker in tickers:
                 try:
                     if self._already_has_fresh_thesis(conn, ticker):
                         continue
 
                     signals = self._get_ticker_signals(conn, ticker)
-                    if len(signals) < 3:
+                    # Merge macro overlay under ticker signals (ticker takes precedence)
+                    merged = {**macro_overlay, **signals}
+                    if len(merged) < 3:
                         continue
 
-                    direction, n_cats, aligned, score = self._score_convergence(signals)
+                    direction, n_cats, aligned, score = self._score_convergence(merged)
                     if n_cats < _MIN_CATEGORIES:
                         continue
 
