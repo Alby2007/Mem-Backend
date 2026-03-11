@@ -104,6 +104,12 @@ async def _lifespan(app: FastAPI):
         # Price feed — keeps last_price atoms fresh for all tracked tickers
         scheduler.register(YFinanceAdapter(db_path=db_path), interval_sec=1800)
 
+        # Polygon price feed — US daily prices (grouped daily, 1 call), fundamentals,
+        # news, dividends/splits via Polygon Stocks Starter plan.
+        # Replaces yfinance fast_info for US tickers; skips gracefully if no API key.
+        from ingest.polygon_price_adapter import PolygonPriceAdapter
+        scheduler.register(PolygonPriceAdapter(db_path=db_path), interval_sec=1800)
+
         # Derived signals — sector rotation, enrichment (no external API needed)
         scheduler.register(SectorRotationAdapter(db_path=db_path), interval_sec=3600)
         scheduler.register(SignalEnrichmentAdapter(db_path=db_path), interval_sec=3600)

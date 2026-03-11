@@ -53,6 +53,11 @@ except ImportError:
     PolygonOptionsAdapter = None  # type: ignore
 
 try:
+    from .polygon_price_adapter import PolygonPriceAdapter
+except ImportError:
+    PolygonPriceAdapter = None  # type: ignore
+
+try:
     from .yield_curve_adapter import YieldCurveAdapter
 except ImportError:
     YieldCurveAdapter = None  # type: ignore
@@ -128,7 +133,7 @@ __all__ = [
     'YFinanceAdapter', 'FREDAdapter', 'EDGARAdapter', 'RSSAdapter',
     'SignalEnrichmentAdapter', 'HistoricalBackfillAdapter',
     'LLMExtractionAdapter', 'EDGARRealtimeAdapter', 'OptionsAdapter',
-    'PolygonOptionsAdapter', 'YieldCurveAdapter', 'FINRAShortInterestAdapter',
+    'PolygonOptionsAdapter', 'PolygonPriceAdapter', 'YieldCurveAdapter', 'FINRAShortInterestAdapter',
     'BoEAdapter', 'EIAAdapter', 'GDELTAdapter', 'USGSAdapter', 'UCDPAdapter',
     'ACLEDAdapter', 'InsiderAdapter', 'LSEFlowAdapter',
     'EarningsCalendarAdapter', 'EconomicCalendarAdapter', 'SectorRotationAdapter',

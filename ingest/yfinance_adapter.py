@@ -138,6 +138,14 @@ _ETF_CATEGORY_FALLBACK: dict = {
 # Predicates that are time-series and should upsert (update) on repeat ingest
 _UPSERT_PREDICATES = {'last_price', 'price_target', 'signal_direction', 'volatility_regime'}
 
+# US tickers now handled by PolygonPriceAdapter (grouped daily call).
+# Excluded from _bulk_download_prices() and _parallel_info_fetch() to avoid
+# duplicate last_price atoms.  _cache_ohlcv_candles() still runs for these.
+try:
+    from ingest.polygon_price_adapter import US_POLYGON_TICKERS as _US_POLYGON_TICKERS
+except ImportError:
+    _US_POLYGON_TICKERS: set = set()  # type: ignore[assignment]
+
 
 def _market_cap_tier(market_cap: Optional[float]) -> str:
     """Classify market cap into standard tiers."""
@@ -473,12 +481,16 @@ class YFinanceAdapter(BaseIngestAdapter):
         """
         atoms: List[RawAtom] = []
         active_tickers = [
-            t for t in self.tickers if t.upper() not in self._delisted_cache
+            t for t in self.tickers
+            if t.upper() not in self._delisted_cache
+            and t.upper() not in _US_POLYGON_TICKERS
         ]
+        _polygon_skipped = sum(1 for t in self.tickers if t.upper() in _US_POLYGON_TICKERS)
         if len(active_tickers) < len(self.tickers):
             self._logger.info(
-                'Skipping %d delisted tickers, %d active',
-                len(self.tickers) - len(active_tickers), len(active_tickers),
+                'Skipping %d delisted + %d polygon-covered tickers, %d active',
+                len(self.tickers) - len(active_tickers) - _polygon_skipped,
+                _polygon_skipped, len(active_tickers),
             )
 
         def _fetch_price(symbol: str):
@@ -573,6 +585,7 @@ class YFinanceAdapter(BaseIngestAdapter):
         futures = {
             ex.submit(self._fetch_info_atoms, sym, now_iso, bulk_prices): sym
             for sym in self.tickers
+            if sym.upper() not in _US_POLYGON_TICKERS
         }
         # Total budget for all info() calls: 120s regardless of ticker count
         _info_auth_fails = 0
