@@ -113,4 +113,21 @@ async def health_detailed():
         else "stopped"
     )
 
+    result["prediction_ledger"] = (
+        "initialized" if getattr(ext, "prediction_ledger", None) is not None else "not initialized"
+    )
+
+    try:
+        conn3 = sqlite3.connect(ext.DB_PATH, timeout=5)
+        result["prediction_ledger_rows"] = conn3.execute(
+            "SELECT COUNT(*) FROM prediction_ledger"
+        ).fetchone()[0]
+        result["calibration_observations_rows"] = conn3.execute(
+            "SELECT COUNT(*) FROM calibration_observations"
+        ).fetchone()[0]
+        conn3.close()
+    except Exception:
+        result["prediction_ledger_rows"] = None
+        result["calibration_observations_rows"] = None
+
     return result
