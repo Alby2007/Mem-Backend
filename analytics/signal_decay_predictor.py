@@ -220,6 +220,10 @@ class SignalDecayPredictor:
                 processed += 1
                 if decay_pct >= 1.0:
                     expired_count += 1
+                    conn.execute(
+                        "UPDATE pattern_signals SET status = 'expired' WHERE id = ?",
+                        (pat['id'],)
+                    )
 
                 # Keep track of the pattern with the BEST (lowest decay) for this ticker
                 existing = ticker_best.get(ticker)
@@ -243,6 +247,20 @@ class SignalDecayPredictor:
                 self._write_atom(conn, ticker, 'pattern_hours_remaining',
                                  str(best['hours_remaining']), round(conf, 3))
                 atoms_written += 3
+
+            # Bulk expire backlog: patterns older than 30 days with quality < 0.50
+            # Catches stale patterns that pre-date the decay predictor fix.
+            bulk_expired = conn.execute(
+                """UPDATE pattern_signals SET status = 'expired'
+                   WHERE status NOT IN ('filled', 'broken', 'expired')
+                     AND quality_score < 0.50
+                     AND julianday('now') - julianday(formed_at) > 30"""
+            ).rowcount
+            if bulk_expired:
+                _log.info(
+                    'SignalDecayPredictor: bulk-expired %d stale patterns (>30d, q<0.50)',
+                    bulk_expired,
+                )
 
             conn.commit()
 

@@ -562,6 +562,12 @@ class BotRunner:
             ).fetchall()
             open_tickers = {r['ticker'] for r in open_rows}
 
+            # Global ticker dedup: skip if ANY agent (generalist or other bot) already holds this ticker
+            _global_open = {r['ticker'] for r in conn.execute(
+                "SELECT DISTINCT ticker FROM paper_positions WHERE user_id=? AND status='open'",
+                (user_id,)
+            ).fetchall()}
+
             if len(open_tickers) >= max_pos:
                 self._write_bot_equity(bot_id, conn, balance, len(open_tickers), now_iso)
                 conn.commit()
@@ -673,7 +679,7 @@ class BotRunner:
 
                 if entries >= _PAPER_MAX_NEW_PER_SCAN:
                     break
-                if ticker in open_tickers or ticker in cooled:
+                if ticker in open_tickers or ticker in _global_open or ticker in cooled:
                     skips += 1
                     continue
                 # Fix 2: Per-ticker concentration check

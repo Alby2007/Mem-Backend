@@ -1174,6 +1174,9 @@ def _ai_run_inner(user_id: str) -> dict:
         ).fetchall()
         open_tickers = {r['ticker'] for r in open_rows}
 
+        # Global ticker dedup: skip if ANY agent (generalist or bot) already holds this ticker
+        _global_open = {r['ticker'] for r in open_rows}
+
         # 24h cooldown on stopped_out positions (prevents re-entering a blown trade)
         _cooldown_cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
         _stopped_rows = conn.execute(
@@ -1293,7 +1296,7 @@ def _ai_run_inner(user_id: str) -> dict:
             regime = (c.get('kb_regime') or '').lower()
             pattern_id = c['id']
 
-            if ticker in open_tickers or ticker in cooled_tickers:
+            if ticker in open_tickers or ticker in _global_open or ticker in cooled_tickers:
                 skips += 1
                 continue
 
