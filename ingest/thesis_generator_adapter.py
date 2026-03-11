@@ -18,6 +18,7 @@ class ThesisGeneratorAdapter(BaseIngestAdapter):
     name = 'thesis_generator_adapter'
 
     def __init__(self, db_path: str) -> None:
+        super().__init__(self.name)
         self._db = db_path
 
     def fetch(self) -> List[RawAtom]:

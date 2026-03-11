@@ -8,18 +8,22 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from typing import List
+
+from ingest.base import BaseIngestAdapter, RawAtom
 
 _logger = logging.getLogger('strategy_evolution_adapter')
 
 
-class StrategyEvolutionAdapter:
+class StrategyEvolutionAdapter(BaseIngestAdapter):
     name = 'strategy_evolution_adapter'
     interval_sec = 21600  # 6 hours
 
     def __init__(self, db_path: str):
+        super().__init__(self.name)
         self.db_path = db_path
 
-    def run(self) -> None:
+    def fetch(self) -> List[RawAtom]:
         try:
             from analytics.strategy_evolution import StrategyEvolution
             engine = StrategyEvolution(self.db_path)
@@ -42,3 +46,7 @@ class StrategyEvolutionAdapter:
         except Exception as e:
             _logger.error('[strategy_evolution] adapter run error: %s', e)
             raise
+        return []
+
+    def transform(self, raw: List[RawAtom]) -> List[RawAtom]:
+        return raw

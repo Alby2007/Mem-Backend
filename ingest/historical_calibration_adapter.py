@@ -32,6 +32,7 @@ class HistoricalCalibrationAdapter(BaseIngestAdapter):
     name = "historical_calibration"
 
     def __init__(self, db_path: str, lookback_years: int = 3):
+        super().__init__(self.name)
         self._db_path       = db_path
         self._lookback_years = lookback_years
 
