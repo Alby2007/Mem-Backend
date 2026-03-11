@@ -1263,7 +1263,7 @@ async def journal_open(
     user_id: str,
     current_user: str = Depends(get_current_user),
 ):
-    user_path_auth(current_user, user_id)
+    await user_path_auth(current_user, user_id)
     try:
         from users.user_store import get_journal_open
         return {"positions": get_journal_open(ext.DB_PATH, user_id)}
@@ -1277,7 +1277,7 @@ async def journal_closed(
     since_days: int = 90,
     current_user: str = Depends(get_current_user),
 ):
-    user_path_auth(current_user, user_id)
+    await user_path_auth(current_user, user_id)
     try:
         from users.user_store import get_journal_closed
         return {"trades": get_journal_closed(ext.DB_PATH, user_id, since_days=since_days)}
@@ -1290,7 +1290,7 @@ async def journal_stats(
     user_id: str,
     current_user: str = Depends(get_current_user),
 ):
-    user_path_auth(current_user, user_id)
+    await user_path_auth(current_user, user_id)
     try:
         from users.user_store import get_journal_stats
         return get_journal_stats(ext.DB_PATH, user_id)
@@ -1303,7 +1303,7 @@ async def journal_pattern_breakdown(
     user_id: str,
     current_user: str = Depends(get_current_user),
 ):
-    user_path_auth(current_user, user_id)
+    await user_path_auth(current_user, user_id)
     try:
         from users.user_store import get_pattern_breakdown
         return {"breakdown": get_pattern_breakdown(ext.DB_PATH, user_id)}
@@ -1316,7 +1316,7 @@ async def journal_regime_breakdown(
     user_id: str,
     current_user: str = Depends(get_current_user),
 ):
-    user_path_auth(current_user, user_id)
+    await user_path_auth(current_user, user_id)
     try:
         from users.user_store import get_regime_breakdown
         return {"breakdown": get_regime_breakdown(ext.DB_PATH, user_id)}
@@ -1335,7 +1335,7 @@ async def notify_test_briefing(
     bypassing delivery_time / day-of-week checks.
     Used for end-to-end verification that the full tip→followup→alert loop works.
     """
-    user_path_auth(current_user, user_id)
+    await user_path_auth(current_user, user_id)
     if not ext.HAS_PRODUCT_LAYER:
         raise HTTPException(503, detail="product layer not available")
 

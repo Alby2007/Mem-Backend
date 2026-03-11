@@ -295,7 +295,7 @@ class GPRAdapter(BaseIngestAdapter):
                 object=trend,
                 confidence=0.75,
                 source=source,
-                metadata={**meta_base, 'period': period, 'prev_gpr': self._last_gpr},
+                metadata={**meta_base, 'period': period, 'prev_gpr': last_gpr},
                 upsert=True,
             ),
             RawAtom(

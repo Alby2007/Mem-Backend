@@ -163,12 +163,21 @@ class PolygonPriceAdapter(BaseIngestAdapter):
         _logger.info('[polygon_price] loaded %d US tickers (%d equities, %d ETFs)',
                      len(self._tickers), len(self._equity_tickers),
                      len(self._tickers) - len(self._equity_tickers))
-        # In-memory last-run timestamps for each slow pass
+        # In-memory last-run timestamps for each slow pass.
+        # Staggered so only one slow pass fires per 1800s cycle:
+        #   cycle 1 (0h):   details runs (last=None)
+        #   cycle 2 (0.5h): financials runs (last=0.5h ago, guard=20h → runs)
+        #   cycle 3 (1h):   news runs (last=1h ago, guard=2h → skips until cycle 4)
+        #   cycle 4 (1.5h): news fires (last=1.5h ago > 2h? no — fires on cycle 5 at 2h)
+        # In practice: details fires on cycle 1, financials on cycle 2,
+        # news on cycle 3 (but guard is 2h so actually cycle 5), dividends cycle 4.
+        # Pre-setting to 1h/2h/3h ago ensures they don't all pile up at restart.
+        _now = datetime.now(timezone.utc)
         self._last_run: Dict[str, Optional[datetime]] = {
-            'details':    None,
-            'financials': None,
-            'news':       None,
-            'dividends':  None,
+            'details':    None,                                  # fires on cycle 1
+            'financials': _now - timedelta(hours=19),            # fires after 1h (cycle 2+)
+            'news':       _now - timedelta(hours=1),             # fires after 1h (cycle 2)
+            'dividends':  _now - timedelta(hours=23),            # fires after 1h (cycle 2)
         }
 
     def _should_run(self, pass_name: str, hours: float) -> bool:
