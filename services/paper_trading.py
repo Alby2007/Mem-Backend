@@ -717,6 +717,7 @@ def monitor_positions(user_id: str) -> dict:
                                 db_path=ext.DB_PATH,
                                 source='paper_bot' if pos.get('bot_id') else 'user',
                                 bot_id=pos.get('bot_id'),
+                                conn=conn,
                             )
                     except Exception as _cal_t1_e:
                         _logger.debug('t1 calibration feedback failed for %s: %s', ticker, _cal_t1_e)
@@ -778,6 +779,7 @@ def monitor_positions(user_id: str) -> dict:
                                 db_path=ext.DB_PATH,
                                 source='paper_bot' if pos.get('bot_id') else 'user',
                                 bot_id=pos.get('bot_id'),
+                                conn=conn,
                             )
                 except Exception as _cal_e:
                     _logger.debug('calibration feedback failed for %s: %s', ticker, _cal_e)
@@ -1060,8 +1062,10 @@ def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float)
         return False, f'pattern decayed: {decay_pct:.0%} past expected resolution time', 1.0
 
     # Hard reject: quality too low regardless of anything else
-    if quality < 0.60:
-        return False, f'quality {quality:.2f} below 0.60', 1.0
+    if quality < 0.50:
+        return False, f'quality {quality:.2f} below 0.50', 1.0
+    if quality < 0.60 and conviction not in ('high', 'confirmed', 'strong'):
+        return False, f'quality {quality:.2f} below 0.60 without high conviction', 1.0
 
     # Hard reject: insufficient cash (below minimum viable 2× risk)
     if remaining_cash < risk_per_trade * 2:
@@ -1095,6 +1099,14 @@ def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float)
     # Calibration negative: skip if hit rate < 40% with ≥10 samples
     if cal_hr is not None and cal_hr < 0.40 and cal_n >= 10:
         return False, f'calibration-negative: hr={cal_hr:.0%} n={cal_n}', 1.0
+
+    # High conviction from KB — trust conviction even at moderate quality
+    if conviction in ('high', 'confirmed', 'strong') and effective_quality >= 0.65:
+        return True, f'high conviction entry: q={quality:.2f} {conviction}{thesis_note}{anomaly_note}', size_mult
+
+    # Medium conviction + quality ≥ 0.65 — lower bar when KB confirms
+    if conviction in ('medium', 'moderate') and effective_quality >= 0.65:
+        return True, f'medium conviction entry: q={quality:.2f} {conviction}{thesis_note}{anomaly_note}', size_mult
 
     # High quality + strong conviction: enter
     if effective_quality >= 0.75 and conviction in ('high', 'confirmed', 'strong'):
