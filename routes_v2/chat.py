@@ -141,6 +141,45 @@ async def get_chat_atoms(
     }
 
 
+@router.get("/chat/stats")
+async def get_chat_stats(
+    user_id: Optional[str] = Query(default=None),
+    auth_user: Optional[str] = Depends(get_current_user_optional),
+):
+    uid = auth_user or user_id
+    if not uid:
+        raise HTTPException(401, detail="authentication required")
+    from knowledge.conversation_store import ConversationStore, session_id_for_user
+    store      = ConversationStore(ext.DB_PATH)
+    session_id = session_id_for_user(uid)
+    metrics    = store.get_cognitive_metrics(session_id)
+    turns      = store.get_total_turn_count(session_id)
+    # top_subjects not in get_cognitive_metrics — query separately
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        subj_rows = conn.execute(
+            """SELECT subject, COUNT(*) as cnt FROM conv_atoms
+               WHERE session_id=? AND subject != ''
+               GROUP BY subject ORDER BY cnt DESC LIMIT 10""",
+            (session_id,),
+        ).fetchall()
+        top_subjects = [{"subject": r["subject"], "count": r["cnt"]} for r in subj_rows]
+    finally:
+        conn.close()
+    return {
+        "total_turns":   turns,
+        "total_atoms":   metrics.get("total_atoms", 0),
+        "user_atoms":    metrics.get("user_atoms", 0),
+        "asst_atoms":    metrics.get("assistant_atoms", 0),
+        "last_7d":       metrics.get("atoms_last_7d", 0),
+        "last_30d":      metrics.get("atoms_last_30d", 0),
+        "graduated":     metrics.get("graduated_to_kb", 0),
+        "pending":       metrics.get("pending", 0),
+        "top_subjects":  top_subjects,
+    }
+
+
 _CHAT_DAILY_LIMITS: dict[str, int] = {
     'free':    5,
     'basic':   20,

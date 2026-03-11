@@ -507,6 +507,25 @@ def get_portfolio(db_path: str, user_id: str) -> List[dict]:
 
 _PORTFOLIO_SIGNAL_PREDS = ('signal_direction', 'conviction_tier', 'last_price', 'price_target', 'upside_pct')
 
+_NAME_CACHE: dict = {}
+
+def _ticker_to_name(ticker: str) -> str:
+    """Return a human-readable company name for a ticker, cached per process."""
+    tk = ticker.upper()
+    if tk in _NAME_CACHE:
+        return _NAME_CACHE[tk]
+    try:
+        import yfinance as yf
+        info = yf.Ticker(ticker).fast_info
+        name = getattr(info, 'long_name', None) or getattr(info, 'short_name', None)
+        if not name:
+            info2 = yf.Ticker(ticker).info
+            name = info2.get('longName') or info2.get('shortName') or ''
+    except Exception:
+        name = ''
+    _NAME_CACHE[tk] = name or ''
+    return _NAME_CACHE[tk]
+
 
 def get_portfolio_with_signals(db_path: str, user_id: str) -> List[dict]:
     """Return holdings enriched with up to 5 KB signal atoms per ticker (lowercase lookup)."""
@@ -526,6 +545,7 @@ def get_portfolio_with_signals(db_path: str, user_id: str) -> List[dict]:
             for p, v in rows:
                 if p not in atoms:  # first row is highest confidence
                     atoms[p] = v
+            h['name'] = _ticker_to_name(h['ticker'])
             h['signal_direction'] = atoms.get('signal_direction')
             h['conviction_tier'] = atoms.get('conviction_tier')
             h['last_price'] = atoms.get('last_price')

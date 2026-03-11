@@ -563,16 +563,82 @@ async def ticker_summary(ticker: str):
     return profile
 
 
+_CT_SCORE: dict = {'high': 0.85, 'medium': 0.65, 'low': 0.40, 'avoid': 0.10}
+
+
 @router.get("/opportunities")
 async def opportunities():
     if not ext.HAS_ANALYTICS:
         raise HTTPException(503, detail="analytics module not available")
     try:
-        summary = ext.build_portfolio_summary(ext.DB_PATH)
+        summary   = ext.build_portfolio_summary(ext.DB_PATH)
+        regime    = _get_market_regime(ext.DB_PATH)
+        top_items = summary.get("top_conviction", [])
+
+        enriched: dict = {}
+        if top_items:
+            tickers = [item['ticker'].lower() for item in top_items]
+            conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+            ph = ','.join('?' * len(tickers))
+            rows = conn.execute(
+                f"""SELECT subject, predicate, object FROM facts
+                    WHERE subject IN ({ph})
+                    AND predicate IN ('conviction_score','best_regime','thesis',
+                                      'macro_confirmation','signal_quality')
+                    ORDER BY confidence DESC""",
+                tickers,
+            ).fetchall()
+            conn.close()
+            for subj, pred, obj in rows:
+                enriched.setdefault(subj, {})
+                if pred not in enriched[subj]:
+                    enriched[subj][pred] = obj
+
+        opps = []
+        for item in top_items:
+            tk    = item['ticker'].lower()
+            atoms = enriched.get(tk, {})
+
+            raw_cs = atoms.get('conviction_score')
+            try:
+                conviction_score = round(float(raw_cs), 3) if raw_cs else None
+            except (TypeError, ValueError):
+                conviction_score = None
+            if conviction_score is None:
+                conviction_score = _CT_SCORE.get(item.get('conviction_tier'))
+
+            best_regime     = atoms.get('best_regime', '')
+            best_regime_key = best_regime.split(' ')[0] if best_regime else ''
+            regime_aligned  = bool(
+                best_regime_key and regime and regime != 'no_data'
+                and best_regime_key == regime
+            )
+
+            thesis = atoms.get('thesis')
+            if thesis:
+                thesis_preview = thesis[:120]
+            else:
+                mac = item.get('macro_confirmation') or atoms.get('macro_confirmation')
+                sig = item.get('signal_quality')     or atoms.get('signal_quality')
+                if mac and mac != 'no_data' and sig:
+                    thesis_preview = f"Macro: {mac} · Signal: {sig}"
+                elif sig:
+                    thesis_preview = f"Signal: {sig}"
+                else:
+                    thesis_preview = None
+
+            opps.append({
+                **item,
+                'conviction_score': conviction_score,
+                'regime_aligned':   regime_aligned,
+                'thesis_preview':   thesis_preview,
+            })
+
         return {
-            "opportunities": summary.get("top_conviction", []),
-            "count":         len(summary.get("top_conviction", [])),
-            "regime":        _get_market_regime(ext.DB_PATH),
+            "opportunities": opps,
+            "count":         len(opps),
+            "regime":        regime,
+            "summary_text":  summary.get("summary_text"),
         }
     except Exception as e:
         raise HTTPException(500, detail=str(e))
