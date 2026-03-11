@@ -99,6 +99,15 @@ _MAX_WORKERS = 2
 # ETF quoteType values that don't carry equity fundamentals
 _ETF_QUOTE_TYPES = {'ETF', 'MUTUALFUND', 'INDEX', 'FUTURE', 'CRYPTOCURRENCY'}
 
+# Tickers that never have fundamentals (commodities, FX pairs, indices).
+# info() calls for these produce 404/empty — skip them in _fetch_info_atoms.
+_NO_FUNDAMENTALS_TICKERS = {
+    'XPTUSD=X', 'XAUUSD=X', 'XAGUSD=X',  # precious metal spot FX
+    'GBPUSD=X', 'EURGBP=X', 'EURUSD=X', 'USDJPY=X', 'USDCHF=X',  # FX pairs
+    '^FTSE', '^FTMC', '^GSPC', '^VIX', '^DJI', '^IXIC', '^RUT',   # indices
+    'GC=F', 'SI=F', 'CL=F', 'NG=F', 'HG=F', 'ZC=F', 'ZS=F',      # futures
+}
+
 # Fallback category labels for well-known ETFs when yfinance returns empty category
 _ETF_CATEGORY_FALLBACK: dict = {
     'XLF': 'financials_sector',
@@ -597,6 +606,8 @@ class YFinanceAdapter(BaseIngestAdapter):
         On 401 (Invalid Crumb), clears the yfinance session cache so the
         next attempt re-fetches a fresh crumb from Yahoo.
         """
+        if symbol.upper() in _NO_FUNDAMENTALS_TICKERS:
+            return []
         import time
         for attempt in range(2):
             try:

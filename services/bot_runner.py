@@ -864,7 +864,7 @@ class BotRunner:
                             source='paper_bot',
                         )
                 except Exception as _pl_e:
-                    _logger.debug('prediction ledger write failed for %s: %s', ticker, _pl_e)
+                    _logger.warning('prediction ledger write failed for %s: %s', ticker, _pl_e, exc_info=True)
 
             # Write equity snapshot
             fresh_bal = conn.execute(
