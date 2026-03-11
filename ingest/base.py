@@ -97,12 +97,20 @@ _F = TypeVar('_F', bound=Callable)
 
 def db_connect(db_path: str, timeout: float = 30.0) -> _sqlite3.Connection:
     """
-    Open a SQLite connection with WAL mode and a 30-second busy-timeout.
-    Use this instead of sqlite3.connect() in every adapter to prevent
-    'database is locked' errors when multiple adapters write concurrently.
+    Open a SQLite connection with optimal pragmas for Trading Galaxy's
+    read-heavy, moderate-write workload.
+
+    WAL mode       — readers don't block writers (critical for bot concurrency)
+    synchronous=1  — NORMAL: safe with WAL, 2-5x faster writes than FULL
+    cache_size     — 200MB page cache keeps hot pattern data in memory
+    temp_store     — RAM for temp tables/sorts (analytics queries)
+    busy_timeout   — 30s wait on lock instead of immediate error
     """
     conn = _sqlite3.connect(db_path, timeout=timeout, check_same_thread=False)
     conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA synchronous=NORMAL')
+    conn.execute('PRAGMA cache_size=-200000')
+    conn.execute('PRAGMA temp_store=MEMORY')
     conn.execute('PRAGMA busy_timeout=30000')
     return conn
 

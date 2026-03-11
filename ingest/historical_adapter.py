@@ -231,12 +231,26 @@ class HistoricalBackfillAdapter(BaseIngestAdapter):
             return []
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        _logger.info('historical_backfill: downloading 5y daily OHLCV for %d tickers', len(self.tickers))
+
+        # Filter out known-dead tickers before hitting Yahoo
+        try:
+            from ingest.yfinance_adapter import _STATIC_DEAD_TICKERS as _dead
+            _dead_upper = {t.upper() for t in _dead}
+        except ImportError:
+            _dead_upper = set()
+        active = [t for t in self.tickers if t.upper() not in _dead_upper]
+        if len(active) < len(self.tickers):
+            _logger.info(
+                'historical_backfill: skipping %d dead tickers, %d active',
+                len(self.tickers) - len(active), len(active),
+            )
+
+        _logger.info('historical_backfill: downloading 5y daily OHLCV for %d tickers', len(active))
 
         # ── Single bulk download: 5 years of daily closes + volume ───────────
         try:
             raw = yf.download(
-                tickers   = self.tickers,
+                tickers   = active,
                 period    = '5y',
                 interval  = '1d',
                 group_by  = 'ticker',
