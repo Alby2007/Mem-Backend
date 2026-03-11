@@ -206,13 +206,14 @@ class ThesisGenerator:
         source: str = 'thesis_generator',
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
+        subj = subject.lower()
         conn.execute(
-            """INSERT INTO facts (subject, predicate, object, confidence, source, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(subject, predicate, source)
-               DO UPDATE SET object=excluded.object, confidence=excluded.confidence,
-                             timestamp=excluded.timestamp""",
-            (subject.lower(), predicate, obj, confidence, source, now),
+            "DELETE FROM facts WHERE subject=? AND predicate=? AND source=?",
+            (subj, predicate, source),
+        )
+        conn.execute(
+            "INSERT INTO facts (subject, predicate, object, confidence, source, timestamp) VALUES (?,?,?,?,?,?)",
+            (subj, predicate, obj, confidence, source, now),
         )
 
     def _get_all_tickers(self, conn: sqlite3.Connection) -> List[str]:
