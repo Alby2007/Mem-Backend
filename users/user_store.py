@@ -92,7 +92,8 @@ CREATE TABLE IF NOT EXISTS pattern_signals (
     kb_regime     TEXT,
     kb_signal_dir TEXT,
     alerted_users TEXT DEFAULT '[]',
-    detected_at   TEXT NOT NULL
+    detected_at   TEXT NOT NULL,
+    expires_at    TEXT
 )
 """
 
@@ -745,19 +746,24 @@ def upsert_pattern_signal(db_path: str, signal: dict) -> int:
     Parameters (all from PatternSignal dataclass, serialised to dict):
       ticker, pattern_type, direction, zone_high, zone_low, zone_size_pct,
       timeframe, formed_at, status, quality_score, kb_conviction,
-      kb_regime, kb_signal_dir.
+      kb_regime, kb_signal_dir, expires_at (optional).
     """
     now_iso = datetime.now(timezone.utc).isoformat()
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         ensure_user_tables(conn)
+        # Migrate: add expires_at column if the table pre-dates this change
+        existing_cols = {r[1] for r in conn.execute('PRAGMA table_info(pattern_signals)')}
+        if 'expires_at' not in existing_cols:
+            conn.execute('ALTER TABLE pattern_signals ADD COLUMN expires_at TEXT')
+            conn.commit()
         cur = conn.execute(
             """INSERT INTO pattern_signals
                (ticker, pattern_type, direction, zone_high, zone_low,
                 zone_size_pct, timeframe, formed_at, status,
                 quality_score, kb_conviction, kb_regime, kb_signal_dir,
-                alerted_users, detected_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?)""",
+                alerted_users, detected_at, expires_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?)""",
             (
                 signal['ticker'], signal['pattern_type'], signal['direction'],
                 signal['zone_high'], signal['zone_low'], signal['zone_size_pct'],
@@ -765,6 +771,7 @@ def upsert_pattern_signal(db_path: str, signal: dict) -> int:
                 signal.get('status', 'open'), signal.get('quality_score'),
                 signal.get('kb_conviction', ''), signal.get('kb_regime', ''),
                 signal.get('kb_signal_dir', ''), now_iso,
+                signal.get('expires_at'),
             ),
         )
         conn.commit()

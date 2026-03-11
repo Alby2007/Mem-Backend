@@ -493,6 +493,19 @@ class BotRunner:
             clauses.append('LOWER(p.direction) = ?')
             params.append(direction.lower())
 
+        # Timeframes filter
+        tf_raw = config.get('timeframes')
+        if tf_raw:
+            tfs = json.loads(tf_raw) if isinstance(tf_raw, str) else tf_raw
+            if tfs:
+                placeholders = ','.join('?' for _ in tfs)
+                clauses.append(f'p.timeframe IN ({placeholders})')
+                params.extend(tfs)
+
+        # Expiry filter — skip patterns past their TTL
+        clauses.append('(p.expires_at IS NULL OR p.expires_at > ?)')
+        params.append(datetime.utcnow().isoformat())
+
         return (' AND '.join(clauses), params)
 
     # ── Bot scan loop ─────────────────────────────────────────────────────────
@@ -751,8 +764,16 @@ class BotRunner:
                     _stale_pct = 0.08 if (
                         _ticker_upper.endswith('=F') or _ticker_upper.endswith('=X')
                         or '.KS' in _ticker_upper or '.HK' in _ticker_upper
+                        or '.L' in _ticker_upper or '.T' in _ticker_upper
                         or 'BTC' in _ticker_upper or 'ETH' in _ticker_upper
                     ) else 0.05
+                    _price_ratio = abs(_live_price - entry_p) / entry_p if entry_p else 0
+                    if _price_ratio > 0.5:
+                        _logger.warning(
+                            'Bot %s: price/zone unit mismatch suspected for %s — '
+                            'live=%.4f zone=%.4f ratio=%.1fx (GBp vs GBX?)',
+                            bot_id, ticker, _live_price, entry_p, _price_ratio
+                        )
                     if direction == 'bullish':
                         if _live_price <= stop_p:
                             skips += 1
@@ -763,7 +784,7 @@ class BotRunner:
                                  bot_id, now_iso)
                             )
                             continue
-                        if abs(_live_price - entry_p) / entry_p > _stale_pct:
+                        if _price_ratio > _stale_pct:
                             skips += 1
                             conn.execute(
                                 "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
@@ -782,7 +803,7 @@ class BotRunner:
                                  bot_id, now_iso)
                             )
                             continue
-                        if abs(_live_price - entry_p) / entry_p > _stale_pct:
+                        if _price_ratio > _stale_pct:
                             skips += 1
                             conn.execute(
                                 "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",

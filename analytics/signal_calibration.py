@@ -246,6 +246,17 @@ def update_calibration(
                 (ticker, pattern_type, timeframe, market_regime,
                  outcome, source, bot_id, now),
             )
+            # Cascade: T2/T3 hit implies T1 was also hit — insert synthetic record
+            # so the observation log is consistent with the incremental mean update.
+            if outcome in ('hit_t2', 'hit_t3'):
+                conn.execute(
+                    """INSERT INTO calibration_observations
+                       (ticker, pattern_type, timeframe, market_regime,
+                        outcome, source, bot_id, observed_at)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    (ticker, pattern_type, timeframe, market_regime,
+                     'hit_t1', source, bot_id, now),
+                )
             if _owns_conn:
                 conn.commit()
         except Exception:

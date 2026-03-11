@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from ingest.base import BaseIngestAdapter, RawAtom, db_connect
 from typing import Dict, List, Optional
 
@@ -64,6 +64,8 @@ _TF_MAP = {
 
 # Default timeframes run by the adapter
 _DEFAULT_TIMEFRAMES = ['15m', '1h', '4h', '1d']
+
+_TTL_BY_TIMEFRAME = {'5m': 2, '15m': 5, '1h': 14, '4h': 21, '1d': 60}  # days
 
 
 # ── KB atom reader ─────────────────────────────────────────────────────────────
@@ -396,6 +398,10 @@ class PatternAdapter:
             if _pattern_exists(conn, sig):
                 continue
             try:
+                ttl_days = _TTL_BY_TIMEFRAME.get(sig.timeframe, 30)
+                expires_at = (
+                    datetime.utcnow() + timedelta(days=ttl_days)
+                ).isoformat()
                 upsert_pattern_signal(self.db_path, {
                     'ticker':        sig.ticker,
                     'pattern_type':  sig.pattern_type,
@@ -410,6 +416,7 @@ class PatternAdapter:
                     'kb_conviction': sig.kb_conviction,
                     'kb_regime':     sig.kb_regime,
                     'kb_signal_dir': sig.kb_signal_dir,
+                    'expires_at':    expires_at,
                 })
                 inserted += 1
             except Exception as exc:
