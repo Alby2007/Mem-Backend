@@ -15,6 +15,7 @@ function jnlSwitchTab(btn, tab) {
   if (tab === 'open')   loadJournalOpen();
   if (tab === 'closed') loadJournalClosed();
   if (tab === 'stats')  loadJournalStats();
+  if (tab === 'add')    jnlInitAddForm();
 }
 
 // ── Load journal screen ────────────────────────────────────────────────────────
@@ -33,7 +34,7 @@ async function loadJournalOpen() {
     const d = await apiFetch(`/users/${state.userId}/journal/open`);
     _jnlOpenData = d?.positions || [];
     if (!_jnlOpenData.length) {
-      el.innerHTML = '<div class="empty text-sm text-muted" style="padding:32px;">No open positions. Accept a tip to start tracking.</div>';
+      el.innerHTML = '<div class="empty text-sm text-muted" style="padding:32px;">No open positions. Accept a tip or tap "+ Add" to log a manual trade.</div>';
       return;
     }
     el.innerHTML = _jnlOpenData.map(p => renderOpenCard(p)).join('');
@@ -66,10 +67,17 @@ function renderOpenCard(p) {
   const tf     = p.timeframe || '';
   const regime = p.regime_at_entry ? p.regime_at_entry.replace(/_/g,' ') : '';
   const note   = escHtml(p.user_note || '');
+  const isManual = p.position_source === 'manual';
+  const sourceBadge = isManual
+    ? `<span class="jnl-source-badge" style="font-size:9px;color:var(--muted);border:1px solid var(--border);padding:1px 5px;border-radius:3px;margin-left:4px;">MANUAL</span>`
+    : '';
+  const deleteBtn = isManual
+    ? `<button class="btn btn-sm btn-ghost" style="color:var(--muted);" onclick="jnlDeleteManual(${p.id})">🗑 Remove</button>`
+    : '';
 
   return `<div class="jnl-open-card" data-id="${p.id}">
     <div class="jnl-card-header">
-      <span class="jnl-ticker ${dirCls}">${dir} ${escHtml(p.ticker)}</span>
+      <span class="jnl-ticker ${dirCls}">${dir} ${escHtml(p.ticker)}</span>${sourceBadge}
       <span class="jnl-badge">${escHtml(ptype)} ${escHtml(tf)}</span>
       <span class="jnl-regime text-muted text-xs">${escHtml(regime)}</span>
       <span class="jnl-hold text-muted text-xs">${escHtml(holdTxt)}</span>
@@ -89,9 +97,21 @@ function renderOpenCard(p) {
       <button class="btn btn-sm" style="background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.3);" onclick="jnlAction(${p.id},'closed','stopped_out')">✗ Stopped</button>
       <button class="btn btn-sm btn-ghost" onclick="jnlAction(${p.id},'hold_t2','manual')">📈 Hold T2</button>
       <button class="btn btn-sm btn-ghost" onclick="jnlOpenPartialModal(${p.id})">⚡ Partial</button>
+      ${deleteBtn}
     </div>
     <textarea class="jnl-note-input" placeholder="Add a note…" data-id="${p.id}" rows="1">${note}</textarea>
   </div>`;
+}
+
+async function jnlDeleteManual(id) {
+  if (!confirm('Remove this manual position?')) return;
+  try {
+    await apiFetch(`/users/${state.userId}/journal/positions/${id}`, { method: 'DELETE' });
+    showToast('Position removed');
+    await loadJournalOpen();
+  } catch(e) {
+    showToast('Error: ' + String(e), 'error');
+  }
 }
 
 async function jnlAction(followupId, action, closeMethod) {
@@ -315,6 +335,122 @@ function renderBreakdownBar(label, winRate, count, avgR) {
     <span class="jnl-bar-pct">${winRate != null ? winRate.toFixed(0) + '%' : '—'}</span>
     <span class="jnl-bar-meta text-muted text-xs">${count}n${escHtml(rTxt)}</span>
   </div>`;
+}
+
+// ── Manual entry form ─────────────────────────────────────────────────────────
+function jnlInitAddForm() {
+  // Direction toggle — idempotent
+  const dirBtns = document.querySelectorAll('.jnl-dir-btn');
+  dirBtns.forEach(btn => {
+    if (!btn._wired) {
+      btn._wired = true;
+      btn.addEventListener('click', function() {
+        dirBtns.forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+      });
+    }
+  });
+
+  // R:R preview — wire once
+  ['jnl-add-entry', 'jnl-add-stop', 'jnl-add-t1'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && !el._rrWired) {
+      el._rrWired = true;
+      el.addEventListener('input', _jnlUpdateRR);
+    }
+  });
+
+  // Submit button — wire once
+  const submitBtn = document.getElementById('jnl-add-submit-btn');
+  if (submitBtn && !submitBtn._wired) {
+    submitBtn._wired = true;
+    submitBtn.addEventListener('click', _jnlSubmitManual);
+  }
+}
+
+function _jnlUpdateRR() {
+  const entry = parseFloat(document.getElementById('jnl-add-entry')?.value);
+  const stop  = parseFloat(document.getElementById('jnl-add-stop')?.value);
+  const t1    = parseFloat(document.getElementById('jnl-add-t1')?.value);
+  const preview = document.getElementById('jnl-add-rr-preview');
+  if (!preview) return;
+  if (!entry || !stop || !t1 || isNaN(entry) || isNaN(stop) || isNaN(t1)) {
+    preview.style.display = 'none';
+    return;
+  }
+  const riskPts   = Math.abs(entry - stop);
+  const rewardPts = Math.abs(t1 - entry);
+  if (riskPts === 0) { preview.style.display = 'none'; return; }
+  const rr = (rewardPts / riskPts).toFixed(2);
+  const riskPct = ((riskPts / entry) * 100).toFixed(2);
+  document.getElementById('jnl-add-risk-pct').textContent = `${riskPct}%`;
+  document.getElementById('jnl-add-rr').textContent = `1:${rr}`;
+  preview.style.display = '';
+}
+
+async function _jnlSubmitManual() {
+  const errEl = document.getElementById('jnl-add-error');
+  const hide  = el => { if (el) el.style.display = 'none'; };
+  const show  = (el, msg) => { if (el) { el.textContent = msg; el.style.display = ''; } };
+  hide(errEl);
+
+  const ticker = (document.getElementById('jnl-add-ticker')?.value || '').trim().toUpperCase();
+  const dir    = document.querySelector('.jnl-dir-btn.active')?.dataset.val || 'bullish';
+  const entry  = document.getElementById('jnl-add-entry')?.value;
+  const stop   = document.getElementById('jnl-add-stop')?.value;
+  const t1     = document.getElementById('jnl-add-t1')?.value;
+  const t2     = document.getElementById('jnl-add-t2')?.value;
+  const size   = document.getElementById('jnl-add-size')?.value;
+  const tf     = document.getElementById('jnl-add-tf')?.value || '';
+  const pattern = (document.getElementById('jnl-add-pattern')?.value || '').trim();
+  const note   = (document.getElementById('jnl-add-note')?.value || '').trim();
+
+  if (!ticker)       { show(errEl, 'Ticker is required.'); return; }
+  if (!entry || isNaN(parseFloat(entry))) { show(errEl, 'Entry price is required.'); return; }
+  if (!stop  || isNaN(parseFloat(stop)))  { show(errEl, 'Stop loss is required.');   return; }
+  if (!t1    || isNaN(parseFloat(t1)))    { show(errEl, 'Target 1 is required.');    return; }
+
+  const payload = {
+    ticker,
+    direction:    dir,
+    entry_price:  parseFloat(entry),
+    stop_loss:    parseFloat(stop),
+    target_1:     parseFloat(t1),
+    target_2:     t2 ? parseFloat(t2) : undefined,
+    position_size: size ? parseFloat(size) : undefined,
+    timeframe:    tf,
+    pattern_type: pattern || 'manual',
+    user_note:    note,
+  };
+
+  const btn = document.getElementById('jnl-add-submit-btn');
+  if (btn) btn.disabled = true;
+  try {
+    await apiFetch(`/users/${state.userId}/journal/positions`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    showToast('Position added');
+    // Reset form
+    ['jnl-add-ticker','jnl-add-entry','jnl-add-stop','jnl-add-t1',
+     'jnl-add-t2','jnl-add-size','jnl-add-pattern'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    const noteEl = document.getElementById('jnl-add-note');
+    if (noteEl) noteEl.value = '';
+    const tfEl = document.getElementById('jnl-add-tf');
+    if (tfEl) tfEl.value = '';
+    document.querySelectorAll('.jnl-dir-btn').forEach((b, i) => b.classList.toggle('active', i === 0));
+    const rrPrev = document.getElementById('jnl-add-rr-preview');
+    if (rrPrev) rrPrev.style.display = 'none';
+    // Switch to Open tab
+    const openTab = document.querySelector('.jnl-tab[data-tab="open"]');
+    if (openTab) jnlSwitchTab(openTab, 'open');
+  } catch(e) {
+    show(errEl, e.message || 'Failed to add position');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // ── Toast helper (falls back to alert if not defined globally) ─────────────────

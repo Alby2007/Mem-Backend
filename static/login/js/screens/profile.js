@@ -95,6 +95,12 @@ async function loadProfile() {
         upgradeEl.textContent = '';
       }
     }
+    // Cash balance
+    const cashBalEl  = document.getElementById('prf-cash-balance');
+    const cashCurEl  = document.getElementById('prf-cash-currency');
+    if (cashBalEl  && d.available_cash  != null) cashBalEl.value  = d.available_cash;
+    if (cashCurEl  && d.cash_currency)           { const o = Array.from(cashCurEl.options).find(op => op.value === d.cash_currency); if (o) o.selected = true; }
+
     // Trading preferences
     const riskSlider = document.getElementById('prf-risk-slider');
     const riskVal    = document.getElementById('prf-risk-val');
@@ -240,6 +246,33 @@ async function loadProfile() {
         if (msgEl) msgEl.textContent = '';
       } catch(e) {
         if (msgEl) { msgEl.style.color = 'var(--red)'; msgEl.textContent = 'Error saving style preferences'; }
+      }
+    });
+  }
+
+  // Cash balance save button
+  const cashSaveBtn = document.getElementById('prf-cash-save-btn');
+  if (cashSaveBtn && !cashSaveBtn._wired) {
+    cashSaveBtn._wired = true;
+    cashSaveBtn.addEventListener('click', async function() {
+      const msgEl = document.getElementById('prf-cash-msg');
+      const bal  = parseFloat(document.getElementById('prf-cash-balance')?.value);
+      const cur  = document.getElementById('prf-cash-currency')?.value || 'GBP';
+      if (isNaN(bal) || bal < 0) {
+        if (msgEl) { msgEl.style.color = 'var(--red)'; msgEl.textContent = 'Enter a valid balance.'; }
+        return;
+      }
+      try {
+        await apiFetch(`/users/${state.userId}/cash`, {
+          method: 'PATCH',
+          body: JSON.stringify({ available_cash: bal, cash_currency: cur })
+        });
+        if (msgEl) {
+          msgEl.style.color = 'var(--green)'; msgEl.textContent = '\u2713 Saved';
+          setTimeout(() => { if (msgEl) msgEl.textContent = ''; }, 3000);
+        }
+      } catch(e) {
+        if (msgEl) { msgEl.style.color = 'var(--red)'; msgEl.textContent = e.message || 'Error saving'; }
       }
     });
   }

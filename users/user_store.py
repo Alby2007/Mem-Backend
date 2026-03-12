@@ -1770,6 +1770,8 @@ def _ensure_tip_followups_table(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tip_followups ADD COLUMN pattern_id INTEGER")
     if 'position_size' not in cols:
         conn.execute("ALTER TABLE tip_followups ADD COLUMN position_size REAL")
+    if 'position_source' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN position_source TEXT DEFAULT 'tip'")
     # 'active' = user consciously accepted; 'watching' = auto-created at tip send
     # status column already exists in DDL with DEFAULT 'watching'
     conn.commit()
@@ -1783,7 +1785,7 @@ _FOLLOWUP_COLS = [
     'pattern_type', 'timeframe', 'zone_low', 'zone_high',
     'expires_at', 'regime_at_entry', 'conviction_at_entry',
     'peak_price', 'peak_price_updated_at', 'alerted_peak_price',
-    'thesis_id',
+    'thesis_id', 'position_source',
 ]
 _FOLLOWUP_SELECT = """
     SELECT id, user_id, ticker, direction, entry_price,
@@ -1793,7 +1795,7 @@ _FOLLOWUP_SELECT = """
            pattern_type, timeframe, zone_low, zone_high,
            expires_at, regime_at_entry, conviction_at_entry,
            peak_price, peak_price_updated_at, alerted_peak_price,
-           thesis_id
+           thesis_id, position_source
     FROM tip_followups
 """
 
@@ -2108,6 +2110,83 @@ def upsert_tip_followup(
             )
         conn.commit()
         return cur.lastrowid, thesis_candidates
+    finally:
+        conn.close()
+
+
+def add_manual_journal_position(db_path: str, user_id: str, data: dict) -> int:
+    """Insert a user-entered manual position into tip_followups."""
+    required = ['ticker', 'direction', 'entry_price', 'stop_loss', 'target_1']
+    for f in required:
+        if not data.get(f):
+            raise ValueError(f'Missing required field: {f}')
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_tip_followups_table(conn)
+        now = datetime.now(timezone.utc).isoformat()
+        existing_cols = {row[1] for row in conn.execute('PRAGMA table_info(tip_followups)')}
+        has_timestamps = 'created_at' in existing_cols
+        if has_timestamps:
+            cur = conn.execute(
+                """INSERT INTO tip_followups
+                     (user_id, ticker, direction, entry_price, stop_loss, target_1, target_2,
+                      position_size, timeframe, pattern_type, user_note, status, position_source,
+                      opened_at, created_at, updated_at, partial_pct)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,'watching','manual',?,?,?,100)""",
+                (
+                    user_id,
+                    data['ticker'].upper().strip(),
+                    data['direction'],
+                    float(data['entry_price']),
+                    float(data['stop_loss']),
+                    float(data['target_1']),
+                    float(data['target_2']) if data.get('target_2') else None,
+                    float(data['position_size']) if data.get('position_size') else None,
+                    data.get('timeframe', ''),
+                    data.get('pattern_type', 'manual'),
+                    data.get('user_note', ''),
+                    data.get('opened_at') or now,
+                    now,
+                    now,
+                )
+            )
+        else:
+            cur = conn.execute(
+                """INSERT INTO tip_followups
+                     (user_id, ticker, direction, entry_price, stop_loss, target_1, target_2,
+                      position_size, timeframe, pattern_type, user_note, status, position_source,
+                      opened_at, partial_pct)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,'watching','manual',?,100)""",
+                (
+                    user_id,
+                    data['ticker'].upper().strip(),
+                    data['direction'],
+                    float(data['entry_price']),
+                    float(data['stop_loss']),
+                    float(data['target_1']),
+                    float(data['target_2']) if data.get('target_2') else None,
+                    float(data['position_size']) if data.get('position_size') else None,
+                    data.get('timeframe', ''),
+                    data.get('pattern_type', 'manual'),
+                    data.get('user_note', ''),
+                    data.get('opened_at') or now,
+                )
+            )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def delete_manual_journal_position(db_path: str, user_id: str, pos_id: int) -> None:
+    """Delete a manual-entry position. Only deletes rows where position_source='manual'."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        conn.execute(
+            "DELETE FROM tip_followups WHERE id=? AND user_id=? AND position_source='manual'",
+            (pos_id, user_id)
+        )
+        conn.commit()
     finally:
         conn.close()
 

@@ -224,7 +224,7 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
     <div class="nav-item active" data-screen="dashboard" id="nav-dashboard">
       <span class="nav-icon">▦</span><span class="nav-label">Dashboard</span>
     </div>
-    <div class="nav-item" data-screen="portfolio" id="nav-portfolio">
+    <div class="nav-item" data-screen="portfolio" id="nav-portfolio" style="display:none;">
       <span class="nav-icon">◈</span><span class="nav-label">Portfolio</span>
     </div>
     <div class="nav-item" data-screen="markets" id="nav-markets">
@@ -501,14 +501,14 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
     <div class="dsh-card">
       <div class="dsh-card-hdr">
         <div class="dsh-card-title">Your Active Positions</div>
-        <a class="dsh-card-action" href="#" onclick="navigate('portfolio');return false;">→ Portfolio</a>
+        <a class="dsh-card-action" href="#" onclick="navigate('journal');return false;">→ Journal</a>
       </div>
       <div id="dash-positions">
         <div class="dsh-empty">
           <span class="dsh-empty-icon">📊</span>
           <div class="dsh-empty-title">No positions tracked yet</div>
-          <div class="dsh-empty-sub">Add your holdings in Portfolio and the AI will monitor your positions, surface matching signals, and flag when your thesis changes.</div>
-          <a class="dsh-empty-cta" onclick="navigate('portfolio')">Set up portfolio →</a>
+          <div class="dsh-empty-sub">Accept a tip or log a manual trade in the Journal to start tracking positions.</div>
+          <a class="dsh-empty-cta" onclick="navigate('journal')">Open Journal →</a>
         </div>
       </div>
       <!-- hidden adapter panel preserved for dev-mode JS toggle -->
@@ -1108,6 +1108,7 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
       <button class="btn btn-ghost btn-sm jnl-tab active" data-tab="open" onclick="jnlSwitchTab(this,'open')">Open</button>
       <button class="btn btn-ghost btn-sm jnl-tab" data-tab="closed" onclick="jnlSwitchTab(this,'closed')">Closed</button>
       <button class="btn btn-ghost btn-sm jnl-tab" data-tab="stats" onclick="jnlSwitchTab(this,'stats')">Stats</button>
+      <button class="btn btn-ghost btn-sm jnl-tab" data-tab="add" onclick="jnlSwitchTab(this,'add')">+ Add</button>
     </div>
   </div>
 
@@ -1147,6 +1148,83 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
     <div style="margin-top:20px;">
       <div class="section-title">Regime Breakdown</div>
       <div id="jnl-regime-bars" class="jnl-regime-bars"></div>
+    </div>
+  </div>
+
+  <!-- Add position tab -->
+  <div id="jnl-tab-add" class="jnl-tab-panel" style="display:none;">
+    <div class="jnl-add-form">
+      <div class="jnl-add-title">Manual Position Entry</div>
+
+      <div class="jnl-add-row">
+        <div class="jnl-add-field">
+          <label>Ticker *</label>
+          <input id="jnl-add-ticker" type="text" placeholder="e.g. BARC.L" style="text-transform:uppercase;" />
+        </div>
+        <div class="jnl-add-field">
+          <label>Direction *</label>
+          <div class="jnl-dir-toggle">
+            <button class="jnl-dir-btn active" data-val="bullish">▲ Long</button>
+            <button class="jnl-dir-btn" data-val="bearish">▼ Short</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="jnl-add-row">
+        <div class="jnl-add-field">
+          <label>Entry Price *</label>
+          <input id="jnl-add-entry" type="number" step="any" placeholder="0.00" />
+        </div>
+        <div class="jnl-add-field">
+          <label>Stop Loss *</label>
+          <input id="jnl-add-stop" type="number" step="any" placeholder="0.00" />
+        </div>
+      </div>
+
+      <div class="jnl-add-row">
+        <div class="jnl-add-field">
+          <label>Target 1 *</label>
+          <input id="jnl-add-t1" type="number" step="any" placeholder="0.00" />
+        </div>
+        <div class="jnl-add-field">
+          <label>Target 2</label>
+          <input id="jnl-add-t2" type="number" step="any" placeholder="0.00" />
+        </div>
+      </div>
+
+      <div class="jnl-add-row">
+        <div class="jnl-add-field">
+          <label>Position Size (shares/units)</label>
+          <input id="jnl-add-size" type="number" step="any" placeholder="optional" />
+        </div>
+        <div class="jnl-add-field">
+          <label>Timeframe</label>
+          <select id="jnl-add-tf">
+            <option value="">—</option>
+            <option value="15m">15m</option>
+            <option value="1h">1h</option>
+            <option value="4h">4h</option>
+            <option value="1d">1d</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="jnl-add-field">
+        <label>Pattern / Setup Type</label>
+        <input id="jnl-add-pattern" type="text" placeholder="e.g. FVG, breakout, manual" />
+      </div>
+
+      <div class="jnl-add-field">
+        <label>Note</label>
+        <textarea id="jnl-add-note" rows="2" placeholder="Why you took this trade…"></textarea>
+      </div>
+
+      <div id="jnl-add-rr-preview" class="jnl-rr-preview" style="display:none;">
+        Risk: <span id="jnl-add-risk-pct"></span> · R:R <span id="jnl-add-rr"></span>
+      </div>
+
+      <div class="jnl-add-error" id="jnl-add-error" style="color:var(--red);font-size:12px;display:none;"></div>
+      <button class="btn btn-primary" id="jnl-add-submit-btn" style="margin-top:12px;width:100%;">Add Position</button>
     </div>
   </div>
 
@@ -1523,6 +1601,27 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
         </div>
       </div>
 
+      <!-- Trading Account cash balance -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">TRADING ACCOUNT</div></div>
+        <div class="prf-card-body">
+          <div class="prf-field">
+            <label>Available Cash Balance</label>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <select id="prf-cash-currency" style="width:80px;">
+                <option value="GBP">GBP</option>
+                <option value="USD">USD</option>
+                <option value="EUR">EUR</option>
+              </select>
+              <input id="prf-cash-balance" type="number" min="0" step="100" placeholder="e.g. 10000" style="flex:1;" />
+            </div>
+            <div class="prf-hint">Used to size positions in tips. Updated anytime.</div>
+          </div>
+          <button class="btn btn-primary prf-btn-full" id="prf-cash-save-btn">Save Cash Balance</button>
+          <div class="profile-msg" id="prf-cash-msg"></div>
+        </div>
+      </div>
+
       <!-- Telegram -->
       <div class="prf-card">
         <div class="prf-card-header"><div class="prf-card-title">TELEGRAM</div></div>
@@ -1852,7 +1951,7 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
 <nav id="mobile-nav" aria-label="Mobile navigation">
   <div id="mobile-nav-inner">
     <div class="mnav-item active" data-screen="dashboard" id="mnav-dashboard"><span class="mnav-icon">▦</span>Dashboard</div>
-    <div class="mnav-item" data-screen="portfolio" id="mnav-portfolio"><span class="mnav-icon">◈</span>Portfolio</div>
+    <div class="mnav-item" data-screen="portfolio" id="mnav-portfolio" style="display:none;"><span class="mnav-icon">◈</span>Portfolio</div>
     <div class="mnav-item" data-screen="markets" id="mnav-markets"><span class="mnav-icon">◬</span>Markets</div>
     <div class="mnav-item" data-screen="visualiser" id="mnav-visualiser"><span class="mnav-icon">⬡</span>Visualiser</div>
     <div class="mnav-item" data-screen="chat" id="mnav-chat" style="position:relative"><span class="mnav-icon">◎</span>Chat<span id="mchat-alert-badge" style="display:none;position:absolute;top:2px;right:4px;min-width:14px;height:14px;padding:0 3px;background:#e53e3e;color:#fff;font-size:8px;font-weight:700;border-radius:7px;line-height:14px;text-align:center;"></span></div>

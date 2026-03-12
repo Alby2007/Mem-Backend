@@ -10,7 +10,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 import extensions as ext
@@ -1320,6 +1320,38 @@ async def journal_regime_breakdown(
     try:
         from users.user_store import get_regime_breakdown
         return {"breakdown": get_regime_breakdown(ext.DB_PATH, user_id)}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
+@router.post("/users/{user_id}/journal/positions")
+async def journal_add_manual_position(
+    user_id: str,
+    body: dict = Body(...),
+    current_user: str = Depends(get_current_user),
+):
+    await user_path_auth(current_user, user_id)
+    try:
+        from users.user_store import add_manual_journal_position
+        result = add_manual_journal_position(ext.DB_PATH, user_id, body)
+        return {"ok": True, "id": result}
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
+@router.delete("/users/{user_id}/journal/positions/{pos_id}")
+async def journal_delete_manual_position(
+    user_id: str,
+    pos_id: int,
+    current_user: str = Depends(get_current_user),
+):
+    await user_path_auth(current_user, user_id)
+    try:
+        from users.user_store import delete_manual_journal_position
+        delete_manual_journal_position(ext.DB_PATH, user_id, pos_id)
+        return {"ok": True}
     except Exception as e:
         raise HTTPException(500, detail=str(e))
 
