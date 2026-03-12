@@ -264,7 +264,7 @@ async function loadProfile() {
       }
       try {
         await apiFetch(`/users/${state.userId}/cash`, {
-          method: 'PATCH',
+          method: 'POST',
           body: JSON.stringify({ available_cash: bal, cash_currency: cur })
         });
         if (msgEl) {
