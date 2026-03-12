@@ -432,13 +432,14 @@ def create_fastapi_app() -> FastAPI:
     from routes_v2 import (
         health, auth, chat, billing, paper,
         markets, analytics_, patterns, network, waitlist, thesis,
-        ingest_routes, kb, users, telegram, scenario, discovery,
+        ingest_routes, kb, users, telegram, scenario, discovery, status as status_routes,
     )
     for _router in [
         health.router, auth.router, chat.router, billing.router, paper.router,
         markets.router, analytics_.router, patterns.router, network.router,
         waitlist.router, thesis.router, ingest_routes.router, kb.router,
         users.router, telegram.router, scenario.router, discovery.router,
+        status_routes.router,
     ]:
         app.include_router(_router)
 
