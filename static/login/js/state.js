@@ -127,6 +127,10 @@ function applyDevGating() {
   if (genBtn) genBtn.style.display = dev ? '' : 'none';
   const profileSel = document.getElementById('p-change-profile-select');
   if (profileSel) profileSel.style.display = dev ? '' : 'none';
+  const navPrivate  = document.getElementById('nav-private-fleet');
+  const mnavPrivate = document.getElementById('mnav-private-fleet');
+  if (navPrivate)  navPrivate.style.display  = dev ? '' : 'none';
+  if (mnavPrivate) mnavPrivate.style.display = dev ? '' : 'none';
   // Tips: Tier row
   const tierRow = document.getElementById('tip-tier-row');
   if (tierRow) tierRow.style.display = dev ? '' : 'none';

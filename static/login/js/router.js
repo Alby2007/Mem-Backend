@@ -1,7 +1,7 @@
 // ── Router ────────────────────────────────────────────────────────────────────
-const _SCREENS = ['dashboard','portfolio','markets','visualiser','chat','tips','patterns','network','history','journal','paper','subscription','profile'];
+const _SCREENS = ['dashboard','portfolio','markets','visualiser','chat','tips','patterns','network','history','journal','paper','private-fleet','subscription','profile'];
 const _AUTH_SCREENS = new Set(['login', 'register']);
-const _NEXT_RE = /^\/[a-z0-9_-]+\/(dashboard|portfolio|markets|visualiser|chat|tips|patterns|network|history|journal|paper|subscription|profile)$/;
+const _NEXT_RE = /^\/[a-z0-9_-]+\/(dashboard|portfolio|markets|visualiser|chat|tips|patterns|network|history|journal|paper|private-fleet|subscription|profile)$/;
 
 function _screenFromPath(path) {
   // /:username/screen  → screen name
@@ -23,7 +23,7 @@ const _SCREEN_TITLES = {
   dashboard: 'Dashboard', portfolio: 'Portfolio', markets: 'Markets',
   visualiser: 'Visualiser', chat: 'Chat', tips: 'Tips', patterns: 'Patterns',
   network: 'Network', history: 'History', journal: 'Journal',
-  paper: 'Paper Trader', subscription: 'Subscription', profile: 'Profile',
+  paper: 'Paper Trader', 'private-fleet': 'Private Fleet', subscription: 'Subscription', profile: 'Profile',
   login: 'Sign In', register: 'Create Account',
 };
 
@@ -64,7 +64,8 @@ function showScreen(name) {
   if (name === 'markets')    initMarketsScreen();
   if (main) main.style.overflow = (name === 'visualiser') ? 'hidden' : '';
   if (name === 'visualiser') loadVisualiser();
-  if (name === 'paper')     loadPaperTrader();
+  if (name === 'paper')          loadPaperTrader();
+  if (name === 'private-fleet') loadPrivateFleet();
   if (name === 'login')         { _injectAuthTgWidget(); _loadLoginStats(); }
   if (name === 'register')      {}
   if (name === 'profile')      loadProfile();

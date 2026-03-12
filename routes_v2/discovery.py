@@ -9,8 +9,10 @@ from __future__ import annotations
 import os
 import sqlite3
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
+
+from routes_v2.auth import user_path_auth
 
 import extensions as ext
 from services.discovery_fleet import (
@@ -120,3 +122,38 @@ async def discovery_reset(x_internal_secret: str = Header(None)):
         return {'deleted_bots': len(bot_ids), 'status': 'reset'}
     except Exception as e:
         raise HTTPException(500, detail=str(e))
+
+
+# ── Dev-only proxy routes (user-authenticated, is_dev gated) ─────────────────
+
+def _dev_gate(user_id: str) -> None:
+    conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+    row = conn.execute(
+        'SELECT is_dev FROM user_preferences WHERE user_id=?', (user_id,)
+    ).fetchone()
+    conn.close()
+    if not row or not row[0]:
+        raise HTTPException(403, detail='dev only')
+
+
+@router.get('/users/{user_id}/private-fleet/status')
+async def private_fleet_status(user_id: str, _: str = Depends(user_path_auth)):
+    _dev_gate(user_id)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    result = get_discovery_status(conn)
+    conn.close()
+    return result
+
+
+@router.get('/users/{user_id}/private-fleet/report')
+async def private_fleet_report(
+    user_id: str,
+    min_observations: int = Query(3, ge=1),
+    limit: int = Query(50, ge=1, le=500),
+    _: str = Depends(user_path_auth),
+):
+    _dev_gate(user_id)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    result = get_discovery_report(conn, min_observations=min_observations, limit=limit)
+    conn.close()
+    return {'report': result}

@@ -254,6 +254,9 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
     <div class="nav-item" data-screen="paper" id="nav-paper">
       <span class="nav-icon">◫</span><span class="nav-label">Paper Trader</span>
     </div>
+    <div class="nav-item" data-screen="private-fleet" id="nav-private-fleet" style="display:none;">
+      <span class="nav-icon">⬡</span><span class="nav-label">Private Fleet</span>
+    </div>
   </div>
   <div class="nav-bottom">
     <div class="nav-item" data-screen="subscription" id="nav-subscription">
@@ -1178,6 +1181,9 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
 </div>
 
 <!-- PAPER TRADER ──────────────────────────────────────────── -->
+<div class="screen" id="screen-private-fleet"></div>
+
+<!-- PAPER TRADER ──────────────────────────────────────────── -->
 <div class="screen" id="screen-paper">
 
   <!-- Header -->
@@ -1855,6 +1861,7 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
     <div class="mnav-item" data-screen="history" id="mnav-history"><span class="mnav-icon">◷</span>History</div>
     <div class="mnav-item" data-screen="journal" id="mnav-journal"><span class="mnav-icon">◧</span>Journal</div>
     <div class="mnav-item" data-screen="paper" id="mnav-paper"><span class="mnav-icon">◫</span>Paper Trader</div>
+    <div class="mnav-item" data-screen="private-fleet" id="mnav-private-fleet" style="display:none;"><span class="mnav-icon">⬡</span>Private Fleet</div>
     <div class="mnav-item" data-screen="subscription" id="mnav-subscription"><span class="mnav-icon">◉</span>Subscription</div>
     <div class="mnav-item" data-screen="profile" id="mnav-profile"><span class="mnav-icon">⊕</span>Profile</div>
     <div class="mnav-item" data-no-nav="1" id="mnav-signout" onclick="doSignOut()"><span class="mnav-icon">⏻</span>Sign Out</div>
@@ -1871,6 +1878,7 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
 <script src="js/screens/portfolio.js?v=20260309g"></script>
 <script src="js/screens/chat.js?v=20260310a"></script>
 <script src="js/screens/paper.js?v=20260307b"></script>
+<script src="js/screens/private_fleet.js"></script>
 <script src="js/screens/profile.js"></script>
 <script src="js/screens/subscription.js"></script>
 <script src="js/screens/tips.js"></script>
