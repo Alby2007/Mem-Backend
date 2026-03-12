@@ -965,7 +965,7 @@ def _read_kb_atoms_for_ticker(ticker: str, predicates: list) -> dict:
         conn.row_factory = sqlite3.Row
         placeholders = ','.join('?' for _ in predicates)
         rows = conn.execute(
-            f"SELECT predicate, object FROM facts WHERE subject=? AND predicate IN ({placeholders}) "
+            f"SELECT predicate, object FROM facts WHERE LOWER(subject)=? AND predicate IN ({placeholders}) "
             f"ORDER BY timestamp DESC",
             [ticker.lower()] + predicates,
         ).fetchall()
@@ -1044,10 +1044,22 @@ def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float)
     ticker     = candidate.get('ticker', '')
     size_mult  = 1.0
 
-    # ── Read new analytics atoms (non-blocking, fails gracefully) ─────────────
+    # ── Read KB atoms live (non-blocking, fails gracefully) ───────────────────
+    # Fetches conviction_tier + signal_direction directly so stale or NULL
+    # kb_conviction / kb_signal_dir columns in pattern_signals don't block entry.
     kb_atoms = _read_kb_atoms_for_ticker(ticker, [
         'pattern_decay_pct', 'anomaly_severity', 'auto_thesis',
+        'conviction_tier', 'signal_direction', 'price_regime',
     ]) if ticker else {}
+
+    # Override pattern_signals columns with fresh live KB values when available
+    _live_conv = (kb_atoms.get('conviction_tier') or '').lower()
+    _live_dir  = (kb_atoms.get('signal_direction') or '').lower()
+    _live_reg  = (kb_atoms.get('price_regime') or '').lower()
+    if _live_conv and not conviction:
+        conviction = _live_conv
+    if _live_dir and not signal_dir:
+        signal_dir = _live_dir
 
     decay_pct = None
     try:
@@ -1135,12 +1147,12 @@ def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float)
     if effective_quality >= 0.70 and conviction in ('medium', 'moderate'):
         return True, f'quality+moderate conviction: q={quality:.2f} {conviction}{anomaly_note}', size_mult
 
-    # Quality ≥ 0.72 with no conviction data at all — only if KB enrichment present
+    # Quality ≥ 0.72 with no conviction data — only enter if at least some KB enrichment
+    # present (kb_regime or kb_signal_dir). conviction is already '' here so omit that check.
     if effective_quality >= 0.72 and not conviction and not signal_dir:
         _has_kb = bool(
             candidate.get('kb_regime') or
-            candidate.get('kb_signal_dir') or
-            (conviction and conviction not in ('', 'none'))
+            candidate.get('kb_signal_dir')
         )
         if not _has_kb:
             return False, f'quality {quality:.2f} but no KB enrichment — skipped', 1.0
@@ -1154,8 +1166,10 @@ def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float)
     # Bots accumulate calibration only after trades close; without this branch,
     # uncalibrated cells with low KB conviction are permanently locked out.
     # Half-size position (0.5×) to limit cold-start risk exposure.
-    if cal_hr is None and effective_quality >= 0.65:
-        return True, f'cold-start entry: q={quality:.2f} no cal yet (0.5× size){anomaly_note}', 0.5
+    # Also treat sparse calibration (< 10 samples) as bootstrap mode — use
+    # cold-start path so the gate doesn't over-filter while data accumulates.
+    if (cal_hr is None or cal_n < 10) and effective_quality >= 0.65:
+        return True, f'cold-start entry: q={quality:.2f} cal_n={cal_n} bootstrap (0.5× size){anomaly_note}', 0.5
 
     # Default: skip (conservative)
     return False, f'no strong signal: q={quality:.2f} conv={conviction} cal_hr={cal_hr}', 1.0

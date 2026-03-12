@@ -337,6 +337,59 @@ async def _lifespan(app: FastAPI):
     except Exception as _pm_e:
         _logger.warning('PositionMonitor failed to start: %s', _pm_e)
 
+    # ── Daily maintenance: pattern pool cleanup + prediction ledger expiry ──────
+    # Fix #3: expire low-quality (< 0.45) patterns older than 48h from the pool
+    # Fix #5: expire stale predictions in the ledger (past their expires_at)
+    try:
+        import threading as _maint_threading
+        def _daily_maintenance() -> None:
+            import time as _mt
+            import sqlite3 as _msq
+            _mt.sleep(120)  # let startup settle
+            while True:
+                try:
+                    _mconn = _msq.connect(ext.DB_PATH, timeout=15)
+                    _mconn.execute('PRAGMA journal_mode=WAL')
+                    _mconn.execute('PRAGMA busy_timeout=15000')
+                    # Pattern pool cleanup: quality < 0.45 AND older than 48h
+                    _n_pat = _mconn.execute("""
+                        UPDATE pattern_signals SET status='broken'
+                        WHERE status NOT IN ('filled','broken','expired')
+                          AND quality_score < 0.45
+                          AND detected_at < datetime('now', '-48 hours')
+                    """).rowcount
+                    # Also expire patterns older than 5 days regardless of quality
+                    _n_stale = _mconn.execute("""
+                        UPDATE pattern_signals SET status='broken'
+                        WHERE status NOT IN ('filled','broken','expired')
+                          AND detected_at < datetime('now', '-5 days')
+                    """).rowcount
+                    _mconn.commit()
+                    _mconn.close()
+                    if _n_pat or _n_stale:
+                        _logger.warning(
+                            'Maintenance: expired %d low-quality + %d stale patterns',
+                            _n_pat, _n_stale,
+                        )
+                except Exception as _me:
+                    _logger.warning('Maintenance pattern cleanup failed: %s', _me)
+                # Prediction ledger expiry
+                try:
+                    if getattr(ext, 'prediction_ledger', None) is not None:
+                        _expired = ext.prediction_ledger.expire_stale_predictions()
+                        if _expired:
+                            _logger.warning('Maintenance: expired %d stale predictions', _expired)
+                except Exception as _ple:
+                    _logger.warning('Maintenance prediction expiry failed: %s', _ple)
+                _mt.sleep(86400)  # run once per day
+
+        _maint_threading.Thread(
+            target=_daily_maintenance, daemon=True, name='daily-maintenance'
+        ).start()
+        _logger.info('Daily maintenance thread started')
+    except Exception as _maint_e:
+        _logger.warning('Daily maintenance thread failed to start: %s', _maint_e)
+
     # ── Notification schedulers ────────────────────────────────────────────────
     # Guard: skip entirely if bot token is absent — no point burning CPU on
     # curate_snapshot() for every user when sends will silently fail anyway.

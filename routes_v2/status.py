@@ -36,8 +36,11 @@ async def platform_status(key: str = ""):
             JOIN paper_bot_configs pbc ON pbc.bot_id = pp.bot_id
             WHERE pbc.role='discovery' AND pp.status='open'
         """).fetchone()[0]
-        closed_total = conn.execute("SELECT COUNT(*) FROM paper_positions WHERE status='closed'").fetchone()[0]
-        wins = conn.execute(
+        # Exclude force-closed (mcp_*) positions with null pnl_r from analytics
+        closed_total = conn.execute(
+            "SELECT COUNT(*) FROM paper_positions WHERE status='closed' AND pnl_r IS NOT NULL"
+        ).fetchone()[0]
+        wins         = conn.execute(
             "SELECT COUNT(*) FROM paper_positions WHERE status='closed' AND pnl_r > 0"
         ).fetchone()[0]
         closes_1h = conn.execute("""
@@ -51,10 +54,10 @@ async def platform_status(key: str = ""):
 
         # Calibration
         cal_obs = conn.execute("SELECT COUNT(*) FROM calibration_observations").fetchone()[0]
-        disc_closed = conn.execute("""
+        disc_closed  = conn.execute("""
             SELECT COUNT(*) FROM paper_positions pp
             JOIN paper_bot_configs pbc ON pbc.bot_id = pp.bot_id
-            WHERE pbc.role='discovery' AND pp.status='closed'
+            WHERE pbc.role='discovery' AND pp.status='closed' AND pp.pnl_r IS NOT NULL
         """).fetchone()[0]
 
         # Top discovery pattern (most entries in last 24h)
