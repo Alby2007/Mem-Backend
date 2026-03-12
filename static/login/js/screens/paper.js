@@ -572,55 +572,106 @@ async function _ptGenToggle(btn) {
 
 // ── Manual bot creation modal ─────────────────────────────────────────────────
 
+const _EXCHANGE_MAP = {
+  'US':   null,
+  'UK':   JSON.stringify(['.L']),
+  'EU':   JSON.stringify(['.DE','.PA','.AS','.L']),
+  'ASIA': JSON.stringify(['.T','.HK','.KS','.TW']),
+};
+
 function _ptShowManualBotModal() {
-  if (document.getElementById('pt-manual-bot-modal')) return;
-  const overlay = document.createElement('div');
-  overlay.id = 'pt-manual-bot-modal';
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:center;justify-content:center;';
-  overlay.innerHTML = `
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:24px 28px;max-width:420px;width:95%;max-height:90vh;overflow-y:auto;">
-      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">Manual Bot Override</div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">This bot won't be subject to evolutionary selection.</div>
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        <label class="evo-form-row">Name (optional)<input id="mb-name" type="text" placeholder="My Strategy" class="evo-input"></label>
-        <label class="evo-form-row">Pattern types (comma-sep)<input id="mb-patterns" type="text" placeholder="fvg,order_block" class="evo-input"></label>
-        <label class="evo-form-row">Sectors (comma-sep, blank=all)<input id="mb-sectors" type="text" placeholder="technology,energy" class="evo-input"></label>
-        <label class="evo-form-row">Volatility (blank=all)<input id="mb-vol" type="text" placeholder="high,extreme" class="evo-input"></label>
-        <label class="evo-form-row">Direction bias<select id="mb-dir" class="evo-input"><option value="">both</option><option value="bullish">bullish</option><option value="bearish">bearish</option></select></label>
-        <label class="evo-form-row">Risk % <input id="mb-risk" type="number" step="0.1" min="0.5" max="2.0" value="1.0" class="evo-input"></label>
-        <label class="evo-form-row">Max positions <input id="mb-maxpos" type="number" step="1" min="2" max="6" value="4" class="evo-input"></label>
-        <label class="evo-form-row">Min quality <input id="mb-minq" type="number" step="0.01" min="0.55" max="0.80" value="0.65" class="evo-input"></label>
-        <label class="evo-form-row">Starting balance (£) <input id="mb-bal" type="number" step="500" min="500" value="5000" class="evo-input"></label>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:16px;">
-        <button id="mb-confirm" class="btn btn-primary" style="flex:1;">Create Bot</button>
-        <button class="btn btn-ghost" onclick="document.getElementById('pt-manual-bot-modal').remove()">Cancel</button>
+  if (document.getElementById('manual-bot-modal')) return;
+  const _patOpts = ['fvg','ifvg','order_block','breaker','mitigation','liquidity_void'];
+  const _secOpts = ['technology','energy','financials','healthcare','consumer','industrials'];
+  const html = `
+    <div id="manual-bot-modal" style="position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;">
+      <div style="background:var(--bg2,var(--card));border:1px solid var(--border);border-radius:8px;padding:28px;width:480px;max-width:95vw;max-height:90vh;overflow-y:auto;">
+        <h3 style="color:var(--accent);margin:0 0 20px;">Custom Bot</h3>
+
+        <label style="color:var(--muted);font-size:12px;">Strategy Name</label>
+        <input id="mb-name" placeholder="My Strategy" style="width:100%;margin:4px 0 12px;padding:8px;background:var(--bg3,var(--card));border:1px solid var(--border);color:var(--text);border-radius:4px;box-sizing:border-box;">
+
+        <label style="color:var(--muted);font-size:12px;">Pattern Types</label>
+        <div id="mb-patterns" style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 12px;">
+          ${_patOpts.map(p => `<label style="cursor:pointer;color:var(--text);font-size:12px;"><input type="checkbox" value="${p}" style="margin-right:4px;">${p}</label>`).join('')}
+        </div>
+
+        <label style="color:var(--muted);font-size:12px;">Sectors</label>
+        <div id="mb-sectors" style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 12px;">
+          ${_secOpts.map(s => `<label style="cursor:pointer;color:var(--text);font-size:12px;"><input type="checkbox" value="${s}" style="margin-right:4px;">${s}</label>`).join('')}
+        </div>
+
+        <label style="color:var(--muted);font-size:12px;">Exchange</label>
+        <select id="mb-exchange" style="width:100%;margin:4px 0 12px;padding:8px;background:var(--bg3,var(--card));border:1px solid var(--border);color:var(--text);border-radius:4px;">
+          <option value="">Any</option>
+          <option value="US">US only</option>
+          <option value="UK">UK (.L)</option>
+          <option value="EU">Europe</option>
+          <option value="ASIA">Asia</option>
+        </select>
+
+        <label style="color:var(--muted);font-size:12px;">Direction Bias</label>
+        <select id="mb-direction" style="width:100%;margin:4px 0 12px;padding:8px;background:var(--bg3,var(--card));border:1px solid var(--border);color:var(--text);border-radius:4px;">
+          <option value="">Any</option>
+          <option value="bullish">Bullish only</option>
+          <option value="bearish">Bearish only</option>
+        </select>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+          <div>
+            <label style="color:var(--muted);font-size:12px;">Risk % per trade</label>
+            <input id="mb-risk" type="number" value="1.0" min="0.5" max="3.0" step="0.1"
+              style="width:100%;margin-top:4px;padding:8px;background:var(--bg3,var(--card));border:1px solid var(--border);color:var(--text);border-radius:4px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="color:var(--muted);font-size:12px;">Max Positions</label>
+            <input id="mb-maxpos" type="number" value="4" min="1" max="8"
+              style="width:100%;margin-top:4px;padding:8px;background:var(--bg3,var(--card));border:1px solid var(--border);color:var(--text);border-radius:4px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="color:var(--muted);font-size:12px;">Min Quality</label>
+            <input id="mb-quality" type="number" value="0.65" min="0.55" max="0.80" step="0.01"
+              style="width:100%;margin-top:4px;padding:8px;background:var(--bg3,var(--card));border:1px solid var(--border);color:var(--text);border-radius:4px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="color:var(--muted);font-size:12px;">Starting Balance (£)</label>
+            <input id="mb-balance" type="number" value="5000" min="500" max="100000" step="500"
+              style="width:100%;margin-top:4px;padding:8px;background:var(--bg3,var(--card));border:1px solid var(--border);color:var(--text);border-radius:4px;box-sizing:border-box;">
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px;">
+          <button onclick="document.getElementById('manual-bot-modal').remove()"
+            style="padding:8px 16px;background:var(--bg3,var(--card));border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer;">Cancel</button>
+          <button onclick="_submitManualBot()"
+            style="padding:8px 16px;background:var(--accent);border:none;color:#000;border-radius:4px;cursor:pointer;font-weight:700;">Launch Bot</button>
+        </div>
       </div>
     </div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector('#mb-confirm').addEventListener('click', async () => {
-    const toJson = v => { const s=v.trim(); if(!s) return null; return JSON.stringify(s.split(',').map(x=>x.trim()).filter(Boolean)); };
-    const genome = {
-      strategy_name:  overlay.querySelector('#mb-name').value.trim() || null,
-      pattern_types:  toJson(overlay.querySelector('#mb-patterns').value),
-      sectors:        toJson(overlay.querySelector('#mb-sectors').value),
-      volatility:     toJson(overlay.querySelector('#mb-vol').value),
-      direction_bias: overlay.querySelector('#mb-dir').value || null,
-      risk_pct:       parseFloat(overlay.querySelector('#mb-risk').value),
-      max_positions:  parseInt(overlay.querySelector('#mb-maxpos').value, 10),
-      min_quality:    parseFloat(overlay.querySelector('#mb-minq').value),
-    };
-    const bal = parseFloat(overlay.querySelector('#mb-bal').value);
-    try {
-      await apiFetch(`/users/${state.userId}/bots`, {
-        method: 'POST',
-        body: JSON.stringify({ ...genome, virtual_balance: bal }),
-      });
-      showToast('Manual bot created', 'ok');
-      overlay.remove();
-      _ptLoadFleet();
-    } catch(e) { showToast(e.message||'Error', 'error'); }
-  });
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function _submitManualBot() {
+  const patterns = [...document.querySelectorAll('#mb-patterns input:checked')].map(el => el.value);
+  const sectors  = [...document.querySelectorAll('#mb-sectors input:checked')].map(el => el.value);
+  const exchKey  = document.getElementById('mb-exchange').value;
+  const body = {
+    strategy_name:   document.getElementById('mb-name').value || 'Custom Bot',
+    pattern_types:   patterns.length ? JSON.stringify(patterns) : null,
+    sectors:         sectors.length  ? JSON.stringify(sectors)  : null,
+    exchanges:       _EXCHANGE_MAP[exchKey] ?? null,
+    direction_bias:  document.getElementById('mb-direction').value || null,
+    risk_pct:        parseFloat(document.getElementById('mb-risk').value),
+    max_positions:   parseInt(document.getElementById('mb-maxpos').value, 10),
+    min_quality:     parseFloat(document.getElementById('mb-quality').value),
+    virtual_balance: parseFloat(document.getElementById('mb-balance').value),
+  };
+  try {
+    const res = await apiFetch(`/users/${state.userId}/bots`, { method: 'POST', body: JSON.stringify(body) });
+    document.getElementById('manual-bot-modal').remove();
+    showToast('Bot launched: ' + (res.bot_id || 'ok'), 'ok');
+    _ptLoadFleet();
+  } catch(e) { showToast(e.message || 'Error', 'error'); }
 }
 
 // ── Onboarding modal ──────────────────────────────────────────────────────────
