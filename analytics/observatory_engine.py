@@ -444,20 +444,28 @@ class _CalibrationSensor:
                 row = conn.execute(
                     "SELECT AVG(hit_rate_t1) FROM signal_calibration WHERE pattern_type='fvg'"
                 ).fetchone()
+                # Only alert if avg hit rate is low AND no active FVG bot already has min_quality >= 0.72
                 if row and row[0] is not None and row[0] < 0.25:
-                    findings.append(Finding(
-                        sensor='calibration',
-                        severity='high',
-                        subject='fvg',
-                        description=(
-                            f'FVG calibration hit_rate_t1={row[0]:.3f} < 0.25 '
-                            f'— active bot should raise min_quality to 0.72'
-                        ),
-                        action_type='alert_only',
-                        action_params={'pattern_type': 'fvg', 'recommended_min_quality': 0.72},
-                        auto_eligible=False,
-                        evidence={'avg_hit_rate': round(float(row[0]), 4)},
-                    ))
+                    fvg_bots_protected = conn.execute(
+                        """SELECT COUNT(*) FROM paper_bot_configs
+                           WHERE active=1 AND killed_at IS NULL
+                           AND min_quality >= 0.72
+                           AND (pattern_types LIKE '%fvg%' OR pattern_types LIKE '%ifvg%')"""
+                    ).fetchone()[0]
+                    if fvg_bots_protected == 0:
+                        findings.append(Finding(
+                            sensor='calibration',
+                            severity='high',
+                            subject='fvg',
+                            description=(
+                                f'FVG calibration hit_rate_t1={row[0]:.3f} < 0.25 '
+                                f'— active bot should raise min_quality to 0.72'
+                            ),
+                            action_type='alert_only',
+                            action_params={'pattern_type': 'fvg', 'recommended_min_quality': 0.72},
+                            auto_eligible=False,
+                            evidence={'avg_hit_rate': round(float(row[0]), 4)},
+                        ))
             except Exception as e:
                 _log.warning('CalibrationSensor: fvg check failed: %s', e)
 
@@ -604,26 +612,32 @@ class _DeliverySensor:
             _log.warning('DeliverySensor: followup corruption check failed: %s', e)
 
         # 3. tip_scheduler last run > 2 hours ago (thread died or never started)
+        # Only alert if there are actually eligible users (tg linked + onboarded)
         try:
             from datetime import timedelta
-            cutoff_2h = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-            last_run = conn.execute(
-                "SELECT MAX(delivered_at) FROM tip_delivery_log"
+            eligible_users = conn.execute(
+                """SELECT COUNT(*) FROM user_preferences
+                   WHERE telegram_chat_id IS NOT NULL AND onboarding_complete = 1"""
             ).fetchone()[0]
-            if last_run is not None and last_run < cutoff_2h:
-                findings.append(Finding(
-                    sensor='delivery',
-                    severity='high',
-                    subject='tip_scheduler',
-                    description=(
-                        f'tip_delivery_log last entry is >2h old ({last_run[:16]}) '
-                        f'— tip_scheduler may have died'
-                    ),
-                    action_type='alert_only',
-                    action_params={'last_run': last_run},
-                    auto_eligible=False,
-                    evidence={'last_run': last_run},
-                ))
+            if eligible_users > 0:
+                cutoff_2h = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+                last_run = conn.execute(
+                    "SELECT MAX(delivered_at) FROM tip_delivery_log"
+                ).fetchone()[0]
+                if last_run is not None and last_run < cutoff_2h:
+                    findings.append(Finding(
+                        sensor='delivery',
+                        severity='high',
+                        subject='tip_scheduler',
+                        description=(
+                            f'tip_delivery_log last entry is >2h old ({last_run[:16]}) '
+                            f'— tip_scheduler may have died'
+                        ),
+                        action_type='alert_only',
+                        action_params={'last_run': last_run},
+                        auto_eligible=False,
+                        evidence={'last_run': last_run, 'eligible_users': eligible_users},
+                    ))
         except Exception as e:
             _log.warning('DeliverySensor: tip_scheduler staleness check failed: %s', e)
 
