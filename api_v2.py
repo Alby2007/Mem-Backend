@@ -56,6 +56,17 @@ async def _lifespan(app: FastAPI):
         except Exception as _br_e:
             _logger.warning('BotRunner restore failed: %s', _br_e)
             ext.bot_runner = None
+        # Auto-seed and restore discovery fleet
+        try:
+            from services.discovery_fleet import ensure_discovery_user, seed_discovery_fleet
+            import sqlite3 as _sq2
+            _dconn = _sq2.connect(ext.DB_PATH, timeout=10)
+            ensure_discovery_user(_dconn)
+            _dconn.close()
+            seed_discovery_fleet(ext.bot_runner)
+            _logger.warning('Discovery fleet: seeded/restored')
+        except Exception as _de:
+            _logger.warning('Discovery fleet startup failed: %s', _de)
     _threading.Thread(target=_restore_all, daemon=True).start()
 
     # ── Ingest scheduler: continuous background data ingestion ─────────────────
@@ -421,13 +432,13 @@ def create_fastapi_app() -> FastAPI:
     from routes_v2 import (
         health, auth, chat, billing, paper,
         markets, analytics_, patterns, network, waitlist, thesis,
-        ingest_routes, kb, users, telegram, scenario,
+        ingest_routes, kb, users, telegram, scenario, discovery,
     )
     for _router in [
         health.router, auth.router, chat.router, billing.router, paper.router,
         markets.router, analytics_.router, patterns.router, network.router,
         waitlist.router, thesis.router, ingest_routes.router, kb.router,
-        users.router, telegram.router, scenario.router,
+        users.router, telegram.router, scenario.router, discovery.router,
     ]:
         app.include_router(_router)
 

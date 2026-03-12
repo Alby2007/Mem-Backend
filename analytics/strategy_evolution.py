@@ -78,7 +78,7 @@ class StrategyEvolution:
                     'reason': 'no mature bots'}
 
         # Skip manual bots from evolution entirely
-        eligible = [b for b in mature if b.get('role') != 'manual']
+        eligible = [b for b in mature if b.get('role') not in ('manual', 'discovery')]
 
         kills     = []
         elites    = []
