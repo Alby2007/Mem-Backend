@@ -108,8 +108,16 @@ def should_notify(
     local_time     = local_now.strftime('%H:%M')
     local_date_str = local_now.strftime('%Y-%m-%d')
 
-    if local_time != delivery_time:
-        return False, ''
+    # Allow up to 2-hour catch-up window so server restarts don't miss the slot
+    try:
+        _sched_h, _sched_m = map(int, delivery_time.split(':'))
+        _now_h,   _now_m   = map(int, local_time.split(':'))
+        _delta = (_now_h * 60 + _now_m) - (_sched_h * 60 + _sched_m)
+        if not (0 <= _delta <= 120):
+            return False, ''
+    except Exception:
+        if local_time != delivery_time:
+            return False, ''
 
     today_name = _WEEKDAY_NAMES[local_now.date().weekday()]
 

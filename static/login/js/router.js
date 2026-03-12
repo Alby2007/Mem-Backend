@@ -54,6 +54,7 @@ function showScreen(name) {
   } else {
     document.documentElement.removeAttribute('data-auth');
   }
+  if (name === 'chat')      _updateAlertBadge(0, false);
   if (name === 'dashboard') loadDashboard();
   if (name === 'patterns')  loadPatterns();
   if (name === 'network')   loadNetwork();

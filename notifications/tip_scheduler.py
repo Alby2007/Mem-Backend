@@ -983,13 +983,20 @@ def _deliver_tip_to_user(db_path: str, user_id: str, user_prefs: dict, weekday: 
             else:
                 sent = True
 
+            _pos_meta = [
+                {'ticker': p['ticker'], 'direction': p.get('direction', ''),
+                 'pattern_type': p.get('pattern_type', ''),
+                 'entry_price': p.get('entry_price'), 'stop_loss': p.get('stop_loss'),
+                 'zone_low': p.get('zone_low'), 'zone_high': p.get('zone_high')}
+                for p in open_positions
+            ] if open_positions else None
             log_tip_delivery(
                 db_path, user_id,
                 success=sent,
                 pattern_signal_id=None,
                 message_length=len(message),
                 local_date=local_date,
-                pattern_meta=None,
+                pattern_meta=_pos_meta,
             )
             if sent:
                 _log.info('TipScheduler: %s briefing delivered to user %s (%d open, %d KB changes)',

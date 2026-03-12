@@ -220,6 +220,23 @@ def _check_chat_quota(user_id: str) -> None:
         pass
 
 
+@router.get("/alerts/pending")
+async def alerts_pending_count(
+    user_id: Optional[str] = Depends(get_current_user_optional),
+):
+    """Return count of unsurfaced chat alerts for the badge. Lightweight — no body."""
+    if not user_id:
+        raise HTTPException(401, detail="authentication required")
+    try:
+        from analytics.position_monitor import get_pending_alerts
+        alerts = get_pending_alerts(ext.DB_PATH, user_id)
+        critical = sum(1 for a in alerts if a.get('priority') == 'CRITICAL')
+        high     = sum(1 for a in alerts if a.get('priority') == 'HIGH')
+        return {"count": len(alerts), "critical": critical, "high": high}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
 @router.post("/chat")
 @limiter.limit(RATE_LIMITS["chat"])
 async def chat_endpoint(
