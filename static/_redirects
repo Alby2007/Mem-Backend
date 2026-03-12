@@ -12,6 +12,7 @@
 /network                    /login/index.html   200
 /history                    /login/index.html   200
 /paper                      /login/index.html   200
+/private-fleet              /login/index.html   200
 /subscription               /login/index.html   200
 /profile                    /login/index.html   200
 
@@ -26,5 +27,6 @@
 /:username/network          /login/index.html   200
 /:username/history          /login/index.html   200
 /:username/paper            /login/index.html   200
+/:username/private-fleet    /login/index.html   200
 /:username/subscription     /login/index.html   200
 /:username/profile          /login/index.html   200
