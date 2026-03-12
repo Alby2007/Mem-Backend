@@ -414,6 +414,29 @@ async def _lifespan(app: FastAPI):
         except Exception as _te:
             _logger.warning('TipScheduler failed to start: %s', _te)
 
+    # ── Observatory Engine — hourly autonomous fleet management ──────────────────
+    try:
+        import threading as _obs_threading
+        import time as _obs_time
+
+        def _observatory_loop():
+            _obs_time.sleep(300)  # 5 min initial delay, let everything else start
+            while True:
+                try:
+                    from analytics.observatory_engine import ObservatoryEngine
+                    ObservatoryEngine(ext.DB_PATH).run()
+                except Exception as _obs_e:
+                    _logger.error('Observatory run failed: %s', _obs_e)
+                _obs_time.sleep(3900)  # 65 minutes between runs
+
+        _obs_thread = _obs_threading.Thread(
+            target=_observatory_loop, daemon=True, name='observatory'
+        )
+        _obs_thread.start()
+        _logger.warning('Observatory Engine: started (65min interval)')
+    except Exception as _obs_start_e:
+        _logger.warning('Observatory Engine failed to start: %s', _obs_start_e)
+
     yield
 
     # ── Shutdown ───────────────────────────────────────────────────────────────

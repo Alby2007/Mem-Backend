@@ -143,6 +143,20 @@ CREATE TABLE IF NOT EXISTS snapshot_delivery_log (
 )
 """
 
+_DDL_OBSERVATORY_RUNS = """
+CREATE TABLE IF NOT EXISTS observatory_runs (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_at              TEXT    NOT NULL,
+    findings_json       TEXT,
+    actions_taken_json  TEXT,
+    actions_queued_json TEXT,
+    tokens_used         INTEGER DEFAULT 0,
+    llm_called          INTEGER DEFAULT 0,
+    run_duration_sec    REAL,
+    error               TEXT
+)
+"""
+
 
 def ensure_user_tables(conn: sqlite3.Connection) -> None:
     """Create all user-related tables if they do not exist. Idempotent."""
@@ -152,6 +166,7 @@ def ensure_user_tables(conn: sqlite3.Connection) -> None:
     conn.execute(_DDL_DELIVERY_LOG)
     conn.execute(_DDL_PATTERN_SIGNALS)
     conn.execute(_DDL_TIP_DELIVERY_LOG)
+    conn.execute(_DDL_OBSERVATORY_RUNS)
     # Migrate existing user_preferences rows to include new columns
     for sql in _PREFERENCES_MIGRATIONS:
         try:
