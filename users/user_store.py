@@ -157,6 +157,21 @@ CREATE TABLE IF NOT EXISTS observatory_runs (
 )
 """
 
+_DDL_MCP_WRITE_QUEUE = """
+CREATE TABLE IF NOT EXISTS mcp_write_queue (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    tool_name    TEXT NOT NULL,
+    path         TEXT,
+    old_str      TEXT,
+    new_str      TEXT,
+    full_content TEXT,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    queued_at    TEXT NOT NULL,
+    resolved_at  TEXT,
+    context      TEXT
+)
+"""
+
 
 def ensure_user_tables(conn: sqlite3.Connection) -> None:
     """Create all user-related tables if they do not exist. Idempotent."""
@@ -167,6 +182,7 @@ def ensure_user_tables(conn: sqlite3.Connection) -> None:
     conn.execute(_DDL_PATTERN_SIGNALS)
     conn.execute(_DDL_TIP_DELIVERY_LOG)
     conn.execute(_DDL_OBSERVATORY_RUNS)
+    conn.execute(_DDL_MCP_WRITE_QUEUE)
     # Migrate existing user_preferences rows to include new columns
     for sql in _PREFERENCES_MIGRATIONS:
         try:

@@ -1002,24 +1002,30 @@ class ObservatoryEngine:
             conn = sqlite3.connect(self.db_path, timeout=10)
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS mcp_write_queue (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    queued_at   TEXT NOT NULL,
-                    action_type TEXT,
-                    subject     TEXT,
-                    params_json TEXT,
-                    rationale   TEXT,
-                    severity    TEXT,
-                    approved    INTEGER DEFAULT 0,
-                    approved_at TEXT
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tool_name    TEXT NOT NULL,
+                    path         TEXT,
+                    old_str      TEXT,
+                    new_str      TEXT,
+                    full_content TEXT,
+                    status       TEXT NOT NULL DEFAULT 'pending',
+                    queued_at    TEXT NOT NULL,
+                    resolved_at  TEXT,
+                    context      TEXT
                 )"""
             )
             conn.execute(
                 """INSERT INTO mcp_write_queue
-                   (queued_at, action_type, subject, params_json, rationale, severity)
-                   VALUES (?,?,?,?,?,?)""",
-                (datetime.now(timezone.utc).isoformat(),
-                 finding.action_type, finding.subject,
-                 json.dumps(params), rationale, finding.severity),
+                   (tool_name, queued_at, context)
+                   VALUES (?,?,?)""",
+                (finding.action_type,
+                 datetime.now(timezone.utc).isoformat(),
+                 json.dumps({
+                     'subject': finding.subject,
+                     'params': params,
+                     'rationale': rationale,
+                     'severity': finding.severity,
+                 })),
             )
             conn.commit()
             conn.close()
