@@ -12,7 +12,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
-from routes_v2.auth import user_path_auth
+from middleware.fastapi_auth import user_path_auth
 
 import extensions as ext
 from services.discovery_fleet import (
