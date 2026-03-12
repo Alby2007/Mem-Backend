@@ -474,7 +474,7 @@ def get_equity_log(user_id: str, days: int = 90) -> list[dict]:
     ]
 
 
-def update_account_size(user_id: str, virtual_balance: Optional[float], mark_set: bool = True) -> dict:
+def update_account_size(user_id: str, virtual_balance: Optional[float], mark_set: bool = True, n_bots: int = 8) -> dict:
     """Update virtual_balance and optionally mark account_size_set=1.
 
     If virtual_balance is None, only mark_set is written (balance unchanged).
@@ -520,7 +520,7 @@ def update_account_size(user_id: str, virtual_balance: Optional[float], mark_set
                 from services.bot_runner import BotRunner
                 runner = BotRunner(ext.DB_PATH)
             if runner.count_bots(user_id) == 0:
-                runner.seed_fleet(user_id, virtual_balance)
+                runner.seed_fleet(user_id, virtual_balance, n_bots=n_bots)
                 _logger.info('Auto-seeded evolutionary fleet for %s (£%.0f)', user_id, virtual_balance)
         except Exception as _seed_e:
             _logger.warning('Fleet seed failed for %s: %s', user_id, _seed_e)

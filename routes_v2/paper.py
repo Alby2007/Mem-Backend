@@ -25,6 +25,7 @@ def _tier_gate(user_id: str) -> None:
 class UpdateAccountRequest(BaseModel):
     virtual_balance: Optional[float] = None
     mark_set: Optional[bool] = True
+    n_bots: int = 8
 
 
 class OpenPositionRequest(BaseModel):
@@ -60,7 +61,7 @@ async def paper_account_get(user_id: str, _: str = Depends(user_path_auth)):
 
 @router.patch("/users/{user_id}/paper/account")
 async def paper_account_update(user_id: str, data: UpdateAccountRequest, _: str = Depends(user_path_auth)):
-    result = svc.update_account_size(user_id, data.virtual_balance, data.mark_set)
+    result = svc.update_account_size(user_id, data.virtual_balance, data.mark_set, n_bots=data.n_bots)
     if 'error' in result:
         raise HTTPException(400, detail=result['error'])
     return result

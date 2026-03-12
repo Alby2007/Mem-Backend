@@ -684,9 +684,9 @@ async function _ptShowOnboarding() {
   overlay.id = 'pt-onboarding-modal';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
   overlay.innerHTML = `
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:28px 32px;max-width:400px;width:90%;">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:28px 32px;max-width:420px;width:90%;">
       <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Set your paper account size</div>
-      <div style="color:var(--muted);font-size:13px;margin-bottom:8px;">The system will auto-seed 8 strategy bots and split the capital equally across them.</div>
+      <div style="color:var(--muted);font-size:13px;margin-bottom:8px;">Capital is split equally across all bots.</div>
       <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
         <button class="btn btn-ghost btn-sm pt-preset" data-v="5000">£5k</button>
         <button class="btn btn-ghost btn-sm pt-preset" data-v="10000">£10k</button>
@@ -697,25 +697,56 @@ async function _ptShowOnboarding() {
         <span style="color:var(--muted);font-size:14px;">£</span>
         <input id="pt-acct-input" type="number" min="1000" max="100000" step="1000" value="10000" class="evo-input" style="flex:1;">
       </div>
+      <div style="margin-bottom:18px;">
+        <div style="color:var(--muted);font-size:12px;margin-bottom:6px;">Number of bots (4–20)</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+          <button class="btn btn-ghost btn-sm pt-nbot-preset" data-v="4">4</button>
+          <button class="btn btn-ghost btn-sm pt-nbot-preset" data-v="8">8</button>
+          <button class="btn btn-ghost btn-sm pt-nbot-preset" data-v="12">12</button>
+          <button class="btn btn-ghost btn-sm pt-nbot-preset" data-v="16">16</button>
+        </div>
+        <input id="pt-nbots-input" type="number" min="4" max="20" step="1" value="8" class="evo-input" style="width:80px;">
+        <span style="color:var(--muted);font-size:11px;margin-left:8px;" id="pt-per-bot-label">£1,250 per bot</span>
+      </div>
       <div style="display:flex;gap:8px;">
         <button id="pt-acct-confirm" class="btn btn-primary" style="flex:1;">Confirm &amp; Seed Fleet</button>
         <button id="pt-acct-dismiss" class="btn btn-ghost">Not now</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
+  const updatePerBot = () => {
+    const bal  = parseFloat(document.getElementById('pt-acct-input').value) || 0;
+    const bots = parseInt(document.getElementById('pt-nbots-input').value) || 8;
+    const per  = bots > 0 ? Math.round(bal / bots) : 0;
+    const el   = document.getElementById('pt-per-bot-label');
+    if (el) el.textContent = `£${per.toLocaleString('en-GB')} per bot`;
+  };
   overlay.querySelectorAll('.pt-preset').forEach(btn => {
-    btn.addEventListener('click', () => { document.getElementById('pt-acct-input').value = btn.dataset.v; });
+    btn.addEventListener('click', () => {
+      document.getElementById('pt-acct-input').value = btn.dataset.v;
+      updatePerBot();
+    });
   });
+  overlay.querySelectorAll('.pt-nbot-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('pt-nbots-input').value = btn.dataset.v;
+      updatePerBot();
+    });
+  });
+  document.getElementById('pt-acct-input').addEventListener('input', updatePerBot);
+  document.getElementById('pt-nbots-input').addEventListener('input', updatePerBot);
+  updatePerBot();
   const close = async (save) => {
     if (save) {
-      const val = parseFloat(document.getElementById('pt-acct-input').value);
+      const val   = parseFloat(document.getElementById('pt-acct-input').value);
+      const nBots = Math.max(4, Math.min(20, parseInt(document.getElementById('pt-nbots-input').value) || 8));
       _ptOnboardingShown = true;  // block re-show while PATCH is in flight
       try {
         await apiFetch(`/users/${state.userId}/paper/account`, {
           method: 'PATCH',
-          body: JSON.stringify({ virtual_balance: val, mark_set: true }),
+          body: JSON.stringify({ virtual_balance: val, mark_set: true, n_bots: nBots }),
         });
-        showToast('Fleet seeding in progress…', 'ok');
+        showToast(`Fleet seeding ${nBots} bots…`, 'ok');
       } catch(e) { /* best effort */ }
     }
     overlay.remove();
