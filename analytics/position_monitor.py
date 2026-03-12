@@ -358,6 +358,9 @@ def _check_profit_triggers(pos: dict, price: float, db_path: str,
     return ('trailing_pullback', 'HIGH')
 
 
+_ALERT_DEDUP_HOURS = {'CRITICAL': 4, 'HIGH': 4, 'MEDIUM': 24, 'LOW': 24}
+
+
 def _write_alert(
     db_path: str,
     pos: dict,
@@ -365,14 +368,26 @@ def _write_alert(
     priority: str,
     price: float,
 ) -> int:
-    """Write a position alert to the DB. Returns the alert row id."""
+    """Write a position alert to the DB. Returns the alert row id, or -1 if deduped."""
     entry   = pos.get('entry_price') or 0.0
     pnl     = _pnl_pct(price, entry, pos.get('direction', 'bullish'))
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    dedup_h = _ALERT_DEDUP_HOURS.get(priority, 4)
+    dedup_since = (datetime.now(timezone.utc) - timedelta(hours=dedup_h)).isoformat()
+
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         _ensure_alerts_table(conn)
+        # Dedup: skip if same alert_type for same followup already written in dedup window
+        existing = conn.execute(
+            """SELECT id FROM position_alerts
+               WHERE followup_id=? AND alert_type=? AND created_at >= ?
+               LIMIT 1""",
+            (pos['id'], alert_type, dedup_since),
+        ).fetchone()
+        if existing:
+            return -1
         cur = conn.execute(
             """INSERT INTO position_alerts
                (followup_id, user_id, ticker, alert_type, priority,
@@ -693,6 +708,8 @@ def _run_monitor_cycle(db_path: str) -> None:
                       pos['user_id'], ticker, alert_type, priority, price)
 
             alert_id = _write_alert(db_path, pos, alert_type, priority, price)
+            if alert_id == -1:
+                continue  # deduped — already sent recently
 
             now_iso = datetime.now(timezone.utc).isoformat()
             update_followup_status(

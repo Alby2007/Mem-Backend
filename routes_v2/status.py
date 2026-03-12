@@ -11,6 +11,91 @@ router = APIRouter()
 STATUS_KEY = os.getenv("STATUS_KEY", "")
 
 
+@router.post("/internal/replay-alerts")
+async def replay_unsurfaced_alerts(key: str = ""):
+    """
+    Drain the backlog of unsurfaced CRITICAL/HIGH position alerts.
+    Sends only the most-recent alert per (followup_id, alert_type) to avoid spam.
+    Marks sent rows surfaced_tg=1.
+    Protected by STATUS_KEY query param.
+    """
+    if not STATUS_KEY or key != STATUS_KEY:
+        raise HTTPException(403, "forbidden")
+
+    conn = sqlite3.connect(ext.DB_PATH, timeout=15)
+    conn.row_factory = sqlite3.Row
+    try:
+        # Most-recent alert per (followup_id, alert_type) — CRITICAL/HIGH only
+        rows = conn.execute(
+            """SELECT pa.id, pa.followup_id, pa.user_id, pa.ticker,
+                      pa.alert_type, pa.priority, pa.current_price,
+                      pa.entry_price, pa.pnl_pct, pa.created_at,
+                      tf.direction, tf.entry_price as tf_entry,
+                      tf.stop_loss, tf.target_1, tf.target_2, tf.target_3,
+                      tf.pattern_type, tf.zone_low, tf.zone_high,
+                      tf.regime_at_entry, tf.conviction_at_entry,
+                      up.telegram_chat_id
+               FROM position_alerts pa
+               JOIN tip_followups tf ON tf.id = pa.followup_id
+               JOIN user_preferences up ON up.user_id = pa.user_id
+               WHERE pa.surfaced_tg = 0
+                 AND pa.priority IN ('CRITICAL','HIGH')
+                 AND pa.id IN (
+                     SELECT MAX(id) FROM position_alerts
+                     WHERE surfaced_tg=0 AND priority IN ('CRITICAL','HIGH')
+                     GROUP BY followup_id, alert_type
+                 )
+               ORDER BY pa.priority DESC, pa.created_at DESC""",
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return {"sent": 0, "skipped_no_tg": 0, "detail": "no unsurfaced alerts"}
+
+    from notifications.telegram_notifier import TelegramNotifier
+
+    notifier = TelegramNotifier()
+    if not notifier.is_configured:
+        raise HTTPException(503, "TELEGRAM_BOT_TOKEN not configured")
+
+    sent = 0
+    skipped = 0
+    for r in rows:
+        chat_id = r["telegram_chat_id"]
+        if not chat_id:
+            skipped += 1
+            continue
+        pos = {
+            "id": r["followup_id"], "user_id": r["user_id"],
+            "ticker": r["ticker"],
+            "direction": r["direction"],
+            "entry_price": r["tf_entry"] or r["entry_price"],
+            "stop_loss": r["stop_loss"], "target_1": r["target_1"],
+            "target_2": r["target_2"], "target_3": r["target_3"],
+            "pattern_type": r["pattern_type"],
+            "zone_low": r["zone_low"], "zone_high": r["zone_high"],
+            "regime_at_entry": r["regime_at_entry"],
+            "conviction_at_entry": r["conviction_at_entry"],
+        }
+        try:
+            from notifications.tip_formatter import format_emergency_alert_with_confidence
+            msg = format_emergency_alert_with_confidence(
+                r["alert_type"], pos, r["current_price"] or 0.0, None
+            )
+            ok = notifier.send(chat_id, msg)
+            if ok:
+                c2 = sqlite3.connect(ext.DB_PATH, timeout=10)
+                c2.execute("UPDATE position_alerts SET surfaced_tg=1 WHERE id=?", (r["id"],))
+                c2.commit()
+                c2.close()
+                sent += 1
+        except Exception as e:
+            skipped += 1
+
+    return {"sent": sent, "skipped_no_tg": skipped, "total_candidates": len(rows)}
+
+
 @router.get("/internal/status")
 async def platform_status(key: str = ""):
     if not STATUS_KEY or key != STATUS_KEY:
