@@ -228,7 +228,8 @@ class _BotPerformanceSensor:
                           virtual_balance, initial_balance, created_at
                    FROM paper_bot_configs
                    WHERE active=1 AND killed_at IS NULL
-                     AND user_id NOT LIKE 'discovery%'"""
+                     AND user_id NOT LIKE 'discovery%'
+                     AND strategy_name NOT LIKE 'disc_%'"""
             ).fetchall()
         except Exception as e:
             _log.warning('BotPerformanceSensor: bot query failed: %s', e)
@@ -418,12 +419,14 @@ class _CalibrationSensor:
     def scan(self, conn: sqlite3.Connection) -> list[Finding]:
         findings: list[Finding] = []
 
-        # Active bot pattern coverage
+        # Active bot pattern coverage (exclude discovery fleet)
         try:
             active_patterns: set[str] = set()
             bots = conn.execute(
                 "SELECT pattern_types FROM paper_bot_configs "
-                "WHERE active=1 AND killed_at IS NULL AND user_id NOT LIKE 'discovery%'"
+                "WHERE active=1 AND killed_at IS NULL "
+                "AND user_id NOT LIKE 'discovery%' "
+                "AND strategy_name NOT LIKE 'disc_%'"
             ).fetchall()
             for (pt_json,) in bots:
                 try:
@@ -501,7 +504,8 @@ class _CalibrationSensor:
                 """SELECT bot_id, strategy_name, pattern_types
                    FROM paper_bot_configs
                    WHERE active=1 AND killed_at IS NULL
-                     AND user_id NOT LIKE 'discovery%'"""
+                     AND user_id NOT LIKE 'discovery%'
+                     AND strategy_name NOT LIKE 'disc_%'"""
             ).fetchall()
             for (bot_id, strat_name, pt_json) in bots2:
                 try:
@@ -544,62 +548,42 @@ class _CalibrationSensor:
 
 # ── Sensor 4: DeliverySensor ────────────────────────────────────────────────────
 class _DeliverySensor:
+    """
+    Watches the delivery PIPELINE, not its output.
+    Only fires if the system is structurally broken — missing token, dead scheduler
+    thread, or corrupted data. Never enumerates individual unsurfaced alerts or
+    per-user delivery stats (those are output concerns, not system health).
+    """
+
     def scan(self, conn: sqlite3.Connection) -> list[Finding]:
         findings: list[Finding] = []
 
-        # 1. Unsurfaced alerts older than 30 min
+        # 1. TELEGRAM_BOT_TOKEN missing — all delivery silently dead
         try:
-            from datetime import timedelta
-            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
-            crit_count = conn.execute(
-                "SELECT COUNT(*) FROM position_alerts "
-                "WHERE surfaced_tg=0 AND priority='CRITICAL' AND created_at < ?",
-                (cutoff,)
-            ).fetchone()[0]
-            high_count = conn.execute(
-                "SELECT COUNT(*) FROM position_alerts "
-                "WHERE surfaced_tg=0 AND priority='HIGH' AND created_at < ?",
-                (cutoff,)
-            ).fetchone()[0]
-            if crit_count > 0:
+            if not os.environ.get('TELEGRAM_BOT_TOKEN', ''):
                 findings.append(Finding(
                     sensor='delivery',
                     severity='critical',
-                    subject='position_alerts',
+                    subject='TELEGRAM_BOT_TOKEN',
                     description=(
-                        f'{crit_count} CRITICAL position alerts unsurfaced >30min '
-                        f'— Telegram delivery broken'
+                        'TELEGRAM_BOT_TOKEN is not set — all Telegram delivery '
+                        'is silently failing'
                     ),
                     action_type='alert_only',
-                    action_params={'unsurfaced_critical': crit_count,
-                                   'unsurfaced_high': high_count},
+                    action_params={},
                     auto_eligible=False,
-                    evidence={'critical': crit_count, 'high': high_count},
-                ))
-            elif high_count > 0:
-                findings.append(Finding(
-                    sensor='delivery',
-                    severity='high',
-                    subject='position_alerts',
-                    description=(
-                        f'{high_count} HIGH position alerts unsurfaced >30min '
-                        f'— check Telegram bot token'
-                    ),
-                    action_type='alert_only',
-                    action_params={'unsurfaced_high': high_count},
-                    auto_eligible=False,
-                    evidence={'critical': crit_count, 'high': high_count},
+                    evidence={'env_var': 'TELEGRAM_BOT_TOKEN', 'set': False},
                 ))
         except Exception as e:
-            _log.warning('DeliverySensor: alert check failed: %s', e)
+            _log.warning('DeliverySensor: token check failed: %s', e)
 
-        # 2. Corrupted tip_followups (ticker = status keyword)
+        # 2. tip_followups data corruption (ticker = status keyword)
         try:
             _STATUS_WORDS = ('watching', 'active', 'expired', 'closed',
                              'hit_t1', 'hit_t2', 'stopped_out')
             placeholders = ','.join('?' * len(_STATUS_WORDS))
             corrupt_count = conn.execute(
-                f"SELECT COUNT(*) FROM tip_followups WHERE ticker IN ({placeholders})",
+                f'SELECT COUNT(*) FROM tip_followups WHERE ticker IN ({placeholders})',
                 _STATUS_WORDS
             ).fetchone()[0]
             if corrupt_count > 0:
@@ -609,7 +593,7 @@ class _DeliverySensor:
                     subject='tip_followups',
                     description=(
                         f'{corrupt_count} tip_followup rows have ticker=status keyword '
-                        f'— data corruption, position monitor broken'
+                        f'— schema shift bug, position monitor will skip these rows'
                     ),
                     action_type='alert_only',
                     action_params={'corrupt_count': corrupt_count},
@@ -619,37 +603,29 @@ class _DeliverySensor:
         except Exception as e:
             _log.warning('DeliverySensor: followup corruption check failed: %s', e)
 
-        # 3. Active users with open positions but 0 tips in 48h
+        # 3. tip_scheduler last run > 2 hours ago (thread died or never started)
         try:
             from datetime import timedelta
-            cutoff_48h = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
-            users_with_pos = conn.execute(
-                """SELECT DISTINCT tf.user_id
-                   FROM tip_followups tf
-                   WHERE tf.status IN ('watching','active')"""
-            ).fetchall()
-            for (uid,) in users_with_pos:
-                tip_count = conn.execute(
-                    """SELECT COUNT(*) FROM tip_delivery_log
-                       WHERE user_id=? AND delivered_at >= ? AND success=1""",
-                    (uid, cutoff_48h)
-                ).fetchone()[0]
-                if tip_count == 0:
-                    findings.append(Finding(
-                        sensor='delivery',
-                        severity='medium',
-                        subject=f'user:{uid}',
-                        description=(
-                            f'User {uid} has open positions but 0 tips delivered in 48h '
-                            f'— tip_scheduler stalled?'
-                        ),
-                        action_type='alert_only',
-                        action_params={'user_id': uid},
-                        auto_eligible=False,
-                        evidence={'user_id': uid, 'hours': 48},
-                    ))
+            cutoff_2h = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+            last_run = conn.execute(
+                "SELECT MAX(delivered_at) FROM tip_delivery_log"
+            ).fetchone()[0]
+            if last_run is not None and last_run < cutoff_2h:
+                findings.append(Finding(
+                    sensor='delivery',
+                    severity='high',
+                    subject='tip_scheduler',
+                    description=(
+                        f'tip_delivery_log last entry is >2h old ({last_run[:16]}) '
+                        f'— tip_scheduler may have died'
+                    ),
+                    action_type='alert_only',
+                    action_params={'last_run': last_run},
+                    auto_eligible=False,
+                    evidence={'last_run': last_run},
+                ))
         except Exception as e:
-            _log.warning('DeliverySensor: tip delivery check failed: %s', e)
+            _log.warning('DeliverySensor: tip_scheduler staleness check failed: %s', e)
 
         return findings
 
