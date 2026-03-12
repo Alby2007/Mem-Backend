@@ -275,15 +275,17 @@ class BotRunner:
             _logger.warning('count_bots error for %s: %s', user_id, e)
             return 0
 
-    def seed_fleet(self, user_id: str, total_balance: float) -> list[str]:
-        """Create 8 seed bots, split capital equally, start all scanner threads."""
+    def seed_fleet(self, user_id: str, total_balance: float, n_bots: int = 8) -> list[str]:
+        """Create n_bots seed bots, split capital equally, start all scanner threads."""
+        import itertools
         templates = _make_seed_templates()
-        per_bot = round(total_balance / len(templates), 2)
+        bot_templates = list(itertools.islice(itertools.cycle(templates), n_bots))
+        per_bot = round(total_balance / n_bots, 2)
         now_iso = datetime.now(timezone.utc).isoformat()
         conn = sqlite3.connect(self.db_path, timeout=10)
         self._ensure_tables(conn)
         bot_ids = []
-        for tmpl in templates:
+        for tmpl in bot_templates:
             bot_id = 'bot_' + str(uuid.uuid4()).replace('-', '')[:12]
             try:
                 conn.execute("""

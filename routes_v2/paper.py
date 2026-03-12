@@ -511,8 +511,12 @@ async def bot_discoveries(user_id: str, _: str = Depends(user_path_auth)):
         raise HTTPException(500, detail=str(e))
 
 
+class ReseedRequest(BaseModel):
+    n_bots: int = 8
+
+
 @router.post("/users/{user_id}/bots/reseed")
-async def reseed_fleet(user_id: str, _: str = Depends(user_path_auth)):
+async def reseed_fleet(user_id: str, data: ReseedRequest = ReseedRequest(), _: str = Depends(user_path_auth)):
     """Kill all existing bots and re-seed fresh with the current balance."""
     _tier_gate(user_id)
     try:
@@ -549,7 +553,8 @@ async def reseed_fleet(user_id: str, _: str = Depends(user_path_auth)):
             conn2.close()
 
         # Step 4: seed fresh fleet (opens its own connection)
-        runner.seed_fleet(user_id, balance)
+        n_bots = max(4, min(20, data.n_bots))
+        runner.seed_fleet(user_id, balance, n_bots=n_bots)
         return {"status": "reseeded", "bots": runner.count_bots(user_id), "balance": balance}
     except Exception as e:
         raise HTTPException(500, detail=str(e))

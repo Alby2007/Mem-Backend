@@ -859,9 +859,19 @@ async function _ptResetFleet() {
 }
 
 async function _ptReseedFleet() {
-  if (!confirm('Replace all bots with fresh seed strategies? Existing bot positions will be closed. Your account balance is preserved.')) return;
+  const input = prompt('How many bots do you want in your fleet? (4–20)', '8');
+  if (input === null) return;
+  const nBots = parseInt(input, 10);
+  if (isNaN(nBots) || nBots < 4 || nBots > 20) {
+    alert('Please enter a number between 4 and 20.');
+    return;
+  }
+  if (!confirm(`Reseed fleet with ${nBots} bots? This will stop all current bots and wipe all trades.`)) return;
   try {
-    const r = await apiFetch(`/users/${state.userId}/bots/reseed`, { method: 'POST' });
+    const r = await apiFetch(`/users/${state.userId}/bots/reseed`, {
+      method: 'POST',
+      body: JSON.stringify({ n_bots: nBots }),
+    });
     showToast(`Fleet reseeded — ${r.bots} bots started with £${(r.balance||0).toLocaleString()}`, 'ok');
     _ptLoadFleet();
   } catch(e) {
