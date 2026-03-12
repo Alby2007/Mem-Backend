@@ -609,30 +609,6 @@ class BotRunner:
                 (bot_id, _cutoff)
             ).fetchall()}
 
-            # 4-hour cooldown after ANY close (not just stops)
-            _recent_cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
-            recently_traded = {r['ticker'] for r in conn.execute(
-                "SELECT DISTINCT ticker FROM paper_positions "
-                "WHERE bot_id=? AND status != 'open' AND closed_at > ?",
-                (bot_id, _recent_cutoff)
-            ).fetchall()}
-
-            # Fix 2: Entry cooldown — also block new entries if ANY entry was made in the last 4h this cycle
-            _last_entry_row = conn.execute(
-                "SELECT created_at FROM paper_agent_log "
-                "WHERE bot_id=? AND event_type='entry' ORDER BY created_at DESC LIMIT 1",
-                (bot_id,)
-            ).fetchone()
-            _entry_cooldown_active = False
-            if _last_entry_row:
-                try:
-                    from datetime import datetime as _dt
-                    _last_entry_ts = _dt.fromisoformat(_last_entry_row[0].replace('Z', '+00:00'))
-                    _entry_cooldown_active = (
-                        datetime.now(timezone.utc) - _last_entry_ts
-                    ).total_seconds() < 4 * 3600
-                except Exception:
-                    pass
 
             # Build filtered candidate query
             filter_sql, filter_params = self._build_filtered_query(config)
@@ -736,14 +712,6 @@ class BotRunner:
                 if entries >= 1:
                     break
                 if ticker in open_tickers or ticker in _global_open or ticker in cooled:
-                    skips += 1
-                    continue
-                # Per-ticker 4h close cooldown
-                if ticker in recently_traded:
-                    skips += 1
-                    continue
-                # Fix 2: Bot-wide entry cooldown — wait 4h between entries
-                if _entry_cooldown_active:
                     skips += 1
                     continue
                 # Fix 5: Fleet-wide ticker concentration cap
@@ -944,7 +912,6 @@ class BotRunner:
                 open_tickers.add(ticker)
                 open_slots_used += 1
                 _fleet_ticker_count[ticker] = _fleet_ticker_count.get(ticker, 0) + 1
-                _entry_cooldown_active = True  # Fix 2: block further entries this scan
                 entries += 1
                 conn.execute(
                     "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
