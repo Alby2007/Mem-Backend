@@ -258,7 +258,17 @@ document.getElementById('tip-preview-btn').addEventListener('click', async () =>
         html += `<div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);font-size:11px;color:#f59e0b;">${warnMsg}</div>`;
       }
     } else if (state._availableCash == null) {
-      html += `<div style="margin-top:8px;font-size:11px;color:var(--muted);">💡 <a href="#" onclick="showScreen('portfolio');return false;" style="color:var(--accent);text-decoration:none;">Set your cash balance</a> to see position sizing warnings</div>`;
+      html += `<div style="margin-top:8px;font-size:11px;color:var(--muted);">💡 <a href="#" onclick="navigate('profile');return false;" style="color:var(--accent);text-decoration:none;">Set your cash balance in Profile</a> to see position sizing warnings</div>`;
+    }
+
+    const patternId = t.pattern_id ?? t.id ?? null;
+
+    // Accept row — only show if pattern_id is available
+    if (patternId) {
+      html += `<div class="tip-accept-row" id="tip-accept-row" data-pattern-id="${patternId}">
+        <button class="btn btn-primary btn-sm" id="tip-take-btn" style="flex:1;">🎯 Take This Trade</button>
+        <button class="btn btn-ghost btn-sm" id="tip-skip-btn">✕ Not for me</button>
+      </div>`;
     }
 
     html += `<div class="feedback-row" id="tip-fb-row">
@@ -271,7 +281,8 @@ document.getElementById('tip-preview-btn').addEventListener('click', async () =>
     </div>`;
 
     wrap.innerHTML = `<div id="tip-card-main">${html}</div>`;
-    const patternId = t.pattern_id ?? t.id ?? null;
+
+    // Wire outcome feedback buttons
     wrap.querySelectorAll('#tip-fb-row .fb-btn').forEach(btn => {
       btn.addEventListener('click', async function() {
         const row = document.getElementById('tip-fb-row');
@@ -289,6 +300,55 @@ document.getElementById('tip-preview-btn').addEventListener('click', async () =>
         }
       });
     });
+
+    // Wire Take This Trade button
+    const takeBtn = wrap.querySelector('#tip-take-btn');
+    const skipBtn = wrap.querySelector('#tip-skip-btn');
+    const acceptRow = wrap.querySelector('#tip-accept-row');
+    if (takeBtn && patternId) {
+      takeBtn.addEventListener('click', async function() {
+        if (acceptRow.dataset.done) return;
+        acceptRow.dataset.done = '1';
+        takeBtn.disabled = true; takeBtn.textContent = '…';
+        if (skipBtn) skipBtn.disabled = true;
+        try {
+          const r = await apiFetch(`/tips/${patternId}/feedback`, {
+            method: 'POST',
+            body: JSON.stringify({ user_id: state.userId, action: 'taking_it', pattern_id: patternId })
+          });
+          const sym = (state._accountCurrency === 'GBP') ? '£' : '$';
+          let confirmHtml = `<div class="tip-confirm" style="margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);">`;
+          confirmHtml += `<div style="font-weight:700;color:var(--green);margin-bottom:6px;">✅ Position added to Journal</div>`;
+          if (r.entry_price != null) {
+            confirmHtml += `<div style="font-size:12px;color:var(--muted);">Entry ${fmt(r.entry_price)} · Stop ${fmt(r.stop_loss)} · T1 ${fmt(r.target_1)}`;
+            if (r.position_size) confirmHtml += ` · ${r.position_size} shares`;
+            confirmHtml += `</div>`;
+          }
+          if (r.cash_after != null) {
+            confirmHtml += `<div style="font-size:11px;color:var(--muted);margin-top:4px;">Cash remaining: ${sym}${Number(r.cash_after).toLocaleString('en-GB',{maximumFractionDigits:0})}</div>`;
+          }
+          confirmHtml += `<div style="margin-top:8px;"><a href="#" onclick="navigate('journal');return false;" style="color:var(--accent);font-size:12px;">→ View in Journal</a></div>`;
+          confirmHtml += `</div>`;
+          acceptRow.insertAdjacentHTML('afterend', confirmHtml);
+          acceptRow.style.display = 'none';
+        } catch(e) {
+          takeBtn.disabled = false; takeBtn.textContent = '🎯 Take This Trade';
+          acceptRow.dataset.done = '';
+          showToast('Error: ' + (e.message || 'Could not accept tip'), 'error');
+        }
+      });
+    }
+    if (skipBtn && patternId) {
+      skipBtn.addEventListener('click', async function() {
+        if (acceptRow.dataset.done) return;
+        acceptRow.dataset.done = '1';
+        acceptRow.style.display = 'none';
+        await apiFetch(`/tips/${patternId}/feedback`, {
+          method: 'POST',
+          body: JSON.stringify({ user_id: state.userId, action: 'not_for_me', pattern_id: patternId })
+        }).catch(() => {});
+      });
+    }
   } catch(e) { wrap.innerHTML = `<div class="text-sm" style="color:var(--red)">${escHtml(e.message)}</div>`; }
 });
 

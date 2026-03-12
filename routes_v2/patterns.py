@@ -510,14 +510,15 @@ async def tip_feedback_action(tip_id: int, request: Request, data: TipFeedbackRe
             conn2 = sqlite3.connect(ext.DB_PATH, timeout=5)
             try:
                 prefs_row = conn2.execute(
-                    "SELECT account_size, max_risk_per_trade_pct, account_currency, tier "
+                    "SELECT account_size, max_risk_per_trade_pct, account_currency, tier, available_cash "
                     "FROM user_preferences WHERE user_id=?", (user_id,)
                 ).fetchone()
             finally:
                 conn2.close()
             prefs = {}
             if prefs_row:
-                prefs = {"account_size": prefs_row[0] or 10000,
+                _acct_size = prefs_row[0] or prefs_row[4] or 10000
+                prefs = {"account_size": _acct_size,
                          "max_risk_per_trade_pct": prefs_row[1] or 1.0,
                          "account_currency": prefs_row[2] or "GBP",
                          "tier": prefs_row[3] or "basic"}

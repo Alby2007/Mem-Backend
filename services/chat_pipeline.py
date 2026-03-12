@@ -548,6 +548,26 @@ def _ticker_carry_forward(
         except Exception:
             pass
 
+    # Seed in-memory session tickers from DB history if lost (e.g. page reload)
+    if not cur_tickers and not ext.sessions.has_tickers(session_id) and user_id and ext.conv_store is not None:
+        try:
+            from retrieval import _extract_tickers as _et2
+            conv_sid = f"TRADING_{user_id}"
+            recent = ext.conv_store.get_recent_messages_for_context(conv_sid, n_turns=4)
+            _hist_tickers: list = []
+            _seen: set = set()
+            for m in reversed(recent):
+                if m.get('role') != 'user':
+                    continue
+                for t in _et2(m.get('content', '')):
+                    if t not in _seen:
+                        _seen.add(t)
+                        _hist_tickers.append(t)
+            if _hist_tickers:
+                ext.sessions.set_tickers(session_id, _hist_tickers)
+        except Exception:
+            pass
+
     retrieve_message = message
     aug_tickers: list = []
     if not cur_tickers and ext.sessions.has_tickers(session_id):
