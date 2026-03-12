@@ -423,8 +423,12 @@ class BotRunner:
             conn = sqlite3.connect(self.db_path, timeout=10)
             self._ensure_tables(conn)
             rows = conn.execute(
-                "SELECT bot_id FROM paper_bot_configs WHERE active=1 AND paused_at IS NULL"
+                "SELECT bot_id FROM paper_bot_configs WHERE active=1 AND killed_at IS NULL"
             ).fetchall()
+            conn.execute(
+                "UPDATE paper_bot_configs SET paused_at=NULL WHERE active=1 AND killed_at IS NULL"
+            )
+            conn.commit()
             conn.close()
             started = 0
             for i, row in enumerate(rows):
