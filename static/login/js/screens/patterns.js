@@ -314,52 +314,36 @@ function _qualDots(q) {
     `<span class="qdot${i < filled ? ' qdot-on' : ''}"></span>`).join('');
 }
 
-// ── Modal open / close ────────────────────────────────────────────────────────
-let _modalPatId = null;
+// ── Modal keep-alive: one backdrop in DOM, hidden between opens ───────────────
+let _modalPatId   = null;
+let _pmLastSrc    = null;  // track last iframe src to avoid redundant reloads
 
-function openPatternModal(id) {
-  const p = window._patternCache[id];
-  if (!p) return;
-  _modalPatId = id;
-  closePatternModal(true);
-
-  const tvSym  = _tvSymbol(p.ticker);
-  const tvInt  = _TV_INTERVAL[p.timeframe] || 'D';
-  const ifrSrc = `https://api.trading-galaxy.uk/markets/chart?sym=${encodeURIComponent(tvSym)}&interval=${tvInt}&zone_high=${encodeURIComponent(p.zone_high||'')}&zone_low=${encodeURIComponent(p.zone_low||'')}&pattern_type=${encodeURIComponent(p.pattern_type||'')}&direction=${encodeURIComponent(p.direction||'')}`;
-
-  const dirCls = (p.direction||'').toLowerCase().includes('bull') ? 'color:#22c55e' : 'color:#ef4444';
-
+function _ensurePatModal() {
+  if (document.getElementById('pat-modal-backdrop')) return;
   const backdrop = document.createElement('div');
-  backdrop.id = 'pat-modal-backdrop';
+  backdrop.id        = 'pat-modal-backdrop';
   backdrop.className = 'pat-modal-backdrop';
+  backdrop.style.display = 'none';
   backdrop.innerHTML = `
   <div class="pat-modal" id="pat-modal" role="dialog" aria-modal="true">
-    <div class="pat-modal-header">
-      <span class="pm-ticker">${escHtml(p.ticker)}</span>
-      ${dirBadge(p.direction)}
-      <span class="pm-type">${escHtml((p.pattern_type||'').replace(/_/g,' '))}</span>
-      <span class="pm-tf">${escHtml(p.timeframe||'—')}</span>
-      <span class="pm-qual">${_qualDots(p.quality_score)}<span class="pm-qual-num">${fmt(p.quality_score)}</span></span>
+    <div class="pat-modal-header" id="pm-header">
+      <span class="pm-ticker" id="pm-ticker"></span>
+      <span id="pm-dir-badge"></span>
+      <span class="pm-type" id="pm-type"></span>
+      <span class="pm-tf"   id="pm-tf"></span>
+      <span class="pm-qual" id="pm-qual"></span>
       <button class="pm-close" id="pm-close" aria-label="Close">&times;</button>
     </div>
     <div class="pat-modal-chart" id="pm-chart">
       <div class="pm-chart-placeholder" id="pm-chart-ph"><div class="spinner"></div><div class="pm-loading-text">Loading chart…</div></div>
-      <iframe id="pm-iframe" src="${ifrSrc}" allowtransparency="true" frameborder="0" style="display:none;"></iframe>
-      <div id="pm-zone-bar">${_buildZoneBar(p, [])}</div>
+      <iframe id="pm-iframe" src="" allowtransparency="true" frameborder="0" style="display:none;"></iframe>
+      <div id="pm-zone-bar"></div>
       <div id="pm-stats-block" class="pm-stats-block" style="display:none;"></div>
     </div>
     <div class="pat-modal-right" id="pm-right">
       <div class="pat-modal-section">
         <div class="pat-modal-section-title">Pattern Details</div>
-        <div class="pat-modal-details-grid">
-          <div class="pm-detail-row"><span class="pm-dlabel">Zone</span><span class="pm-dval mono">${fmt(p.zone_low)} – ${fmt(p.zone_high)}</span></div>
-          <div class="pm-detail-row"><span class="pm-dlabel">Quality</span><span class="pm-dval">${_qualDots(p.quality_score)} <span class="mono-amber">${fmt(p.quality_score)}</span></span></div>
-          <div class="pm-detail-row"><span class="pm-dlabel">Formed</span><span class="pm-dval">${escHtml(_relTime(p.formed_at))}</span></div>
-          <div class="pm-detail-row"><span class="pm-dlabel">Status</span><span class="pm-dval"><span class="badge badge-open">${escHtml(p.status||'open')}</span></span></div>
-          <div class="pm-detail-row"><span class="pm-dlabel">Conviction</span><span class="pm-dval mono-amber" id="pm-conviction">…</span></div>
-          <div class="pm-detail-row"><span class="pm-dlabel">Regime</span><span class="pm-dval mono" id="pm-regime">…</span></div>
-          <div class="pm-detail-row"><span class="pm-dlabel">Signal Dir</span><span class="pm-dval" id="pm-sigdir">…</span></div>
-        </div>
+        <div class="pat-modal-details-grid" id="pm-details-grid"></div>
       </div>
       <div class="pat-modal-section" id="pm-evidence-section">
         <div class="pat-modal-section-title" id="pm-evidence-title">KB Evidence</div>
@@ -370,38 +354,97 @@ function openPatternModal(id) {
         </div>
       </div>
       <div class="pat-modal-footer">
-        <button class="pat-discuss-btn" id="pm-discuss">💬 Discuss in Chat &rarr;</button>
+        <button class="pat-discuss-btn" id="pm-discuss">&#x1F4AC; Discuss in Chat &rarr;</button>
       </div>
     </div>
   </div>`;
-
   document.body.appendChild(backdrop);
 
-  // Show iframe once loaded
-  const iframe = document.getElementById('pm-iframe');
-  iframe.addEventListener('load', () => {
-    document.getElementById('pm-chart-ph').style.display = 'none';
-    iframe.style.display = 'block';
-  });
-
-  // Close handlers
+  // Wire close handlers once
   document.getElementById('pm-close').addEventListener('click', closePatternModal);
   backdrop.addEventListener('click', e => { if (e.target === backdrop) closePatternModal(); });
 
-  // Discuss CTA
-  document.getElementById('pm-discuss').addEventListener('click', () => {
-    closePatternModal();
-    sendPatternToChat(p);
+  // Show iframe once loaded, hide skeleton
+  document.getElementById('pm-iframe').addEventListener('load', () => {
+    const ph = document.getElementById('pm-chart-ph');
+    const ifr = document.getElementById('pm-iframe');
+    if (ph)  ph.style.display  = 'none';
+    if (ifr) ifr.style.display = 'block';
   });
+}
 
-  // Load context + stats async
+function openPatternModal(id) {
+  const p = window._patternCache[id];
+  if (!p) return;
+  _modalPatId = id;
+
+  _ensurePatModal();
+
+  // ── Header ──
+  document.getElementById('pm-ticker').textContent    = p.ticker;
+  document.getElementById('pm-dir-badge').innerHTML   = dirBadge(p.direction);
+  document.getElementById('pm-type').textContent      = (p.pattern_type||'').replace(/_/g,' ');
+  document.getElementById('pm-tf').textContent        = p.timeframe || '—';
+  document.getElementById('pm-qual').innerHTML        =
+    _qualDots(p.quality_score) + `<span class="pm-qual-num">${fmt(p.quality_score)}</span>`;
+
+  // ── Details grid ──
+  document.getElementById('pm-details-grid').innerHTML = `
+    <div class="pm-detail-row"><span class="pm-dlabel">Zone</span><span class="pm-dval mono">${fmt(p.zone_low)} – ${fmt(p.zone_high)}</span></div>
+    <div class="pm-detail-row"><span class="pm-dlabel">Quality</span><span class="pm-dval">${_qualDots(p.quality_score)} <span class="mono-amber">${fmt(p.quality_score)}</span></span></div>
+    <div class="pm-detail-row"><span class="pm-dlabel">Formed</span><span class="pm-dval">${escHtml(_relTime(p.formed_at))}</span></div>
+    <div class="pm-detail-row"><span class="pm-dlabel">Status</span><span class="pm-dval"><span class="badge badge-open">${escHtml(p.status||'open')}</span></span></div>
+    <div class="pm-detail-row"><span class="pm-dlabel">Conviction</span><span class="pm-dval mono-amber" id="pm-conviction">…</span></div>
+    <div class="pm-detail-row"><span class="pm-dlabel">Regime</span><span class="pm-dval mono" id="pm-regime">…</span></div>
+    <div class="pm-detail-row"><span class="pm-dlabel">Signal Dir</span><span class="pm-dval" id="pm-sigdir">…</span></div>`;
+
+  // ── Evidence reset ──
+  const evEl = document.getElementById('pm-evidence-rows');
+  evEl.innerHTML = '<div class="pat-evidence-skeleton"></div><div class="pat-evidence-skeleton"></div><div class="pat-evidence-skeleton"></div>';
+  document.getElementById('pm-evidence-title').textContent = 'KB Evidence';
+  const sb = document.getElementById('pm-stats-block');
+  sb.style.display = 'none'; sb.innerHTML = '';
+
+  // ── Zone bar placeholder ──
+  document.getElementById('pm-zone-bar').innerHTML = _buildZoneBar(p, []);
+
+  // ── Iframe: only reload when symbol/interval changes ──
+  const tvSym  = _tvSymbol(p.ticker);
+  const tvInt  = _TV_INTERVAL[p.timeframe] || 'D';
+  const newSrc = `https://api.trading-galaxy.uk/markets/chart?sym=${encodeURIComponent(tvSym)}&interval=${tvInt}&zone_high=${encodeURIComponent(p.zone_high||'')}&zone_low=${encodeURIComponent(p.zone_low||'')}&pattern_type=${encodeURIComponent(p.pattern_type||'')}&direction=${encodeURIComponent(p.direction||'')}`;
+  const iframe = document.getElementById('pm-iframe');
+  const ph     = document.getElementById('pm-chart-ph');
+  if (newSrc !== _pmLastSrc) {
+    _pmLastSrc = newSrc;
+    ph.style.display  = '';     // show skeleton
+    iframe.style.display = 'none';
+    iframe.src = newSrc;        // triggers load event → hides skeleton
+  } else {
+    // Same chart — already warm, just make sure it's visible
+    ph.style.display  = 'none';
+    iframe.style.display = 'block';
+  }
+
+  // ── Show modal ──
+  const backdrop = document.getElementById('pat-modal-backdrop');
+  backdrop.style.display = '';
+  document.body.style.overflow = 'hidden';
+
+  // ── Discuss CTA (re-wire each open) ──
+  const discussBtn = document.getElementById('pm-discuss');
+  const newBtn = discussBtn.cloneNode(true);  // remove old listeners
+  discussBtn.replaceWith(newBtn);
+  newBtn.addEventListener('click', () => { closePatternModal(); sendPatternToChat(p); });
+
+  // ── Load context + stats async ──
   _loadPatternContext(id, p);
   _loadPatternStats(p);
 }
 
 function closePatternModal(silent) {
-  const el = document.getElementById('pat-modal-backdrop');
-  if (el) el.remove();
+  const backdrop = document.getElementById('pat-modal-backdrop');
+  if (backdrop) backdrop.style.display = 'none';
+  document.body.style.overflow = '';
   if (!silent) _modalPatId = null;
 }
 
