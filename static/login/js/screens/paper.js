@@ -332,7 +332,8 @@ function _ptRenderBotDetailHTML(bot, equity, positions, log, fleetBots) {
       <div class="evo-detail-card">
         <div class="evo-section-header">PERFORMANCE</div>
         <div class="evo-perf-grid">
-          <div><span class="evo-stat-label">Balance</span><span class="evo-stat-val" style="color:${retCol};">${fmtK(bot.virtual_balance||0)} (${retSign}${retPct.toFixed(1)}%)</span></div>
+          <div><span class="evo-stat-label">Equity</span><span class="evo-stat-val" style="color:${retCol};">${fmtK(bot.equity||bot.virtual_balance||0)} (${retSign}${retPct.toFixed(1)}%)</span></div>
+          <div><span class="evo-stat-label">Cash</span><span class="evo-stat-val">${fmtK(bot.virtual_balance||0)}</span></div>
           <div><span class="evo-stat-label">Trades</span><span class="evo-stat-val">${bot.total_closed||0}</span></div>
           <div><span class="evo-stat-label">Win Rate</span><span class="evo-stat-val">${bot.win_rate!=null?(bot.win_rate*100).toFixed(0)+'%':'—'}</span></div>
           <div><span class="evo-stat-label">Avg R</span><span class="evo-stat-val">${bot.avg_r!=null?bot.avg_r.toFixed(2)+'R':'—'}</span></div>

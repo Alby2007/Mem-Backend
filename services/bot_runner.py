@@ -1044,13 +1044,20 @@ class BotRunner:
                         _logger.debug('bot calibration update failed %s: %s', ticker, _ce)
 
     def _write_bot_equity(self, bot_id: str, conn, balance: float, open_count: int, now_iso: str):
-        """Write equity snapshot for this bot."""
+        """Write equity snapshot for this bot using mark-to-market live prices."""
+        from services.paper_trading import fetch_live_prices
         try:
             pos_rows = conn.execute(
-                "SELECT entry_price, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
+                "SELECT ticker, entry_price, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
                 (bot_id,)
             ).fetchall()
-            open_value = sum(float(r[0]) * float(r[1]) for r in pos_rows)
+            open_value = 0.0
+            if pos_rows:
+                tickers = [r[0] for r in pos_rows]
+                live = fetch_live_prices(tickers)
+                for ticker, entry_price, qty in pos_rows:
+                    price = live.get(ticker) or entry_price  # fallback to entry if fetch fails
+                    open_value += float(price) * float(qty)
             equity = round(balance + open_value, 2)
             conn.execute(
                 "INSERT INTO paper_bot_equity (bot_id, equity_value, cash_balance, open_positions, logged_at) VALUES (?,?,?,?,?)",
@@ -1096,13 +1103,19 @@ class BotRunner:
                 "SELECT equity_value FROM paper_bot_equity WHERE bot_id=? ORDER BY logged_at ASC",
                 (bot_id,)
             ).fetchall()
-            # Compute open position value before closing connection
+            # Compute open position value (mark-to-market) before closing connection
             try:
+                from services.paper_trading import fetch_live_prices
                 pos_rows = conn.execute(
-                    "SELECT entry_price, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
+                    "SELECT ticker, entry_price, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
                     (bot_id,)
                 ).fetchall()
-                open_value = sum(float(r[0]) * float(r[1]) for r in pos_rows)
+                open_value = 0.0
+                if pos_rows:
+                    live = fetch_live_prices([r[0] for r in pos_rows])
+                    for ticker, entry_price, qty in pos_rows:
+                        price = live.get(ticker) or entry_price
+                        open_value += float(price) * float(qty)
             except Exception:
                 open_value = 0.0
             conn.close()
