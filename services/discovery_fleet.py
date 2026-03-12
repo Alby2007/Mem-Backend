@@ -275,17 +275,53 @@ def get_discovery_status(conn) -> dict:
             (DISCOVERY_USER_ID,),
         ).fetchone()[0]
 
+        open_rows = conn.execute(
+            """SELECT pp.ticker, pp.direction, pp.entry_price, pp.opened_at,
+                      pp.t1, pp.stop, pbc.strategy_name, pbc.pattern_types, pbc.sectors
+               FROM paper_positions pp
+               JOIN paper_bot_configs pbc ON pbc.bot_id = pp.bot_id
+               WHERE pbc.user_id=? AND pp.status='open'
+               ORDER BY pp.opened_at DESC""",
+            (DISCOVERY_USER_ID,),
+        ).fetchall()
+
+        coverage_rows = conn.execute(
+            """SELECT pattern_types, direction_bias, COUNT(*) as n
+               FROM paper_bot_configs
+               WHERE user_id=? AND active=1
+               GROUP BY pattern_types, direction_bias""",
+            (DISCOVERY_USER_ID,),
+        ).fetchall()
+
         return {
             'total_bots':             total_bots,
             'active_bots':            active_bots,
             'total_positions_closed': total_closed,
             'total_observations':     total_observations,
             'top_cells':              get_discovery_report(conn, min_observations=3, limit=10),
+            'open_positions': [
+                {
+                    'ticker':    r[0],
+                    'direction': r[1],
+                    'entry':     round(r[2], 4) if r[2] else None,
+                    'opened_at': r[3],
+                    't1':        round(r[4], 4) if r[4] else None,
+                    'stop':      round(r[5], 4) if r[5] else None,
+                    'bot_name':  r[6],
+                    'pattern':   r[7],
+                    'sector':    r[8],
+                }
+                for r in open_rows
+            ],
+            'coverage': [
+                {'pattern': r[0], 'direction': r[1] or 'any', 'count': r[2]}
+                for r in coverage_rows
+            ],
         }
     except Exception as e:
         _logger.warning('get_discovery_status error: %s', e)
         return {
             'total_bots': 0, 'active_bots': 0,
             'total_positions_closed': 0, 'total_observations': 0,
-            'top_cells': [], 'error': str(e),
+            'top_cells': [], 'open_positions': [], 'coverage': [], 'error': str(e),
         }

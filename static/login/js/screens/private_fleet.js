@@ -43,15 +43,14 @@ async function loadPrivateFleet() {
 
 async function _pfRefresh() {
   try {
-    const [status, report, positions] = await Promise.all([
+    const [status, report] = await Promise.all([
       apiFetch(`/users/${state.userId}/private-fleet/status`),
       apiFetch(`/users/${state.userId}/private-fleet/report?min_observations=3&limit=20`),
-      _pfFetchPositions(),
     ]);
 
     _pfRenderStats(status);
     _pfRenderReport(report?.report || []);
-    _pfRenderPositions(positions);
+    _pfRenderPositions(status?.open_positions || []);
 
     const el = document.getElementById('pf-last-updated');
     if (el) el.textContent = 'Updated ' + new Date().toLocaleTimeString('en-GB');
@@ -60,20 +59,15 @@ async function _pfRefresh() {
   }
 }
 
-async function _pfFetchPositions() {
-  try {
-    return null;
-  } catch(e) { return null; }
-}
-
 function _pfRenderStats(s) {
   const el = document.getElementById('pf-stats-row');
   if (!el || !s) return;
+  const openCount = s.open_positions?.length || 0;
   const cards = [
-    { label: 'Discovery Bots',    value: s.total_bots || 0,              sub: `${s.active_bots || 0} active` },
-    { label: 'Closed Positions',  value: (s.total_positions_closed || 0).toLocaleString(), sub: 'all time' },
-    { label: 'Calibration Obs',   value: (s.total_observations || 0).toLocaleString(),     sub: 'signal cells' },
-    { label: 'Signal Cells Found',value: (s.top_cells?.length || 0),     sub: 'min 3 obs' },
+    { label: 'Discovery Bots',   value: s.total_bots || 0,                              sub: `${s.active_bots || 0} active` },
+    { label: 'Open Positions',   value: openCount,                                       sub: 'live entries' },
+    { label: 'Closed Positions', value: (s.total_positions_closed || 0).toLocaleString(), sub: 'all time' },
+    { label: 'Calibration Obs',  value: (s.total_observations || 0).toLocaleString(),     sub: 'signal cells' },
   ];
   el.innerHTML = cards.map(c => `
     <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px 16px;">
@@ -117,10 +111,57 @@ function _pfRenderReport(rows) {
   }).join('');
 }
 
-function _pfRenderPositions(data) {
+function _pfRenderPositions(positions) {
   const el = document.getElementById('pf-positions');
   if (!el) return;
-  el.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:12px;background:var(--card);border:1px solid var(--border);border-radius:8px;">
-    Live position detail coming soon — discovery bots are scanning every 5 minutes.
-  </div>`;
+
+  if (!positions || !positions.length) {
+    el.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:12px;background:var(--card);border:1px solid var(--border);border-radius:8px;">No open positions yet.</div>`;
+    return;
+  }
+
+  const rows = positions.map(p => {
+    const dir = p.direction || '';
+    const dirCol = dir === 'bullish' ? 'var(--green)' : dir === 'bearish' ? 'var(--red)' : 'var(--muted)';
+    const dirArrow = dir === 'bullish' ? '▲' : dir === 'bearish' ? '▼' : '—';
+    const pat = (() => { try { return JSON.parse(p.pattern)[0] || '—'; } catch { return p.pattern || '—'; } })();
+    const sec = (() => { try { return JSON.parse(p.sector)?.[0] || 'all'; } catch { return p.sector || 'all'; } })();
+    const age = (() => {
+      if (!p.opened_at) return '—';
+      const ms = Date.now() - new Date(p.opened_at).getTime();
+      const h = Math.floor(ms / 3600000);
+      const m = Math.floor((ms % 3600000) / 60000);
+      return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    })();
+    return `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:7px 6px;font-weight:600;font-size:12px;">${escHtml(p.ticker)}</td>
+        <td style="padding:7px 6px;font-size:11px;color:${dirCol};">${dirArrow} ${dir}</td>
+        <td style="padding:7px 6px;font-size:11px;color:var(--muted);">${escHtml(pat.replace(/_/g,' '))}</td>
+        <td style="padding:7px 6px;font-size:11px;color:var(--muted);">${escHtml(sec)}</td>
+        <td style="padding:7px 6px;font-size:11px;text-align:right;">${p.entry?.toLocaleString() ?? '—'}</td>
+        <td style="padding:7px 6px;font-size:11px;text-align:right;color:var(--green);">${p.t1?.toLocaleString() ?? '—'}</td>
+        <td style="padding:7px 6px;font-size:11px;text-align:right;color:var(--red);">${p.stop?.toLocaleString() ?? '—'}</td>
+        <td style="padding:7px 6px;font-size:10px;color:var(--muted);text-align:right;">${age}</td>
+      </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border);">
+            <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">TICKER</th>
+            <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">DIR</th>
+            <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">PATTERN</th>
+            <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">SECTOR</th>
+            <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">ENTRY</th>
+            <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">T1</th>
+            <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">STOP</th>
+            <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">AGE</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
 }
