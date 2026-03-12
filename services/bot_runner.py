@@ -570,11 +570,15 @@ class BotRunner:
             # Monitor open positions first
             self._monitor_bot_positions(bot_id, conn, now_iso)
 
-            # Count open positions for this bot
+            # Fix 1: Count open slots — partial_closed positions still occupy a slot
             open_rows = conn.execute(
                 "SELECT ticker FROM paper_positions WHERE bot_id=? AND status='open'", (bot_id,)
             ).fetchall()
             open_tickers = {r['ticker'] for r in open_rows}
+            # Partial closes keep the position open — slot still occupied
+            open_slots_used = conn.execute(
+                "SELECT COUNT(*) FROM paper_positions WHERE bot_id=? AND status='open'", (bot_id,)
+            ).fetchone()[0]
 
             # Global ticker dedup: skip if ANY agent (generalist or other bot) already holds this ticker
             _global_open = {r['ticker'] for r in conn.execute(
@@ -582,13 +586,22 @@ class BotRunner:
                 (user_id,)
             ).fetchall()}
 
-            if len(open_tickers) >= max_pos:
+            # Fix 5: Fleet-wide ticker concentration — count open positions per ticker across all bots
+            _fleet_ticker_count = {}
+            for r in conn.execute(
+                "SELECT ticker, COUNT(*) as cnt FROM paper_positions "
+                "WHERE user_id=? AND status='open' GROUP BY ticker", (user_id,)
+            ).fetchall():
+                _fleet_ticker_count[r['ticker']] = r['cnt']
+            _FLEET_MAX_PER_TICKER = 2  # no more than 2 bots long the same ticker simultaneously
+
+            if open_slots_used >= max_pos:
                 self._write_bot_equity(bot_id, conn, balance, len(open_tickers), now_iso)
                 conn.commit()
                 conn.close()
                 return {'entries': 0, 'skips': 0, 'reason': 'max_positions reached'}
 
-            # 24h cooldown (bot-specific)
+            # 24h cooldown (bot-specific, stopped-out tickers)
             _cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
             cooled = {r['ticker'] for r in conn.execute(
                 "SELECT DISTINCT ticker FROM paper_positions "
@@ -596,13 +609,30 @@ class BotRunner:
                 (bot_id, _cutoff)
             ).fetchall()}
 
-            # Fix 2: 4-hour cooldown after ANY close (not just stops)
+            # 4-hour cooldown after ANY close (not just stops)
             _recent_cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
             recently_traded = {r['ticker'] for r in conn.execute(
                 "SELECT DISTINCT ticker FROM paper_positions "
                 "WHERE bot_id=? AND status != 'open' AND closed_at > ?",
                 (bot_id, _recent_cutoff)
             ).fetchall()}
+
+            # Fix 2: Entry cooldown — also block new entries if ANY entry was made in the last 4h this cycle
+            _last_entry_row = conn.execute(
+                "SELECT created_at FROM paper_agent_log "
+                "WHERE bot_id=? AND event_type='entry' ORDER BY created_at DESC LIMIT 1",
+                (bot_id,)
+            ).fetchone()
+            _entry_cooldown_active = False
+            if _last_entry_row:
+                try:
+                    from datetime import datetime as _dt
+                    _last_entry_ts = _dt.fromisoformat(_last_entry_row[0].replace('Z', '+00:00'))
+                    _entry_cooldown_active = (
+                        datetime.now(timezone.utc) - _last_entry_ts
+                    ).total_seconds() < 4 * 3600
+                except Exception:
+                    pass
 
             # Build filtered candidate query
             filter_sql, filter_params = self._build_filtered_query(config)
@@ -661,8 +691,7 @@ class BotRunner:
             else:
                 reg_list = None
 
-            # Fix 3: Equity-based risk sizing
-            # Compute total equity (cash + open position cost basis)
+            # Equity-based risk sizing (cash + open position cost basis)
             open_pos_rows = conn.execute(
                 "SELECT entry_price, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
                 (bot_id,)
@@ -670,13 +699,25 @@ class BotRunner:
             open_value = sum(float(r[0]) * float(r[1]) for r in open_pos_rows)
             equity = balance + open_value
 
-            # Fix 1: Use initial_balance for consistent caps (not depleted virtual_balance)
             initial = float(config['initial_balance'])
-            risk_per_trade = equity * risk_pct / 100.0  # Fix 3: equity-based risk
-            max_pos_value  = initial * 0.15  # Fix 1: Tighter 15% of initial per position (was 20% of current cash)
-            remaining_cash = balance  # still use free cash for affordability checks
+            risk_per_trade = equity * risk_pct / 100.0
+            max_pos_value  = initial * 0.15
+            remaining_cash = balance
             entries = 0
             skips   = 0
+
+            # Fix 3: Fetch current market regime for bot-level alignment check
+            _market_regime = ''
+            try:
+                _regime_row = conn.execute(
+                    "SELECT object FROM facts WHERE predicate='market_regime' "
+                    "ORDER BY timestamp DESC LIMIT 1"
+                ).fetchone()
+                if _regime_row:
+                    _market_regime = (_regime_row[0] or '').lower()
+            except Exception:
+                pass
+            direction_bias = (config.get('direction_bias') or '').lower()
 
             conn.execute(
                 "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
@@ -691,14 +732,29 @@ class BotRunner:
                 quality   = c.get('quality_score') or 0
                 regime    = (c.get('kb_regime') or '').lower()
 
-                if entries >= _PAPER_MAX_NEW_PER_SCAN:
+                # Fix 6: 1 entry per scan cycle maximum
+                if entries >= 1:
                     break
                 if ticker in open_tickers or ticker in _global_open or ticker in cooled:
                     skips += 1
                     continue
-                # Fix 2: Per-ticker concentration check
+                # Per-ticker 4h close cooldown
                 if ticker in recently_traded:
                     skips += 1
+                    continue
+                # Fix 2: Bot-wide entry cooldown — wait 4h between entries
+                if _entry_cooldown_active:
+                    skips += 1
+                    continue
+                # Fix 5: Fleet-wide ticker concentration cap
+                if _fleet_ticker_count.get(ticker, 0) >= _FLEET_MAX_PER_TICKER:
+                    skips += 1
+                    conn.execute(
+                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                        (user_id, 'skip', ticker,
+                         f'Fleet concentration cap: {_fleet_ticker_count[ticker]} bots already hold {ticker}',
+                         bot_id, now_iso)
+                    )
                     continue
                 if not _is_market_open(ticker):
                     skips += 1
@@ -717,18 +773,30 @@ class BotRunner:
                         skips += 1
                         continue
 
-                # Quality gate
-                if quality < min_qual:
+                # Fix 4: Cold-start quality floor — no calibration data → require higher quality
+                cal_samples = c.get('cal_samples') or 0
+                effective_min_qual = 0.70 if cal_samples == 0 else min_qual
+                if quality < effective_min_qual:
                     skips += 1
                     continue
 
-                # Regime misalignment
+                # Fix 3: Regime alignment — pattern-level misalignment (hard skip)
                 if regime and (
                     (direction == 'bullish' and any(x in regime for x in ('risk_off', 'bearish')))
                     or (direction == 'bearish' and any(x in regime for x in ('risk_on', 'bullish')))
                 ):
                     skips += 1
                     continue
+
+                # Fix 3: Bot direction_bias vs market regime — size penalty on conflict
+                _regime_size_mult = 1.0
+                if _market_regime and direction_bias:
+                    _bias_conflicts = (
+                        (direction_bias == 'bullish' and any(x in _market_regime for x in ('risk_off', 'contraction', 'bearish')))
+                        or (direction_bias == 'bearish' and any(x in _market_regime for x in ('risk_on', 'expansion', 'bullish')))
+                    )
+                    if _bias_conflicts:
+                        _regime_size_mult = 0.5
 
                 zone_low  = float(c.get('zone_low') or 0)
                 zone_high = float(c.get('zone_high') or 0)
@@ -841,6 +909,9 @@ class BotRunner:
                     )
                     continue
 
+                # Fix 3: apply regime size multiplier on top of calibration multiplier
+                size_mult *= _regime_size_mult
+
                 eff_risk  = risk_per_trade * size_mult
                 qty = min(eff_risk / risk, (max_pos_value * size_mult) / entry_p)
                 qty = max(round(qty, 4), 0.0001)
@@ -871,6 +942,9 @@ class BotRunner:
                      bot_id)
                 )
                 open_tickers.add(ticker)
+                open_slots_used += 1
+                _fleet_ticker_count[ticker] = _fleet_ticker_count.get(ticker, 0) + 1
+                _entry_cooldown_active = True  # Fix 2: block further entries this scan
                 entries += 1
                 conn.execute(
                     "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
