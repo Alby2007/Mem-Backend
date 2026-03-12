@@ -1605,20 +1605,34 @@ try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_
       <div class="prf-card">
         <div class="prf-card-header"><div class="prf-card-title">TRADING ACCOUNT</div></div>
         <div class="prf-card-body">
-          <div class="prf-field">
-            <label>Available Cash Balance</label>
-            <div style="display:flex;gap:8px;align-items:center;">
-              <select id="prf-cash-currency" style="width:80px;">
-                <option value="GBP">GBP</option>
-                <option value="USD">USD</option>
-                <option value="EUR">EUR</option>
-              </select>
-              <input id="prf-cash-balance" type="number" min="0" step="100" placeholder="e.g. 10000" style="flex:1;" />
+
+          <!-- Display state: shown once a balance is saved -->
+          <div id="prf-cash-display" style="display:none;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+              <span class="prf-hint" style="margin:0;">Available Cash Balance</span>
+              <button class="btn btn-ghost btn-sm" id="prf-cash-edit-btn" style="font-size:11px;padding:2px 8px;">Edit</button>
             </div>
-            <div class="prf-hint">Used to size positions in tips. Updated anytime.</div>
+            <div id="prf-cash-display-value" style="font-size:22px;font-weight:700;color:var(--accent);letter-spacing:-0.5px;">—</div>
           </div>
-          <button class="btn btn-primary prf-btn-full" id="prf-cash-save-btn">Save Cash Balance</button>
-          <div class="profile-msg" id="prf-cash-msg"></div>
+
+          <!-- Edit state: shown when no balance set or Edit clicked -->
+          <div id="prf-cash-form">
+            <div class="prf-field">
+              <label>Available Cash Balance</label>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <select id="prf-cash-currency" style="width:80px;">
+                  <option value="GBP">GBP</option>
+                  <option value="USD">USD</option>
+                  <option value="EUR">EUR</option>
+                </select>
+                <input id="prf-cash-balance" type="number" min="0" step="100" placeholder="e.g. 10000" style="flex:1;" />
+              </div>
+              <div class="prf-hint">Used to size positions in tips. Updated anytime.</div>
+            </div>
+            <button class="btn btn-primary prf-btn-full" id="prf-cash-save-btn">Save Cash Balance</button>
+            <div class="profile-msg" id="prf-cash-msg"></div>
+          </div>
+
         </div>
       </div>
 

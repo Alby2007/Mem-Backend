@@ -28,6 +28,7 @@ class OnboardingRequest(BaseModel):
     tip_delivery_timezone: Optional[str] = None
     account_size: Optional[float] = None
     selected_sectors: Optional[list] = None
+    telegram_chat_id: Optional[str] = None
 
 
 class PortfolioRequest(BaseModel):
@@ -185,7 +186,7 @@ async def user_onboarding(user_id: str, data: OnboardingRequest, _: str = Depend
         if not result.valid:
             raise HTTPException(400, detail={"error": "validation_failed", "details": result.errors})
     try:
-        ext.update_preferences(ext.DB_PATH, user_id, data.model_dump(exclude_none=True))
+        ext.update_preferences(ext.DB_PATH, user_id, **data.model_dump(exclude_none=True))
         if data.portfolio:
             ext.upsert_portfolio(ext.DB_PATH, user_id, data.portfolio)
         return {"ok": True, "user_id": user_id}

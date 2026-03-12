@@ -251,6 +251,34 @@ async function loadProfile() {
   }
 
   // Cash balance save button
+  // Cash balance — show display or form based on whether balance is set
+  const _cashDisplay = document.getElementById('prf-cash-display');
+  const _cashForm    = document.getElementById('prf-cash-form');
+  const _cashVal     = document.getElementById('prf-cash-display-value');
+  const _cashEditBtn = document.getElementById('prf-cash-edit-btn');
+
+  function _showCashDisplay(bal, cur) {
+    const sym = { GBP: '\u00a3', USD: '$', EUR: '\u20ac' }[cur] || cur + ' ';
+    if (_cashVal) _cashVal.textContent = sym + Number(bal).toLocaleString('en-GB');
+    if (_cashDisplay) _cashDisplay.style.display = '';
+    if (_cashForm)    _cashForm.style.display    = 'none';
+  }
+  function _showCashForm() {
+    if (_cashDisplay) _cashDisplay.style.display = 'none';
+    if (_cashForm)    _cashForm.style.display    = '';
+  }
+
+  // On load: if balance already set, show display state
+  if (d.available_cash != null && d.available_cash > 0) {
+    const cashBalEl = document.getElementById('prf-cash-balance');
+    const cashCurEl = document.getElementById('prf-cash-currency');
+    if (cashBalEl) cashBalEl.value = d.available_cash;
+    if (cashCurEl) { const o = Array.from(cashCurEl.options).find(op => op.value === (d.cash_currency || 'GBP')); if (o) o.selected = true; }
+    _showCashDisplay(d.available_cash, d.cash_currency || 'GBP');
+  }
+
+  if (_cashEditBtn) _cashEditBtn.addEventListener('click', _showCashForm);
+
   const cashSaveBtn = document.getElementById('prf-cash-save-btn');
   if (cashSaveBtn && !cashSaveBtn._wired) {
     cashSaveBtn._wired = true;
@@ -267,10 +295,7 @@ async function loadProfile() {
           method: 'POST',
           body: JSON.stringify({ available_cash: bal, cash_currency: cur })
         });
-        if (msgEl) {
-          msgEl.style.color = 'var(--green)'; msgEl.textContent = '\u2713 Saved';
-          setTimeout(() => { if (msgEl) msgEl.textContent = ''; }, 3000);
-        }
+        _showCashDisplay(bal, cur);
       } catch(e) {
         if (msgEl) { msgEl.style.color = 'var(--red)'; msgEl.textContent = e.message || 'Error saving'; }
       }
