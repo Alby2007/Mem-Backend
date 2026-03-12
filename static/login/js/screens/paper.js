@@ -381,29 +381,36 @@ function _ptGenotypeRows(bot) {
 }
 
 function _ptPositionRow(p) {
-  const dirCol = p.direction === 'bullish' ? 'var(--green)' : 'var(--red)';
+  const isBull = p.direction === 'bullish';
+  const dirCol = isBull ? 'var(--green)' : 'var(--red)';
+  const side   = isBull ? 'BUY' : 'SELL';
+  const val    = (p.entry_price && p.quantity) ? '\u00a3' + (p.entry_price * p.quantity).toLocaleString('en-GB', {minimumFractionDigits:0, maximumFractionDigits:0}) : '';
   const unr    = p.unrealised_pnl_r;
   const unrStr = unr != null ? (unr >= 0 ? '+' : '') + unr + 'R' : '';
   return `<div class="evo-pos-row">
     <span style="color:var(--accent);font-weight:700;">${escHtml(p.ticker)}</span>
-    <span style="color:${dirCol};">${p.direction}</span>
+    <span style="color:${dirCol};font-weight:700;">${side}</span>
+    ${val ? `<span style="color:var(--muted);font-size:11px;">${val}</span>` : ''}
     <span class="mono">entry=${_ptFmt(p.entry_price)} stop=${_ptFmt(p.stop)} t1=${_ptFmt(p.t1)}</span>
-    ${unrStr ? `<span style="color:${unr>=0?'var(--green)':'var(--red)'};">${unrStr}</span>` : ''}
+    ${unrStr ? `<span style="color:${unr>=0?'var(--green)':'var(--red)'};">` + unrStr + `</span>` : ''}
   </div>`;
 }
 
 function _ptClosedRow(p) {
   const pnl    = p.pnl_r;
-  const pnlStr = pnl != null ? (pnl >= 0 ? '+' : '') + pnl + 'R' : '—';
+  const pnlStr = pnl != null ? (pnl >= 0 ? '+' : '') + pnl + 'R' : '\u2014';
   const pnlCol = pnl != null ? (pnl >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--muted)';
-  const status = (p.status || '').replace(/_/g,' ');
+  const side   = p.direction === 'bullish' ? 'BUY' : 'SELL';
+  const sideCol= p.direction === 'bullish' ? 'var(--green)' : 'var(--red)';
+  const outcome= (p.status || '').replace('_hit',' hit').replace(/_/g,' ');
   const dur    = p.opened_at && p.closed_at ? _ptDuration(p.opened_at, p.closed_at) : '';
   return `<div class="evo-pos-row">
     <span style="color:var(--accent);font-weight:700;">${escHtml(p.ticker)}</span>
+    <span style="color:${sideCol};font-weight:600;font-size:11px;">${side}</span>
     <span style="color:${pnlCol};font-weight:700;">${pnlStr}</span>
-    <span style="color:var(--muted);font-size:11px;">${escHtml(status)}</span>
+    <span style="color:var(--muted);font-size:11px;">${escHtml(outcome)}</span>
     ${dur ? `<span style="color:var(--muted);font-size:11px;">${dur}</span>` : ''}
-    <span style="color:var(--muted);font-size:10px;">${escHtml(p.pattern_type||'')} ${escHtml(p.direction||'')}</span>
+    <span style="color:var(--muted);font-size:10px;">${escHtml(p.pattern_type||'')}</span>
   </div>`;
 }
 
