@@ -2494,7 +2494,7 @@ def get_journal_stats(db_path: str, user_id: str) -> dict:
                 'best_pattern': None, 'worst_pattern': None,
                 'best_regime': None, 'worst_regime': None}
 
-    wins       = sum(1 for r in rows if r[0] == 'closed' and r[1] is not None and r[1] > 0)
+    wins       = sum(1 for r in rows if r[0] in ('closed','t2_hit','t1_hit','stopped_out') and r[1] is not None and r[1] > 0)
     total      = len(rows)
     r_values   = [r[1] for r in rows if r[1] is not None]
     avg_r      = round(sum(r_values) / len(r_values), 2) if r_values else None

@@ -122,11 +122,12 @@ async def platform_status(key: str = ""):
             WHERE pbc.role='discovery' AND pp.status='open'
         """).fetchone()[0]
         # Exclude force-closed (mcp_*) positions with null pnl_r from analytics
+        # status='closed' = force/manual close; t2_hit/t1_hit/stopped_out = normal terminal states
         closed_total = conn.execute(
-            "SELECT COUNT(*) FROM paper_positions WHERE status='closed' AND pnl_r IS NOT NULL"
+            "SELECT COUNT(*) FROM paper_positions WHERE status IN ('t2_hit','t1_hit','stopped_out','closed') AND pnl_r IS NOT NULL"
         ).fetchone()[0]
         wins         = conn.execute(
-            "SELECT COUNT(*) FROM paper_positions WHERE status='closed' AND pnl_r > 0"
+            "SELECT COUNT(*) FROM paper_positions WHERE status IN ('t2_hit','t1_hit','stopped_out','closed') AND pnl_r > 0"
         ).fetchone()[0]
         closes_1h = conn.execute("""
             SELECT COUNT(*) FROM paper_positions
@@ -142,7 +143,7 @@ async def platform_status(key: str = ""):
         disc_closed  = conn.execute("""
             SELECT COUNT(*) FROM paper_positions pp
             JOIN paper_bot_configs pbc ON pbc.bot_id = pp.bot_id
-            WHERE pbc.role='discovery' AND pp.status='closed' AND pp.pnl_r IS NOT NULL
+            WHERE pbc.role='discovery' AND pp.status IN ('t2_hit','t1_hit','stopped_out','closed') AND pp.pnl_r IS NOT NULL
         """).fetchone()[0]
 
         # Top discovery pattern (most entries in last 24h)

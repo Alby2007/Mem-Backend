@@ -267,7 +267,7 @@ def _build_your_week_section(user_id: str, db_path: str) -> str:
             return ''
 
         total  = len(recent)
-        wins   = sum(1 for t in recent if t['status'] == 'closed' and (t.get('r_multiple') or 0) > 0)
+        wins   = sum(1 for t in recent if t['status'] in ('closed','t2_hit','t1_hit','stopped_out') and (t.get('r_multiple') or 0) > 0)
         stops  = sum(1 for t in recent if t['status'] in ('stopped', 'expired'))
         r_vals = [t['r_multiple'] for t in recent if t.get('r_multiple') is not None]
         avg_r  = round(sum(r_vals) / len(r_vals), 2) if r_vals else None

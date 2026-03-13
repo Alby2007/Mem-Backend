@@ -251,7 +251,7 @@ class _BotPerformanceSensor:
                     """SELECT COUNT(*) as closed,
                               SUM(CASE WHEN pnl_r > 0 THEN 1 ELSE 0 END) as wins
                        FROM paper_positions
-                       WHERE bot_id=? AND status='closed' AND pnl_r IS NOT NULL""",
+                       WHERE bot_id=? AND status IN ('t2_hit','t1_hit','stopped_out','closed') AND pnl_r IS NOT NULL""",
                     (bot_id,)
                 ).fetchone()
                 closed = stats[0] or 0
@@ -1119,11 +1119,11 @@ class ObservatoryEngine:
                 total_capital = float(total_capital_row[0] or 0)
                 wins = conn.execute(
                     "SELECT COUNT(*) FROM paper_positions "
-                    "WHERE status='closed' AND pnl_r > 0 AND pnl_r IS NOT NULL"
+                    "WHERE status IN ('t2_hit','t1_hit','stopped_out','closed') AND pnl_r > 0 AND pnl_r IS NOT NULL"
                 ).fetchone()[0]
                 closed = conn.execute(
                     "SELECT COUNT(*) FROM paper_positions "
-                    "WHERE status='closed' AND pnl_r IS NOT NULL"
+                    "WHERE status IN ('t2_hit','t1_hit','stopped_out','closed') AND pnl_r IS NOT NULL"
                 ).fetchone()[0]
                 fleet_wr = round(wins / closed, 3) if closed > 0 else 0.0
                 regime_row = conn.execute(
