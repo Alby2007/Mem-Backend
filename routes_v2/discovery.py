@@ -157,3 +157,119 @@ async def private_fleet_report(
     result = get_discovery_report(conn, min_observations=min_observations, limit=limit)
     conn.close()
     return {'report': result}
+
+
+@router.get('/users/{user_id}/private-fleet/closed-positions')
+async def pf_closed_positions(
+    user_id: str,
+    limit: int = Query(200, ge=1, le=1000),
+    status: str = Query(None),
+    _: str = Depends(user_path_auth),
+):
+    _dev_gate(user_id)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    try:
+        q = """
+            SELECT
+                pp.id, pp.ticker, pp.direction, pp.pattern_id,
+                pp.entry_price, pp.exit_price, pp.stop, pp.t1, pp.t2,
+                pp.pnl_r, pp.status, pp.opened_at, pp.closed_at,
+                pp.bot_id, pp.note,
+                pbc.strategy_name, pbc.pattern_types, pbc.sectors
+            FROM paper_positions pp
+            LEFT JOIN paper_bot_configs pbc ON pbc.bot_id = pp.bot_id
+            WHERE pp.status != 'open'
+              AND (pp.bot_id LIKE 'disc_%' OR pp.user_id = 'system_discovery')
+        """
+        params: list = []
+        if status:
+            q += " AND pp.status = ?"
+            params.append(status)
+        q += " ORDER BY pp.closed_at DESC LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(q, params).fetchall()
+        cols = ['id', 'ticker', 'direction', 'pattern_id', 'entry_price', 'exit_price',
+                'stop', 't1', 't2', 'pnl_r', 'status', 'opened_at', 'closed_at',
+                'bot_id', 'note', 'strategy_name', 'pattern_types', 'sectors']
+        positions = [dict(zip(cols, r)) for r in rows]
+
+        wins = [p for p in positions if (p.get('pnl_r') or 0) > 0]
+        losses = [p for p in positions if (p.get('pnl_r') or 0) < 0]
+        gross_profit = sum(p['pnl_r'] for p in wins if p['pnl_r'])
+        gross_loss   = abs(sum(p['pnl_r'] for p in losses if p['pnl_r']))
+        avg_r = (sum(p['pnl_r'] for p in positions if p.get('pnl_r') is not None) / len(positions)) if positions else 0
+
+        outcome_counts: dict = {}
+        for p in positions:
+            s = p.get('status') or 'closed'
+            outcome_counts[s] = outcome_counts.get(s, 0) + 1
+
+        stats = {
+            'win_rate': round(len(wins) / len(positions) * 100, 1) if positions else 0,
+            'avg_r':    round(avg_r, 2),
+            'gross_profit': round(gross_profit, 2),
+            'gross_loss':   round(gross_loss, 2),
+            't2_hits':    outcome_counts.get('t2_hit', 0),
+            't1_hits':    outcome_counts.get('t1_hit', 0),
+            'stopped':    outcome_counts.get('stopped_out', 0),
+            'closed':     outcome_counts.get('closed', 0),
+        }
+        return {'total': len(positions), 'stats': stats, 'positions': positions}
+    finally:
+        conn.close()
+
+
+@router.get('/users/{user_id}/private-fleet/calibration-obs')
+async def pf_calibration_obs(
+    user_id: str,
+    limit: int = Query(200, ge=1, le=2000),
+    _: str = Depends(user_path_auth),
+):
+    _dev_gate(user_id)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    try:
+        rows = conn.execute("""
+            SELECT co.id, co.ticker, co.pattern_type, co.timeframe,
+                   co.market_regime, co.outcome, co.source, co.bot_id,
+                   co.pnl_r, co.observed_at
+            FROM calibration_observations co
+            WHERE co.ticker != 'TEST.L'
+            ORDER BY co.observed_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+
+        cols = ['id', 'ticker', 'pattern_type', 'timeframe', 'market_regime',
+                'outcome', 'source', 'bot_id', 'pnl_r', 'observed_at']
+        observations = [dict(zip(cols, r)) for r in rows]
+
+        outcome_breakdown: dict = {}
+        pattern_breakdown: dict = {}
+        for o in observations:
+            oc = o.get('outcome') or 'unknown'
+            outcome_breakdown[oc] = outcome_breakdown.get(oc, 0) + 1
+            pt = o.get('pattern_type') or 'unknown'
+            pattern_breakdown[pt] = pattern_breakdown.get(pt, 0) + 1
+
+        try:
+            signal_cells = conn.execute(
+                "SELECT COUNT(*) FROM calibration_matrix"
+            ).fetchone()[0]
+        except Exception:
+            signal_cells = 0
+
+        cells_with_obs = len(set(
+            (o.get('pattern_type', ''), o.get('timeframe', ''), o.get('market_regime', ''))
+            for o in observations
+        ))
+
+        return {
+            'total': len(observations),
+            'signal_cells': signal_cells,
+            'cells_with_obs': cells_with_obs,
+            'outcome_breakdown': outcome_breakdown,
+            'pattern_breakdown': pattern_breakdown,
+            'observations': observations,
+        }
+    finally:
+        conn.close()
