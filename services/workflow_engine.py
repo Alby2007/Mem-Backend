@@ -282,7 +282,7 @@ def _fetch_ticker_summary(ticker: str) -> Optional[dict]:
         if not facts:
             facts = ext.kg.query(subject=ticker.upper(), limit=60)
         if not facts:
-            return None
+            return {'ticker': ticker}
 
         # Map predicate → object (last wins if dupes)
         fm: dict = {}
@@ -348,14 +348,11 @@ def _fetch_ticker_summary(ticker: str) -> Optional[dict]:
             ctx['recommendation'] = 'neutral'
             ctx['rec_label'] = 'No clear signal'
 
-        # Only return if we have at least one meaningful field
-        if len(ctx) <= 2:  # just ticker + recommendation
-            return None
         return ctx
 
     except Exception as e:
         _logger.debug('ticker summary fetch failed for %s: %s', ticker, e)
-        return None
+        return {'ticker': ticker}
 
 
 def detect_nl_setup(message: str) -> Optional[dict]:
