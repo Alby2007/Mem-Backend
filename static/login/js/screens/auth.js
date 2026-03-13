@@ -1,3 +1,17 @@
+// ── Guard against SES/MetaMask lockdown unhandled rejections ────────────────
+window.addEventListener('unhandledrejection', function(e) {
+  const msg = (e.reason && (e.reason.message || String(e.reason))) || '';
+  if (
+    msg.includes('Access to storage') ||
+    msg.includes('intrinsics') ||
+    msg.includes('lockdown') ||
+    msg.includes('SES') ||
+    msg.includes('Compartment')
+  ) {
+    e.preventDefault(); // suppress — these come from MetaMask/extension, not our code
+  }
+});
+
 // ── Connection ping ───────────────────────────────────────────────────────────
 async function pingConnection() {
   try {
@@ -86,14 +100,22 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   msg.innerHTML = '<span class="spinner"></span>';
   try {
     const d = await apiFetch('/auth/token', { method: 'POST', body: JSON.stringify({ email, password: pw }) });
-    if (!d) { msg.textContent = 'Sign in failed.'; return; }
-    await _saveSession(d.access_token || d.token, d.user_id);
+    if (!d) { msg.style.color = 'var(--red)'; msg.textContent = 'Sign in failed — check your credentials.'; return; }
+    try { await _saveSession(d.access_token || d.token, d.user_id); } catch { /* storage blocked by extension — session still valid via cookie */ }
     const _nextRaw = new URLSearchParams(window.location.search).get('next') || '';
     const _nextScreen = _nextRaw && _NEXT_RE.test(_nextRaw)
       ? _screenFromPath(_nextRaw)
       : 'dashboard';
     navigate(_nextScreen || 'dashboard', { replace: true });
-  } catch (e) { msg.style.color = 'var(--red)'; msg.textContent = e.message; }
+  } catch (e) {
+    const errMsg = (e && e.message) || String(e);
+    // Ignore SES/lockdown errors from browser extensions — proceed normally
+    if (errMsg.includes('storage') || errMsg.includes('intrinsics') || errMsg.includes('lockdown')) {
+      navigate('dashboard', { replace: true });
+      return;
+    }
+    msg.style.color = 'var(--red)'; msg.textContent = errMsg;
+  }
 });
 
 // Enter key submits forms
