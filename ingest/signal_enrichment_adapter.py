@@ -1678,22 +1678,23 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
         )
 
         # ── Retroactive pattern enrichment ────────────────────────────────────
-        # Backfill kb_conviction/kb_regime/kb_signal_dir on open patterns that
-        # were created before their enrichment atoms existed (99.7% of patterns).
+        # Re-stamp kb_conviction/kb_regime/kb_signal_dir on ALL open patterns
+        # with the current KB values.  COALESCE(NULLIF) guard intentionally
+        # removed — we always overwrite so stale values (Issue 2) are corrected
+        # every enrichment cycle, not just when the field was previously null.
         try:
             _pconn = sqlite3.connect(self._db_path, timeout=30)
             _pconn.execute('PRAGMA journal_mode=WAL')
             _pconn.execute('PRAGMA busy_timeout=30000')
             _pconn.row_factory = sqlite3.Row
 
-            _unenriched = _pconn.execute("""
+            _open_tickers = _pconn.execute("""
                 SELECT DISTINCT ticker FROM pattern_signals
                 WHERE status NOT IN ('filled','broken','expired')
-                  AND (kb_conviction IS NULL OR kb_conviction = '')
             """).fetchall()
 
             _pat_updated = 0
-            for (_pticker,) in _unenriched:
+            for (_pticker,) in _open_tickers:
                 _patoms: dict = {}
                 for _prow in _pconn.execute(
                     "SELECT predicate, object FROM facts WHERE LOWER(subject)=? "
@@ -1711,23 +1712,131 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                 if _conviction or _signal_dir or _regime:
                     _n = _pconn.execute("""
                         UPDATE pattern_signals
-                        SET kb_conviction = COALESCE(NULLIF(kb_conviction,''), ?),
-                            kb_signal_dir = COALESCE(NULLIF(kb_signal_dir,''), ?),
-                            kb_regime     = COALESCE(NULLIF(kb_regime,''), ?)
+                        SET kb_conviction = CASE WHEN ? != '' THEN ? ELSE kb_conviction END,
+                            kb_signal_dir = CASE WHEN ? != '' THEN ? ELSE kb_signal_dir END,
+                            kb_regime     = CASE WHEN ? != '' THEN ? ELSE kb_regime END
                         WHERE ticker = ?
                           AND status NOT IN ('filled','broken','expired')
-                          AND (kb_conviction IS NULL OR kb_conviction = '')
-                    """, (_conviction, _signal_dir, _regime, _pticker)).rowcount
+                    """, (
+                        _conviction, _conviction,
+                        _signal_dir, _signal_dir,
+                        _regime,     _regime,
+                        _pticker,
+                    )).rowcount
                     _pat_updated += _n
 
             _pconn.commit()
             _pconn.close()
             if _pat_updated:
                 _logger.info(
-                    '[signal_enrichment] retroactively enriched %d patterns across %d tickers',
-                    _pat_updated, len(_unenriched),
+                    '[signal_enrichment] re-stamped %d patterns across %d open tickers',
+                    _pat_updated, len(_open_tickers),
                 )
         except Exception as _pe:
             _logger.warning('[signal_enrichment] retroactive pattern enrichment failed: %s', _pe)
 
         return atoms
+
+
+# ── Standalone stale-pattern re-enrichment ────────────────────────────────────
+
+def enrich_stale_patterns(db_path: str = 'trading_knowledge.db', dry_run: bool = False) -> int:
+    """
+    Re-stamp kb_conviction / kb_signal_dir / kb_regime on every open
+    pattern_signals row using current KB facts.
+
+    Fixes Issue 2: patterns with stale kb_conviction that the retroactive block
+    previously skipped because it used COALESCE(NULLIF) — skipping non-null rows.
+
+    Usage:
+        python -m ingest.signal_enrichment_adapter          # update
+        python -m ingest.signal_enrichment_adapter --dry-run
+    """
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=30000')
+    conn.row_factory = sqlite3.Row
+    try:
+        open_tickers = conn.execute(
+            "SELECT DISTINCT ticker FROM pattern_signals "
+            "WHERE status NOT IN ('filled','broken','expired')"
+        ).fetchall()
+
+        updated = 0
+        stale   = 0
+
+        for (ticker,) in open_tickers:
+            patoms: dict = {}
+            for row in conn.execute(
+                "SELECT predicate, object FROM facts WHERE LOWER(subject)=? "
+                "AND predicate IN ('conviction_tier','signal_direction','price_regime') "
+                "ORDER BY timestamp DESC",
+                (ticker.lower(),)
+            ).fetchall():
+                if row[0] not in patoms:
+                    patoms[row[0]] = row[1]
+
+            conviction = patoms.get('conviction_tier', '')
+            signal_dir = patoms.get('signal_direction', '')
+            regime     = patoms.get('price_regime', '')
+
+            if not (conviction or signal_dir or regime):
+                continue
+
+            stale_count = conn.execute("""
+                SELECT COUNT(*) FROM pattern_signals
+                WHERE ticker = ?
+                  AND status NOT IN ('filled','broken','expired')
+                  AND (
+                    (? != '' AND (kb_conviction IS NULL OR kb_conviction != ?)) OR
+                    (? != '' AND (kb_signal_dir IS NULL OR kb_signal_dir != ?)) OR
+                    (? != '' AND (kb_regime     IS NULL OR kb_regime     != ?))
+                  )
+            """, (
+                ticker,
+                conviction, conviction,
+                signal_dir, signal_dir,
+                regime,     regime,
+            )).fetchone()[0]
+            stale += stale_count
+
+            if dry_run:
+                continue
+
+            n = conn.execute("""
+                UPDATE pattern_signals
+                SET kb_conviction = CASE WHEN ? != '' THEN ? ELSE kb_conviction END,
+                    kb_signal_dir = CASE WHEN ? != '' THEN ? ELSE kb_signal_dir END,
+                    kb_regime     = CASE WHEN ? != '' THEN ? ELSE kb_regime     END
+                WHERE ticker = ?
+                  AND status NOT IN ('filled','broken','expired')
+            """, (
+                conviction, conviction,
+                signal_dir, signal_dir,
+                regime,     regime,
+                ticker,
+            )).rowcount
+            updated += n
+
+        if not dry_run:
+            conn.commit()
+
+        _logger.info(
+            '[enrich_stale_patterns] %s %d pattern rows across %d tickers (stale detected=%d)',
+            'dry_run:' if dry_run else 'updated',
+            stale if dry_run else updated,
+            len(open_tickers), stale,
+        )
+        return stale if dry_run else updated
+    finally:
+        conn.close()
+
+
+if __name__ == '__main__':
+    import sys as _sys
+    import os as _os
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    _db  = _os.environ.get('DB_PATH', 'trading_knowledge.db')
+    _dry = '--dry-run' in _sys.argv
+    _n   = enrich_stale_patterns(db_path=_db, dry_run=_dry)
+    print(f'{"[DRY RUN] Would update" if _dry else "Updated"} {_n} pattern rows.')
