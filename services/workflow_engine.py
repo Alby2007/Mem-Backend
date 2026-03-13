@@ -110,10 +110,10 @@ def _validate_ticker(val: str) -> Optional[str]:
     val = val.upper().strip()
     if not val:
         return 'Ticker cannot be empty.'
+    if not re.match(r'^[A-Z0-9.\-\^/]+$', val):
+        return f'"{val[:30]}" doesn\'t look like a ticker — please enter a symbol (e.g. BARC.L, NVDA, 0700.HK).'
     if len(val) > 20:
         return 'Ticker must be 20 characters or fewer.'
-    if not re.match(r'^[A-Z0-9.\-\^/]+$', val):
-        return 'Ticker can only contain letters, numbers, and . - ^ /'
     return None
 
 
