@@ -201,6 +201,7 @@ def _gdelt_tone_query(query: str, timespan: str = '1d') -> Optional[float]:
     """
     Fetch average tone for a query from GDELT GKG tonechart mode.
     Returns inverted/normalised tension score (0–100), or None on failure.
+    Retries up to 3 times with exponential backoff on 429 / timeout.
     """
     params = {
         'query':    query,
@@ -209,45 +210,52 @@ def _gdelt_tone_query(query: str, timespan: str = '1d') -> Optional[float]:
         'timespan': timespan,
     }
     url = _GDELT_DOC_BASE + '?' + urllib.parse.urlencode(params)
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={'User-Agent': 'TradingKB/1.0', 'Accept': 'application/json'},
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = _json.loads(resp.read().decode('utf-8', errors='replace'))
+    last_exc = None
+    for attempt in range(3):
+        if attempt > 0:
+            time.sleep(30 * (2 ** (attempt - 1)))  # 30s, 60s backoff
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={'User-Agent': 'TradingKB/1.0', 'Accept': 'application/json'},
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = _json.loads(resp.read().decode('utf-8', errors='replace'))
 
-        # GDELT tonechart returns {'tonechart': [{'bin': <tone>, 'count': N, 'toparts': [...]}, ...]}
-        # Each entry is a tone bucket: 'bin' is the tone midpoint (-100..+100), 'count' is article count.
-        chart = data.get('tonechart', [])
-        if not chart:
-            return None
+            # GDELT tonechart returns {'tonechart': [{'bin': <tone>, 'count': N, 'toparts': [...]}, ...]}
+            chart = data.get('tonechart', [])
+            if not chart:
+                return None
 
-        # Count-weighted average of bin values
-        total_weight = 0.0
-        weighted_sum = 0.0
-        for b in chart:
-            tone_val = b.get('bin') if b.get('bin') is not None else b.get('avg')
-            count = b.get('count', 1)
-            if tone_val is not None:
-                try:
-                    weighted_sum += float(tone_val) * float(count)
-                    total_weight += float(count)
-                except (TypeError, ValueError):
-                    pass
-        if total_weight == 0:
-            return None
+            # Count-weighted average of bin values
+            total_weight = 0.0
+            weighted_sum = 0.0
+            for b in chart:
+                tone_val = b.get('bin') if b.get('bin') is not None else b.get('avg')
+                count = b.get('count', 1)
+                if tone_val is not None:
+                    try:
+                        weighted_sum += float(tone_val) * float(count)
+                        total_weight += float(count)
+                    except (TypeError, ValueError):
+                        pass
+            if total_weight == 0:
+                return None
 
-        avg_tone = weighted_sum / total_weight
-        # Invert (-100..+100) → tension score (0..100)
-        # avg_tone = -100 (max hostility) → score = 100
-        # avg_tone = +100 (max positive)  → score = 0
-        tension = max(0.0, min(100.0, (-avg_tone + 100.0) / 2.0))
-        return round(tension, 1)
+            avg_tone = weighted_sum / total_weight
+            # Invert (-100..+100) → tension score (0..100)
+            tension = max(0.0, min(100.0, (-avg_tone + 100.0) / 2.0))
+            return round(tension, 1)
 
-    except Exception as exc:
-        _logger.warning('GDELT tone query failed for %r: %s', query, exc)
-        return None
+        except Exception as exc:
+            last_exc = exc
+            err_str = str(exc)
+            # Only retry on rate limiting or timeouts
+            if '429' not in err_str and 'timed out' not in err_str and 'timeout' not in err_str.lower():
+                break
+
+    _logger.warning('GDELT tone query failed for %r: %s', query, last_exc)
+    return None
 
 
 def _trend_label(current: float, previous: Optional[float]) -> str:
@@ -290,7 +298,7 @@ class GDELTAdapter(BaseIngestAdapter):
         region_scores: Dict[str, List[float]] = {}
 
         for pair_label, query, region in _PAIRS:
-            time.sleep(30)  # 2 pairs/min — GDELT free tier hard limit ~120 req/hr per IP
+            time.sleep(45)  # ~1.3 pairs/min — conservative to avoid 429s on GDELT free tier
             raw_score = _gdelt_tone_query(query, timespan='1d')
             if raw_score is None:
                 self._logger.warning('No GDELT data for pair %s', pair_label)

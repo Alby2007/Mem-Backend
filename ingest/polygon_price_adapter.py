@@ -338,7 +338,7 @@ class PolygonPriceAdapter(BaseIngestAdapter):
         """Fetch quarterly fundamentals for US equity tickers."""
         atoms: List[RawAtom] = []
         now_iso = datetime.now(timezone.utc).isoformat()
-        equity_tickers = self._tickers & _US_EQUITY_TICKERS
+        equity_tickers = self._equity_tickers  # already excludes ETFs via __init__
         succeeded = 0
 
         for sym in sorted(equity_tickers):
