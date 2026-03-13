@@ -513,17 +513,38 @@ def _auto_resolve_calibration(pos: dict, db_path: str) -> None:
         except Exception:
             pass
 
-        # ── Fallback: yfinance ─────────────────────────────────────────────
+        # ── Fallback: yfinance (timeout-guarded — blocks on network) ──────
         if not candles:
-            try:
-                import yfinance as yf
-                from analytics.historical_calibration import HistoricalCalibrator
-                df = yf.download(ticker, start=created_at[:10], end=expires_at[:10],
-                                 interval='1d', progress=False, auto_adjust=True)
-                if not df.empty:
-                    candles = HistoricalCalibrator._df_to_ohlcv(df)
-            except Exception:
-                pass
+            _yf_result: list = []
+            _yf_exc: list = []
+
+            def _yf_fetch() -> None:
+                try:
+                    import yfinance as _yf
+                    from analytics.historical_calibration import HistoricalCalibrator
+                    _df = _yf.download(
+                        ticker,
+                        start=created_at[:10],
+                        end=expires_at[:10],
+                        interval='1d',
+                        progress=False,
+                        auto_adjust=True,
+                    )
+                    if not _df.empty:
+                        _yf_result.extend(HistoricalCalibrator._df_to_ohlcv(_df))
+                except Exception as _e:
+                    _yf_exc.append(_e)
+
+            _t = threading.Thread(target=_yf_fetch, daemon=True, name='yf-autoresolve')
+            _t.start()
+            _t.join(timeout=10)
+            if _t.is_alive():
+                _log.debug(
+                    'PositionMonitor: yfinance fallback timed out for followup %d %s — skipping',
+                    pos['id'], ticker,
+                )
+            elif _yf_result:
+                candles = _yf_result
 
         if not candles:
             return

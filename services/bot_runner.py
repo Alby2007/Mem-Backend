@@ -251,6 +251,9 @@ class BotRunner:
         self._threads: dict[str, threading.Thread] = {}
         self._stop_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+        # Dedicated position exit monitor — separate from per-bot scan threads
+        self._pos_monitor_stop: Optional[threading.Event] = None
+        self._pos_monitor_thread: Optional[threading.Thread] = None
 
     # ── Schema ────────────────────────────────────────────────────────────────
 
@@ -319,6 +322,7 @@ class BotRunner:
         for i, bot_id in enumerate(bot_ids):
             delay = i * 15
             self.start_bot(bot_id, startup_delay=delay)
+        self.start_bot_position_monitor()
         return bot_ids
 
     def start_bot(self, bot_id: str, startup_delay: int = 0) -> bool:
@@ -417,6 +421,67 @@ class BotRunner:
         _logger.info('kill_bot: %s killed (%s)', bot_id, reason)
         return True
 
+    def start_bot_position_monitor(self, interval_sec: int = 300) -> None:
+        """Start the dedicated bot position exit monitor thread (5-min default).
+
+        This thread calls monitor_positions() for every user that has at least one
+        active bot, every `interval_sec` seconds.  It is intentionally independent
+        of each bot's scan_interval so exits are checked even when the 30-min entry
+        scan has not fired yet.
+        """
+        if self._pos_monitor_thread and self._pos_monitor_thread.is_alive():
+            return
+        self._pos_monitor_stop = threading.Event()
+        self._pos_monitor_thread = threading.Thread(
+            target=self._bot_position_monitor_loop,
+            args=(self._pos_monitor_stop, interval_sec),
+            name='bot-pos-monitor',
+            daemon=True,
+        )
+        self._pos_monitor_thread.start()
+        _logger.info('BotRunner: bot position monitor started (interval=%ds)', interval_sec)
+
+    def stop_bot_position_monitor(self) -> None:
+        """Signal the bot position monitor thread to stop."""
+        if self._pos_monitor_stop:
+            self._pos_monitor_stop.set()
+
+    def _bot_position_monitor_loop(
+        self, stop_event: threading.Event, interval_sec: int
+    ) -> None:
+        """Background loop: call monitor_positions() for every active bot user."""
+        import time as _t
+        _t.sleep(30)  # brief startup delay so DB is ready
+        while not stop_event.is_set():
+            try:
+                self._run_bot_position_monitor_cycle()
+            except Exception as _e:
+                _logger.error('BotRunner pos-monitor cycle error: %s', _e)
+            stop_event.wait(interval_sec)
+
+    def _run_bot_position_monitor_cycle(self) -> None:
+        """One cycle: find all users with active bots, call monitor_positions for each."""
+        from services.paper_trading import monitor_positions
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            rows = conn.execute(
+                "SELECT DISTINCT user_id FROM paper_bot_configs WHERE active=1 AND killed_at IS NULL"
+            ).fetchall()
+            conn.close()
+        except Exception as _e:
+            _logger.warning('BotRunner pos-monitor: failed to load user list: %s', _e)
+            return
+        for (user_id,) in rows:
+            try:
+                result = monitor_positions(user_id)
+                if result.get('updates'):
+                    _logger.info(
+                        'BotRunner pos-monitor: %s — %d exits/partials',
+                        user_id, len(result['updates']),
+                    )
+            except Exception as _ue:
+                _logger.warning('BotRunner pos-monitor: error for %s: %s', user_id, _ue)
+
     def restore_bots(self, startup_delay: int = 90) -> int:
         """Re-launch all active bots at server startup."""
         try:
@@ -435,6 +500,7 @@ class BotRunner:
                 delay = startup_delay + i * 10
                 if self.start_bot(row[0], startup_delay=delay):
                     started += 1
+            self.start_bot_position_monitor()
             _logger.info('restore_bots: re-launched %d bots', started)
             return started
         except Exception as e:
@@ -446,6 +512,7 @@ class BotRunner:
         with self._lock:
             for ev in self._stop_events.values():
                 ev.set()
+        self.stop_bot_position_monitor()
 
     # ── Query builder ─────────────────────────────────────────────────────────
 

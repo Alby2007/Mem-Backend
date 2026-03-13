@@ -665,8 +665,13 @@ def monitor_positions(user_id: str) -> dict:
 
     yf_syms = {pos['ticker']: _YF_MAP.get(pos['ticker'].lower(), pos['ticker']) for pos in open_pos}
     live_prices = fetch_live_prices(list(yf_syms.values()))
-    sym_to_ticker = {v: k for k, v in yf_syms.items()}
-    prices_by_ticker = {sym_to_ticker[sym]: price for sym, price in live_prices.items()}
+    # Build prices_by_ticker directly from the forward mapping to avoid losing tickers
+    # when two tickers share the same yf symbol (inversion would silently drop one).
+    prices_by_ticker = {
+        ticker: live_prices[yf_sym]
+        for ticker, yf_sym in yf_syms.items()
+        if yf_sym in live_prices
+    }
 
     for pos in open_pos:
         ticker = pos['ticker']
