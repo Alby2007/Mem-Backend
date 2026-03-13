@@ -252,6 +252,64 @@ _WORKFLOW_INTROS: Dict[str, str] = {
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+_NL_SETUP_PATTERNS = [
+    re.compile(r'\b(log|setup|set up|set-up|add|track|record|journal)\b.*\btrade\b', re.IGNORECASE),
+    re.compile(r'\b(i(?:\'m| am| want to| wanna))\b.*\b(long|short|buy|sell|bullish|bearish)\b', re.IGNORECASE),
+    re.compile(r'\b(going|went)\b.*\b(long|short|bullish|bearish)\b', re.IGNORECASE),
+    re.compile(r'\b(entry|entering)\b.{0,60}\b(stop|sl|stoploss|stop.loss)\b', re.IGNORECASE),
+]
+_NL_TICKER_RE    = re.compile(r'\b([A-Z]{1,5}(?:\.[A-Z]{1,2})?|\d{4,6}\.[A-Z]{1,2})\b')
+_NL_DIRECTION_RE = re.compile(r'\b(bullish|bearish|long|short|buy|sell)\b', re.IGNORECASE)
+_NL_PRICE_RE     = re.compile(r'(?:entry|entered?|at|from|price)[^\d]{0,10}([\d]+\.?[\d]*)', re.IGNORECASE)
+_NL_STOP_RE      = re.compile(r'(?:stop(?:\s*loss)?|sl)[^\d]{0,10}([\d]+\.?[\d]*)', re.IGNORECASE)
+_NL_T1_RE        = re.compile(r'(?:t(?:arget)?[\s\-]?1|tp[\s\-]?1|t1)[^\d]{0,10}([\d]+\.?[\d]*)', re.IGNORECASE)
+_NL_T2_RE        = re.compile(r'(?:t(?:arget)?[\s\-]?2|tp[\s\-]?2|t2)[^\d]{0,10}([\d]+\.?[\d]*)', re.IGNORECASE)
+_NL_STOPWORDS    = {'A', 'AN', 'THE', 'FOR', 'AND', 'OR', 'IN', 'ON', 'AT', 'TO', 'OF', 'IS',
+                    'IT', 'MY', 'ME', 'BE', 'DO', 'UP', 'IF', 'NO', 'SO', 'US', 'WE', 'AM',
+                    'PM', 'KB', 'AI', 'UK', 'US', 'EU', 'TP'}
+
+
+def detect_nl_setup(message: str) -> Optional[dict]:
+    """
+    Detect natural language trade setup intent and extract any available fields.
+    Returns a dict of pre-filled fields (may be partial), or None if not detected.
+    """
+    if not any(p.search(message) for p in _NL_SETUP_PATTERNS):
+        return None
+
+    extracted: dict = {}
+
+    # Ticker — find caps words, exclude stopwords
+    tickers = [t for t in _NL_TICKER_RE.findall(message) if t not in _NL_STOPWORDS]
+    if tickers:
+        extracted['ticker'] = tickers[0].upper()
+
+    # Direction
+    dm = _NL_DIRECTION_RE.search(message)
+    if dm:
+        raw = dm.group(1).lower()
+        extracted['direction'] = 'bearish' if raw in ('bearish', 'short', 'sell') else 'bullish'
+
+    # Prices
+    em = _NL_PRICE_RE.search(message)
+    if em:
+        extracted['entry_price'] = str(float(em.group(1)))
+
+    sm = _NL_STOP_RE.search(message)
+    if sm:
+        extracted['stop_loss'] = str(float(sm.group(1)))
+
+    t1m = _NL_T1_RE.search(message)
+    if t1m:
+        extracted['target_1'] = str(float(t1m.group(1)))
+
+    t2m = _NL_T2_RE.search(message)
+    if t2m:
+        extracted['target_2'] = str(float(t2m.group(1)))
+
+    return extracted if extracted else None
+
+
 def detect_workflow_trigger(message: str) -> Optional[str]:
     """Return workflow key if message is a slash trigger, else None."""
     cmd = message.strip().lower()
@@ -279,6 +337,61 @@ def start_workflow(db_path: str, user_id: str, workflow_key: str) -> str:
     _set_state(db_path, user_id, workflow_key, 0, {})
     intro = _WORKFLOW_INTROS.get(workflow_key, '')
     return intro + steps[0].prompt
+
+
+def start_workflow_prefilled(db_path: str, user_id: str, workflow_key: str, prefilled: dict) -> WorkflowResult:
+    """
+    Create workflow state pre-loaded with extracted fields, skip to first unanswered step.
+    Returns WorkflowResult pointing at the first unanswered step.
+    """
+    steps = _WORKFLOW_STEPS[workflow_key]
+    data = {}
+
+    # Walk steps in order, storing valid pre-filled values
+    for step in steps:
+        val = prefilled.get(step.field)
+        if val is None:
+            continue
+        # Validate before accepting
+        if step.validator:
+            err = step.validator(val)
+            if err:
+                continue  # skip bad extractions silently
+        data[step.field] = val
+
+    # Find first step not yet answered
+    first_missing_idx = 0
+    for i, step in enumerate(steps):
+        if step.field not in data:
+            first_missing_idx = i
+            break
+    else:
+        # All fields pre-filled — attempt completion
+        _set_state(db_path, user_id, workflow_key, len(steps), data)
+        return _complete_workflow(db_path, user_id, workflow_key, data)
+
+    _set_state(db_path, user_id, workflow_key, first_missing_idx, data)
+
+    # Build a summary of what was understood
+    field_labels = {
+        'ticker': 'Ticker', 'direction': 'Direction', 'entry_price': 'Entry',
+        'stop_loss': 'Stop', 'target_1': 'T1', 'target_2': 'T2',
+        'timeframe': 'Timeframe', 'pattern_type': 'Pattern', 'user_note': 'Note',
+    }
+    understood = ', '.join(
+        f"**{field_labels.get(k, k)}** {v}"
+        for k, v in data.items()
+        if k in field_labels
+    )
+    prefix = f'📋 **Log a trade** — understood so far: {understood}\n\n' if understood else '📋 **Log a trade** — let me collect the details.\n\n'
+
+    next_step = steps[first_missing_idx]
+    return WorkflowResult(
+        done=False,
+        answer=prefix + next_step.prompt,
+        next_step=first_missing_idx,
+        workflow_field=next_step.field,
+    )
 
 
 def advance_workflow(db_path: str, user_id: str, message: str) -> WorkflowResult:

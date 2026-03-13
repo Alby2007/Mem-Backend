@@ -237,6 +237,21 @@ async def alerts_pending_count(
         raise HTTPException(500, detail=str(e))
 
 
+@router.delete("/chat/workflow")
+async def cancel_workflow_endpoint(
+    user_id: Optional[str] = Depends(get_current_user_optional),
+):
+    """Cancel any active workflow for the current user. Called on page/chat load."""
+    if not user_id:
+        return {"ok": True}
+    try:
+        from services.workflow_engine import cancel_workflow
+        cancel_workflow(ext.DB_PATH, user_id)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 @router.post("/chat")
 @limiter.limit(RATE_LIMITS["chat"])
 async def chat_endpoint(
@@ -251,7 +266,8 @@ async def chat_endpoint(
         try:
             from services.workflow_engine import (
                 detect_workflow_trigger, get_active_workflow,
-                start_workflow, advance_workflow, cancel_workflow,
+                start_workflow, start_workflow_prefilled, advance_workflow,
+                cancel_workflow, detect_nl_setup,
             )
             user_msg = data.message.strip()
 
@@ -287,6 +303,22 @@ async def chat_endpoint(
                         None if result.done
                         else {
                             "active": active["workflow"],
+                            "step": result.next_step,
+                            "field": result.workflow_field,
+                        }
+                    ),
+                }
+
+            # 4. Natural language setup detection — only when no workflow active
+            nl_fields = detect_nl_setup(user_msg)
+            if nl_fields:
+                result = start_workflow_prefilled(ext.DB_PATH, user_id, 'setup_trade', nl_fields)
+                return {
+                    "answer": result.answer,
+                    "workflow": (
+                        None if result.done
+                        else {
+                            "active": "setup_trade",
                             "step": result.next_step,
                             "field": result.workflow_field,
                         }
