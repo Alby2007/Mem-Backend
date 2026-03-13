@@ -16,7 +16,7 @@ import os
 import sqlite3
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 _log = logging.getLogger(__name__)
 
@@ -695,6 +695,10 @@ class ObservatoryEngine:
 
         duration = round(time.monotonic() - start, 2)
 
+        # Suppress findings that were already reported within the last 24h
+        # (prevents the same stale alert from spamming Telegram every hour)
+        findings = self._filter_cooldown(findings)
+
         # Always report (even all-clear)
         try:
             budget_today = self._tokens_used_today()
@@ -1028,6 +1032,45 @@ class ObservatoryEngine:
             _log.warning('Observatory: _queue_write failed: %s', e)
 
     # ── Report ─────────────────────────────────────────────────────────────────
+    def _filter_cooldown(self, findings: list[Finding], cooldown_hours: int = 24) -> list[Finding]:
+        """Suppress findings whose sensor+subject was already reported within cooldown_hours."""
+        if not findings:
+            return findings
+        try:
+            cutoff = (datetime.now(timezone.utc).replace(tzinfo=None)
+                      - timedelta(hours=cooldown_hours)).isoformat()
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            try:
+                _ensure_observatory_table(conn)
+                rows = conn.execute(
+                    "SELECT findings_json FROM observatory_runs WHERE run_at > ? AND findings_json IS NOT NULL",
+                    (cutoff,)
+                ).fetchall()
+            finally:
+                conn.close()
+
+            # Build set of (sensor, subject) seen in the last cooldown_hours
+            seen: set[tuple[str, str]] = set()
+            for (fjson,) in rows:
+                try:
+                    for f in json.loads(fjson or '[]'):
+                        seen.add((f.get('sensor', ''), f.get('subject', '')))
+                except Exception:
+                    pass
+
+            fresh = []
+            for f in findings:
+                key = (f.sensor, f.subject)
+                if key in seen:
+                    _log.info('Observatory: suppressing repeat finding %s/%s (cooldown %dh)',
+                              f.sensor, f.subject, cooldown_hours)
+                else:
+                    fresh.append(f)
+            return fresh
+        except Exception as e:
+            _log.warning('Observatory: cooldown filter failed, passing all findings: %s', e)
+            return findings
+
     def _report(
         self,
         findings: list[Finding],

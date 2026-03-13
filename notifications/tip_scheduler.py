@@ -1225,6 +1225,11 @@ def _run_tip_cycle(db_path: str) -> None:
         timezone_str  = prefs.get('tip_delivery_timezone') or 'UTC'
         tier          = prefs.get('tier') or 'basic'
 
+        # Skip users with no Telegram linked — can't deliver, don't log failure
+        if not prefs.get('telegram_chat_id'):
+            _log.debug('TipScheduler: skipping user %s — no telegram_chat_id', user_id)
+            continue
+
         for json_col in ('tip_timeframes', 'tip_pattern_types', 'tip_markets'):
             try:
                 prefs[json_col] = json.loads(prefs[json_col]) if prefs[json_col] else None
