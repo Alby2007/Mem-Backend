@@ -891,11 +891,14 @@ function renderTickerContext(ctx) {
     ? `<div class="tc-thesis">${escHtml(ctx.thesis)}</div>`
     : '';
 
+  const chartHtml = `<div class="tc-chart"><iframe src="${API}/markets/chart?sym=${encodeURIComponent(ctx.ticker)}" frameborder="0" allowfullscreen></iframe></div>`;
+
   return `<div class="ticker-ctx-card">
   <div class="tc-header">
     <span class="tc-ticker">${escHtml(ctx.ticker)}</span>
     <span class="tc-rec ${recClass}">${recIcon} ${escHtml(recLabel)}</span>
   </div>
+  ${chartHtml}
   ${rows.length ? `<div class="tc-rows">${rows.join('')}</div>` : ''}
   ${thesisHtml}
 </div>`;
