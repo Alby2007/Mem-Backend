@@ -220,6 +220,59 @@ async def pf_closed_positions(
         conn.close()
 
 
+@router.get('/users/{user_id}/private-fleet/bots')
+async def pf_bots(
+    user_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    pattern: str = Query(None),
+    _: str = Depends(user_path_auth),
+):
+    _dev_gate(user_id)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    try:
+        where = "WHERE pbc.user_id=?"
+        params: list = [DISCOVERY_USER_ID]
+        if pattern:
+            where += " AND pbc.pattern_types LIKE ?"
+            params.append(f'%{pattern}%')
+
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM paper_bot_configs pbc {where}", params
+        ).fetchone()[0]
+
+        rows = conn.execute(
+            f"""SELECT pbc.bot_id, pbc.strategy_name, pbc.pattern_types, pbc.sectors,
+                       pbc.direction_bias, pbc.active, pbc.created_at,
+                       COUNT(CASE WHEN pp.status='open' THEN 1 END) as open_pos,
+                       COUNT(CASE WHEN pp.status!='open' THEN 1 END) as closed_pos,
+                       SUM(CASE WHEN pp.pnl_r > 0 AND pp.status!='open' THEN 1 ELSE 0 END) as wins,
+                       AVG(CASE WHEN pp.status!='open' THEN pp.pnl_r END) as avg_r
+                FROM paper_bot_configs pbc
+                LEFT JOIN paper_positions pp ON pp.bot_id = pbc.bot_id
+                {where}
+                GROUP BY pbc.bot_id
+                ORDER BY closed_pos DESC, pbc.created_at DESC
+                LIMIT ? OFFSET ?""",
+            params + [limit, offset],
+        ).fetchall()
+
+        cols = ['bot_id', 'strategy_name', 'pattern_types', 'sectors', 'direction_bias',
+                'active', 'created_at', 'open_pos', 'closed_pos', 'wins', 'avg_r']
+        bots = []
+        for r in rows:
+            b = dict(zip(cols, r))
+            closed = b['closed_pos'] or 0
+            wins   = b['wins'] or 0
+            b['win_rate'] = round(wins / closed * 100, 1) if closed > 0 else None
+            b['avg_r']    = round(b['avg_r'], 2) if b['avg_r'] is not None else None
+            bots.append(b)
+
+        return {'total': total, 'limit': limit, 'offset': offset, 'bots': bots}
+    finally:
+        conn.close()
+
+
 @router.get('/users/{user_id}/private-fleet/calibration-obs')
 async def pf_calibration_obs(
     user_id: str,

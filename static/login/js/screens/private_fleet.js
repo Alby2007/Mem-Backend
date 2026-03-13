@@ -1,11 +1,16 @@
 // ── PRIVATE FLEET — Internal discovery fleet observation ──────────────────────
 
-let _pfPollTimer  = null;
-let _pfView       = 'fleet';
-let _pfLastStatus = null;
-let _pfLastReport = null;
+let _pfPollTimer   = null;
+let _pfView        = 'fleet';
+let _pfLastStatus  = null;
+let _pfLastReport  = null;
 let _pfClosedCache = null;
 let _pfCalibCache  = null;
+let _pfBotsCache   = null;
+let _pfBotsPage    = 0;
+let _pfBotsTotal   = 0;
+let _pfBotsPattern = 'all';
+const _pfBotsPageSize = 50;
 let _pfSortCol     = null;
 let _pfSortAsc     = true;
 let _pfFilter      = 'all';
@@ -528,120 +533,170 @@ function _pfRenderClosedDetail(data, filter, sortCol, sortAsc) {
 // ── detail view: DISCOVERY BOTS ───────────────────────────────────────────────
 
 async function _pfPopulateBots() {
-  const s = _pfLastStatus;
-  if (!s) {
-    document.getElementById('pf-detail-body').innerHTML = _pfLoading();
-    return;
-  }
-
-  let perf = {};
-  try {
-    const r = await apiFetch(`/users/${state.userId}/bots/fleet-performance`);
-    (r?.bots || []).forEach(b => { perf[b.bot_id] = b; });
-  } catch(e) { /* perf stays empty */ }
-
-  _pfRenderBotsDetail(s, perf, _pfFilter);
+  _pfBotsPage    = 0;
+  _pfBotsPattern = 'all';
+  _pfBotsCache   = null;
+  await _pfFetchAndRenderBots();
 }
 
-function _pfSetBotsFilter(f) {
-  _pfFilter = f;
-  if (_pfLastStatus) _pfRenderBotsDetail(_pfLastStatus, window._pfPerfCache || {}, f);
-}
-
-function _pfRenderBotsDetail(s, perf, filter) {
-  window._pfPerfCache = perf;
+async function _pfFetchAndRenderBots() {
   const body = document.getElementById('pf-detail-body');
   if (!body) return;
 
-  const openByBot = {};
-  (s.open_positions || []).forEach(p => {
-    openByBot[p.bot_id] = (openByBot[p.bot_id] || 0) + 1;
-  });
+  const patParam = _pfBotsPattern !== 'all' ? `&pattern=${encodeURIComponent(_pfBotsPattern)}` : '';
+  const url = `/users/${state.userId}/private-fleet/bots?limit=${_pfBotsPageSize}&offset=${_pfBotsPage * _pfBotsPageSize}${patParam}`;
 
-  // Get bot list from perf response + coverage (no disc_ prefix filter — bot_ids vary)
-  const botIds = [...new Set([
-    ...Object.keys(perf),
-    ...(s.coverage || []).map(c => c.pattern).filter(Boolean),
-  ])].filter(Boolean);
+  try {
+    const data = await apiFetch(url);
+    _pfBotsCache  = data;
+    _pfBotsTotal  = data.total;
+    _pfRenderBotsDetail(data);
+  } catch(e) {
+    body.innerHTML = `<div style="color:var(--red);padding:20px;">Failed to load: ${escHtml(String(e))}</div>`;
+  }
+}
 
-  // Use coverage patterns for filter tabs
+function _pfSetBotsPattern(p) {
+  _pfBotsPattern = p;
+  _pfBotsPage    = 0;
+  _pfFetchAndRenderBots();
+}
+
+function _pfBotsGoPage(page) {
+  _pfBotsPage = page;
+  _pfFetchAndRenderBots();
+}
+
+function _pfRenderBotsDetail(data) {
+  const body = document.getElementById('pf-detail-body');
+  if (!body) return;
+
+  const s     = _pfLastStatus || {};
+  const bots  = data.bots || [];
+  const total = data.total || 0;
+  const totalPages = Math.ceil(total / _pfBotsPageSize);
+
+  const summary = _pfSummaryBar([
+    { label: 'Total Bots', value: s.total_bots || total },
+    { label: 'Active',     value: s.active_bots || 0, color: 'var(--green)' },
+    { label: 'Open Pos',   value: s.open_positions?.length || 0 },
+  ]);
+
+  // Pattern filter tabs from coverage
   const coveragePatterns = [...new Set((s.coverage || []).map(c => {
     try { return JSON.parse(c.pattern)?.[0] || c.pattern; } catch { return c.pattern; }
   }).filter(Boolean))];
-
   const tabs = [
     { label: 'ALL', value: 'all' },
     ...coveragePatterns.slice(0, 6).map(p => ({ label: p.replace(/_/g,' ').toUpperCase(), value: p })),
   ];
 
-  let bots = botIds;
-  if (filter !== 'all') {
-    bots = bots.filter(id => id.includes(filter));
-  }
-
-  const summary = _pfSummaryBar([
-    { label: 'Total Bots',  value: s.total_bots  || botIds.length },
-    { label: 'Active',      value: s.active_bots  || 0, color: 'var(--green)' },
-    { label: 'Open Pos',    value: s.open_positions?.length || 0 },
-  ]);
-
-  const tableRows = bots.length ? bots.map(id => {
-    const cleanId = id.replace(/^disc_/, '');
-    const label   = cleanId.replace(/_/g, ' · ');
-    const parts   = cleanId.split('_');
-    const pat     = parts[0] || '—';
-    const sec     = parts[1] || '—';
-    const dir     = parts[2] || 'any';
-    const open    = openByBot[id] || 0;
-    const closed  = perf[id]?.closed || 0;
-    const wr      = perf[id]?.win_rate != null ? (perf[id].win_rate * 100).toFixed(0) + '%' : '—';
-    const wrCol   = perf[id]?.win_rate >= 0.6 ? 'var(--green)' : perf[id]?.win_rate >= 0.45 ? 'var(--accent)' : 'var(--muted)';
-    return `<tr style="border-bottom:1px solid var(--border);">
-      <td style="padding:7px 6px;font-size:11px;font-weight:500;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(label)}</td>
+  const tableRows = bots.length ? bots.map(b => {
+    let pat = b.pattern_types || '—';
+    try { const a = JSON.parse(pat); pat = Array.isArray(a) ? a.join(', ') : pat; } catch {}
+    let sec = b.sectors || '—';
+    try { const a = JSON.parse(sec); sec = Array.isArray(a) ? a[0] || 'all' : sec; } catch {}
+    const wr    = b.win_rate != null ? b.win_rate.toFixed(1) + '%' : '—';
+    const wrCol = b.win_rate >= 60 ? 'var(--green)' : b.win_rate >= 45 ? 'var(--accent)' : b.win_rate != null ? 'var(--red)' : 'var(--muted)';
+    const safe  = encodeURIComponent(JSON.stringify(b));
+    return `<tr onclick="_pfBotRowClick(decodeURIComponent('${safe}'))"
+      onmouseenter="this.style.background='rgba(255,255,255,0.03)'"
+      onmouseleave="this.style.background=''"
+      style="border-bottom:1px solid var(--border);cursor:pointer;">
+      <td style="padding:7px 6px;font-size:11px;font-weight:500;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;">${escHtml(b.bot_id || '—')}</td>
       <td style="padding:7px 6px;font-size:11px;color:var(--muted);white-space:nowrap;">${escHtml(pat.replace(/_/g,' '))}</td>
       <td style="padding:7px 6px;font-size:11px;color:var(--muted);white-space:nowrap;">${escHtml(sec)}</td>
-      <td style="padding:7px 6px;font-size:11px;white-space:nowrap;">${_pfSideHtml(dir === 'any' ? null : dir)}</td>
-      <td style="padding:7px 6px;font-size:11px;text-align:right;">${open}</td>
-      <td style="padding:7px 6px;font-size:11px;text-align:right;color:var(--muted);">${closed}</td>
+      <td style="padding:7px 6px;font-size:11px;white-space:nowrap;">${_pfSideHtml(b.direction_bias)}</td>
+      <td style="padding:7px 6px;font-size:11px;text-align:right;">${b.open_pos || 0}</td>
+      <td style="padding:7px 6px;font-size:11px;text-align:right;color:var(--muted);">${b.closed_pos || 0}</td>
       <td style="padding:7px 6px;font-size:11px;text-align:right;font-weight:600;color:${wrCol};">${wr}</td>
     </tr>`;
-  }).join('') : `<tr><td colspan="7" style="padding:30px;text-align:center;color:var(--muted);">No bot performance data yet — positions will appear once bots start closing trades.</td></tr>`;
+  }).join('') : `<tr><td colspan="7" style="padding:30px;text-align:center;color:var(--muted);">No bots found.</td></tr>`;
 
-  // If no bots from perf, show coverage grid instead
-  const showCoverage = botIds.length === 0;
-  const coverageRows = showCoverage ? (s.coverage || []).map(c => {
-    let pat = c.pattern || '—';
-    try { pat = JSON.parse(c.pattern)?.[0] || pat; } catch {}
-    return `<tr style="border-bottom:1px solid var(--border);">
-      <td style="padding:7px 6px;font-size:11px;color:var(--muted);">${escHtml(pat.replace(/_/g,' '))}</td>
-      <td style="padding:7px 6px;font-size:11px;white-space:nowrap;">${_pfSideHtml(c.direction === 'any' ? null : c.direction)}</td>
-      <td style="padding:7px 6px;font-size:11px;text-align:right;color:var(--accent);">${c.count}</td>
-    </tr>`;
-  }).join('') : null;
+  // Pagination controls
+  const from  = _pfBotsPage * _pfBotsPageSize + 1;
+  const to    = Math.min((_pfBotsPage + 1) * _pfBotsPageSize, total);
+  const pagination = totalPages > 1 ? `
+    <div style="display:flex;align-items:center;gap:10px;justify-content:center;margin-top:12px;font-size:12px;">
+      <button onclick="_pfBotsGoPage(${_pfBotsPage - 1})" ${_pfBotsPage === 0 ? 'disabled' : ''}
+        style="padding:4px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;
+               color:${_pfBotsPage === 0 ? 'var(--muted)' : 'var(--text)'};cursor:${_pfBotsPage === 0 ? 'default' : 'pointer'};">← Prev</button>
+      <span style="color:var(--muted);">${from}–${to} of ${total}</span>
+      <button onclick="_pfBotsGoPage(${_pfBotsPage + 1})" ${_pfBotsPage >= totalPages - 1 ? 'disabled' : ''}
+        style="padding:4px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;
+               color:${_pfBotsPage >= totalPages - 1 ? 'var(--muted)' : 'var(--text)'};cursor:${_pfBotsPage >= totalPages - 1 ? 'default' : 'pointer'};">Next →</button>
+    </div>` : '';
 
   body.innerHTML = summary
-    + (showCoverage ? '' : _pfTabs(tabs, filter, '_pfSetBotsFilter'))
-    + `<div style="overflow-x:auto;"><table style="width:100%;min-width:500px;border-collapse:collapse;font-size:12px;">
+    + _pfTabs(tabs, _pfBotsPattern, '_pfSetBotsPattern')
+    + `<div style="overflow-x:auto;"><table style="width:100%;min-width:520px;border-collapse:collapse;font-size:12px;">
       <thead><tr style="border-bottom:1px solid var(--border);">
-        ${showCoverage ? `
-          <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">PATTERN</th>
-          <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">SIDE</th>
-          <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">BOTS</th>
-        ` : `
-          <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">BOT</th>
-          <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">PATTERN</th>
-          <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">SECTOR</th>
-          <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">SIDE</th>
-          <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">OPEN</th>
-          <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">CLOSED</th>
-          <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">WIN%</th>
-        `}
+        <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;white-space:nowrap;">BOT ID</th>
+        <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;white-space:nowrap;">PATTERN</th>
+        <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;white-space:nowrap;">SECTOR</th>
+        <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;white-space:nowrap;">SIDE</th>
+        <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;white-space:nowrap;">OPEN</th>
+        <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;white-space:nowrap;">CLOSED</th>
+        <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;white-space:nowrap;">WIN%</th>
       </tr></thead>
-      <tbody>${showCoverage ? (coverageRows || '<tr><td colspan="3" style="padding:20px;text-align:center;color:var(--muted);">No coverage data.</td></tr>') : tableRows}</tbody>
-    </table></div>`;
+      <tbody>${tableRows}</tbody>
+    </table></div>`
+    + pagination;
 
   const upd = document.getElementById('pf-detail-updated');
-  if (upd) upd.textContent = `${bots.length} bots`;
+  if (upd) upd.textContent = `${total} bots`;
+}
+
+function _pfBotRowClick(jsonStr) {
+  let b;
+  try { b = JSON.parse(jsonStr); } catch { return; }
+
+  const existing = document.getElementById('pf-bot-modal');
+  if (existing) existing.remove();
+
+  let pat = b.pattern_types || '—';
+  try { const a = JSON.parse(pat); pat = Array.isArray(a) ? a.join(' + ') : pat; } catch {}
+  let sec = b.sectors || 'all sectors';
+  try { const a = JSON.parse(sec); sec = Array.isArray(a) ? (a[0] || 'all') : sec; } catch {}
+  const wr     = b.win_rate != null ? b.win_rate.toFixed(1) + '%' : '—';
+  const wrCol  = b.win_rate >= 60 ? 'var(--green)' : b.win_rate >= 45 ? 'var(--accent)' : b.win_rate != null ? 'var(--red)' : 'var(--muted)';
+  const avgR   = b.avg_r != null ? b.avg_r.toFixed(2) + 'R' : '—';
+  const avgCol = b.avg_r > 0 ? 'var(--green)' : b.avg_r < 0 ? 'var(--red)' : 'var(--muted)';
+  const created = b.created_at ? new Date(b.created_at).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'}) : '—';
+
+  const fields = [
+    { label: 'Bot ID',    value: escHtml(b.bot_id || '—'),  color: 'var(--accent)', large: true },
+    { label: 'Win Rate',  value: escHtml(wr),               color: wrCol },
+    { label: 'Avg R',     value: escHtml(avgR),             color: avgCol },
+    { label: 'Pattern',   value: escHtml(pat.replace(/_/g,' ')) },
+    { label: 'Sector',    value: escHtml(sec) },
+    { label: 'Side',      value: b.direction_bias ? escHtml(b.direction_bias === 'bullish' ? '▲ Long' : '▼ Short') : '— Any', color: b.direction_bias === 'bullish' ? 'var(--green)' : b.direction_bias === 'bearish' ? 'var(--red)' : 'var(--muted)' },
+    { label: 'Open',      value: String(b.open_pos || 0) },
+    { label: 'Closed',    value: String(b.closed_pos || 0) },
+    { label: 'Active',    value: b.active ? '✓ Yes' : '✗ No', color: b.active ? 'var(--green)' : 'var(--red)' },
+    { label: 'Created',   value: escHtml(created) },
+    { label: 'Strategy',  value: `<span style="font-size:10px;color:var(--muted);word-break:break-all;">${escHtml(b.strategy_name || '—')}</span>` },
+  ];
+
+  const modal = document.createElement('div');
+  modal.id = 'pf-bot-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:440px;width:100%;position:relative;box-shadow:0 8px 40px rgba(0,0,0,0.6);max-height:90vh;overflow-y:auto;">
+      <button onclick="document.getElementById('pf-bot-modal').remove()"
+        style="position:absolute;top:12px;right:14px;background:transparent;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;">×</button>
+      <div style="font-size:10px;font-weight:700;letter-spacing:2px;color:var(--accent);margin-bottom:16px;">◈ BOT DETAIL</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        ${fields.map(f => `
+          <div style="${f.large ? 'grid-column:1/-1;' : ''}">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px;">${f.label}</div>
+            <div style="font-size:${f.large ? '15px' : '13px'};font-weight:${f.large ? '600' : '500'};color:${f.color || 'var(--text)'}">${f.value}</div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
 }
 
 // ── detail view: CALIBRATION OBS ─────────────────────────────────────────────
