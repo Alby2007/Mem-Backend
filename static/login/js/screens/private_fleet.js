@@ -32,6 +32,15 @@ function _pfDirHtml(dir) {
   return `<span style="color:${col};">${arrow} ${dir}</span>`;
 }
 
+function _pfSideHtml(dir) {
+  if (!dir) return '—';
+  const isLong = dir === 'bullish';
+  const col    = isLong ? 'var(--green)' : 'var(--red)';
+  const arrow  = isLong ? '▲' : '▼';
+  const label  = isLong ? 'Long' : 'Short';
+  return `<span style="color:${col};">${arrow} ${label}</span>`;
+}
+
 function _pfStatusLabel(s) {
   return { t2_hit: 'T2 Hit', t1_hit: 'T1 Hit', stopped_out: 'Stopped', closed: 'Closed' }[s] || (s || '—');
 }
@@ -364,7 +373,7 @@ function _pfRenderOpenDetail(positions, filter, sortCol, sortAsc) {
   ]);
 
   const thCols = [
-    { label: 'TICKER', key: 'ticker' }, { label: 'DIR', key: 'direction' },
+    { label: 'TICKER', key: 'ticker' }, { label: 'SIDE', key: 'direction' },
     { label: 'PATTERN', key: null }, { label: 'SECTOR', key: null },
     { label: 'ENTRY', key: 'entry' }, { label: 'T1', key: 't1' },
     { label: 'STOP', key: 'stop' }, { label: 'AGE', key: 'age' },
@@ -374,23 +383,23 @@ function _pfRenderOpenDetail(positions, filter, sortCol, sortAsc) {
     const pat = (() => { try { return JSON.parse(p.pattern)[0] || '—'; } catch { return p.pattern || '—'; } })();
     const sec = (() => { try { return JSON.parse(p.sector)?.[0] || 'all'; } catch { return p.sector || 'all'; } })();
     return `<tr style="border-bottom:1px solid var(--border);">
-      <td style="padding:7px 6px;font-weight:600;font-size:12px;">${escHtml(p.ticker)}</td>
-      <td style="padding:7px 6px;font-size:11px;">${_pfDirHtml(p.direction)}</td>
-      <td style="padding:7px 6px;font-size:11px;color:var(--muted);">${escHtml(pat.replace(/_/g,' '))}</td>
-      <td style="padding:7px 6px;font-size:11px;color:var(--muted);">${escHtml(sec)}</td>
-      <td style="padding:7px 6px;font-size:11px;text-align:right;">${_pfFmt(p.entry)}</td>
-      <td style="padding:7px 6px;font-size:11px;text-align:right;color:var(--green);">${_pfFmt(p.t1)}</td>
-      <td style="padding:7px 6px;font-size:11px;text-align:right;color:var(--red);">${_pfFmt(p.stop)}</td>
-      <td style="padding:7px 6px;font-size:10px;color:var(--muted);text-align:right;">${_pfAge(p.opened_at)}</td>
+      <td style="padding:7px 6px;font-weight:600;font-size:12px;white-space:nowrap;">${escHtml(p.ticker)}</td>
+      <td style="padding:7px 6px;font-size:11px;white-space:nowrap;">${_pfSideHtml(p.direction)}</td>
+      <td style="padding:7px 6px;font-size:11px;color:var(--muted);white-space:nowrap;">${escHtml(pat.replace(/_/g,' '))}</td>
+      <td style="padding:7px 6px;font-size:11px;color:var(--muted);white-space:nowrap;">${escHtml(sec)}</td>
+      <td style="padding:7px 6px;font-size:11px;text-align:right;white-space:nowrap;">${_pfFmt(p.entry)}</td>
+      <td style="padding:7px 6px;font-size:11px;text-align:right;color:var(--green);white-space:nowrap;">${_pfFmt(p.t1)}</td>
+      <td style="padding:7px 6px;font-size:11px;text-align:right;color:var(--red);white-space:nowrap;">${_pfFmt(p.stop)}</td>
+      <td style="padding:7px 6px;font-size:10px;color:var(--muted);text-align:right;white-space:nowrap;">${_pfAge(p.opened_at)}</td>
     </tr>`;
   }).join('');
 
   body.innerHTML = summary
     + _pfTabs(tabs, filter, '_pfSetOpenFilter')
-    + `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">
+    + `<div style="overflow-x:auto;"><table style="width:100%;min-width:620px;border-collapse:collapse;font-size:12px;">
       <thead><tr style="border-bottom:1px solid var(--border);">
         ${thCols.map(c => c.key ? _pfSortHeader(c.label, c.key, sortCol, sortAsc, '_pfSortOpen')
-          : `<th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">${c.label}</th>`).join('')}
+          : `<th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;white-space:nowrap;">${c.label}</th>`).join('')}
       </tr></thead>
       <tbody>${tableRows || '<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--muted);">No positions.</td></tr>'}</tbody>
     </table></div>`;
@@ -472,7 +481,7 @@ function _pfRenderClosedDetail(data, filter, sortCol, sortAsc) {
   }
 
   const thCols = [
-    { label: 'TICKER', key: 'ticker' }, { label: 'DIR', key: 'direction' },
+    { label: 'TICKER', key: 'ticker' }, { label: 'SIDE', key: 'direction' },
     { label: 'PATTERN', key: null }, { label: 'STATUS', key: 'status' },
     { label: 'ENTRY', key: 'entry_price' }, { label: 'EXIT', key: 'exit_price' },
     { label: 'P&L R', key: 'pnl_r' }, { label: 'CLOSED', key: 'closed_at' },
@@ -481,17 +490,17 @@ function _pfRenderClosedDetail(data, filter, sortCol, sortAsc) {
   const tableRows = rows.map(p => {
     const pnl    = p.pnl_r != null ? p.pnl_r.toFixed(2) + 'R' : '—';
     const pnlCol = p.pnl_r > 0 ? 'var(--green)' : p.pnl_r < 0 ? 'var(--red)' : 'var(--muted)';
-    const pat    = (p.pattern_types || p.pattern_id || '—').replace(/_/g, ' ');
+    const pat    = (() => { try { const a = JSON.parse(p.pattern_types); return (Array.isArray(a) ? a[0] : a) || p.pattern_id || '—'; } catch { return p.pattern_types || p.pattern_id || '—'; } })().replace(/_/g, ' ');
     const closed = p.closed_at ? new Date(p.closed_at).toLocaleDateString('en-GB', {day:'2-digit',month:'short'}) : '—';
     return `<tr style="border-bottom:1px solid var(--border);">
-      <td style="padding:7px 6px;font-weight:600;font-size:12px;">${escHtml(p.ticker)}</td>
-      <td style="padding:7px 6px;font-size:11px;">${_pfDirHtml(p.direction)}</td>
-      <td style="padding:7px 6px;font-size:11px;color:var(--muted);">${escHtml(pat)}</td>
-      <td style="padding:7px 6px;font-size:11px;color:${outcomeColors[p.status]||'var(--muted)'};">${_pfStatusLabel(p.status)}</td>
-      <td style="padding:7px 6px;font-size:11px;text-align:right;">${_pfFmt(p.entry_price)}</td>
-      <td style="padding:7px 6px;font-size:11px;text-align:right;">${_pfFmt(p.exit_price)}</td>
-      <td style="padding:7px 6px;font-size:11px;text-align:right;font-weight:600;color:${pnlCol};">${pnl}</td>
-      <td style="padding:7px 6px;font-size:10px;color:var(--muted);">${closed}</td>
+      <td style="padding:7px 6px;font-weight:600;font-size:12px;white-space:nowrap;">${escHtml(p.ticker)}</td>
+      <td style="padding:7px 6px;font-size:11px;white-space:nowrap;">${_pfSideHtml(p.direction)}</td>
+      <td style="padding:7px 6px;font-size:11px;color:var(--muted);white-space:nowrap;">${escHtml(pat)}</td>
+      <td style="padding:7px 6px;font-size:11px;white-space:nowrap;color:${outcomeColors[p.status]||'var(--muted)'};">${ _pfStatusLabel(p.status)}</td>
+      <td style="padding:7px 6px;font-size:11px;text-align:right;white-space:nowrap;">${_pfFmt(p.entry_price)}</td>
+      <td style="padding:7px 6px;font-size:11px;text-align:right;white-space:nowrap;">${_pfFmt(p.exit_price)}</td>
+      <td style="padding:7px 6px;font-size:11px;text-align:right;font-weight:600;white-space:nowrap;color:${pnlCol};">${pnl}</td>
+      <td style="padding:7px 6px;font-size:10px;color:var(--muted);white-space:nowrap;">${closed}</td>
     </tr>`;
   }).join('');
 
@@ -504,10 +513,10 @@ function _pfRenderClosedDetail(data, filter, sortCol, sortAsc) {
 
   body.innerHTML = summary + breakdownBar
     + _pfTabs(tabs, filter, '_pfSetClosedFilter')
-    + `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">
+    + `<div style="overflow-x:auto;"><table style="width:100%;min-width:640px;border-collapse:collapse;font-size:12px;">
       <thead><tr style="border-bottom:1px solid var(--border);">
         ${thCols.map(c => c.key ? _pfSortHeader(c.label, c.key, sortCol, sortAsc, '_pfSortClosed')
-          : `<th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">${c.label}</th>`).join('')}
+          : `<th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;white-space:nowrap;">${c.label}</th>`).join('')}
       </tr></thead>
       <tbody>${tableRows || '<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--muted);">No positions.</td></tr>'}</tbody>
     </table></div>`;
@@ -549,26 +558,25 @@ function _pfRenderBotsDetail(s, perf, filter) {
     openByBot[p.bot_id] = (openByBot[p.bot_id] || 0) + 1;
   });
 
-  // Get bot list from open positions bot_ids + perf keys
+  // Get bot list from perf response + coverage (no disc_ prefix filter — bot_ids vary)
   const botIds = [...new Set([
-    ...(s.open_positions || []).map(p => p.bot_id).filter(Boolean),
     ...Object.keys(perf),
-  ])].filter(id => id && id.startsWith('disc_'));
+    ...(s.coverage || []).map(c => c.pattern).filter(Boolean),
+  ])].filter(Boolean);
 
-  // Extract pattern types for filter tabs
-  const patterns = [...new Set(botIds.map(id => {
-    const parts = id.replace('disc_', '').split('_');
-    return parts[0] || 'unknown';
-  }))];
+  // Use coverage patterns for filter tabs
+  const coveragePatterns = [...new Set((s.coverage || []).map(c => {
+    try { return JSON.parse(c.pattern)?.[0] || c.pattern; } catch { return c.pattern; }
+  }).filter(Boolean))];
 
   const tabs = [
     { label: 'ALL', value: 'all' },
-    ...patterns.map(p => ({ label: p.toUpperCase(), value: p })),
+    ...coveragePatterns.slice(0, 6).map(p => ({ label: p.replace(/_/g,' ').toUpperCase(), value: p })),
   ];
 
   let bots = botIds;
   if (filter !== 'all') {
-    bots = bots.filter(id => id.replace('disc_', '').startsWith(filter));
+    bots = bots.filter(id => id.includes(filter));
   }
 
   const summary = _pfSummaryBar([
@@ -577,40 +585,59 @@ function _pfRenderBotsDetail(s, perf, filter) {
     { label: 'Open Pos',    value: s.open_positions?.length || 0 },
   ]);
 
-  const tableRows = bots.map(id => {
-    const label  = id.replace('disc_', '').replace(/_/g, ' · ');
-    const parts  = id.replace('disc_', '').split('_');
-    const pat    = parts[0] || '—';
-    const sec    = parts[1] || '—';
-    const dir    = parts[2] || 'any';
-    const open   = openByBot[id] || 0;
-    const closed = perf[id]?.closed || 0;
-    const wr     = perf[id]?.win_rate != null ? (perf[id].win_rate * 100).toFixed(0) + '%' : '—';
-    const wrCol  = perf[id]?.win_rate >= 0.6 ? 'var(--green)' : perf[id]?.win_rate >= 0.45 ? 'var(--accent)' : 'var(--muted)';
+  const tableRows = bots.length ? bots.map(id => {
+    const cleanId = id.replace(/^disc_/, '');
+    const label   = cleanId.replace(/_/g, ' · ');
+    const parts   = cleanId.split('_');
+    const pat     = parts[0] || '—';
+    const sec     = parts[1] || '—';
+    const dir     = parts[2] || 'any';
+    const open    = openByBot[id] || 0;
+    const closed  = perf[id]?.closed || 0;
+    const wr      = perf[id]?.win_rate != null ? (perf[id].win_rate * 100).toFixed(0) + '%' : '—';
+    const wrCol   = perf[id]?.win_rate >= 0.6 ? 'var(--green)' : perf[id]?.win_rate >= 0.45 ? 'var(--accent)' : 'var(--muted)';
     return `<tr style="border-bottom:1px solid var(--border);">
       <td style="padding:7px 6px;font-size:11px;font-weight:500;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(label)}</td>
-      <td style="padding:7px 6px;font-size:11px;color:var(--muted);">${escHtml(pat)}</td>
-      <td style="padding:7px 6px;font-size:11px;color:var(--muted);">${escHtml(sec)}</td>
-      <td style="padding:7px 6px;font-size:11px;">${_pfDirHtml(dir === 'any' ? null : dir)}</td>
+      <td style="padding:7px 6px;font-size:11px;color:var(--muted);white-space:nowrap;">${escHtml(pat.replace(/_/g,' '))}</td>
+      <td style="padding:7px 6px;font-size:11px;color:var(--muted);white-space:nowrap;">${escHtml(sec)}</td>
+      <td style="padding:7px 6px;font-size:11px;white-space:nowrap;">${_pfSideHtml(dir === 'any' ? null : dir)}</td>
       <td style="padding:7px 6px;font-size:11px;text-align:right;">${open}</td>
       <td style="padding:7px 6px;font-size:11px;text-align:right;color:var(--muted);">${closed}</td>
       <td style="padding:7px 6px;font-size:11px;text-align:right;font-weight:600;color:${wrCol};">${wr}</td>
     </tr>`;
-  }).join('');
+  }).join('') : `<tr><td colspan="7" style="padding:30px;text-align:center;color:var(--muted);">No bot performance data yet — positions will appear once bots start closing trades.</td></tr>`;
+
+  // If no bots from perf, show coverage grid instead
+  const showCoverage = botIds.length === 0;
+  const coverageRows = showCoverage ? (s.coverage || []).map(c => {
+    let pat = c.pattern || '—';
+    try { pat = JSON.parse(c.pattern)?.[0] || pat; } catch {}
+    return `<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:7px 6px;font-size:11px;color:var(--muted);">${escHtml(pat.replace(/_/g,' '))}</td>
+      <td style="padding:7px 6px;font-size:11px;white-space:nowrap;">${_pfSideHtml(c.direction === 'any' ? null : c.direction)}</td>
+      <td style="padding:7px 6px;font-size:11px;text-align:right;color:var(--accent);">${c.count}</td>
+    </tr>`;
+  }).join('') : null;
 
   body.innerHTML = summary
-    + _pfTabs(tabs, filter, '_pfSetBotsFilter')
-    + `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">
+    + (showCoverage ? '' : _pfTabs(tabs, filter, '_pfSetBotsFilter'))
+    + `<div style="overflow-x:auto;"><table style="width:100%;min-width:500px;border-collapse:collapse;font-size:12px;">
       <thead><tr style="border-bottom:1px solid var(--border);">
-        <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">BOT</th>
-        <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">PATTERN</th>
-        <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">SECTOR</th>
-        <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">DIR</th>
-        <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">OPEN</th>
-        <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">CLOSED</th>
-        <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">WIN%</th>
+        ${showCoverage ? `
+          <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">PATTERN</th>
+          <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">SIDE</th>
+          <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">BOTS</th>
+        ` : `
+          <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">BOT</th>
+          <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">PATTERN</th>
+          <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">SECTOR</th>
+          <th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">SIDE</th>
+          <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">OPEN</th>
+          <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">CLOSED</th>
+          <th style="padding:6px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">WIN%</th>
+        `}
       </tr></thead>
-      <tbody>${tableRows || '<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--muted);">No bots found.</td></tr>'}</tbody>
+      <tbody>${showCoverage ? (coverageRows || '<tr><td colspan="3" style="padding:20px;text-align:center;color:var(--muted);">No coverage data.</td></tr>') : tableRows}</tbody>
     </table></div>`;
 
   const upd = document.getElementById('pf-detail-updated');
@@ -700,14 +727,18 @@ function _pfRenderCalibDetail(data, filter, sortCol, sortAsc) {
     const ocArr = oc.includes('t2') || oc.includes('hit') ? '▲' : oc.includes('stop') ? '▼' : '—';
     const bot  = (o.bot_id || o.source || '—').replace('disc_','').slice(0, 20);
     const date = o.observed_at ? new Date(o.observed_at).toLocaleDateString('en-GB', {day:'2-digit',month:'short'}) : '—';
-    return `<tr style="border-bottom:1px solid var(--border);">
-      <td style="padding:7px 6px;font-weight:600;font-size:12px;">${escHtml(o.ticker)}</td>
-      <td style="padding:7px 6px;font-size:11px;color:var(--muted);">${escHtml((o.pattern_type||'—').replace(/_/g,' '))}</td>
-      <td style="padding:7px 6px;font-size:11px;color:var(--muted);">${escHtml(o.timeframe||'—')}</td>
-      <td style="padding:7px 6px;font-size:11px;color:var(--muted);">${escHtml((o.market_regime||'—').replace(/_/g,' '))}</td>
-      <td style="padding:7px 6px;font-size:11px;font-weight:600;color:${ocCol};">${ocArr} ${escHtml(ocLbl)}</td>
-      <td style="padding:7px 6px;font-size:10px;color:var(--muted);">${escHtml(bot)}</td>
-      <td style="padding:7px 6px;font-size:10px;color:var(--muted);">${date}</td>
+    const safe = encodeURIComponent(JSON.stringify(o));
+    return `<tr onclick="_pfCalibRowClick(decodeURIComponent('${safe}'))"
+      onmouseenter="this.style.background='rgba(255,255,255,0.03)'"
+      onmouseleave="this.style.background=''"
+      style="border-bottom:1px solid var(--border);cursor:pointer;">
+      <td style="padding:7px 6px;font-weight:600;font-size:12px;white-space:nowrap;">${escHtml(o.ticker)}</td>
+      <td style="padding:7px 6px;font-size:11px;color:var(--muted);white-space:nowrap;">${escHtml((o.pattern_type||'—').replace(/_/g,' '))}</td>
+      <td style="padding:7px 6px;font-size:11px;color:var(--muted);white-space:nowrap;">${escHtml(o.timeframe||'—')}</td>
+      <td style="padding:7px 6px;font-size:11px;color:var(--muted);white-space:nowrap;">${escHtml((o.market_regime||'—').replace(/_/g,' '))}</td>
+      <td style="padding:7px 6px;font-size:11px;font-weight:600;white-space:nowrap;color:${ocCol};">${ocArr} ${escHtml(ocLbl)}</td>
+      <td style="padding:7px 6px;font-size:10px;color:var(--muted);white-space:nowrap;">${escHtml(bot)}</td>
+      <td style="padding:7px 6px;font-size:10px;color:var(--muted);white-space:nowrap;">${date}</td>
     </tr>`;
   }).join('');
 
@@ -721,14 +752,65 @@ function _pfRenderCalibDetail(data, filter, sortCol, sortAsc) {
 
   body.innerHTML = summary + patBar
     + _pfTabs(tabs, filter, '_pfSetCalibFilter')
-    + `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">
+    + `<div style="overflow-x:auto;"><table style="width:100%;min-width:580px;border-collapse:collapse;font-size:12px;">
       <thead><tr style="border-bottom:1px solid var(--border);">
         ${thCols.map(c => c.key ? _pfSortHeader(c.label, c.key, sortCol, sortAsc, '_pfSortCalib')
-          : `<th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">${c.label}</th>`).join('')}
+          : `<th style="padding:6px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;white-space:nowrap;">${c.label}</th>`).join('')}
       </tr></thead>
       <tbody>${tableRows || '<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--muted);">No observations.</td></tr>'}</tbody>
     </table></div>`;
 
   const upd = document.getElementById('pf-detail-updated');
   if (upd) upd.textContent = `${rows.length} of ${data.total} shown`;
+}
+
+// ── Calibration obs row detail card ──────────────────────────────────────────
+
+function _pfCalibRowClick(jsonStr) {
+  let o;
+  try { o = JSON.parse(jsonStr); } catch { return; }
+
+  const existing = document.getElementById('pf-calib-modal');
+  if (existing) existing.remove();
+
+  const oc     = o.outcome || '—';
+  const ocCol  = _pfOutcomeColor(oc);
+  const ocArr  = oc.includes('t2') || oc.includes('hit') ? '▲' : oc.includes('stop') ? '▼' : '—';
+  const ocLbl  = oc.replace(/_/g, ' ');
+  const pnl    = o.pnl_r != null ? o.pnl_r.toFixed(2) + 'R' : '—';
+  const pnlCol = o.pnl_r > 0 ? 'var(--green)' : o.pnl_r < 0 ? 'var(--red)' : 'var(--muted)';
+  const date   = o.observed_at ? new Date(o.observed_at).toLocaleString('en-GB', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+  const botFull = o.bot_id || o.source || '—';
+
+  const rows = [
+    { label: 'Ticker',       value: escHtml(o.ticker || '—'),                               color: 'var(--accent)',  large: true },
+    { label: 'Outcome',      value: `${ocArr} ${escHtml(ocLbl)}`,                            color: ocCol },
+    { label: 'P&L R',        value: escHtml(pnl),                                            color: pnlCol },
+    { label: 'Pattern',      value: escHtml((o.pattern_type || '—').replace(/_/g, ' ')) },
+    { label: 'Timeframe',    value: escHtml(o.timeframe || '—') },
+    { label: 'Regime',       value: escHtml((o.market_regime || '—').replace(/_/g, ' ')) },
+    { label: 'Bot',          value: escHtml(botFull.replace('disc_', '').replace(/_/g, ' · ')) },
+    { label: 'Observed',     value: escHtml(date) },
+    { label: 'ID',           value: `<span style="font-size:10px;color:var(--muted);word-break:break-all;">${escHtml(o.id || '—')}</span>` },
+  ];
+
+  const modal = document.createElement('div');
+  modal.id = 'pf-calib-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:420px;width:100%;position:relative;box-shadow:0 8px 40px rgba(0,0,0,0.6);">
+      <button onclick="document.getElementById('pf-calib-modal').remove()"
+        style="position:absolute;top:12px;right:14px;background:transparent;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;">×</button>
+      <div style="font-size:10px;font-weight:700;letter-spacing:2px;color:var(--accent);margin-bottom:16px;">◈ OBSERVATION DETAIL</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        ${rows.map(r => `
+          <div style="${r.large ? 'grid-column:1/-1;' : ''}">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px;">${r.label}</div>
+            <div style="font-size:${r.large ? '20px' : '13px'};font-weight:${r.large ? '700' : '500'};color:${r.color || 'var(--text)'}">${r.value}</div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
 }
