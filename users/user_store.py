@@ -864,7 +864,7 @@ def get_open_patterns(
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         ensure_user_tables(conn)
-        clauses = ["status NOT IN ('filled','broken')", "quality_score >= ?"]
+        clauses = ["status IN ('open','partially_filled')", "quality_score >= ?"]
         params: list = [min_quality]
         if ticker:
             clauses.append("ticker LIKE ?")
