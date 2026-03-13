@@ -95,6 +95,13 @@ _UPPERCASE_STOPWORDS: Set[str] = {
 # ── Company name → exchange ticker map ───────────────────────────────────────
 # Handles natural-language company names in BBC/Sky/ThisIsMoney/NHK/SCMP text.
 # Keys are lowercase for case-insensitive matching.
+#
+# Two tiers:
+#   _COMPANY_NAME_MAP        — multi-word or unique names, safe for plain
+#                              substring match (no false-positive risk).
+#   _COMPANY_NAME_MAP_STRICT — short/common words (bp, bt, next, vw, gsk…)
+#                              that require whole-word regex matching so
+#                              "the next big thing" doesn't → NXT.L.
 
 _COMPANY_NAME_MAP: Dict[str, str] = {
     # ── LSE / FTSE (.L) ───────────────────────────────────────────────────────
@@ -106,32 +113,26 @@ _COMPANY_NAME_MAP: Dict[str, str] = {
     'natwest':              'NWG.L',
     'natwest group':        'NWG.L',
     'standard chartered':   'STAN.L',
-    'shell':                'SHEL.L',
     'shell plc':            'SHEL.L',
-    'bp':                   'BP.L',
-    'bp plc':               'BP.L',
     'british petroleum':    'BP.L',
+    'bp plc':               'BP.L',
     'rio tinto':            'RIO.L',
     'rio tinto plc':        'RIO.L',
     'glencore':             'GLEN.L',
     'diageo':               'DGE.L',
     'astrazeneca':          'AZN.L',
     'astra zeneca':         'AZN.L',
-    'gsk':                  'GSK.L',
     'glaxosmithkline':      'GSK.L',
     'unilever':             'ULVR.L',
     'rolls-royce':          'RR.L',
     'rolls royce':          'RR.L',
     'bae systems':          'BA.L',
     'vodafone':             'VOD.L',
-    'bt':                   'BT.A.L',
     'bt group':             'BT.A.L',
     'tesco':                'TSCO.L',
     'sainsburys':           'SBRY.L',
     "sainsbury's":          'SBRY.L',
     'marks and spencer':    'MKS.L',
-    'm&s':                  'MKS.L',
-    'next':                 'NXT.L',
     'national grid':        'NG.L',
     'centrica':             'CNA.L',
     'reckitt':              'RKT.L',
@@ -140,7 +141,6 @@ _COMPANY_NAME_MAP: Dict[str, str] = {
     'smith & nephew':       'SN.L',
     'imperial brands':      'IMB.L',
     'british american tobacco': 'BATS.L',
-    'bat':                  'BATS.L',
     'antofagasta':          'ANTO.L',
     'anglo american':       'AAL.L',
     'compass group':        'CPG.L',
@@ -160,25 +160,17 @@ _COMPANY_NAME_MAP: Dict[str, str] = {
     'pearson':              'PSON.L',
     'informa':              'INF.L',
     'intercontinental hotels': 'IHG.L',
-    'ihg':                  'IHG.L',
     'whitbread':            'WTB.L',
-    'flutter':              'FLTR.L',
     'flutter entertainment': 'FLTR.L',
     # ── XETRA (.DE) ───────────────────────────────────────────────────────────
-    'sap':                  'SAP.DE',
     'deutsche bank':        'DBK.DE',
     'commerzbank':          'CBK.DE',
     'volkswagen':           'VOW3.DE',
-    'vw':                   'VOW3.DE',
-    'bmw':                  'BMW.DE',
-    'mercedes':             'MBG.DE',
     'mercedes-benz':        'MBG.DE',
     'siemens':              'SIE.DE',
     'allianz':              'ALV.DE',
-    'basf':                 'BAS.DE',
     'bayer':                'BAYN.DE',
     'adidas':               'ADS.DE',
-    'puma':                 'PUM.DE',
     'infineon':             'IFX.DE',
     'airbus':               'AIR.DE',
     'munich re':            'MUV2.DE',
@@ -186,16 +178,11 @@ _COMPANY_NAME_MAP: Dict[str, str] = {
     'continental':          'CON.DE',
     'fresenius':            'FRE.DE',
     'henkel':               'HEN3.DE',
-    'linde':                'LIN.DE',
     # ── ASX (.AX) ─────────────────────────────────────────────────────────────
-    'bhp':                  'BHP.AX',
     'bhp group':            'BHP.AX',
     'commonwealth bank':    'CBA.AX',
-    'cba':                  'CBA.AX',
     'westpac':              'WBC.AX',
-    'anz':                  'ANZ.AX',
     'anz bank':             'ANZ.AX',
-    'nab':                  'NAB.AX',
     'national australia bank': 'NAB.AX',
     'macquarie':            'MQG.AX',
     'woodside':             'WDS.AX',
@@ -203,7 +190,6 @@ _COMPANY_NAME_MAP: Dict[str, str] = {
     'rio tinto australia':  'RIO.AX',
     'wesfarmers':           'WES.AX',
     'woolworths':           'WOW.AX',
-    'coles':                'COL.AX',
     'telstra':              'TLS.AX',
     'afterpay':             'SQ2.AX',
     # ── TSE (.T) ─────────────────────────────────────────────────────────────
@@ -219,10 +205,8 @@ _COMPANY_NAME_MAP: Dict[str, str] = {
     'mitsubishi':           '8058.T',
     'mitsubishi corporation': '8058.T',
     'panasonic':            '6752.T',
-    'ntt':                  '9432.T',
     'ntt docomo':           '9432.T',
     'hitachi':              '6501.T',
-    'nec':                  '6701.T',
     'fujitsu':              '6702.T',
     'canon':                '7751.T',
     'nikon':                '7731.T',
@@ -230,7 +214,6 @@ _COMPANY_NAME_MAP: Dict[str, str] = {
     'fast retailing':       '9983.T',
     'uniqlo':               '9983.T',
     'keyence':              '6861.T',
-    'recruit':              '6098.T',
     'recruit holdings':     '6098.T',
     'daikin':               '6367.T',
     'shin-etsu':            '4063.T',
@@ -247,46 +230,88 @@ _COMPANY_NAME_MAP: Dict[str, str] = {
     'hsbc hong kong':       '0005.HK',
     'cnooc':                '0883.HK',
     'petrochina':           '0857.HK',
-    'ping an':              '2318.HK',
     'ping an insurance':    '2318.HK',
     'china mobile':         '0941.HK',
-    'byd':                  '1211.HK',
     'byd company':          '1211.HK',
-    'aia':                  '1299.HK',
     'aia group':            '1299.HK',
     'anta sports':          '2020.HK',
     'country garden':       '2007.HK',
     # ── KRX (.KS) ─────────────────────────────────────────────────────────────
-    'samsung':              '005930.KS',
     'samsung electronics':  '005930.KS',
     'sk hynix':             '000660.KS',
-    'hynix':                '000660.KS',
-    'hyundai':              '005380.KS',
     'hyundai motor':        '005380.KS',
-    'kia':                  '000270.KS',
     'lg electronics':       '066570.KS',
-    'posco':                '005490.KS',
     'kb financial':         '105560.KS',
-    'kakao':                '035720.KS',
-    'naver':                '035420.KS',
     'celltrion':            '068270.KS',
 }
+
+# Short / ambiguous words — require whole-word matching to avoid false positives.
+# E.g. "next" must not fire on "the next big thing"; "bp" not on "bps" or "ibps".
+_COMPANY_NAME_MAP_STRICT: Dict[str, str] = {
+    # LSE
+    'shell':    'SHEL.L',
+    'bp':       'BP.L',
+    'gsk':      'GSK.L',
+    'bt':       'BT.A.L',
+    'm&s':      'MKS.L',
+    'next':     'NXT.L',
+    'bat':      'BATS.L',
+    'ihg':      'IHG.L',
+    'flutter':  'FLTR.L',
+    'aviva':    'AV.L',
+    # XETRA
+    'sap':      'SAP.DE',
+    'vw':       'VOW3.DE',
+    'bmw':      'BMW.DE',
+    'mercedes': 'MBG.DE',
+    'basf':     'BAS.DE',
+    'puma':     'PUM.DE',
+    'linde':    'LIN.DE',
+    # ASX
+    'bhp':      'BHP.AX',
+    'cba':      'CBA.AX',
+    'anz':      'ANZ.AX',
+    'nab':      'NAB.AX',
+    'coles':    'COL.AX',
+    # TSE
+    'ntt':      '9432.T',
+    'nec':      '6701.T',
+    'recruit':  '6098.T',
+    # HKEX
+    'ping an':  '2318.HK',
+    'byd':      '1211.HK',
+    'aia':      '1299.HK',
+    # KRX
+    'samsung':  '005930.KS',
+    'hynix':    '000660.KS',
+    'hyundai':  '005380.KS',
+    'kia':      '000270.KS',
+    'posco':    '005490.KS',
+    'kakao':    '035720.KS',
+    'naver':    '035420.KS',
+}
+
+# Pre-compile word-boundary patterns for the strict map (once at import time)
+_STRICT_PATTERNS: List[tuple] = [
+    (re.compile(r'(?<![a-z])' + re.escape(name) + r'(?![a-z])', re.IGNORECASE), ticker)
+    for name, ticker in _COMPANY_NAME_MAP_STRICT.items()
+]
 
 
 def _extract_tickers(text: str) -> List[str]:
     """Extract likely ticker symbols from text.
 
-    Two passes:
-    1. Company-name map — catches natural-language names (Barclays → BARC.L,
-       Samsung → 005930.KS, etc.) written by BBC/Sky/NHK/SCMP journalists.
-    2. Regex — catches explicit ticker symbols already in the text, including
-       exchange suffixes (.L .DE .AX .HK .T .KS .AS .PA).
+    Three passes:
+    1. Safe company-name map — multi-word / unique names, plain substring match.
+    2. Strict company-name map — short/ambiguous words, word-boundary regex.
+    3. Regex — explicit exchange-suffix symbols already in the text
+       (.L .DE .AX .HK .T .KS .AS .PA …) plus bare 2-5 cap US tickers.
     """
     result: List[str] = []
     seen: set = set()
     text_lower = text.lower()
 
-    # Pass 1 — company name map (longest match first to avoid partial overlaps)
+    # Pass 1 — safe names (longest first to avoid partial overlaps)
     for name in sorted(_COMPANY_NAME_MAP, key=len, reverse=True):
         if name in text_lower:
             ticker = _COMPANY_NAME_MAP[name]
@@ -294,8 +319,14 @@ def _extract_tickers(text: str) -> List[str]:
                 seen.add(ticker)
                 result.append(ticker)
 
-    # Pass 2 — regex for explicit ticker symbols
-    # Matches: standard caps (2-5), exchange-suffix tickers (e.g. 7203.T, 0700.HK)
+    # Pass 2 — strict / ambiguous names (whole-word boundary match)
+    for pattern, ticker in _STRICT_PATTERNS:
+        if ticker not in seen and pattern.search(text):
+            seen.add(ticker)
+            result.append(ticker)
+
+    # Pass 3 — regex for explicit ticker symbols
+    # Matches exchange-suffix tickers (e.g. 7203.T, 0700.HK) and bare caps
     candidates = re.findall(
         r'\b([A-Z0-9]{1,6}'
         r'(?:\.(?:L|DE|AX|HK|T|KS|AS|PA|MI|SW|ST|TO|NZ|CO|BR))'
