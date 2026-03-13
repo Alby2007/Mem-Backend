@@ -734,6 +734,24 @@ class YFinanceAdapter(BaseIngestAdapter):
             if current_price and float(current_price) > 0:
                 direction = _direction_from_target(float(current_price), float(target_price))
                 pct_upside = round((float(target_price) - float(current_price)) / float(current_price) * 100, 1)
+                # Blend 52w position when target-based signal is neutral:
+                # if price is near 52w low → 'short'; near 52w high → 'long'
+                # This corrects the structural bias where analyst targets are
+                # almost always above price, leaving bearish tickers as 'neutral'.
+                if direction == 'neutral':
+                    _h52 = info.get('fiftyTwoWeekHigh')
+                    _l52 = info.get('fiftyTwoWeekLow')
+                    if _h52 and _l52:
+                        try:
+                            _h, _l, _p = float(_h52), float(_l52), float(current_price)
+                            if _h > _l:
+                                _ratio = (_p - _l) / (_h - _l)
+                                if _ratio <= 0.20:
+                                    direction = 'short'
+                                elif _ratio >= 0.80:
+                                    direction = 'long'
+                        except (TypeError, ValueError, ZeroDivisionError):
+                            pass
                 atoms.append(RawAtom(
                     subject=symbol,
                     predicate='signal_direction',
