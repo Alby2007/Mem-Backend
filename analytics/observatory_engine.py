@@ -935,6 +935,11 @@ class ObservatoryEngine:
         if not bot_id or not parameter:
             return False
 
+        _ALLOWED_PARAMS = {'min_quality', 'risk_pct', 'scan_interval_sec', 'max_positions'}
+        if parameter not in _ALLOWED_PARAMS:
+            _log.warning('Observatory: rejected unsafe parameter name: %s', parameter)
+            return False
+
         conn = sqlite3.connect(self.db_path, timeout=10)
         try:
             row = conn.execute(

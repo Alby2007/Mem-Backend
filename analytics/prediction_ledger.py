@@ -194,7 +194,9 @@ class PredictionLedger:
 
     # ── Intraday resolution hook ─────────────────────────────────────────────
 
-    def on_price_written(self, ticker: str, current_price: float) -> None:
+    def on_price_written(
+        self, ticker: str, current_price: float, conn=None
+    ) -> None:
         """
         Called by KnowledgeGraph.add_fact() when a last_price atom is written.
         Resolves any open predictions for this ticker if price has crossed
@@ -202,14 +204,18 @@ class PredictionLedger:
 
         This is the primary resolution path — predictions can resolve within
         5 minutes of the target being hit.
+
+        Pass an existing ``conn`` to avoid opening a new connection per call
+        (important when called in a tight loop over many tickers from graph.py).
         """
         if current_price <= 0:
             return
 
         ticker_up = ticker.upper()
-        conn = self._connect()
+        _own_conn = conn is None
+        _conn = self._connect() if _own_conn else conn
         try:
-            rows = conn.execute(
+            rows = _conn.execute(
                 """SELECT id, ticker, entry_price, target_1, target_2,
                           stop_loss, p_hit_t1
                    FROM prediction_ledger
@@ -217,7 +223,8 @@ class PredictionLedger:
                 (ticker_up,),
             ).fetchall()
         finally:
-            conn.close()
+            if _own_conn:
+                _conn.close()
 
         for row in rows:
             pred_id, _ticker, entry, t1, t2, stop, p_t1 = row
@@ -225,7 +232,7 @@ class PredictionLedger:
                 current_price, entry, t1, t2, stop
             )
             if outcome:
-                self._resolve(pred_id, outcome, current_price, p_t1)
+                self._resolve(pred_id, outcome, current_price, p_t1, conn=conn)
 
     def _classify_outcome(
         self,
@@ -270,27 +277,31 @@ class PredictionLedger:
         outcome:       str,
         resolved_price: float,
         p_hit_t1:      float,
+        conn=None,
     ) -> None:
         """Write outcome + Brier contribution to the ledger row."""
         now = datetime.now(timezone.utc).isoformat()
         hit_t1_binary = 1.0 if outcome in ('hit_t1', 'hit_t2', 'hit_t3') else 0.0
         brier_t1 = round((p_hit_t1 - hit_t1_binary) ** 2, 6)
 
-        conn = self._connect()
+        _own_conn = conn is None
+        _conn = self._connect() if _own_conn else conn
         try:
-            conn.execute(
+            _conn.execute(
                 """UPDATE prediction_ledger
                    SET outcome=?, resolved_at=?, resolved_price=?, brier_t1=?
                    WHERE id=?""",
                 (outcome, now, resolved_price, brier_t1, pred_id),
             )
-            conn.commit()
+            if _own_conn:
+                _conn.commit()
             _log.info(
                 'PredictionLedger: resolved id=%d outcome=%s price=%.4f brier=%.4f',
                 pred_id, outcome, resolved_price, brier_t1,
             )
         finally:
-            conn.close()
+            if _own_conn:
+                _conn.close()
 
     # ── Daily expiry job ─────────────────────────────────────────────────────
 

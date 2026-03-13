@@ -145,7 +145,6 @@ class StrategyEvolution:
             replacement = self._spawn_replacement(elites, viables, user_id, now_iso)
             if replacement:
                 per_bot_balance = self._avg_initial_balance(user_id)
-                new_bot_id = runner.seed_fleet.__func__(runner, user_id, 0)  # defer; use direct insert
                 new_bot_id = self._insert_bot(user_id, replacement, per_bot_balance, now_iso)
                 if new_bot_id:
                     runner.start_bot(new_bot_id, startup_delay=30)
@@ -500,16 +499,24 @@ class StrategyEvolution:
             worst = sorted_bots[-1] if sorted_bots else None
 
             # Add equity sparklines (last 6 points) and compute true equity (cash + open positions)
+            # Mark-to-market: use live prices so fitness scores reflect current value
+            from services.paper_trading import fetch_live_prices as _flp
             conn = sqlite3.connect(self.db_path, timeout=10)
             total_equity = 0.0
             for b in bots:
                 cash = b.get('virtual_balance', 0)
                 try:
                     pos_rows = conn.execute(
-                        "SELECT entry_price, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
+                        "SELECT ticker, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
                         (b['bot_id'],)
                     ).fetchall()
-                    open_value = sum(float(r[0]) * float(r[1]) for r in pos_rows)
+                    open_value = 0.0
+                    if pos_rows:
+                        tickers = [r[0] for r in pos_rows]
+                        live = _flp(tickers)
+                        for ticker, qty in pos_rows:
+                            price = live.get(ticker) or 0.0
+                            open_value += float(price) * float(qty)
                 except Exception:
                     open_value = 0.0
                 b['equity'] = round(cash + open_value, 2)

@@ -219,9 +219,7 @@ def get_discovery_report(conn, min_observations: int = 5, limit: int = 50) -> li
                 AVG(CASE WHEN co.outcome IN ('hit_t1','hit_t2','hit_t3') THEN 1.0 ELSE 0.0 END) AS hit_rate,
                 AVG(sc.sample_size) AS avg_samples
             FROM calibration_observations co
-            JOIN paper_positions pp  ON pp.bot_id = co.bot_id
-                                    AND pp.ticker = co.ticker
-            JOIN paper_bot_configs bc ON bc.bot_id = pp.bot_id
+            JOIN paper_bot_configs bc ON bc.bot_id = co.bot_id
             LEFT JOIN signal_calibration sc ON sc.ticker = co.ticker
                                            AND sc.pattern_type = co.pattern_type
                                            AND sc.timeframe = co.timeframe

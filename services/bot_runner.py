@@ -642,6 +642,12 @@ class BotRunner:
 
             # Monitor open positions first
             self._monitor_bot_positions(bot_id, conn, now_iso)
+            # Re-read balance after monitor may have restored cash on exits
+            _bal_row = conn.execute(
+                "SELECT virtual_balance FROM paper_bot_configs WHERE bot_id=?", (bot_id,)
+            ).fetchone()
+            if _bal_row:
+                balance = float(_bal_row[0])
 
             # Fix 1: Count open slots — partial_closed positions still occupy a slot
             open_rows = conn.execute(

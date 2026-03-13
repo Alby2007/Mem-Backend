@@ -234,8 +234,6 @@ def update_calibration(
                      AND (market_regime=? OR (market_regime IS NULL AND ? IS NULL))""",
                 (ticker, pattern_type, timeframe, market_regime, market_regime),
             )
-        if _owns_conn:
-            conn.commit()
         # Write observation-level log — never let this break the main path
         try:
             conn.execute(
@@ -257,10 +255,10 @@ def update_calibration(
                     (ticker, pattern_type, timeframe, market_regime,
                      'hit_t1', source, bot_id, now),
                 )
-            if _owns_conn:
-                conn.commit()
         except Exception:
             pass
+        if _owns_conn:
+            conn.commit()
     finally:
         if _owns_conn:
             conn.close()
