@@ -637,12 +637,18 @@ def _fetch_working_memory(
         ]
         _yf_values = set(_YF_TICKER_MAP.values())
 
+        # Exchange suffixes whose tickers are always fetchable via yfinance
+        _EXCHANGE_SUFFIXES = ('.L', '.PA', '.AS', '.DE', '.MI', '.SW',
+                              '.ST', '.HK', '.T', '.AX', '.TO', '.NYB')
+
         def _is_live_asset(t: str) -> bool:
             tu = t.upper()
             if tu in _YF_TICKER_MAP: return True
             if t in _yf_values: return True
             if (t.endswith('-USD') or t.endswith('=X') or t.endswith('=F')
-                    or t.startswith('^') or t.endswith('.NYB')):
+                    or t.startswith('^')):
+                return True
+            if any(t.upper().endswith(sfx.upper()) for sfx in _EXCHANGE_SUFFIXES):
                 return True
             return False
 
@@ -909,7 +915,7 @@ def _llm_data_request_pass(
     """
     if not (ext.HAS_WORKING_MEMORY and ext.working_memory is not None
             and not live_fetched
-            and (len(atoms) < 8 or _query_wants_live(message))):
+            and (len(atoms) < 20 or _query_wants_live(message))):
         return '', live_fetched, [], None
     try:
         from knowledge.working_memory import (
