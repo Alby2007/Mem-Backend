@@ -64,6 +64,13 @@ _DEFAULT_FEEDS: Dict[str, str] = {
     # 'proactive_investors': disabled — returns malformed XML consistently
     # 'investegate':         disabled — returns malformed XML consistently
     'thisismoney':          'https://www.thisismoney.co.uk/money/investing/index.rss',
+    # Asia-Pacific — TSE (.T), HKEX (.HK), KRX (.KS), ASX (.AX) coverage
+    'nhk_business':         'https://www3.nhk.or.jp/rss/news/cat6.xml',
+    'scmp_business':        'https://www.scmp.com/rss/5/feed',
+    'korea_herald_biz':     'https://www.koreaherald.com/rss/020000000000.xml',
+    'reuters_asia_biz':     'https://feeds.reuters.com/reuters/asiabusinessnews',
+    # Australia — ASX coverage
+    'abc_business_au':      'https://www.abc.net.au/news/feed/51120/rss.xml',
 }
 
 # Max parallel workers for feed fetching
@@ -85,19 +92,222 @@ _UPPERCASE_STOPWORDS: Set[str] = {
     'USD', 'GBP', 'JPY',
 }
 
+# ── Company name → exchange ticker map ───────────────────────────────────────
+# Handles natural-language company names in BBC/Sky/ThisIsMoney/NHK/SCMP text.
+# Keys are lowercase for case-insensitive matching.
+
+_COMPANY_NAME_MAP: Dict[str, str] = {
+    # ── LSE / FTSE (.L) ───────────────────────────────────────────────────────
+    'barclays':             'BARC.L',
+    'lloyds':               'LLOY.L',
+    'lloyds banking':       'LLOY.L',
+    'lloyds bank':          'LLOY.L',
+    'hsbc':                 'HSBA.L',
+    'natwest':              'NWG.L',
+    'natwest group':        'NWG.L',
+    'standard chartered':   'STAN.L',
+    'shell':                'SHEL.L',
+    'shell plc':            'SHEL.L',
+    'bp':                   'BP.L',
+    'bp plc':               'BP.L',
+    'british petroleum':    'BP.L',
+    'rio tinto':            'RIO.L',
+    'rio tinto plc':        'RIO.L',
+    'glencore':             'GLEN.L',
+    'diageo':               'DGE.L',
+    'astrazeneca':          'AZN.L',
+    'astra zeneca':         'AZN.L',
+    'gsk':                  'GSK.L',
+    'glaxosmithkline':      'GSK.L',
+    'unilever':             'ULVR.L',
+    'rolls-royce':          'RR.L',
+    'rolls royce':          'RR.L',
+    'bae systems':          'BA.L',
+    'vodafone':             'VOD.L',
+    'bt':                   'BT.A.L',
+    'bt group':             'BT.A.L',
+    'tesco':                'TSCO.L',
+    'sainsburys':           'SBRY.L',
+    "sainsbury's":          'SBRY.L',
+    'marks and spencer':    'MKS.L',
+    'm&s':                  'MKS.L',
+    'next':                 'NXT.L',
+    'national grid':        'NG.L',
+    'centrica':             'CNA.L',
+    'reckitt':              'RKT.L',
+    'reckitt benckiser':    'RKT.L',
+    'smith+nephew':         'SN.L',
+    'smith & nephew':       'SN.L',
+    'imperial brands':      'IMB.L',
+    'british american tobacco': 'BATS.L',
+    'bat':                  'BATS.L',
+    'antofagasta':          'ANTO.L',
+    'anglo american':       'AAL.L',
+    'compass group':        'CPG.L',
+    'haleon':               'HLN.L',
+    'melrose':              'MRO.L',
+    'prudential':           'PRU.L',
+    'legal & general':      'LGEN.L',
+    'aviva':                'AV.L',
+    'admiral':              'ADM.L',
+    'segro':                'SGRO.L',
+    'land securities':      'LAND.L',
+    'british land':         'BLND.L',
+    'kingfisher':           'KGF.L',
+    'jd sports':            'JD.L',
+    'experian':             'EXPN.L',
+    'relx':                 'REL.L',
+    'pearson':              'PSON.L',
+    'informa':              'INF.L',
+    'intercontinental hotels': 'IHG.L',
+    'ihg':                  'IHG.L',
+    'whitbread':            'WTB.L',
+    'flutter':              'FLTR.L',
+    'flutter entertainment': 'FLTR.L',
+    # ── XETRA (.DE) ───────────────────────────────────────────────────────────
+    'sap':                  'SAP.DE',
+    'deutsche bank':        'DBK.DE',
+    'commerzbank':          'CBK.DE',
+    'volkswagen':           'VOW3.DE',
+    'vw':                   'VOW3.DE',
+    'bmw':                  'BMW.DE',
+    'mercedes':             'MBG.DE',
+    'mercedes-benz':        'MBG.DE',
+    'siemens':              'SIE.DE',
+    'allianz':              'ALV.DE',
+    'basf':                 'BAS.DE',
+    'bayer':                'BAYN.DE',
+    'adidas':               'ADS.DE',
+    'puma':                 'PUM.DE',
+    'infineon':             'IFX.DE',
+    'airbus':               'AIR.DE',
+    'munich re':            'MUV2.DE',
+    'munich reinsurance':   'MUV2.DE',
+    'continental':          'CON.DE',
+    'fresenius':            'FRE.DE',
+    'henkel':               'HEN3.DE',
+    'linde':                'LIN.DE',
+    # ── ASX (.AX) ─────────────────────────────────────────────────────────────
+    'bhp':                  'BHP.AX',
+    'bhp group':            'BHP.AX',
+    'commonwealth bank':    'CBA.AX',
+    'cba':                  'CBA.AX',
+    'westpac':              'WBC.AX',
+    'anz':                  'ANZ.AX',
+    'anz bank':             'ANZ.AX',
+    'nab':                  'NAB.AX',
+    'national australia bank': 'NAB.AX',
+    'macquarie':            'MQG.AX',
+    'woodside':             'WDS.AX',
+    'fortescue':            'FMG.AX',
+    'rio tinto australia':  'RIO.AX',
+    'wesfarmers':           'WES.AX',
+    'woolworths':           'WOW.AX',
+    'coles':                'COL.AX',
+    'telstra':              'TLS.AX',
+    'afterpay':             'SQ2.AX',
+    # ── TSE (.T) ─────────────────────────────────────────────────────────────
+    'toyota':               '7203.T',
+    'toyota motor':         '7203.T',
+    'sony':                 '6758.T',
+    'sony group':           '6758.T',
+    'softbank':             '9984.T',
+    'softbank group':       '9984.T',
+    'nintendo':             '7974.T',
+    'honda':                '7267.T',
+    'honda motor':          '7267.T',
+    'mitsubishi':           '8058.T',
+    'mitsubishi corporation': '8058.T',
+    'panasonic':            '6752.T',
+    'ntt':                  '9432.T',
+    'ntt docomo':           '9432.T',
+    'hitachi':              '6501.T',
+    'nec':                  '6701.T',
+    'fujitsu':              '6702.T',
+    'canon':                '7751.T',
+    'nikon':                '7731.T',
+    'kddi':                 '9433.T',
+    'fast retailing':       '9983.T',
+    'uniqlo':               '9983.T',
+    'keyence':              '6861.T',
+    'recruit':              '6098.T',
+    'recruit holdings':     '6098.T',
+    'daikin':               '6367.T',
+    'shin-etsu':            '4063.T',
+    'shin etsu chemical':   '4063.T',
+    # ── HKEX (.HK) ───────────────────────────────────────────────────────────
+    'tencent':              '0700.HK',
+    'tencent holdings':     '0700.HK',
+    'alibaba':              '9988.HK',
+    'alibaba group':        '9988.HK',
+    'meituan':              '3690.HK',
+    'xiaomi':               '1810.HK',
+    'jd.com':               '9618.HK',
+    'netease':              '9999.HK',
+    'hsbc hong kong':       '0005.HK',
+    'cnooc':                '0883.HK',
+    'petrochina':           '0857.HK',
+    'ping an':              '2318.HK',
+    'ping an insurance':    '2318.HK',
+    'china mobile':         '0941.HK',
+    'byd':                  '1211.HK',
+    'byd company':          '1211.HK',
+    'aia':                  '1299.HK',
+    'aia group':            '1299.HK',
+    'anta sports':          '2020.HK',
+    'country garden':       '2007.HK',
+    # ── KRX (.KS) ─────────────────────────────────────────────────────────────
+    'samsung':              '005930.KS',
+    'samsung electronics':  '005930.KS',
+    'sk hynix':             '000660.KS',
+    'hynix':                '000660.KS',
+    'hyundai':              '005380.KS',
+    'hyundai motor':        '005380.KS',
+    'kia':                  '000270.KS',
+    'lg electronics':       '066570.KS',
+    'posco':                '005490.KS',
+    'kb financial':         '105560.KS',
+    'kakao':                '035720.KS',
+    'naver':                '035420.KS',
+    'celltrion':            '068270.KS',
+}
+
 
 def _extract_tickers(text: str) -> List[str]:
-    """Extract likely ticker symbols from text, including LSE .L suffix (e.g. BARC.L)."""
-    # Match standard tickers (2-5 caps) AND LSE .L format
-    candidates = re.findall(r'\b([A-Z]{2,5}\.L|[A-Z]{2,5})\b', text)
-    result = []
-    seen = set()
+    """Extract likely ticker symbols from text.
+
+    Two passes:
+    1. Company-name map — catches natural-language names (Barclays → BARC.L,
+       Samsung → 005930.KS, etc.) written by BBC/Sky/NHK/SCMP journalists.
+    2. Regex — catches explicit ticker symbols already in the text, including
+       exchange suffixes (.L .DE .AX .HK .T .KS .AS .PA).
+    """
+    result: List[str] = []
+    seen: set = set()
+    text_lower = text.lower()
+
+    # Pass 1 — company name map (longest match first to avoid partial overlaps)
+    for name in sorted(_COMPANY_NAME_MAP, key=len, reverse=True):
+        if name in text_lower:
+            ticker = _COMPANY_NAME_MAP[name]
+            if ticker not in seen:
+                seen.add(ticker)
+                result.append(ticker)
+
+    # Pass 2 — regex for explicit ticker symbols
+    # Matches: standard caps (2-5), exchange-suffix tickers (e.g. 7203.T, 0700.HK)
+    candidates = re.findall(
+        r'\b([A-Z0-9]{1,6}'
+        r'(?:\.(?:L|DE|AX|HK|T|KS|AS|PA|MI|SW|ST|TO|NZ|CO|BR))'
+        r'|[A-Z]{2,5})\b',
+        text,
+    )
     for t in candidates:
-        # For .L tickers, check the base symbol isn't a stopword
-        base = t[:-2] if t.endswith('.L') else t
+        base = re.sub(r'\.[A-Z]+$', '', t)
         if base not in _UPPERCASE_STOPWORDS and t not in seen:
             seen.add(t)
             result.append(t)
+
     return result
 
 
