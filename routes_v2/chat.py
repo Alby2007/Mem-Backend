@@ -245,6 +245,59 @@ async def chat_endpoint(
     user_id: Optional[str] = Depends(get_current_user_optional),
 ):
     _check_chat_quota(user_id)
+
+    # ── Workflow intercept ────────────────────────────────────────────────────
+    if user_id:
+        try:
+            from services.workflow_engine import (
+                detect_workflow_trigger, get_active_workflow,
+                start_workflow, advance_workflow, cancel_workflow,
+            )
+            user_msg = data.message.strip()
+
+            # 1. Cancel command — highest priority
+            if user_msg.lower() in ('cancel', '/cancel'):
+                active = get_active_workflow(ext.DB_PATH, user_id)
+                if active:
+                    cancel_workflow(ext.DB_PATH, user_id)
+                    return {"answer": "Workflow cancelled. Ask me anything.", "workflow": None}
+
+            # 2. New workflow trigger (/setup, /log)
+            trigger = detect_workflow_trigger(user_msg)
+            if trigger:
+                active = get_active_workflow(ext.DB_PATH, user_id)
+                if active:
+                    return {
+                        "answer": (
+                            f"You're already in a workflow — type **cancel** to start over, "
+                            f"or answer: {active['current_prompt']}"
+                        ),
+                        "workflow": {"active": active["workflow"], "step": active["step"]},
+                    }
+                prompt = start_workflow(ext.DB_PATH, user_id, trigger)
+                return {"answer": prompt, "workflow": {"active": trigger, "step": 0}}
+
+            # 3. Active workflow step — route to engine instead of LLM
+            active = get_active_workflow(ext.DB_PATH, user_id)
+            if active:
+                result = advance_workflow(ext.DB_PATH, user_id, user_msg)
+                return {
+                    "answer": result.answer,
+                    "workflow": (
+                        None if result.done
+                        else {
+                            "active": active["workflow"],
+                            "step": result.next_step,
+                            "field": result.workflow_field,
+                        }
+                    ),
+                }
+        except Exception as _wf_exc:
+            import logging as _wf_log
+            _wf_log.getLogger(__name__).warning("workflow intercept error: %s", _wf_exc)
+            # Fall through to normal pipeline on unexpected error
+
+    # ── Normal chat pipeline ──────────────────────────────────────────────────
     from services import chat_pipeline
 
     response, status = chat_pipeline.run(

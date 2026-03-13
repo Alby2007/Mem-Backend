@@ -944,6 +944,13 @@ input[type="range"].prf-range::-webkit-slider-thumb { -webkit-appearance: none; 
 .chat-send-btn { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #000; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: opacity .15s, transform .1s; }
 .chat-send-btn:hover { opacity: .85; }
 .chat-send-btn:active { transform: scale(.92); }
+.chat-wf-menu { position: absolute; bottom: calc(100% + 8px); left: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 6px; min-width: 200px; z-index: 120; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.chat-wf-menu-title { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 4px 8px 6px; }
+.chat-wf-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: none; background: transparent; border-radius: 7px; cursor: pointer; color: var(--text); text-align: left; transition: background .12s; }
+.chat-wf-item:hover { background: rgba(255,255,255,.07); }
+.chat-wf-item strong { display: block; font-size: 13px; }
+.chat-wf-item small { font-size: 11px; color: var(--muted); }
+.chat-wf-icon { font-size: 16px; flex-shrink: 0; }
 .toggle { position: relative; width: 32px; height: 18px; }
 .toggle input { opacity: 0; width: 0; height: 0; }
 .toggle-slider { position: absolute; inset: 0; background: var(--border); border-radius: 18px; cursor: pointer; transition: .2s; }

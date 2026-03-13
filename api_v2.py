@@ -103,6 +103,12 @@ async def _lifespan(app: FastAPI):
             _ret_mod.set_db_path(db_path)
         except Exception:
             pass
+        # Workflow engine — create chat_workflow_state table
+        try:
+            from services.workflow_engine import ensure_workflow_table
+            ensure_workflow_table(db_path)
+        except Exception as _wf_e:
+            _logger.warning('ensure_workflow_table failed: %s', _wf_e)
         scheduler = IngestScheduler(ext.kg)
 
         # LLM extractor — drains the extraction_queue; batch size tunable via env

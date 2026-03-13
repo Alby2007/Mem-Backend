@@ -870,6 +870,38 @@ document.getElementById('overlay-btn').addEventListener('click', function() {
   cb.checked = !cb.checked;
   this.classList.toggle('active', cb.checked);
 });
+
+// ── Workflow trigger button ───────────────────────────────────────────────────
+(function() {
+  const wfBtn  = document.getElementById('chat-workflow-btn');
+  const wfMenu = document.getElementById('chat-workflow-menu');
+  if (!wfBtn || !wfMenu) return;
+
+  wfBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    const open = wfMenu.style.display !== 'none';
+    wfMenu.style.display = open ? 'none' : 'block';
+    wfBtn.classList.toggle('active', !open);
+  });
+
+  wfMenu.querySelectorAll('.chat-wf-item').forEach(function(item) {
+    item.addEventListener('click', function() {
+      const cmd = item.dataset.cmd;
+      wfMenu.style.display = 'none';
+      wfBtn.classList.remove('active');
+      const inp = document.getElementById('chat-input');
+      if (inp) { inp.value = cmd; }
+      sendChat();
+    });
+  });
+
+  document.addEventListener('click', function(e) {
+    if (!wfMenu.contains(e.target) && e.target !== wfBtn) {
+      wfMenu.style.display = 'none';
+      wfBtn.classList.remove('active');
+    }
+  });
+})();
 document.getElementById('chat-input').addEventListener('input', function() {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 120) + 'px';
