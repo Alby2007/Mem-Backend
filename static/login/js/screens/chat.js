@@ -796,6 +796,7 @@ async function sendChat() {
     const precedentHtml    = d.historical_precedent ? renderPrecedentCard(d.historical_precedent) : '';
     const temporalHtml     = d.temporal_search ? renderTemporalSearchCard(d.temporal_search) : '';
     const transitionHtml   = d.transition_forecast ? renderTransitionCard(d.transition_forecast) : '';
+    const tickerCtxHtml    = d.ticker_context ? renderTickerContext(d.ticker_context) : '';
     // Build merged atoms from LLM grounding block + DB atoms for market stress fallback
     const _mergedAtoms = {};
     if (grounding) grounding.forEach(r => { const k = r.key === 'regime' ? 'price_regime' : r.key; if (r.val) _mergedAtoms[k] = r.val; });
@@ -803,7 +804,7 @@ async function sendChat() {
     const mktStress = d.market_stress || computeMarketStress(Object.keys(_mergedAtoms).length ? _mergedAtoms : null);
     const epistemicHtml = renderEpistemicFooter(d.atoms_used, d.stress || null, mktStress);
     const bubble = thinking.querySelector('.msg-bubble');
-    bubble.innerHTML = answer + overlayHtml + tipCardHtml + kbPanelHtml + precedentHtml + temporalHtml + transitionHtml + calHtml + epistemicHtml;
+    bubble.innerHTML = tickerCtxHtml + answer + overlayHtml + tipCardHtml + kbPanelHtml + precedentHtml + temporalHtml + transitionHtml + calHtml + epistemicHtml;
     // Animate stress bars + calibration bars + precedent bars
     requestAnimationFrame(() => {
       thinking.querySelectorAll('.stress-bar-fill[data-width]').forEach((bar, i) => {
@@ -870,6 +871,35 @@ document.getElementById('overlay-btn').addEventListener('click', function() {
   cb.checked = !cb.checked;
   this.classList.toggle('active', cb.checked);
 });
+
+// ── Ticker context card (shown after ticker step in setup workflow) ───────────
+function renderTickerContext(ctx) {
+  if (!ctx || !ctx.ticker) return '';
+  const rec = ctx.recommendation || 'neutral';
+  const recLabel = ctx.rec_label || 'No clear signal';
+  const recClass = rec === 'bullish' ? 'tc-bullish' : rec === 'bearish' ? 'tc-bearish' : 'tc-neutral';
+  const recIcon  = rec === 'bullish' ? '📈' : rec === 'bearish' ? '📉' : '↔️';
+
+  const rows = [];
+  if (ctx.price)      rows.push(`<div class="tc-row"><span class="tc-label">Price</span><span class="tc-val">${escHtml(ctx.price)}</span></div>`);
+  if (ctx.signal)     rows.push(`<div class="tc-row"><span class="tc-label">Signal</span><span class="tc-val tc-sig ${ctx.signal === 'bullish' || ctx.signal === 'long' ? 'tc-bull' : 'tc-bear'}">${escHtml(ctx.signal.charAt(0).toUpperCase() + ctx.signal.slice(1))}${ctx.conviction ? ' <em>(' + escHtml(ctx.conviction) + ')</em>' : ''}</span></div>`);
+  if (ctx.regime)     rows.push(`<div class="tc-row"><span class="tc-label">Regime</span><span class="tc-val">${escHtml(ctx.regime)}</span></div>`);
+  if (ctx.volatility) rows.push(`<div class="tc-row"><span class="tc-label">Vol</span><span class="tc-val">${escHtml(ctx.volatility)}</span></div>`);
+  if (ctx.key_level)  rows.push(`<div class="tc-row"><span class="tc-label">Key level</span><span class="tc-val">${escHtml(ctx.key_level)}</span></div>`);
+
+  const thesisHtml = ctx.thesis
+    ? `<div class="tc-thesis">${escHtml(ctx.thesis)}</div>`
+    : '';
+
+  return `<div class="ticker-ctx-card">
+  <div class="tc-header">
+    <span class="tc-ticker">${escHtml(ctx.ticker)}</span>
+    <span class="tc-rec ${recClass}">${recIcon} ${escHtml(recLabel)}</span>
+  </div>
+  ${rows.length ? `<div class="tc-rows">${rows.join('')}</div>` : ''}
+  ${thesisHtml}
+</div>`;
+}
 
 // ── Workflow trigger button ───────────────────────────────────────────────────
 (function() {

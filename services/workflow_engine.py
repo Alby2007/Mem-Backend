@@ -95,6 +95,7 @@ class WorkflowResult:
     answer: str
     next_step: Optional[int] = None
     workflow_field: Optional[str] = None
+    ticker_context: Optional[dict] = None
 
 
 # ── Validators ────────────────────────────────────────────────────────────────
@@ -269,20 +270,19 @@ _NL_STOPWORDS    = {'A', 'AN', 'THE', 'FOR', 'AND', 'OR', 'IN', 'ON', 'AT', 'TO'
                     'PM', 'KB', 'AI', 'UK', 'US', 'EU', 'TP'}
 
 
-def _fetch_ticker_summary(ticker: str) -> str:
+def _fetch_ticker_summary(ticker: str) -> Optional[dict]:
     """
-    Pull key KB atoms for a ticker and return a compact markdown context card.
-    Returns empty string if nothing useful is found.
+    Pull key KB atoms for a ticker and return a structured context dict for frontend rendering.
+    Returns None if nothing useful is found.
     Lazy-imports ext to avoid circular imports at module load.
     """
     try:
         import extensions as ext
         facts = ext.kg.query(subject=ticker, limit=60)
         if not facts:
-            # Try uppercase variant
             facts = ext.kg.query(subject=ticker.upper(), limit=60)
         if not facts:
-            return ''
+            return None
 
         # Map predicate → object (last wins if dupes)
         fm: dict = {}
@@ -292,61 +292,70 @@ def _fetch_ticker_summary(ticker: str) -> str:
             if p and v:
                 fm[p] = str(v)
 
-        lines = []
+        ctx: dict = {'ticker': ticker}
 
         # Price
         price = fm.get('last_price') or fm.get('price') or fm.get('current_price')
         if price:
             try:
                 pf = float(str(price).replace(',', '').replace('$', '').replace('£', '').replace('p', ''))
-                price_str = f'£{pf:,.2f}' if ticker.endswith('.L') else f'${pf:,.2f}'
+                ctx['price'] = f'£{pf:,.2f}' if ticker.endswith('.L') else f'${pf:,.2f}'
             except ValueError:
-                price_str = str(price)
-            lines.append(f'**Price:** {price_str}')
+                ctx['price'] = str(price)
 
         # Signal direction + conviction
-        sig_dir  = fm.get('signal_direction') or fm.get('direction')
-        conv     = fm.get('conviction_tier') or fm.get('conviction')
+        sig_dir = fm.get('signal_direction') or fm.get('direction')
+        conv    = fm.get('conviction_tier') or fm.get('conviction')
         if sig_dir:
-            dir_emoji = '📈' if sig_dir.lower() in ('bullish', 'long') else ('📉' if sig_dir.lower() in ('bearish', 'short') else '↔️')
-            conv_str  = f' ({conv.upper()} conviction)' if conv else ''
-            lines.append(f'**Signal:** {dir_emoji} {sig_dir.capitalize()}{conv_str}')
+            ctx['signal'] = sig_dir.lower()
+            if conv:
+                ctx['conviction'] = conv.lower()
 
         # Regime
         regime = fm.get('price_regime') or fm.get('regime')
         if regime:
-            lines.append(f'**Regime:** {regime.replace("_", " ").title()}')
+            ctx['regime'] = regime.replace('_', ' ').title()
 
         # Volatility
         vol = fm.get('volatility_regime') or fm.get('volatility')
         if vol:
-            lines.append(f'**Vol:** {vol.replace("_", " ")}')
+            ctx['volatility'] = vol.replace('_', ' ')
 
         # Key level / invalidation
         inv = fm.get('invalidation_price') or fm.get('key_level')
         if inv:
             try:
                 ivf = float(str(inv).replace(',', '').replace('$', '').replace('£', ''))
-                inv_str = f'£{ivf:,.2f}' if ticker.endswith('.L') else f'${ivf:,.2f}'
+                ctx['key_level'] = f'£{ivf:,.2f}' if ticker.endswith('.L') else f'${ivf:,.2f}'
             except ValueError:
-                inv_str = str(inv)
-            lines.append(f'**Key level:** {inv_str}')
+                ctx['key_level'] = str(inv)
 
-        # Thesis (first 120 chars)
+        # Thesis (first 140 chars)
         thesis = fm.get('thesis') or fm.get('summary') or fm.get('key_thesis')
         if thesis:
-            short = thesis[:120].rstrip() + ('…' if len(thesis) > 120 else '')
-            lines.append(f'*{short}*')
+            ctx['thesis'] = thesis[:140].rstrip() + ('…' if len(thesis) > 140 else '')
 
-        if not lines:
-            return ''
+        # Recommendation — based on signal direction
+        sig = ctx.get('signal', '')
+        conv_val = ctx.get('conviction', '')
+        if sig in ('bullish', 'long'):
+            ctx['recommendation'] = 'bullish'
+            ctx['rec_label'] = 'Lean bullish'
+        elif sig in ('bearish', 'short'):
+            ctx['recommendation'] = 'bearish'
+            ctx['rec_label'] = 'Lean bearish'
+        else:
+            ctx['recommendation'] = 'neutral'
+            ctx['rec_label'] = 'No clear signal'
 
-        card = '\n'.join(f'- {l}' for l in lines)
-        return f'\n\n> 📊 **{ticker} context from KB**\n{card}\n'
+        # Only return if we have at least one meaningful field
+        if len(ctx) <= 2:  # just ticker + recommendation
+            return None
+        return ctx
 
     except Exception as e:
         _logger.debug('ticker summary fetch failed for %s: %s', ticker, e)
-        return ''
+        return None
 
 
 def detect_nl_setup(message: str) -> Optional[dict]:
@@ -551,18 +560,17 @@ def advance_workflow(db_path: str, user_id: str, message: str) -> WorkflowResult
     _set_state(db_path, user_id, workflow_key, next_idx, data)
     next_step = steps[next_idx]
 
-    # After ticker is accepted, inject KB context before the direction prompt
-    next_prompt = next_step.prompt
+    # After ticker is accepted, fetch KB context for the direction prompt
+    ticker_ctx = None
     if current_step.field == 'ticker':
-        kb_card = _fetch_ticker_summary(value)
-        if kb_card:
-            next_prompt = kb_card + '\n' + next_prompt
+        ticker_ctx = _fetch_ticker_summary(value)
 
     return WorkflowResult(
         done=False,
-        answer=next_prompt,
+        answer=next_step.prompt,
         next_step=next_idx,
         workflow_field=next_step.field,
+        ticker_context=ticker_ctx,
     )
 
 

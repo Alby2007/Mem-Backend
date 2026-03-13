@@ -307,6 +307,7 @@ async def chat_endpoint(
                             "field": result.workflow_field,
                         }
                     ),
+                    "ticker_context": result.ticker_context or None,
                 }
 
             # 4. Natural language setup detection — only when no workflow active
