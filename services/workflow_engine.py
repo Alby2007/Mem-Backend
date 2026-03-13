@@ -269,6 +269,86 @@ _NL_STOPWORDS    = {'A', 'AN', 'THE', 'FOR', 'AND', 'OR', 'IN', 'ON', 'AT', 'TO'
                     'PM', 'KB', 'AI', 'UK', 'US', 'EU', 'TP'}
 
 
+def _fetch_ticker_summary(ticker: str) -> str:
+    """
+    Pull key KB atoms for a ticker and return a compact markdown context card.
+    Returns empty string if nothing useful is found.
+    Lazy-imports ext to avoid circular imports at module load.
+    """
+    try:
+        import extensions as ext
+        facts = ext.kg.query(subject=ticker, limit=60)
+        if not facts:
+            # Try uppercase variant
+            facts = ext.kg.query(subject=ticker.upper(), limit=60)
+        if not facts:
+            return ''
+
+        # Map predicate → object (last wins if dupes)
+        fm: dict = {}
+        for f in facts:
+            p = (f.get('predicate') or '').lower().replace(' ', '_')
+            v = f.get('object') or ''
+            if p and v:
+                fm[p] = str(v)
+
+        lines = []
+
+        # Price
+        price = fm.get('last_price') or fm.get('price') or fm.get('current_price')
+        if price:
+            try:
+                pf = float(str(price).replace(',', '').replace('$', '').replace('£', '').replace('p', ''))
+                price_str = f'£{pf:,.2f}' if ticker.endswith('.L') else f'${pf:,.2f}'
+            except ValueError:
+                price_str = str(price)
+            lines.append(f'**Price:** {price_str}')
+
+        # Signal direction + conviction
+        sig_dir  = fm.get('signal_direction') or fm.get('direction')
+        conv     = fm.get('conviction_tier') or fm.get('conviction')
+        if sig_dir:
+            dir_emoji = '📈' if sig_dir.lower() in ('bullish', 'long') else ('📉' if sig_dir.lower() in ('bearish', 'short') else '↔️')
+            conv_str  = f' ({conv.upper()} conviction)' if conv else ''
+            lines.append(f'**Signal:** {dir_emoji} {sig_dir.capitalize()}{conv_str}')
+
+        # Regime
+        regime = fm.get('price_regime') or fm.get('regime')
+        if regime:
+            lines.append(f'**Regime:** {regime.replace("_", " ").title()}')
+
+        # Volatility
+        vol = fm.get('volatility_regime') or fm.get('volatility')
+        if vol:
+            lines.append(f'**Vol:** {vol.replace("_", " ")}')
+
+        # Key level / invalidation
+        inv = fm.get('invalidation_price') or fm.get('key_level')
+        if inv:
+            try:
+                ivf = float(str(inv).replace(',', '').replace('$', '').replace('£', ''))
+                inv_str = f'£{ivf:,.2f}' if ticker.endswith('.L') else f'${ivf:,.2f}'
+            except ValueError:
+                inv_str = str(inv)
+            lines.append(f'**Key level:** {inv_str}')
+
+        # Thesis (first 120 chars)
+        thesis = fm.get('thesis') or fm.get('summary') or fm.get('key_thesis')
+        if thesis:
+            short = thesis[:120].rstrip() + ('…' if len(thesis) > 120 else '')
+            lines.append(f'*{short}*')
+
+        if not lines:
+            return ''
+
+        card = '\n'.join(f'- {l}' for l in lines)
+        return f'\n\n> 📊 **{ticker} context from KB**\n{card}\n'
+
+    except Exception as e:
+        _logger.debug('ticker summary fetch failed for %s: %s', ticker, e)
+        return ''
+
+
 def detect_nl_setup(message: str) -> Optional[dict]:
     """
     Detect natural language trade setup intent and extract any available fields.
@@ -470,9 +550,17 @@ def advance_workflow(db_path: str, user_id: str, message: str) -> WorkflowResult
 
     _set_state(db_path, user_id, workflow_key, next_idx, data)
     next_step = steps[next_idx]
+
+    # After ticker is accepted, inject KB context before the direction prompt
+    next_prompt = next_step.prompt
+    if current_step.field == 'ticker':
+        kb_card = _fetch_ticker_summary(value)
+        if kb_card:
+            next_prompt = kb_card + '\n' + next_prompt
+
     return WorkflowResult(
         done=False,
-        answer=next_step.prompt,
+        answer=next_prompt,
         next_step=next_idx,
         workflow_field=next_step.field,
     )
