@@ -1572,3 +1572,125 @@ async def notify_test_briefing(
         return {"sent": True, "chat_id": chat_id, "mode": "monday_briefing"}
     except Exception as e:
         raise HTTPException(500, detail=str(e))
+
+
+# ── Ledger position calculator ─────────────────────────────────────────────────
+
+class LedgerCalcRequest(BaseModel):
+    pattern_id: int | None = None
+    ticker: str
+    direction: str
+    zone_high: float
+    zone_low: float
+    timeframe: str
+    account_size: float | None = None
+    risk_pct: float | None = None
+
+
+@router.post("/users/{user_id}/ledger/calculate")
+async def ledger_calculate(
+    user_id: str,
+    data: LedgerCalcRequest,
+    _: str = Depends(user_path_auth),
+):
+    """Calculate position sizing and levels for a given pattern zone."""
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        row = conn.execute(
+            "SELECT account_size, max_risk_per_trade_pct, account_currency "
+            "FROM user_preferences WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(500, detail=f"DB error: {e}")
+
+    account_size = data.account_size or (row[0] if row and row[0] else 10000.0)
+    risk_pct     = data.risk_pct     or (row[1] if row and row[1] else 1.0)
+    currency     = row[2] if row else "GBP"
+
+    zh = data.zone_high
+    zl = data.zone_low
+    is_bear = data.direction.lower() == "bearish"
+    zone_span = abs(zh - zl)
+
+    entry = zh if is_bear else zl
+    stop  = round(zh * 1.025, 4) if is_bear else round(zl * 0.975, 4)
+
+    t1 = round(zl - zone_span * 1.5, 4) if is_bear else round(zh + zone_span * 1.5, 4)
+    t2 = round(zl - zone_span * 3.0, 4) if is_bear else round(zh + zone_span * 3.0, 4)
+
+    risk_amount    = account_size * risk_pct / 100
+    risk_per_unit  = abs(entry - stop)
+    position_size  = round(risk_amount / risk_per_unit, 2) if risk_per_unit > 0 else 0
+    position_value = round(position_size * entry, 2)
+
+    rr_t1 = round(abs(t1 - entry) / risk_per_unit, 2) if risk_per_unit > 0 else None
+    rr_t2 = round(abs(t2 - entry) / risk_per_unit, 2) if risk_per_unit > 0 else None
+
+    return {
+        "entry":          entry,
+        "stop":           stop,
+        "t1":             t1,
+        "t2":             t2,
+        "target_entry":   entry,
+        "target_exit":    t1,
+        "position_size":  position_size,
+        "position_value": position_value,
+        "risk_amount":    round(risk_amount, 2),
+        "rr_t1":          rr_t1,
+        "rr_t2":          rr_t2,
+        "account_size":   account_size,
+        "risk_pct":       risk_pct,
+        "currency":       currency,
+        "zone_high":      zh,
+        "zone_low":       zl,
+    }
+
+
+# ── Admin: set user tier ──────────────────────────────────────────────────────
+
+class SetTierRequest(BaseModel):
+    user_id: Optional[str] = None
+    email: Optional[str] = None
+    tier: str  # free | basic | pro | premium
+
+
+@router.post("/admin/set-tier")
+async def admin_set_tier(data: SetTierRequest, request: Request):
+    secret = request.headers.get("x-admin-secret", "")
+    if secret != "meridian-ops-2025":
+        raise HTTPException(403, detail="forbidden")
+    valid_tiers = ("free", "basic", "pro", "premium")
+    tier = data.tier.lower()
+    if tier not in valid_tiers:
+        raise HTTPException(400, detail=f"Invalid tier. Must be one of: {valid_tiers}")
+
+    uid = data.user_id
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        # Resolve email → user_id if no user_id supplied
+        if not uid and data.email:
+            row = conn.execute(
+                "SELECT user_id FROM user_auth WHERE email = ? COLLATE NOCASE",
+                (data.email,),
+            ).fetchone()
+            if not row:
+                conn.close()
+                raise HTTPException(404, detail=f"No user found with email {data.email}")
+            uid = row[0]
+        if not uid:
+            raise HTTPException(400, detail="Provide user_id or email")
+
+        conn.execute(
+            """INSERT INTO user_preferences (user_id, tier) VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET tier = excluded.tier""",
+            (uid, tier),
+        )
+        conn.commit()
+        conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+    return {"ok": True, "user_id": uid, "tier": tier}
