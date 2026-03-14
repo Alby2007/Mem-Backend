@@ -916,9 +916,57 @@ async def get_pipeline(current_user: str = Depends(get_current_user)):
             ).fetchall()
             return [dict(r) for r in rows]
 
-        watching = _followup_rows("status = 'watching'")
-        staged = _followup_rows("status = 'staged'")
-        active = _followup_rows("status = 'active' AND position_source IN ('manual','pipeline')")
+        def _enrich_with_kb(rows: list[dict]) -> list[dict]:
+            """Merge live KB facts into pipeline rows by ticker."""
+            if not rows:
+                return rows
+            tickers = list({r['ticker'].upper() for r in rows if r.get('ticker')})
+            placeholders = ','.join('?' for _ in tickers)
+            kb_rows = conn.execute(
+                f"""SELECT subject, predicate, object FROM facts
+                    WHERE UPPER(subject) IN ({placeholders})
+                    ORDER BY timestamp DESC""",
+                tickers,
+            ).fetchall()
+            facts: dict[str, dict] = {}
+            seen: set = set()
+            for r in kb_rows:
+                subj = r['subject'].upper()
+                pred = r['predicate']
+                key = f'{subj}|{pred}'
+                if key in seen:
+                    continue
+                seen.add(key)
+                facts.setdefault(subj, {})[pred] = r['object']
+
+            _KB_FIELDS = [
+                'conviction_tier', 'macro_confirmation', 'institutional_flow',
+                'signal_quality', 'auto_thesis', 'auto_thesis_score',
+                'pattern_decay_pct', 'pattern_hours_remaining', 'catalyst',
+                'best_regime', 'worst_regime', 'volatility_regime',
+                'upside_pct', 'signal_direction',
+            ]
+            enriched = []
+            for row in rows:
+                row = dict(row)
+                kb = facts.get((row.get('ticker') or '').upper(), {})
+                for field in _KB_FIELDS:
+                    if field not in row or row[field] is None:
+                        val = kb.get(field)
+                        if val is not None:
+                            try:
+                                row[field] = float(val) if field in (
+                                    'auto_thesis_score', 'pattern_decay_pct',
+                                    'pattern_hours_remaining', 'upside_pct'
+                                ) else val
+                            except (TypeError, ValueError):
+                                row[field] = val
+                enriched.append(row)
+            return enriched
+
+        watching = _enrich_with_kb(_followup_rows("status = 'watching'"))
+        staged = _enrich_with_kb(_followup_rows("status = 'staged'"))
+        active = _enrich_with_kb(_followup_rows("status = 'active' AND position_source IN ('manual','pipeline')"))
         assessing = _followup_rows(
             "status IN ('closed','stopped_out','hit_t1','hit_t2') AND (user_note IS NULL OR user_note = '')"
         )
