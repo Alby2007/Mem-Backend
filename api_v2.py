@@ -479,7 +479,14 @@ _ALLOWED_ORIGINS = frozenset([
     "https://app.trading-galaxy.uk",
     "http://localhost:3000",
     "http://localhost:5173",
+    "http://localhost:8080",
 ])
+
+_ALLOWED_ORIGIN_SUFFIXES = (
+    ".trycloudflare.com",
+    ".ngrok-free.app",
+    ".ngrok.io",
+)
 
 _CSRF_SAFE_METHODS = frozenset(["GET", "HEAD", "OPTIONS"])
 
@@ -491,7 +498,7 @@ def create_fastapi_app() -> FastAPI:
     async def csrf_origin_check(request: Request, call_next):
         if request.method not in _CSRF_SAFE_METHODS:
             origin = request.headers.get("origin", "")
-            if origin and origin not in _ALLOWED_ORIGINS:
+            if origin and origin not in _ALLOWED_ORIGINS and not any(origin.endswith(s) for s in _ALLOWED_ORIGIN_SUFFIXES):
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "forbidden: origin not allowed"},
@@ -500,7 +507,7 @@ def create_fastapi_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=list(_ALLOWED_ORIGINS),
+        allow_origins=list(_ALLOWED_ORIGINS) + ["https://*.trycloudflare.com", "https://*.ngrok-free.app"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
