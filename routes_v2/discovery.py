@@ -124,16 +124,11 @@ async def discovery_reset(x_internal_secret: str = Header(None)):
         raise HTTPException(500, detail=str(e))
 
 
-# ── Dev-only proxy routes (user-authenticated, is_dev gated) ─────────────────
+# ── MOT routes (user-authenticated, open to all registered users) ─────────────
 
 def _dev_gate(user_id: str) -> None:
-    conn = sqlite3.connect(ext.DB_PATH, timeout=5)
-    row = conn.execute(
-        'SELECT is_dev FROM user_preferences WHERE user_id=?', (user_id,)
-    ).fetchone()
-    conn.close()
-    if not row or not row[0]:
-        raise HTTPException(403, detail='dev only')
+    """Previously restricted to is_dev users. Now open to all authenticated users."""
+    pass
 
 
 @router.get('/users/{user_id}/private-fleet/status')
