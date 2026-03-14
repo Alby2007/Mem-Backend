@@ -1070,7 +1070,7 @@ async def pipeline_remove(followup_id: int, current_user: str = Depends(get_curr
         from users.user_store import _ensure_tip_followups_table
         _ensure_tip_followups_table(conn)
         conn.execute(
-            "DELETE FROM tip_followups WHERE id = ? AND user_id = ? AND position_source = 'pipeline'",
+            "DELETE FROM tip_followups WHERE id = ? AND user_id = ?",
             (followup_id, current_user),
         )
         conn.commit()
