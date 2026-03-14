@@ -106,9 +106,11 @@ function drawOverlay() {{
   const ctx   = canvas.getContext('2d');
   ctx.clearRect(0, 0, W, H);
 
-  // Zone band
-  ctx.fillStyle = ZONE_FILL;
-  ctx.fillRect(0, yHigh, W, yLow - yHigh);
+  // Zone band — skip if zone is too thin to be visible
+  const yHeight = yLow - yHigh;
+  if (yHeight < 8) return;
+  ctx.fillStyle = 'rgba(38,63,226,0.15)';
+  ctx.fillRect(0, yHigh, W, yHeight);
 
   // Top/bottom borders
   ctx.strokeStyle = ZONE_BORDER_COLOUR;
@@ -166,8 +168,8 @@ function _fallbackDraw() {{
   _fallbackAttempts++;
   const mid  = (ZONE_HIGH + ZONE_LOW) / 2;
   const span = Math.max(ZONE_HIGH - ZONE_LOW, mid * 0.04);
-  priceMin   = ZONE_LOW  - span * 3.5;
-  priceMax   = ZONE_HIGH + span * 3.5;
+  priceMin   = ZONE_LOW  - span * 1.5;
+  priceMax   = ZONE_HIGH + span * 1.5;
   // TradingView widget renders an <iframe> inside #tv; use that for bounds
   const tvDiv = document.getElementById('tv');
   const tvIframe = tvDiv ? tvDiv.querySelector('iframe') : null;

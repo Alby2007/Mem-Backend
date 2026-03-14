@@ -1136,19 +1136,38 @@ async def pipeline_watch(data: PipelineWatchRequest, current_user: str = Depends
             raise HTTPException(404, detail='Pattern not found')
 
         pat = dict(pat)
-        entry = pat.get('zone_high') or pat.get('zone_low')
-        stop = pat.get('zone_low') if pat.get('direction', '').lower() == 'bullish' else pat.get('zone_high')
+        direction = (pat.get('direction') or 'bullish').lower()
+        zh = float(pat['zone_high']) if pat.get('zone_high') else None
+        zl = float(pat['zone_low'])  if pat.get('zone_low')  else None
+
+        # Bearish: enter at resistance (zone_high), stop 2.5% above it
+        # Bullish: enter at support  (zone_low),  stop 2.5% below it
+        if direction == 'bearish':
+            entry = zh
+            stop  = round(zh * 1.025, 4) if zh else None
+        else:
+            entry = zl
+            stop  = round(zl * 0.975, 4) if zl else None
+
+        # T1/T2: project 1.5× and 3× zone size beyond the zone
+        zone_size = abs(zh - zl) if (zh and zl) else 0
+        if direction == 'bearish':
+            t1 = round(zl - zone_size * 1.5, 4) if (zl and zone_size) else None
+            t2 = round(zl - zone_size * 3.0, 4) if (zl and zone_size) else None
+        else:
+            t1 = round(zh + zone_size * 1.5, 4) if (zh and zone_size) else None
+            t2 = round(zh + zone_size * 3.0, 4) if (zh and zone_size) else None
 
         from users.user_store import upsert_tip_followup
         row_id, _ = upsert_tip_followup(
             ext.DB_PATH,
             user_id=current_user,
             ticker=data.ticker.upper(),
-            direction=pat.get('direction', 'bullish'),
-            entry_price=float(entry) if entry else None,
-            stop_loss=float(stop) if stop else None,
-            target_1=None,
-            target_2=None,
+            direction=direction,
+            entry_price=entry,
+            stop_loss=stop,
+            target_1=t1,
+            target_2=t2,
             pattern_type=pat.get('pattern_type'),
             timeframe=pat.get('timeframe'),
             zone_low=float(pat['zone_low']) if pat.get('zone_low') else None,
