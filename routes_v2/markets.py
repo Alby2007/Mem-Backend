@@ -35,6 +35,7 @@ async def markets_chart(
     sym: str = "AAPL", symbol: str = None, interval: str = "D",
     zone_high: str = None, zone_low: str = None,
     pattern_type: str = None, direction: str = None,
+    fill_color: str = None,
 ):
     tvSym = sym if sym != "AAPL" or symbol is None else (symbol or sym)
     tvInt = interval if interval in ("1","5","15","30","60","120","240","D","W","M") else "D"
@@ -50,6 +51,8 @@ async def markets_chart(
     zone_js    = f"const ZONE_HIGH={zh}, ZONE_LOW={zl};" if has_zone else "const ZONE_HIGH=null, ZONE_LOW=null;"
     pat_label  = (pattern_type or "").replace("_", " ").upper() or "ZONE"
     dir_colour = "#22c55e" if (direction or "").lower().startswith("bull") else ("#ef4444" if (direction or "").lower().startswith("bear") else "#f59e0b")
+    zone_fill = fill_color if fill_color else "rgba(245,158,11,0.13)"
+    zone_border_colour = fill_color if fill_color else (dir_colour + "aa")
 
     zone_overlay_html = ""
     if has_zone:
@@ -67,6 +70,8 @@ async def markets_chart(
 {zone_js}
 const PAT_LABEL  = {repr(pat_label)};
 const DIR_COLOUR = {repr(dir_colour)};
+const ZONE_FILL = {repr(zone_fill)};
+const ZONE_BORDER_COLOUR = {repr(zone_border_colour)};
 
 let zoneVisible = true;
 let tvFrame     = null;   // TradingView iframe element
@@ -100,12 +105,12 @@ function drawOverlay() {{
   const ctx   = canvas.getContext('2d');
   ctx.clearRect(0, 0, W, H);
 
-  // Amber zone band
-  ctx.fillStyle = 'rgba(245,158,11,0.13)';
+  // Zone band
+  ctx.fillStyle = ZONE_FILL;
   ctx.fillRect(0, yHigh, W, yLow - yHigh);
 
   // Top/bottom borders
-  ctx.strokeStyle = DIR_COLOUR + 'aa';
+  ctx.strokeStyle = ZONE_BORDER_COLOUR;
   ctx.lineWidth   = 1;
   ctx.setLineDash([6, 4]);
   ctx.beginPath(); ctx.moveTo(0, yHigh); ctx.lineTo(W, yHigh); ctx.stroke();
