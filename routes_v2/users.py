@@ -98,6 +98,24 @@ class ProfileRequest(BaseModel):
     phone: str = ""
 
 
+class ProfileUpdateRequest(BaseModel):
+    display_name: Optional[str] = None
+    country: Optional[str] = None
+    timezone: Optional[str] = None
+    account_currency: Optional[str] = None
+    preferred_regions: Optional[list] = None
+    experience_level: Optional[str] = None
+    style_risk_tolerance: Optional[str] = None
+    style_timeframe: Optional[str] = None
+    tip_timeframes: Optional[list] = None
+    tip_markets: Optional[list] = None
+    tip_pattern_types: Optional[list] = None
+    selected_sectors: Optional[list] = None
+    style_sector_focus: Optional[list] = None
+    trading_bio: Optional[str] = None
+    preferred_broker: Optional[str] = None
+
+
 class NotifyTestRequest(BaseModel):
     chat_id: str
 
@@ -487,6 +505,146 @@ async def update_style_prefs_route(
         raise HTTPException(400, detail=str(e))
     except Exception as e:
         raise HTTPException(500, detail=str(e))
+
+
+@router.get("/users/{user_id}/profile")
+async def get_profile(user_id: str, current_user: str = Depends(get_current_user)):
+    if current_user != user_id:
+        raise HTTPException(403, detail="forbidden")
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+        # Ensure new columns exist
+        for ddl in [
+            "ALTER TABLE user_preferences ADD COLUMN country TEXT",
+            "ALTER TABLE user_preferences ADD COLUMN preferred_regions TEXT DEFAULT '[]'",
+            "ALTER TABLE user_auth ADD COLUMN display_name TEXT",
+        ]:
+            try:
+                conn.execute(ddl)
+                conn.commit()
+            except Exception:
+                pass
+
+        prefs_row = conn.execute(
+            """SELECT tier, timezone, account_currency, experience_level,
+                      style_risk_tolerance, style_timeframe, tip_timeframes,
+                      tip_markets, tip_pattern_types, selected_sectors,
+                      style_sector_focus, trading_bio, preferred_broker,
+                      country, preferred_regions
+               FROM user_preferences WHERE user_id=?""", (user_id,)
+        ).fetchone()
+        auth_row = conn.execute(
+            "SELECT email, created_at, last_login, display_name FROM user_auth WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    if prefs_row is None:
+        raise HTTPException(404, detail="user not found")
+
+    d = dict(prefs_row)
+    for jcol in ("tip_timeframes", "tip_markets", "tip_pattern_types",
+                 "selected_sectors", "style_sector_focus", "preferred_regions"):
+        try:
+            d[jcol] = json.loads(d[jcol]) if d[jcol] else []
+        except Exception:
+            d[jcol] = []
+
+    if auth_row:
+        d["email"] = auth_row["email"]
+        d["created_at"] = auth_row["created_at"]
+        d["last_login"] = auth_row["last_login"]
+        d["display_name"] = auth_row["display_name"]
+    d["user_id"] = user_id
+    return d
+
+
+@router.patch("/users/{user_id}/profile")
+async def update_profile(
+    user_id: str, data: ProfileUpdateRequest,
+    current_user: str = Depends(get_current_user),
+):
+    if current_user != user_id:
+        raise HTTPException(403, detail="forbidden")
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        # Ensure new columns exist (idempotent)
+        for ddl in [
+            "ALTER TABLE user_preferences ADD COLUMN country TEXT",
+            "ALTER TABLE user_preferences ADD COLUMN preferred_regions TEXT DEFAULT '[]'",
+            "ALTER TABLE user_auth ADD COLUMN display_name TEXT",
+        ]:
+            try:
+                conn.execute(ddl)
+                conn.commit()
+            except Exception:
+                pass
+        # Ensure other optional columns exist too
+        for col_ddl in [
+            "ALTER TABLE user_preferences ADD COLUMN experience_level TEXT DEFAULT ''",
+            "ALTER TABLE user_preferences ADD COLUMN style_risk_tolerance TEXT DEFAULT ''",
+            "ALTER TABLE user_preferences ADD COLUMN style_timeframe TEXT DEFAULT ''",
+            "ALTER TABLE user_preferences ADD COLUMN style_sector_focus TEXT DEFAULT '[]'",
+            "ALTER TABLE user_preferences ADD COLUMN trading_bio TEXT DEFAULT ''",
+            "ALTER TABLE user_preferences ADD COLUMN preferred_broker TEXT DEFAULT ''",
+        ]:
+            try:
+                conn.execute(col_ddl)
+                conn.commit()
+            except Exception:
+                pass
+
+        d = data.model_dump(exclude_none=True)
+        updated = []
+
+        # Fields that go to user_auth
+        AUTH_FIELDS = {"display_name"}
+        auth_updates, auth_params = [], []
+        for field in AUTH_FIELDS:
+            if field in d:
+                auth_updates.append(f"{field}=?")
+                auth_params.append(str(d[field])[:50] if d[field] else None)
+                updated.append(field)
+        if auth_updates:
+            auth_params.append(user_id)
+            conn.execute(f"UPDATE user_auth SET {', '.join(auth_updates)} WHERE user_id=?", auth_params)
+
+        # JSON list fields
+        JSON_FIELDS = {"tip_timeframes", "tip_markets", "tip_pattern_types",
+                       "selected_sectors", "style_sector_focus", "preferred_regions"}
+        # Scalar fields going to user_preferences
+        PREF_SCALAR = {"country", "timezone", "account_currency", "experience_level",
+                       "style_risk_tolerance", "style_timeframe", "trading_bio", "preferred_broker"}
+
+        pref_updates, pref_params = [], []
+        for field in PREF_SCALAR:
+            if field in d:
+                pref_updates.append(f"{field}=?")
+                val = d[field]
+                if field == "trading_bio":
+                    val = str(val)[:200]
+                elif isinstance(val, str):
+                    val = val[:100]
+                pref_params.append(val)
+                updated.append(field)
+        for field in JSON_FIELDS:
+            if field in d:
+                pref_updates.append(f"{field}=?")
+                pref_params.append(json.dumps(d[field]))
+                updated.append(field)
+
+        if pref_updates:
+            pref_params.append(user_id)
+            conn.execute(f"UPDATE user_preferences SET {', '.join(pref_updates)} WHERE user_id=?", pref_params)
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+    return {"updated": updated, "user_id": user_id}
 
 
 @router.delete("/users/{user_id}")
