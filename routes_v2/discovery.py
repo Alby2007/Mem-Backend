@@ -12,7 +12,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
-from middleware.fastapi_auth import user_path_auth
+from middleware.fastapi_auth import get_current_user, user_path_auth
 
 import extensions as ext
 from services.discovery_fleet import (
@@ -323,6 +323,140 @@ async def pf_calibration_obs(
             'outcome_breakdown': outcome_breakdown,
             'pattern_breakdown': pattern_breakdown,
             'observations': observations,
+        }
+    finally:
+        conn.close()
+
+
+# ── Ops Terminal Briefing ─────────────────────────────────────────────────────
+
+@router.get('/ops/briefing')
+async def ops_briefing(user_id: str = Depends(get_current_user)):
+    """Aggregated briefing for the Meridian Operations Terminal."""
+    _dev_gate(user_id)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        import json as _json
+        from datetime import datetime, timezone, timedelta
+
+        # ── Regime: KB facts for market, SPY, HYG, TLT ──────────────────
+        regime_rows = conn.execute(
+            """SELECT subject, predicate, object FROM facts
+               WHERE LOWER(subject) IN ('market','spy','hyg','tlt')
+                 AND predicate IN ('market_regime','signal_direction','last_price','price_regime')
+               ORDER BY timestamp DESC"""
+        ).fetchall()
+
+        regime = {'market_regime': '', 'signal_direction': ''}
+        proxy_data = {p: {} for p in ('spy', 'hyg', 'tlt')}
+        _seen = set()
+        for r in regime_rows:
+            subj, pred, obj = r['subject'].lower(), r['predicate'], r['object']
+            key = f'{subj}|{pred}'
+            if key in _seen:
+                continue
+            _seen.add(key)
+            if subj == 'market':
+                if pred == 'market_regime':
+                    regime['market_regime'] = obj
+                elif pred == 'signal_direction':
+                    regime['signal_direction'] = obj
+            elif subj in proxy_data:
+                proxy_data[subj][pred] = obj
+
+        for pn in ('spy', 'hyg', 'tlt'):
+            regime[pn] = {
+                'last_price': proxy_data[pn].get('last_price', ''),
+                'price_regime': proxy_data[pn].get('price_regime', ''),
+            }
+
+        # ── Overnight closes (last 12h) ─────────────────────────────────
+        cutoff_12h = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
+        ov = conn.execute(
+            """SELECT COUNT(*) as n,
+                      SUM(CASE WHEN pnl_r > 0 THEN 1 ELSE 0 END) as wins,
+                      ROUND(AVG(pnl_r), 3) as avg_r,
+                      ROUND(SUM(pnl_r), 1) as gross_r
+               FROM paper_positions
+               WHERE status IN ('t2_hit','t1_hit','stopped_out','closed')
+                 AND closed_at > ?
+                 AND (bot_id LIKE 'disc_%%' OR user_id = 'system_discovery')""",
+            (cutoff_12h,),
+        ).fetchone()
+        overnight = {
+            'closed_count': ov['n'] or 0,
+            'wins': ov['wins'] or 0,
+            'avg_r': float(ov['avg_r'] or 0),
+            'gross_r': float(ov['gross_r'] or 0),
+            'since_hours': 12,
+        }
+
+        # ── Fleet summary ────────────────────────────────────────────────
+        fleet_status = get_discovery_status(conn)
+        open_positions = fleet_status.get('open_positions', [])
+        _conv = {}
+        for op in open_positions:
+            ck = f"{op['ticker']}|{(op.get('direction') or '').lower()}"
+            if ck not in _conv:
+                _conv[ck] = {'ticker': op['ticker'], 'direction': op.get('direction', ''), 'bot_count': 0}
+            _conv[ck]['bot_count'] += 1
+        top_convergence = sorted(
+            [v for v in _conv.values() if v['bot_count'] >= 3],
+            key=lambda x: x['bot_count'], reverse=True,
+        )[:10]
+
+        fleet = {
+            'open_positions': len(open_positions),
+            'active_bots': fleet_status.get('active_bots', 0),
+            'top_convergence': top_convergence,
+        }
+
+        # ── Observatory ──────────────────────────────────────────────────
+        obs_row = conn.execute(
+            "SELECT run_at, findings_json FROM observatory_runs ORDER BY run_at DESC LIMIT 1"
+        ).fetchone()
+        observatory = {'last_run': '', 'findings_count': 0, 'last_findings': []}
+        if obs_row:
+            observatory['last_run'] = obs_row['run_at'] or ''
+            try:
+                findings = _json.loads(obs_row['findings_json'] or '[]')
+                observatory['findings_count'] = len(findings)
+                observatory['last_findings'] = [
+                    f.get('summary', f.get('title', '')) for f in findings[:5]
+                ] if isinstance(findings, list) else []
+            except Exception:
+                pass
+
+        # ── Pattern pool stats ───────────────────────────────────────────
+        pat = conn.execute(
+            """SELECT COUNT(*) as total_open,
+                      SUM(CASE WHEN quality_score >= 0.50 THEN 1 ELSE 0 END) as quality_medium,
+                      SUM(CASE WHEN quality_score <  0.50 THEN 1 ELSE 0 END) as quality_low
+               FROM pattern_signals
+               WHERE status NOT IN ('filled','broken','expired')"""
+        ).fetchone()
+        actionable = conn.execute(
+            """SELECT COUNT(*) FROM pattern_signals
+               WHERE status NOT IN ('filled','broken','expired')
+                 AND quality_score >= 0.50
+                 AND formed_at > ?""",
+            ((datetime.now(timezone.utc) - timedelta(days=5)).isoformat(),),
+        ).fetchone()[0]
+
+        patterns = {
+            'total_open': pat['total_open'] or 0,
+            'quality_medium': pat['quality_medium'] or 0,
+            'quality_low': pat['quality_low'] or 0,
+            'actionable': actionable or 0,
+        }
+
+        return {
+            'regime': regime,
+            'overnight': overnight,
+            'fleet': fleet,
+            'observatory': observatory,
+            'patterns': patterns,
         }
     finally:
         conn.close()
