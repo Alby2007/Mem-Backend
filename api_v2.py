@@ -488,6 +488,7 @@ _ALLOWED_ORIGIN_SUFFIXES = (
     ".trycloudflare.com",
     ".ngrok-free.app",
     ".ngrok.io",
+    ".pages.dev",
 )
 
 _CSRF_SAFE_METHODS = frozenset(["GET", "HEAD", "OPTIONS"])
@@ -509,7 +510,7 @@ def create_fastapi_app() -> FastAPI:
 
     # Dynamic CORS: reflect exact origin for allowed origins so credentials work
     _cors_allow_origins = list(_ALLOWED_ORIGINS)
-    _cors_allow_origins_regex = r"https://[a-z0-9\-]+\.trycloudflare\.com|https://[a-z0-9\-]+\.ngrok-free\.app|https://[a-z0-9\-]+\.ngrok\.io"
+    _cors_allow_origins_regex = r"https://[a-z0-9\-]+\.trycloudflare\.com|https://[a-z0-9\-]+\.ngrok-free\.app|https://[a-z0-9\-]+\.ngrok\.io|https://[a-z0-9\-]+\.pages\.dev"
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_allow_origins,
