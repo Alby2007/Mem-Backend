@@ -488,6 +488,21 @@ def _resolve_market_object(ticker: str, facts: dict, pats: list, pos: list) -> d
 
     obj_confidence = round(min(1.0, avg_quality * conv_weight + 0.1 * min(len(pats), 5)), 2)
 
+    # Primary direction — majority of open pattern directions
+    dir_counts: dict[str, int] = {}
+    for p in pats:
+        d = (p.get('direction') or '').lower()
+        if d:
+            dir_counts[d] = dir_counts.get(d, 0) + 1
+    primary_direction = max(dir_counts, key=dir_counts.get) if dir_counts else ''
+
+    # Numeric helpers for new enrichment fields
+    def _float(key, default=0.0):
+        try:
+            return float(facts.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
     return {
         'ticker': ticker,
         'last_price': facts.get('last_price', ''),
@@ -501,16 +516,35 @@ def _resolve_market_object(ticker: str, facts: dict, pats: list, pos: list) -> d
             {
                 'id': p.get('id'),
                 'type': p.get('pattern_type'),
+                'pattern_type': p.get('pattern_type'),
                 'tf': p.get('timeframe'),
+                'timeframe': p.get('timeframe'),
                 'quality': float(p.get('quality_score') or 0),
+                'quality_score': float(p.get('quality_score') or 0),
                 'direction': p.get('direction', ''),
+                'zone_high': p.get('zone_high'),
+                'zone_low': p.get('zone_low'),
             }
             for p in pats
         ],
+        'primary_direction': primary_direction,
         'bot_consensus': {'bearish': bear_count, 'bullish': bull_count},
         'regime': facts.get('market_regime', ''),
         'object_confidence': obj_confidence,
         'last_verified': facts.get('_latest_ts', ''),
+        # ── Enrichment fields (ATLAS + FORGE) ──
+        'upside_pct': _float('upside_pct'),
+        'auto_thesis': facts.get('auto_thesis', ''),
+        'auto_thesis_score': _float('auto_thesis_score'),
+        'macro_confirmation': facts.get('macro_confirmation', 'no_data'),
+        'pattern_decay_pct': _float('pattern_decay_pct'),
+        'pattern_hours_remaining': _float('pattern_hours_remaining'),
+        'volatility_regime': facts.get('volatility_regime', ''),
+        'signal_quality': facts.get('signal_quality', ''),
+        'thesis_score': _float('thesis_score'),
+        'institutional_flow': facts.get('institutional_flow', ''),
+        'best_regime': facts.get('best_regime', ''),
+        'worst_regime': facts.get('worst_regime', ''),
     }
 
 
@@ -522,7 +556,7 @@ def _bulk_resolve(conn) -> list[dict]:
                   zone_high, zone_low, kb_conviction, kb_regime, kb_signal_dir
            FROM pattern_signals
            WHERE status NOT IN ('filled','broken','expired')
-             AND quality_score >= 0.50"""
+             AND quality_score >= 0.35"""
     ).fetchall()
 
     patterns_by_ticker: dict[str, list] = {}
@@ -678,5 +712,368 @@ async def get_corpus_bulk(current_user: str = Depends(get_current_user)):
         _corpus_cache['data'] = objects
         _corpus_cache['ts'] = now
         return {'objects': objects, 'cached': False}
+    finally:
+        conn.close()
+
+
+# ── FORGE Pipeline ────────────────────────────────────────────────────────────
+
+import json as _json
+from datetime import datetime as _dt, timezone as _tz
+
+
+def _score_pattern_for_user(pat: dict, facts: dict, user_prefs: dict, pipeline_tickers: set) -> tuple:
+    """Score a single pattern against user preferences. Returns (score, [reason_tags])."""
+    ticker = pat.get('ticker', '')
+    if ticker.upper() in pipeline_tickers:
+        return (-999, [])
+
+    score = 0.0
+    reasons: list[str] = []
+
+    # Base quality (0-30)
+    q = float(pat.get('quality_score') or 0)
+    score += q * 30
+
+    # Timeframe match (0-20)
+    user_tfs = []
+    raw_tfs = user_prefs.get('tip_timeframes')
+    if isinstance(raw_tfs, str):
+        try:
+            user_tfs = _json.loads(raw_tfs)
+        except Exception:
+            pass
+    elif isinstance(raw_tfs, list):
+        user_tfs = raw_tfs
+    pat_tf = pat.get('timeframe', '')
+    if pat_tf in user_tfs:
+        score += 20
+        reasons.append('timeframe match')
+    elif any(tf in pat_tf for tf in user_tfs):
+        score += 10
+
+    # Macro alignment (0-15)
+    macro = facts.get('macro_confirmation', 'no_data')
+    macro_pts = {'confirmed': 15, 'partial': 8, 'unconfirmed': 2, 'no_data': 0}.get(macro, 0)
+    score += macro_pts
+    if macro_pts >= 8:
+        reasons.append('macro aligned')
+
+    # Thesis alignment (0-15 / -10)
+    auto_thesis = facts.get('auto_thesis', '')
+    pat_dir = (pat.get('direction') or '').lower()
+    if auto_thesis and auto_thesis.lower() == pat_dir:
+        score += 15
+        reasons.append('thesis aligned')
+    elif auto_thesis and auto_thesis.lower() != pat_dir:
+        score -= 10
+
+    # Freshness penalty (0 to -15)
+    try:
+        decay = float(facts.get('pattern_decay_pct', 0))
+    except (TypeError, ValueError):
+        decay = 0.0
+    score -= decay * 15
+
+    # Catalyst present (0-10)
+    if facts.get('catalyst'):
+        score += 10
+        reasons.append('catalyst')
+
+    return (round(score, 2), reasons)
+
+
+def _get_pipeline_tickers(conn, user_id: str) -> set:
+    """Return set of uppercase tickers already in user's pipeline."""
+    from users.user_store import _ensure_tip_followups_table
+    _ensure_tip_followups_table(conn)
+    rows = conn.execute(
+        "SELECT DISTINCT UPPER(ticker) FROM tip_followups "
+        "WHERE user_id = ? AND status IN ('watching','staged','active')",
+        (user_id,),
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def _detected_for_user(conn, user_id: str, limit: int = 15) -> list[dict]:
+    """Score all open patterns for a user and return top N as Market Objects."""
+    # User prefs
+    try:
+        prow = conn.execute(
+            "SELECT tip_timeframes FROM user_preferences WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        user_prefs = {'tip_timeframes': prow[0] if prow else None}
+    except Exception:
+        user_prefs = {}
+
+    pipeline_tickers = _get_pipeline_tickers(conn, user_id)
+
+    # All open patterns
+    pat_rows = conn.execute(
+        """SELECT id, ticker, pattern_type, direction, timeframe, quality_score,
+                  zone_high, zone_low, kb_conviction, kb_regime, kb_signal_dir
+           FROM pattern_signals
+           WHERE status NOT IN ('filled','broken','expired')
+             AND quality_score >= 0.35"""
+    ).fetchall()
+
+    # Group by ticker
+    pats_by_ticker: dict[str, list] = {}
+    for r in pat_rows:
+        pats_by_ticker.setdefault(r['ticker'], []).append(dict(r))
+
+    # Facts for all tickers
+    all_tickers = set(pats_by_ticker.keys())
+    if not all_tickers:
+        return []
+    placeholders = ','.join('?' for _ in all_tickers)
+    fact_rows = conn.execute(
+        f"SELECT subject, predicate, object FROM facts WHERE UPPER(subject) IN ({placeholders}) ORDER BY timestamp DESC",
+        [t.upper() for t in all_tickers],
+    ).fetchall()
+    facts_by_ticker: dict[str, dict] = {}
+    seen: set[str] = set()
+    for r in fact_rows:
+        subj = r['subject'].upper()
+        pred = r['predicate']
+        key = f'{subj}|{pred}'
+        if key in seen:
+            continue
+        seen.add(key)
+        facts_by_ticker.setdefault(subj, {})[pred] = r['object']
+
+    # Score each pattern and pick top N
+    scored: list[tuple] = []
+    for ticker, pats in pats_by_ticker.items():
+        facts = facts_by_ticker.get(ticker.upper(), {})
+        for pat in pats:
+            s, reasons = _score_pattern_for_user(pat, facts, user_prefs, pipeline_tickers)
+            if s <= -999:
+                continue
+            scored.append((s, reasons, ticker, pat, facts))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = scored[:limit]
+
+    # Build Market Objects for the top results
+    results = []
+    for s, reasons, ticker, pat, facts in top:
+        obj = _resolve_market_object(
+            ticker,
+            facts,
+            pats_by_ticker.get(ticker, []),
+            [],  # no bot positions needed for detected
+        )
+        obj['_score'] = s
+        obj['_reasons'] = reasons
+        results.append(obj)
+
+    return results
+
+
+class PipelineWatchRequest(BaseModel):
+    pattern_id: int
+    ticker: str
+
+
+class PipelineStageRequest(BaseModel):
+    stage: str
+    position_size: float | None = None
+    note: str | None = None
+
+
+@router.get('/ops/pipeline/detected')
+async def get_pipeline_detected(current_user: str = Depends(get_current_user)):
+    """Personalised top-15 pattern suggestions for FORGE DETECTED column."""
+    _dev_gate(current_user)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        return {'detected': _detected_for_user(conn, current_user)}
+    finally:
+        conn.close()
+
+
+@router.get('/ops/pipeline')
+async def get_pipeline(current_user: str = Depends(get_current_user)):
+    """All six FORGE pipeline columns in one call."""
+    _dev_gate(current_user)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        from users.user_store import _ensure_tip_followups_table
+        _ensure_tip_followups_table(conn)
+
+        uid = current_user
+
+        def _followup_rows(where: str, params: tuple = ()) -> list[dict]:
+            rows = conn.execute(
+                f"""SELECT id, ticker, direction, entry_price, stop_loss,
+                           target_1, target_2, target_3, status, pattern_type,
+                           timeframe, opened_at, closed_at, position_size,
+                           user_note, position_source, pattern_id,
+                           regime_at_entry, conviction_at_entry, expires_at
+                    FROM tip_followups
+                    WHERE user_id = ? AND {where}
+                    ORDER BY opened_at DESC""",
+                (uid,) + params,
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+        watching = _followup_rows("status = 'watching'")
+        staged = _followup_rows("status = 'staged'")
+        active = _followup_rows("status = 'active' AND position_source IN ('manual','pipeline')")
+        assessing = _followup_rows(
+            "status IN ('closed','stopped_out','hit_t1','hit_t2') AND (user_note IS NULL OR user_note = '')"
+        )
+        complete = conn.execute(
+            """SELECT id, ticker, direction, entry_price, stop_loss,
+                      target_1, target_2, target_3, status, pattern_type,
+                      timeframe, opened_at, closed_at, position_size,
+                      user_note, position_source, pattern_id,
+                      regime_at_entry, conviction_at_entry, expires_at
+               FROM tip_followups
+               WHERE user_id = ? AND status = 'complete'
+               ORDER BY closed_at DESC LIMIT 10""",
+            (uid,),
+        ).fetchall()
+        complete = [dict(r) for r in complete]
+
+        detected = _detected_for_user(conn, uid)
+
+        return {
+            'detected': detected,
+            'watching': watching,
+            'staged': staged,
+            'active': active,
+            'assessing': assessing,
+            'complete': complete,
+        }
+    finally:
+        conn.close()
+
+
+@router.post('/ops/pipeline/watch')
+async def pipeline_watch(data: PipelineWatchRequest, current_user: str = Depends(get_current_user)):
+    """Add a pattern to FORGE pipeline as WATCHING."""
+    _dev_gate(current_user)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        # Look up pattern details
+        pat = conn.execute(
+            """SELECT id, ticker, pattern_type, direction, timeframe, quality_score,
+                      zone_high, zone_low, kb_conviction, kb_regime
+               FROM pattern_signals WHERE id = ?""",
+            (data.pattern_id,),
+        ).fetchone()
+        if not pat:
+            raise HTTPException(404, detail='Pattern not found')
+
+        pat = dict(pat)
+        entry = pat.get('zone_high') or pat.get('zone_low')
+        stop = pat.get('zone_low') if pat.get('direction', '').lower() == 'bullish' else pat.get('zone_high')
+
+        from users.user_store import upsert_tip_followup
+        row_id, _ = upsert_tip_followup(
+            ext.DB_PATH,
+            user_id=current_user,
+            ticker=data.ticker.upper(),
+            direction=pat.get('direction', 'bullish'),
+            entry_price=float(entry) if entry else None,
+            stop_loss=float(stop) if stop else None,
+            target_1=None,
+            target_2=None,
+            pattern_type=pat.get('pattern_type'),
+            timeframe=pat.get('timeframe'),
+            zone_low=float(pat['zone_low']) if pat.get('zone_low') else None,
+            zone_high=float(pat['zone_high']) if pat.get('zone_high') else None,
+            regime_at_entry=pat.get('kb_regime'),
+            conviction_at_entry=pat.get('kb_conviction'),
+            initial_status='watching',
+        )
+
+        # Set position_source and pattern_id
+        conn2 = sqlite3.connect(ext.DB_PATH, timeout=10)
+        try:
+            conn2.execute(
+                "UPDATE tip_followups SET position_source='pipeline', pattern_id=? WHERE id=?",
+                (data.pattern_id, row_id),
+            )
+            conn2.commit()
+        finally:
+            conn2.close()
+
+        return {'id': row_id, 'ticker': data.ticker.upper(), 'status': 'watching'}
+    finally:
+        conn.close()
+
+
+@router.patch('/ops/pipeline/{followup_id}/stage')
+async def pipeline_stage(followup_id: int, data: PipelineStageRequest, current_user: str = Depends(get_current_user)):
+    """Advance a pipeline item's stage."""
+    _dev_gate(current_user)
+
+    valid_transitions = {
+        'staged': ['watching'],
+        'complete': ['closed', 'stopped_out', 'hit_t1', 'hit_t2'],
+    }
+    allowed_from = valid_transitions.get(data.stage)
+    if not allowed_from:
+        raise HTTPException(400, detail=f"Invalid target stage: {data.stage}")
+
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    try:
+        from users.user_store import _ensure_tip_followups_table
+        _ensure_tip_followups_table(conn)
+        row = conn.execute(
+            "SELECT id, status FROM tip_followups WHERE id = ? AND user_id = ?",
+            (followup_id, current_user),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, detail='Pipeline item not found')
+        current_status = row[1]
+        if current_status not in allowed_from:
+            raise HTTPException(400, detail=f"Cannot transition from '{current_status}' to '{data.stage}'")
+
+        updates = ['status = ?']
+        params: list = [data.stage]
+        if data.position_size is not None:
+            updates.append('position_size = ?')
+            params.append(data.position_size)
+        if data.note is not None:
+            updates.append('user_note = ?')
+            params.append(data.note[:500])
+        if data.stage == 'complete':
+            from datetime import datetime, timezone
+            updates.append('closed_at = ?')
+            params.append(datetime.now(timezone.utc).isoformat())
+
+        params.append(followup_id)
+        conn.execute(
+            f"UPDATE tip_followups SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+        return {'id': followup_id, 'stage': data.stage}
+    finally:
+        conn.close()
+
+
+@router.delete('/ops/pipeline/{followup_id}')
+async def pipeline_remove(followup_id: int, current_user: str = Depends(get_current_user)):
+    """Remove an item from the FORGE pipeline."""
+    _dev_gate(current_user)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    try:
+        from users.user_store import _ensure_tip_followups_table
+        _ensure_tip_followups_table(conn)
+        conn.execute(
+            "DELETE FROM tip_followups WHERE id = ? AND user_id = ? AND position_source = 'pipeline'",
+            (followup_id, current_user),
+        )
+        conn.commit()
+        return {'deleted': followup_id}
     finally:
         conn.close()
