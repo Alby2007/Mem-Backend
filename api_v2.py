@@ -477,6 +477,8 @@ _ALLOWED_ORIGINS = frozenset([
     "https://trading-galaxy.uk",
     "https://www.trading-galaxy.uk",
     "https://app.trading-galaxy.uk",
+    "https://meridian-operations-terminal.uk",
+    "https://www.meridian-operations-terminal.uk",
     "http://localhost:3000",
     "http://localhost:5173",
     "http://localhost:8080",
