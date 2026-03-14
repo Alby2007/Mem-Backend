@@ -460,3 +460,223 @@ async def ops_briefing(user_id: str = Depends(get_current_user)):
         }
     finally:
         conn.close()
+
+
+# ── CORPUS — Market Objects ───────────────────────────────────────────────────
+
+import time as _time
+
+_corpus_cache: dict = {'data': None, 'ts': 0}
+_CORPUS_TTL = 300  # 5 minutes
+
+
+def _resolve_market_object(ticker: str, facts: dict, pats: list, pos: list) -> dict:
+    """Build a single Market Object from pre-fetched data."""
+
+    bear_count = sum(1 for p in pos if (p.get('direction') or '').lower() in ('bearish', 'short'))
+    bull_count = len(pos) - bear_count
+
+    # Conviction weight mapping
+    conv_map = {'high': 1.0, 'medium': 0.7, 'low': 0.4}
+    conviction = facts.get('conviction_tier', '')
+    conv_weight = conv_map.get(conviction, 0.5)
+
+    avg_quality = 0
+    if pats:
+        quals = [float(p.get('quality_score') or 0) for p in pats]
+        avg_quality = sum(quals) / len(quals) if quals else 0
+
+    obj_confidence = round(min(1.0, avg_quality * conv_weight + 0.1 * min(len(pats), 5)), 2)
+
+    return {
+        'ticker': ticker,
+        'last_price': facts.get('last_price', ''),
+        'price_regime': facts.get('price_regime', ''),
+        'signal_direction': facts.get('signal_direction', ''),
+        'conviction_tier': conviction,
+        'macro_confirmed': facts.get('macro_confirmed', '') == 'true',
+        'catalyst': facts.get('catalyst', ''),
+        'sector': facts.get('sector', ''),
+        'open_patterns': [
+            {
+                'id': p.get('id'),
+                'type': p.get('pattern_type'),
+                'tf': p.get('timeframe'),
+                'quality': float(p.get('quality_score') or 0),
+                'direction': p.get('direction', ''),
+            }
+            for p in pats
+        ],
+        'bot_consensus': {'bearish': bear_count, 'bullish': bull_count},
+        'regime': facts.get('market_regime', ''),
+        'object_confidence': obj_confidence,
+        'last_verified': facts.get('_latest_ts', ''),
+    }
+
+
+def _bulk_resolve(conn) -> list[dict]:
+    """Resolve all tickers with open patterns into Market Objects."""
+    # 1. All tickers with open patterns
+    pat_rows = conn.execute(
+        """SELECT id, ticker, pattern_type, direction, timeframe, quality_score,
+                  zone_high, zone_low, kb_conviction, kb_regime, kb_signal_dir
+           FROM pattern_signals
+           WHERE status NOT IN ('filled','broken','expired')
+             AND quality_score >= 0.50"""
+    ).fetchall()
+
+    patterns_by_ticker: dict[str, list] = {}
+    all_tickers: set[str] = set()
+    for r in pat_rows:
+        t = r['ticker']
+        all_tickers.add(t)
+        patterns_by_ticker.setdefault(t, []).append(dict(r))
+
+    if not all_tickers:
+        return []
+
+    # 2. Facts for those tickers
+    placeholders = ','.join('?' for _ in all_tickers)
+    fact_rows = conn.execute(
+        f"""SELECT subject, predicate, object, timestamp FROM facts
+            WHERE UPPER(subject) IN ({placeholders})
+            ORDER BY timestamp DESC""",
+        [t.upper() for t in all_tickers],
+    ).fetchall()
+
+    facts_by_ticker: dict[str, dict] = {}
+    seen_keys: set[str] = set()
+    for r in fact_rows:
+        subj = r['subject'].upper()
+        pred = r['predicate']
+        key = f'{subj}|{pred}'
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        bucket = facts_by_ticker.setdefault(subj, {})
+        bucket[pred] = r['object']
+        if '_latest_ts' not in bucket:
+            bucket['_latest_ts'] = r['timestamp'] or ''
+
+    # Also add market-level regime to each ticker's facts
+    market_facts = conn.execute(
+        """SELECT predicate, object FROM facts
+           WHERE LOWER(subject) = 'market'
+             AND predicate IN ('market_regime','signal_direction')
+           ORDER BY timestamp DESC LIMIT 2"""
+    ).fetchall()
+    market_regime_data = {}
+    for mf in market_facts:
+        if mf['predicate'] not in market_regime_data:
+            market_regime_data[mf['predicate']] = mf['object']
+
+    for t in all_tickers:
+        bucket = facts_by_ticker.setdefault(t.upper(), {})
+        if 'market_regime' not in bucket:
+            bucket['market_regime'] = market_regime_data.get('market_regime', '')
+
+    # 3. Bot positions for consensus
+    pos_rows = conn.execute(
+        f"""SELECT ticker, direction FROM paper_positions
+            WHERE status = 'open'
+              AND UPPER(ticker) IN ({placeholders})""",
+        [t.upper() for t in all_tickers],
+    ).fetchall()
+
+    positions_by_ticker: dict[str, list] = {}
+    for r in pos_rows:
+        positions_by_ticker.setdefault(r['ticker'].upper(), []).append(dict(r))
+
+    # 4. Build objects
+    objects = []
+    for t in sorted(all_tickers):
+        obj = _resolve_market_object(
+            t,
+            facts_by_ticker.get(t.upper(), {}),
+            patterns_by_ticker.get(t, []),
+            positions_by_ticker.get(t.upper(), [])
+        )
+        objects.append(obj)
+
+    return objects
+
+
+@router.get('/ops/corpus/{ticker}')
+async def get_corpus_ticker(ticker: str, current_user: str = Depends(get_current_user)):
+    """Single Market Object for a ticker — resolved from KB atoms, patterns, positions."""
+    _dev_gate(current_user)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        # Patterns
+        pat_rows = conn.execute(
+            """SELECT id, ticker, pattern_type, direction, timeframe, quality_score,
+                      zone_high, zone_low, kb_conviction, kb_regime, kb_signal_dir
+               FROM pattern_signals
+               WHERE UPPER(ticker) = ?
+                 AND status NOT IN ('filled','broken','expired')""",
+            (ticker.upper(),),
+        ).fetchall()
+        patterns_by_ticker = {ticker.upper(): [dict(r) for r in pat_rows]}
+
+        # Facts
+        fact_rows = conn.execute(
+            """SELECT subject, predicate, object, timestamp FROM facts
+               WHERE UPPER(subject) = ?
+               ORDER BY timestamp DESC""",
+            (ticker.upper(),),
+        ).fetchall()
+        facts: dict[str, str] = {}
+        for r in fact_rows:
+            if r['predicate'] not in facts:
+                facts[r['predicate']] = r['object']
+                if '_latest_ts' not in facts:
+                    facts['_latest_ts'] = r['timestamp'] or ''
+
+        # Market regime
+        mr = conn.execute(
+            """SELECT predicate, object FROM facts
+               WHERE LOWER(subject) = 'market'
+                 AND predicate IN ('market_regime','signal_direction')
+               ORDER BY timestamp DESC LIMIT 2"""
+        ).fetchall()
+        for mf in mr:
+            if mf['predicate'] not in facts:
+                facts[mf['predicate']] = mf['object']
+
+        # Bot positions
+        pos_rows = conn.execute(
+            """SELECT ticker, direction FROM paper_positions
+               WHERE status = 'open' AND UPPER(ticker) = ?""",
+            (ticker.upper(),),
+        ).fetchall()
+        positions_by_ticker = {ticker.upper(): [dict(r) for r in pos_rows]}
+
+        return _resolve_market_object(
+            ticker.upper(),
+            facts,
+            patterns_by_ticker.get(ticker.upper(), []),
+            positions_by_ticker.get(ticker.upper(), []),
+        )
+    finally:
+        conn.close()
+
+
+@router.get('/ops/corpus')
+async def get_corpus_bulk(current_user: str = Depends(get_current_user)):
+    """All active Market Objects (tickers with actionable patterns). 5-min cache."""
+    _dev_gate(current_user)
+
+    now = _time.time()
+    if _corpus_cache['data'] is not None and (now - _corpus_cache['ts']) < _CORPUS_TTL:
+        return {'objects': _corpus_cache['data'], 'cached': True}
+
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        objects = _bulk_resolve(conn)
+        _corpus_cache['data'] = objects
+        _corpus_cache['ts'] = now
+        return {'objects': objects, 'cached': False}
+    finally:
+        conn.close()
