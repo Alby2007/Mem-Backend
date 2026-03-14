@@ -52,12 +52,13 @@ async def markets_chart(
     pat_label  = (pattern_type or "").replace("_", " ").upper() or "ZONE"
     dir_colour = "#22c55e" if (direction or "").lower().startswith("bull") else ("#ef4444" if (direction or "").lower().startswith("bear") else "#f59e0b")
     zone_fill = fill_color if fill_color else "rgba(245,158,11,0.13)"
-    zone_border_colour = fill_color if fill_color else (dir_colour + "aa")
+    # Border always uses the direction colour (or a solid version of fill_color)
+    zone_border_colour = dir_colour
 
     zone_overlay_html = ""
     if has_zone:
         zone_overlay_html = f"""
-<canvas id="ov" style="position:fixed;top:0;left:0;pointer-events:none;z-index:10;"></canvas>
+<canvas id="ov" style="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:9999;"></canvas>
 <button id="ov-toggle" title="Toggle zone overlay" style="
   position:fixed;bottom:12px;right:12px;z-index:20;
   background:#1a1a2a;border:1px solid #f59e0b44;color:#f59e0b;
@@ -155,23 +156,36 @@ window.addEventListener('message', e => {{
   }}
 }});
 
-// Fallback: estimate price range from the zone itself (±40% padding)
-// so the overlay shows immediately even without TV postMessage
-setTimeout(() => {{
-  if (priceMin === null && ZONE_HIGH !== null) {{
-    const mid  = (ZONE_HIGH + ZONE_LOW) / 2;
-    const span = Math.max(ZONE_HIGH - ZONE_LOW, mid * 0.05);
-    priceMin   = ZONE_LOW  - span * 3;
-    priceMax   = ZONE_HIGH + span * 3;
-    const el   = document.getElementById('tv');
-    if (el) {{
-      const r = el.getBoundingClientRect();
-      chartTop    = r.top    + 40;   // approx toolbar height
-      chartBottom = r.bottom - 20;   // approx scale padding
-    }}
-    drawOverlay();
+// Fallback: estimate price range from the zone itself (±300% padding)
+// so the overlay shows immediately even without TV postMessage.
+// Retries every second for up to 8s to wait for TradingView to fully render.
+let _fallbackAttempts = 0;
+function _fallbackDraw() {{
+  if (priceMin !== null) return;  // postMessage already provided range
+  if (ZONE_HIGH === null) return;
+  _fallbackAttempts++;
+  const mid  = (ZONE_HIGH + ZONE_LOW) / 2;
+  const span = Math.max(ZONE_HIGH - ZONE_LOW, mid * 0.04);
+  priceMin   = ZONE_LOW  - span * 3.5;
+  priceMax   = ZONE_HIGH + span * 3.5;
+  // TradingView widget renders an <iframe> inside #tv; use that for bounds
+  const tvDiv = document.getElementById('tv');
+  const tvIframe = tvDiv ? tvDiv.querySelector('iframe') : null;
+  const el = tvIframe || tvDiv;
+  if (el) {{
+    const r = el.getBoundingClientRect();
+    // TV toolbar ~50px top, bottom scale ~30px, right price axis ~65px
+    chartTop    = r.top    + 50;
+    chartBottom = r.bottom - 30;
+  }} else if (_fallbackAttempts < 8) {{
+    priceMin = null;  // reset and retry
+    setTimeout(_fallbackDraw, 1000);
+    return;
   }}
-}}, 2500);
+  drawOverlay();
+}}
+setTimeout(_fallbackDraw, 1500);
+setTimeout(() => {{ if (priceMin === null) _fallbackDraw(); }}, 3500);
 
 window.addEventListener('resize', drawOverlay);
 """
