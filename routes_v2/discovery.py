@@ -717,6 +717,40 @@ import json as _json
 from datetime import datetime as _dt, timezone as _tz
 
 
+def _parse_json_list(val) -> list:
+    if not val:
+        return []
+    try:
+        return _json.loads(val) if isinstance(val, str) else (val if isinstance(val, list) else [])
+    except Exception:
+        return []
+
+
+COUNTRY_TO_REGION: dict = {
+    'GB': 'UK',  'IE': 'UK',
+    'US': 'US',  'CA': 'US',
+    'DE': 'Europe', 'FR': 'Europe', 'NL': 'Europe', 'IT': 'Europe',
+    'ES': 'Europe', 'SE': 'Europe', 'CH': 'Europe', 'AT': 'Europe', 'BE': 'Europe',
+    'NO': 'Europe', 'DK': 'Europe', 'FI': 'Europe', 'PT': 'Europe', 'PL': 'Europe',
+    'JP': 'Japan',
+    'HK': 'HK',  'CN': 'HK',  'SG': 'HK',  'TW': 'HK',
+    'AU': 'Australia', 'NZ': 'Australia',
+    'IN': 'India',
+    'KR': 'Korea',
+}
+
+
+def _ticker_region(ticker: str) -> str:
+    if ticker.endswith('.L'):  return 'UK'
+    if ticker.endswith('.T'):  return 'Japan'
+    if ticker.endswith(('.HK', '.TW')): return 'HK'
+    if ticker.endswith('.AX'): return 'Australia'
+    if ticker.endswith(('.KS', '.KQ')): return 'Korea'
+    if ticker.endswith(('.NS', '.BO')): return 'India'
+    if ticker.endswith(('.DE', '.PA', '.AS', '.MI', '.MC', '.ST', '.OL', '.CO', '.HE')): return 'Europe'
+    return 'US'
+
+
 def _score_pattern_for_user(pat: dict, facts: dict, user_prefs: dict, pipeline_tickers: set) -> tuple:
     """Score a single pattern against user preferences. Returns (score, [reason_tags])."""
     ticker = pat.get('ticker', '')
@@ -726,54 +760,115 @@ def _score_pattern_for_user(pat: dict, facts: dict, user_prefs: dict, pipeline_t
     score = 0.0
     reasons: list[str] = []
 
-    # Base quality (0-30)
+    # ── Base quality (0–30) ──────────────────────────────────────
     q = float(pat.get('quality_score') or 0)
     score += q * 30
 
-    # Timeframe match (0-20)
-    user_tfs = []
-    raw_tfs = user_prefs.get('tip_timeframes')
-    if isinstance(raw_tfs, str):
-        try:
-            user_tfs = _json.loads(raw_tfs)
-        except Exception:
-            pass
-    elif isinstance(raw_tfs, list):
-        user_tfs = raw_tfs
+    # ── Timeframe match (0–20) ───────────────────────────────────
+    user_tfs = user_prefs.get('timeframes', [])
     pat_tf = pat.get('timeframe', '')
     if pat_tf in user_tfs:
         score += 20
-        reasons.append('timeframe match')
+        reasons.append(f'⏱ {pat_tf}')
     elif any(tf in pat_tf for tf in user_tfs):
         score += 10
 
-    # Macro alignment (0-15)
+    # ── Pattern type match (0–15) ────────────────────────────────
+    user_patterns = user_prefs.get('pattern_types', [])
+    pat_type = pat.get('pattern_type', '')
+    if user_patterns and pat_type in user_patterns:
+        score += 15
+        reasons.append(f'⬡ {pat_type.replace("_"," ")}')
+
+    # ── Sector match (0–15) ──────────────────────────────────────
+    user_sectors = [s.lower() for s in user_prefs.get('sectors', [])]
+    ticker_sector = (facts.get('sector') or '').lower()
+    if user_sectors and ticker_sector:
+        sector_hit = any(
+            us in ticker_sector or ticker_sector in us
+            for us in user_sectors
+        )
+        if sector_hit:
+            score += 15
+            reasons.append(f'◈ {ticker_sector}')
+
+    # ── Region / home country (0–20) ─────────────────────────────
+    ticker_region = _ticker_region(ticker)
+    user_regions = user_prefs.get('regions', [])
+    country = (user_prefs.get('country') or '').upper()
+    home_region = COUNTRY_TO_REGION.get(country, '')
+
+    if home_region and ticker_region == home_region:
+        score += 20
+        reasons.append('🏠 home market')
+    elif user_regions and ticker_region in user_regions:
+        score += 12
+        reasons.append('◎ preferred region')
+    elif not user_regions and not home_region:
+        if ticker_region in ('US', 'UK'):
+            score += 5
+
+    # ── Macro alignment (0–15) ───────────────────────────────────
     macro = facts.get('macro_confirmation', 'no_data')
     macro_pts = {'confirmed': 15, 'partial': 8, 'unconfirmed': 2, 'no_data': 0}.get(macro, 0)
     score += macro_pts
     if macro_pts >= 8:
-        reasons.append('macro aligned')
+        reasons.append('✦ macro')
 
-    # Thesis alignment (0-15 / -10)
-    auto_thesis = facts.get('auto_thesis', '')
+    # ── Thesis alignment (0–15 / –10) ────────────────────────────
+    auto_thesis = (facts.get('auto_thesis') or '').lower()
     pat_dir = (pat.get('direction') or '').lower()
-    if auto_thesis and auto_thesis.lower() == pat_dir:
+    if auto_thesis and auto_thesis == pat_dir:
         score += 15
-        reasons.append('thesis aligned')
-    elif auto_thesis and auto_thesis.lower() != pat_dir:
+        reasons.append('▲ thesis')
+    elif auto_thesis and auto_thesis != pat_dir:
         score -= 10
 
-    # Freshness penalty (0 to -15)
+    # ── Risk tolerance ───────────────────────────────────────────
+    risk = user_prefs.get('risk_tolerance', 'moderate')
+    conviction = (facts.get('conviction_tier') or '').lower()
+    if risk == 'conservative':
+        if conviction == 'high':
+            score += 10
+            reasons.append('★ high conv')
+        elif conviction in ('low', 'avoid'):
+            score -= 15
+    elif risk == 'moderate':
+        if conviction == 'high':
+            score += 5
+        elif conviction == 'avoid':
+            score -= 10
+    # aggressive: no conviction penalty
+
+    # ── Style timeframe alignment (0–8 / –5) ────────────────────
+    style = user_prefs.get('style_timeframe', 'swing')
+    _tf_map = {
+        'scalp':    ['1m', '5m', '15m'],
+        'intraday': ['15m', '30m', '1h'],
+        'swing':    ['1h', '4h', '1d'],
+        'position': ['1d', '1w'],
+    }
+    style_tfs = _tf_map.get(style, [])
+    if pat_tf in style_tfs:
+        score += 8
+    elif style_tfs and pat_tf not in style_tfs:
+        score -= 5
+
+    # ── Freshness penalty (0 to –15) ─────────────────────────────
     try:
-        decay = float(facts.get('pattern_decay_pct', 0))
+        decay = float(facts.get('pattern_decay_pct') or 0)
     except (TypeError, ValueError):
         decay = 0.0
     score -= decay * 15
 
-    # Catalyst present (0-10)
+    # ── Catalyst bonus (0–10) ────────────────────────────────────
     if facts.get('catalyst'):
         score += 10
-        reasons.append('catalyst')
+        reasons.append('⚡ catalyst')
+
+    # ── KB avoid penalty ─────────────────────────────────────────
+    if conviction == 'avoid':
+        score -= 20
 
     return (round(score, 2), reasons)
 
@@ -792,13 +887,30 @@ def _get_pipeline_tickers(conn, user_id: str) -> set:
 
 def _detected_for_user(conn, user_id: str, limit: int = 15) -> list[dict]:
     """Score all open patterns for a user and return top N as Market Objects."""
-    # User prefs
+    # User prefs — read all profile fields
     try:
         prow = conn.execute(
-            "SELECT tip_timeframes FROM user_preferences WHERE user_id = ?",
+            """SELECT tip_timeframes, tip_pattern_types, selected_sectors,
+                      style_sector_focus, preferred_regions, country,
+                      style_risk_tolerance, style_timeframe, tip_markets,
+                      account_currency
+               FROM user_preferences WHERE user_id = ?""",
             (user_id,),
         ).fetchone()
-        user_prefs = {'tip_timeframes': prow[0] if prow else None}
+        if prow:
+            user_prefs = {
+                'timeframes':     _parse_json_list(prow[0]),
+                'pattern_types':  _parse_json_list(prow[1]),
+                'sectors':        _parse_json_list(prow[2]) or _parse_json_list(prow[3]),
+                'regions':        _parse_json_list(prow[4]),
+                'country':        prow[5] or '',
+                'risk_tolerance': prow[6] or 'moderate',
+                'style_timeframe':prow[7] or 'swing',
+                'markets':        _parse_json_list(prow[8]),
+                'currency':       prow[9] or 'USD',
+            }
+        else:
+            user_prefs = {}
     except Exception:
         user_prefs = {}
 
@@ -849,7 +961,16 @@ def _detected_for_user(conn, user_id: str, limit: int = 15) -> list[dict]:
             scored.append((s, reasons, ticker, pat, facts))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    top = scored[:limit]
+    # Deduplicate by ticker — keep best-scoring pattern per ticker
+    seen_tickers: set = set()
+    top = []
+    for item in scored:
+        t = item[2].upper()
+        if t not in seen_tickers:
+            seen_tickers.add(t)
+            top.append(item)
+        if len(top) >= limit:
+            break
 
     # Build Market Objects for the top results
     results = []
