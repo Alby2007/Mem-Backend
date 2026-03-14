@@ -77,6 +77,8 @@ const ZONE_BORDER_COLOUR = {repr(zone_border_colour)};
 let zoneVisible = true;
 let tvFrame     = null;   // TradingView iframe element
 let priceMin    = null, priceMax = null, chartTop = 0, chartBottom = 0;
+// Safe default — full viewport height until TV iframe bounds are known
+function _safeChartBottom() {{ return chartBottom > chartTop + 50 ? chartBottom : window.innerHeight; }}
 
 const canvas   = document.getElementById('ov');
 const toggleBtn = document.getElementById('ov-toggle');
@@ -96,7 +98,9 @@ function drawOverlay() {{
   if (priceRange <= 0) return;
 
   // Map price to Y pixel (price axis: top=high, bottom=low)
-  const pxRange = chartBottom - chartTop;
+  const effectiveBottom = _safeChartBottom();
+  const pxRange = effectiveBottom - chartTop;
+  if (pxRange <= 0) return;
   function priceToY(p) {{
     return chartTop + (1 - (p - priceMin) / priceRange) * pxRange;
   }}
@@ -106,9 +110,8 @@ function drawOverlay() {{
   const ctx   = canvas.getContext('2d');
   ctx.clearRect(0, 0, W, H);
 
-  // Zone band — skip if zone is too thin to be visible
+  // Zone band
   const yHeight = yLow - yHigh;
-  if (yHeight < 8) return;
   ctx.fillStyle = 'rgba(38,63,226,0.15)';
   ctx.fillRect(0, yHigh, W, yHeight);
 
@@ -176,11 +179,18 @@ function _fallbackDraw() {{
   const el = tvIframe || tvDiv;
   if (el) {{
     const r = el.getBoundingClientRect();
-    // TV toolbar ~50px top, bottom scale ~30px, right price axis ~65px
-    chartTop    = r.top    + 50;
-    chartBottom = r.bottom - 30;
+    if (r.bottom > r.top + 50) {{
+      // TV toolbar ~50px top, bottom scale ~30px
+      chartTop    = r.top    + 50;
+      chartBottom = r.bottom - 30;
+    }} else if (_fallbackAttempts < 8) {{
+      // iframe not sized yet — reset and retry
+      priceMin = null;
+      setTimeout(_fallbackDraw, 1000);
+      return;
+    }}
   }} else if (_fallbackAttempts < 8) {{
-    priceMin = null;  // reset and retry
+    priceMin = null;
     setTimeout(_fallbackDraw, 1000);
     return;
   }}
