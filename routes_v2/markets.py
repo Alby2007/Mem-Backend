@@ -36,6 +36,7 @@ async def markets_chart(
     zone_high: str = None, zone_low: str = None,
     pattern_type: str = None, direction: str = None,
     fill_color: str = None,
+    entry: str = None, stop: str = None, t1: str = None, t2: str = None,
 ):
     tvSym = sym if sym != "AAPL" or symbol is None else (symbol or sym)
     tvInt = interval if interval in ("1","5","15","30","60","120","240","D","W","M") else "D"
@@ -49,6 +50,22 @@ async def markets_chart(
 
     has_zone   = zh is not None and zl is not None
     zone_js    = f"const ZONE_HIGH={zh}, ZONE_LOW={zl};" if has_zone else "const ZONE_HIGH=null, ZONE_LOW=null;"
+
+    # Level lines — entry, stop, t1, t2
+    def _parse_level(v):
+        try: return float(v) if v else None
+        except (TypeError, ValueError): return None
+    lv_entry = _parse_level(entry)
+    lv_stop  = _parse_level(stop)
+    lv_t1    = _parse_level(t1)
+    lv_t2    = _parse_level(t2)
+    levels_js = (
+        f"const LV_ENTRY={lv_entry if lv_entry is not None else 'null'};"
+        f"const LV_STOP={lv_stop   if lv_stop  is not None else 'null'};"
+        f"const LV_T1={lv_t1       if lv_t1    is not None else 'null'};"
+        f"const LV_T2={lv_t2       if lv_t2    is not None else 'null'};"
+    )
+    has_levels = any(v is not None for v in [lv_entry, lv_stop, lv_t1, lv_t2])
     pat_label  = (pattern_type or "").replace("_", " ").upper() or "ZONE"
     dir_colour = "#22c55e" if (direction or "").lower().startswith("bull") else ("#ef4444" if (direction or "").lower().startswith("bear") else "#f59e0b")
     zone_fill = fill_color if fill_color else "rgba(245,158,11,0.13)"
@@ -56,19 +73,21 @@ async def markets_chart(
     zone_border_colour = dir_colour
 
     zone_overlay_html = ""
-    if has_zone:
+    if has_zone or has_levels:
+        toggle_label = "◈ LEVELS ON" if (has_levels and not has_zone) else "◈ ZONE ON"
         zone_overlay_html = f"""
 <canvas id="ov" style="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:9999;"></canvas>
-<button id="ov-toggle" title="Toggle zone overlay" style="
+<button id="ov-toggle" title="Toggle overlay" style="
   position:fixed;bottom:12px;right:12px;z-index:20;
   background:#1a1a2a;border:1px solid #f59e0b44;color:#f59e0b;
   font-size:10px;font-family:monospace;padding:4px 10px;border-radius:4px;
   cursor:pointer;opacity:0.85;letter-spacing:0.05em;">
-  ◈ ZONE ON
+  {toggle_label}
 </button>"""
 
     zone_script = f"""
 {zone_js}
+{levels_js}
 const PAT_LABEL  = {repr(pat_label)};
 const DIR_COLOUR = {repr(dir_colour)};
 const ZONE_FILL = {repr(zone_fill)};
@@ -84,7 +103,7 @@ const canvas   = document.getElementById('ov');
 const toggleBtn = document.getElementById('ov-toggle');
 
 function drawOverlay() {{
-  if (!canvas || ZONE_HIGH === null || !zoneVisible) {{
+  if (!canvas || !zoneVisible) {{
     if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
     return;
   }}
@@ -105,29 +124,58 @@ function drawOverlay() {{
     return chartTop + (1 - (p - priceMin) / priceRange) * pxRange;
   }}
 
-  const yHigh = priceToY(ZONE_HIGH);
-  const yLow  = priceToY(ZONE_LOW);
-  const ctx   = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, W, H);
 
-  // Zone band
-  const yHeight = yLow - yHigh;
-  ctx.fillStyle = 'rgba(38,63,226,0.15)';
-  ctx.fillRect(0, yHigh, W, yHeight);
+  // Zone band (only if zone data available)
+  if (ZONE_HIGH !== null && ZONE_LOW !== null) {{
+    const yHigh = priceToY(ZONE_HIGH);
+    const yLow  = priceToY(ZONE_LOW);
+    const yHeight = yLow - yHigh;
+    ctx.fillStyle = 'rgba(38,63,226,0.15)';
+    ctx.fillRect(0, yHigh, W, yHeight);
 
-  // Top/bottom borders
-  ctx.strokeStyle = ZONE_BORDER_COLOUR;
-  ctx.lineWidth   = 1;
-  ctx.setLineDash([6, 4]);
-  ctx.beginPath(); ctx.moveTo(0, yHigh); ctx.lineTo(W, yHigh); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(0, yLow);  ctx.lineTo(W, yLow);  ctx.stroke();
-  ctx.setLineDash([]);
+    // Zone borders
+    ctx.strokeStyle = ZONE_BORDER_COLOUR;
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath(); ctx.moveTo(0, yHigh); ctx.lineTo(W, yHigh); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, yLow);  ctx.lineTo(W, yLow);  ctx.stroke();
+    ctx.setLineDash([]);
 
-  // Label
-  ctx.fillStyle    = DIR_COLOUR;
-  ctx.font         = '9px monospace';
+    // Zone label
+    ctx.fillStyle     = DIR_COLOUR;
+    ctx.font          = '9px monospace';
+    ctx.letterSpacing = '0.06em';
+    ctx.fillText(PAT_LABEL, 8, yHigh - 4);
+  }}
+
+  // Level lines
+  const LEVELS = [
+    {{ price: LV_ENTRY, color: '#3b82f6', dash: [],     label: 'ENTRY', width: 1.5 }},
+    {{ price: LV_STOP,  color: '#ef4444', dash: [6, 4], label: 'STOP',  width: 1   }},
+    {{ price: LV_T1,    color: '#22c55e', dash: [6, 4], label: 'T1',    width: 1   }},
+    {{ price: LV_T2,    color: '#10b981', dash: [4, 6], label: 'T2',    width: 1   }},
+  ];
+  ctx.font = 'bold 9px monospace';
   ctx.letterSpacing = '0.06em';
-  ctx.fillText(PAT_LABEL, 8, yHigh - 4);
+  LEVELS.forEach(lv => {{
+    if (lv.price === null || lv.price === undefined) return;
+    const y = priceToY(lv.price);
+    if (y < chartTop - 4 || y > effectiveBottom + 4) return; // off screen
+    ctx.strokeStyle = lv.color;
+    ctx.lineWidth   = lv.width;
+    ctx.setLineDash(lv.dash);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    ctx.setLineDash([]);
+    // Right-edge label
+    const label = `${{lv.label}} ${{lv.price.toFixed(2)}}`;
+    const tw    = ctx.measureText(label).width;
+    ctx.fillStyle = lv.color;
+    ctx.fillRect(W - tw - 14, y - 9, tw + 10, 13);
+    ctx.fillStyle = '#0a0e17';
+    ctx.fillText(label, W - tw - 9, y + 1);
+  }});
 }}
 
 if (toggleBtn) {{
@@ -229,7 +277,7 @@ new TradingView.widget({{
   save_image: false,
 }});
 </script>
-{"<script>" + zone_script + "</script>" if has_zone else ""}
+{"<script>" + zone_script + "</script>" if (has_zone or has_levels) else ""}
 </body></html>"""
     from fastapi.responses import HTMLResponse as _HR
     return _HR(
