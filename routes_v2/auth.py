@@ -84,7 +84,7 @@ async def auth_register(request: Request, data: RegisterRequest, response: Respo
         raise HTTPException(503, detail="auth not available — install PyJWT and bcrypt")
 
     _beta_secret = os.environ.get("BETA_PASSWORD", "")
-    if not _beta_secret or data.beta_password != _beta_secret:
+    if _beta_secret and data.beta_password != _beta_secret:
         ext.log_audit_event(ext.DB_PATH, action="register",
                             ip_address=request.client.host if request.client else None,
                             user_agent=request.headers.get("user-agent"),

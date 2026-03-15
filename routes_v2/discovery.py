@@ -997,6 +997,12 @@ class PipelineStageRequest(BaseModel):
     stage: str
     position_size: float | None = None
     note: str | None = None
+    entry_price: float | None = None
+    stop_loss: float | None = None
+    target_1: float | None = None
+    target_2: float | None = None
+    target_entry: float | None = None
+    target_exit: float | None = None
 
 
 @router.get('/ops/pipeline/detected')
@@ -1029,7 +1035,8 @@ async def get_pipeline(current_user: str = Depends(get_current_user)):
                            target_1, target_2, target_3, status, pattern_type,
                            timeframe, opened_at, closed_at, position_size,
                            user_note, position_source, pattern_id,
-                           regime_at_entry, conviction_at_entry, expires_at
+                           regime_at_entry, conviction_at_entry, expires_at,
+                           zone_high, zone_low, target_entry, target_exit
                     FROM tip_followups
                     WHERE user_id = ? AND {where}
                     ORDER BY opened_at DESC""",
@@ -1089,14 +1096,15 @@ async def get_pipeline(current_user: str = Depends(get_current_user)):
         staged = _enrich_with_kb(_followup_rows("status = 'staged'"))
         active = _enrich_with_kb(_followup_rows("status = 'active' AND position_source IN ('manual','pipeline')"))
         assessing = _followup_rows(
-            "status IN ('closed','stopped_out','hit_t1','hit_t2') AND (user_note IS NULL OR user_note = '')"
+            "status IN ('assessing','closed','stopped_out','hit_t1','hit_t2') AND (user_note IS NULL OR user_note = '')"
         )
         complete = conn.execute(
             """SELECT id, ticker, direction, entry_price, stop_loss,
                       target_1, target_2, target_3, status, pattern_type,
                       timeframe, opened_at, closed_at, position_size,
                       user_note, position_source, pattern_id,
-                      regime_at_entry, conviction_at_entry, expires_at
+                      regime_at_entry, conviction_at_entry, expires_at,
+                      zone_high, zone_low, target_entry, target_exit
                FROM tip_followups
                WHERE user_id = ? AND status = 'complete'
                ORDER BY closed_at DESC LIMIT 10""",
@@ -1199,8 +1207,10 @@ async def pipeline_stage(followup_id: int, data: PipelineStageRequest, current_u
     _dev_gate(current_user)
 
     valid_transitions = {
-        'staged': ['watching'],
-        'complete': ['closed', 'stopped_out', 'hit_t1', 'hit_t2'],
+        'staged':    ['watching'],
+        'active':    ['staged'],
+        'assessing': ['active'],
+        'complete':  ['closed', 'stopped_out', 'hit_t1', 'hit_t2', 'assessing'],
     }
     allowed_from = valid_transitions.get(data.stage)
     if not allowed_from:
@@ -1225,10 +1235,28 @@ async def pipeline_stage(followup_id: int, data: PipelineStageRequest, current_u
         if data.position_size is not None:
             updates.append('position_size = ?')
             params.append(data.position_size)
+        if data.entry_price is not None:
+            updates.append('entry_price = ?')
+            params.append(data.entry_price)
+        if data.stop_loss is not None:
+            updates.append('stop_loss = ?')
+            params.append(data.stop_loss)
+        if data.target_1 is not None:
+            updates.append('target_1 = ?')
+            params.append(data.target_1)
+        if data.target_2 is not None:
+            updates.append('target_2 = ?')
+            params.append(data.target_2)
+        if data.target_entry is not None:
+            updates.append('target_entry = ?')
+            params.append(data.target_entry)
+        if data.target_exit is not None:
+            updates.append('target_exit = ?')
+            params.append(data.target_exit)
         if data.note is not None:
             updates.append('user_note = ?')
             params.append(data.note[:500])
-        if data.stage == 'complete':
+        if data.stage in ('complete', 'assessing'):
             from datetime import datetime, timezone
             updates.append('closed_at = ?')
             params.append(datetime.now(timezone.utc).isoformat())

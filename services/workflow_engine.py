@@ -254,11 +254,19 @@ _WORKFLOW_INTROS: Dict[str, str] = {
 # ── Public API ────────────────────────────────────────────────────────────────
 
 _NL_SETUP_PATTERNS = [
-    re.compile(r'\b(log|setup|set up|set-up|add|track|record|journal)\b.*\btrade\b', re.IGNORECASE),
+    re.compile(r'\b(log|add|track|record|journal)\b.*\btrade\b', re.IGNORECASE),
     re.compile(r'\b(i(?:\'m| am| want to| wanna))\b.*\b(long|short|buy|sell|bullish|bearish)\b', re.IGNORECASE),
-    re.compile(r'\b(going|went)\b.*\b(long|short|bullish|bearish)\b', re.IGNORECASE),
+    re.compile(r'\b(going|went)\b.*\b(long|short|bullish|bearish)\b.*\b(on|in)\b', re.IGNORECASE),
     re.compile(r'\b(entry|entering)\b.{0,60}\b(stop|sl|stoploss|stop.loss)\b', re.IGNORECASE),
 ]
+_NL_QUESTION_RE = re.compile(r'^\s*(what|who|where|when|why|how|which|is|are|do|does|can|could|should|would|tell me|show me|give me|find|whats|what\'s)\b|\?', re.IGNORECASE)
+
+
+def _is_question(message: str) -> bool:
+    """Return True if the message looks like a question rather than a trade intent."""
+    return bool(_NL_QUESTION_RE.search(message))
+
+
 _NL_TICKER_RE    = re.compile(r'\b([A-Z]{1,5}(?:\.[A-Z]{1,2})?|\d{4,6}\.[A-Z]{1,2})\b')
 _NL_DIRECTION_RE = re.compile(r'\b(bullish|bearish|long|short|buy|sell)\b', re.IGNORECASE)
 _NL_PRICE_RE     = re.compile(r'(?:entry|entered?|at|from|price)[^\d]{0,10}([\d]+\.?[\d]*)', re.IGNORECASE)
@@ -360,6 +368,8 @@ def detect_nl_setup(message: str) -> Optional[dict]:
     Detect natural language trade setup intent and extract any available fields.
     Returns a dict of pre-filled fields (may be partial), or None if not detected.
     """
+    if _is_question(message):
+        return None
     if not any(p.search(message) for p in _NL_SETUP_PATTERNS):
         return None
 
