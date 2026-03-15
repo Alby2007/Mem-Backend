@@ -343,6 +343,26 @@ async def _lifespan(app: FastAPI):
     except Exception as _pm_e:
         _logger.warning('PositionMonitor failed to start: %s', _pm_e)
 
+    # StagedEntryMonitor — auto-advances staged→active when target_entry is hit
+    try:
+        from services.staged_entry_monitor import StagedEntryMonitor
+        _staged_monitor = StagedEntryMonitor(db_path=ext.DB_PATH, interval_sec=60)
+        _staged_monitor.start()
+        app.state.staged_entry_monitor = _staged_monitor
+        ext.staged_entry_monitor = _staged_monitor
+    except Exception as _sem_e:
+        _logger.warning('StagedEntryMonitor failed to start: %s', _sem_e)
+
+    # ActiveExitMonitor — auto-advances active→assessing when exit/stop price is hit
+    try:
+        from services.active_exit_monitor import ActiveExitMonitor
+        _exit_monitor = ActiveExitMonitor(db_path=ext.DB_PATH, interval_sec=60)
+        _exit_monitor.start()
+        app.state.active_exit_monitor = _exit_monitor
+        ext.active_exit_monitor = _exit_monitor
+    except Exception as _aem_e:
+        _logger.warning('ActiveExitMonitor failed to start: %s', _aem_e)
+
     # ── Daily maintenance: pattern pool cleanup + prediction ledger expiry ──────
     # Fix #3: expire low-quality (< 0.45) patterns older than 48h from the pool
     # Fix #5: expire stale predictions in the ledger (past their expires_at)
@@ -462,6 +482,16 @@ async def _lifespan(app: FastAPI):
     except Exception:
         pass
     try:
+        if getattr(ext, 'staged_entry_monitor', None):
+            ext.staged_entry_monitor.stop()
+    except Exception:
+        pass
+    try:
+        if getattr(ext, 'active_exit_monitor', None):
+            ext.active_exit_monitor.stop()
+    except Exception:
+        pass
+    try:
         if ext.delivery_scheduler:
             ext.delivery_scheduler.stop()
     except Exception:
@@ -529,13 +559,14 @@ def create_fastapi_app() -> FastAPI:
         health, auth, chat, billing, paper,
         markets, analytics_, patterns, network, waitlist, thesis,
         ingest_routes, kb, users, telegram, scenario, discovery, status as status_routes,
+        debate,
     )
     for _router in [
         health.router, auth.router, chat.router, billing.router, paper.router,
         markets.router, analytics_.router, patterns.router, network.router,
         waitlist.router, thesis.router, ingest_routes.router, kb.router,
         users.router, telegram.router, scenario.router, discovery.router,
-        status_routes.router,
+        status_routes.router, debate.router,
     ]:
         app.include_router(_router)
 

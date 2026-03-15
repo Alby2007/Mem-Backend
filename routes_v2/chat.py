@@ -259,10 +259,11 @@ async def chat_endpoint(
     data: ChatRequest,
     user_id: Optional[str] = Depends(get_current_user_optional),
 ):
-    _check_chat_quota(user_id)
+    if data.mode != 'debate':
+        _check_chat_quota(user_id)
 
     # ── Workflow intercept ────────────────────────────────────────────────────
-    if user_id:
+    if user_id and data.mode != 'debate':
         try:
             from services.workflow_engine import (
                 detect_workflow_trigger, get_active_workflow,
