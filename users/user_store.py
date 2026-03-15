@@ -1772,6 +1772,10 @@ def _ensure_tip_followups_table(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tip_followups ADD COLUMN position_size REAL")
     if 'position_source' not in cols:
         conn.execute("ALTER TABLE tip_followups ADD COLUMN position_source TEXT DEFAULT 'tip'")
+    if 'target_entry' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN target_entry REAL")
+    if 'target_exit' not in cols:
+        conn.execute("ALTER TABLE tip_followups ADD COLUMN target_exit REAL")
     # 'active' = user consciously accepted; 'watching' = auto-created at tip send
     # status column already exists in DDL with DEFAULT 'watching'
     conn.commit()
