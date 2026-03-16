@@ -733,6 +733,57 @@ async def sentinel_positions(current_user: str = Depends(get_current_user)):
         conn.close()
 
 
+@router.get('/ops/network/leaderboard')
+async def network_leaderboard(
+    limit: int = Query(50, ge=1, le=200),
+    min_samples: int = Query(20, ge=5),
+    current_user: str = Depends(get_current_user),
+):
+    """Top calibration cells by hit rate -- for NETWORK proven cells leaderboard."""
+    _dev_gate(current_user)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("""
+            SELECT ticker, pattern_type, timeframe, market_regime,
+                   hit_rate_t1, hit_rate_t2, stopped_out_rate,
+                   sample_size, calibration_confidence
+            FROM signal_calibration
+            WHERE sample_size >= ?
+              AND hit_rate_t1 >= 0.6
+            ORDER BY hit_rate_t1 DESC, sample_size DESC
+            LIMIT ?
+        """, (min_samples, limit)).fetchall()
+        return {'cells': [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@router.get('/ops/network/matrix')
+async def network_matrix(current_user: str = Depends(get_current_user)):
+    """Average hit rate per pattern x regime -- for NETWORK heatmap matrix."""
+    _dev_gate(current_user)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("""
+            SELECT pattern_type, market_regime,
+                   AVG(hit_rate_t1) as avg_hit,
+                   SUM(sample_size) as total_n,
+                   COUNT(*) as cells
+            FROM signal_calibration
+            WHERE sample_size >= 10
+              AND market_regime IN (
+                'risk_off_contraction','risk_on_expansion',
+                'stagflation','recovery'
+              )
+            GROUP BY pattern_type, market_regime
+        """).fetchall()
+        return {'matrix': [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
 # ── FORGE Pipeline ────────────────────────────────────────────────────────────
 
 import json as _json
