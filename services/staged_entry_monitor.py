@@ -18,15 +18,33 @@ _log = logging.getLogger(__name__)
 
 
 def _get_latest_price(db_path: str, ticker: str) -> Optional[float]:
-    """Read last_price atom from KB facts table."""
+    """Read latest close from ohlcv_cache (15m bars, updated every 300s).
+    Falls back to last_price KB atom if no cache entry exists."""
     try:
         conn = sqlite3.connect(db_path, timeout=5)
+        # Primary: 15m ohlcv_cache — covers all 534 tickers, max 15min stale
         row = conn.execute(
-            """SELECT object FROM facts
-               WHERE LOWER(subject) = ? AND predicate = 'last_price'
-               ORDER BY rowid DESC LIMIT 1""",
-            (ticker.lower(),),
+            """SELECT close FROM ohlcv_cache
+               WHERE ticker = ? AND interval = '15m'
+               ORDER BY ts DESC LIMIT 1""",
+            (ticker,),
         ).fetchone()
+        if not row:
+            # Fallback: try uppercase ticker (some tickers stored differently)
+            row = conn.execute(
+                """SELECT close FROM ohlcv_cache
+                   WHERE UPPER(ticker) = UPPER(?) AND interval = '15m'
+                   ORDER BY ts DESC LIMIT 1""",
+                (ticker,),
+            ).fetchone()
+        if not row:
+            # Last resort: KB last_price atom (may be up to 1800s stale for non-US)
+            row = conn.execute(
+                """SELECT object FROM facts
+                   WHERE LOWER(subject) = ? AND predicate = 'last_price'
+                   ORDER BY rowid DESC LIMIT 1""",
+                (ticker.lower(),),
+            ).fetchone()
         conn.close()
         if row:
             return float(row[0])
