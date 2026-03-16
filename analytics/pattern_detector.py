@@ -745,7 +745,10 @@ def detect_all_patterns(
     if db_path and all_signals:
         try:
             import sqlite3 as _sq
+            import logging as _logging
+            _cal_logger = _logging.getLogger(__name__)
             _conn = _sq.connect(db_path, timeout=5)
+            _lifted_count = 0
             for sig in all_signals:
                 _row = _conn.execute("""
                     SELECT hit_rate_t1, sample_size
@@ -762,7 +765,13 @@ def detect_all_patterns(
                     if _hr >= 0.6:
                         _lift = (_hr - 0.6) * 0.4 * min(1.0, math.log(_n + 1) / math.log(201))
                         sig.quality_score = round(min(1.0, sig.quality_score + _lift), 4)
+                        _lifted_count += 1
             _conn.close()
+            if _lifted_count > 0:
+                _cal_logger.debug(
+                    'pattern_detector: calibration lift applied to %d/%d patterns for %s',
+                    _lifted_count, len(all_signals), ticker,
+                )
         except Exception:
             pass
 

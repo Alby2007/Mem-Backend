@@ -648,7 +648,184 @@ class HistoricalCalibrator:
             'calibration: complete — %d tickers, %d patterns, %d calibration rows',
             len(results), total_patterns, total_rows,
         )
+
+        # ── Intraday calibration passes (background thread — non-blocking) ────
+        _INTRADAY_TFS = ['4h', '1h', '15m']
+
+        def _run_intraday():
+            _logger.info('calibration: starting intraday passes (%s)', ', '.join(_INTRADAY_TFS))
+            for tf in _INTRADAY_TFS:
+                intraday_total_patterns = 0
+                intraday_total_rows     = 0
+                for _ticker in tickers:
+                    try:
+                        r = self.calibrate_ticker_intraday(
+                            _ticker, tf, proxy_data, lookback_days=60,
+                        )
+                        intraday_total_patterns += r.get('patterns_detected', 0)
+                        intraday_total_rows     += r.get('calibration_rows_written', 0)
+                        results[_ticker][f'patterns_{tf}'] = r.get('patterns_detected', 0)
+                    except Exception as _e:
+                        _logger.debug('intraday calibration %s/%s failed: %s', _ticker, tf, _e)
+                _logger.info(
+                    'calibration: %s pass — %d patterns, %d rows',
+                    tf, intraday_total_patterns, intraday_total_rows,
+                )
+
+        import threading as _threading
+        _t = _threading.Thread(target=_run_intraday, daemon=True, name='intraday-calibration')
+        _t.start()
+
         return results
+
+    def _regime_from_date(self, candle_date: 'pd.Timestamp', proxy_data: dict) -> str:
+        """Map an intraday candle's date to the daily proxy series for regime classification."""
+        close_spy = proxy_data.get('SPY')
+        if close_spy is None:
+            return 'no_data'
+        try:
+            date_idx = close_spy.index.searchsorted(candle_date)
+            date_idx = min(date_idx, len(close_spy) - 1)
+            if date_idx < 20:
+                return 'no_data'
+            return _classify_regime(
+                close_spy,
+                proxy_data.get('^VIX'),
+                proxy_data.get('TLT'),
+                proxy_data.get('GLD'),
+                window_end=date_idx,
+            )
+        except Exception:
+            return 'no_data'
+
+    def calibrate_ticker_intraday(
+        self,
+        ticker: str,
+        timeframe: str,
+        proxy_data: dict,
+        lookback_days: int = 60,
+    ) -> Dict[str, int]:
+        """
+        Run sliding-window calibration for intraday timeframes (15m, 1h, 4h).
+        Uses per-ticker yfinance fetch since ohlcv_cache only has 1d data.
+        Skips tickers already calibrated for this timeframe within 7 days.
+        """
+        if not HAS_DEPS or not HAS_DETECTOR or not HAS_CALIBRATION:
+            return {'patterns_detected': 0, 'calibration_rows_written': 0}
+
+        tf_map = {
+            '15m': ('15m', '60d', 60, 64, 5),
+            '1h':  ('1h',  '60d', 80, 24, 4),
+            '4h':  ('1h',  '60d', 80, 16, 4),
+        }
+        if timeframe not in tf_map:
+            return {'patterns_detected': 0, 'calibration_rows_written': 0}
+
+        yf_interval, yf_period, window_size, forward_horizon, step_size = tf_map[timeframe]
+
+        # 7-day recency guard — skip if already calibrated recently
+        try:
+            _gconn = sqlite3.connect(self._db_path, timeout=5)
+            _row = _gconn.execute(
+                """SELECT MAX(last_updated) FROM signal_calibration
+                   WHERE UPPER(ticker) = UPPER(?) AND timeframe = ?""",
+                (ticker, timeframe),
+            ).fetchone()
+            _gconn.close()
+            if _row and _row[0]:
+                _last = datetime.fromisoformat(_row[0].replace('Z', '+00:00'))
+                _hours = (datetime.now(timezone.utc) - _last).total_seconds() / 3600
+                if _hours < 168:
+                    return {'patterns_detected': 0, 'calibration_rows_written': 0, 'skipped': True}
+        except Exception:
+            pass
+
+        try:
+            t = yf.Ticker(ticker)
+            df = t.history(period=yf_period, interval=yf_interval, auto_adjust=True)
+            if df is None or df.empty or len(df) < window_size + forward_horizon:
+                return {'patterns_detected': 0, 'calibration_rows_written': 0}
+            df.index = pd.to_datetime(df.index, utc=True)
+        except Exception as e:
+            _logger.debug('intraday calibration fetch failed %s/%s: %s', ticker, timeframe, e)
+            return {'patterns_detected': 0, 'calibration_rows_written': 0}
+
+        if timeframe == '4h' and yf_interval == '1h':
+            df = df.resample('4h').agg({
+                'Open': 'first', 'High': 'max',
+                'Low': 'min', 'Close': 'last', 'Volume': 'sum',
+            }).dropna()
+
+        n_rows    = len(df)
+        total_end = n_rows - forward_horizon
+        buckets: Dict[str, _AggBucket] = {}
+        patterns_detected = 0
+
+        for window_end in range(window_size, total_end, step_size):
+            window_df = df.iloc[window_end - window_size : window_end]
+            future_df = df.iloc[window_end : window_end + forward_horizon]
+
+            candles = self._df_to_ohlcv(window_df)
+            future  = self._df_to_ohlcv(future_df)
+            if len(candles) < 3 or not future:
+                continue
+
+            try:
+                candle_date = pd.Timestamp(candles[-1].timestamp)
+                if candle_date.tzinfo is None:
+                    candle_date = candle_date.tz_localize('UTC')
+                candle_date = candle_date.floor('D')
+                regime = self._regime_from_date(candle_date, proxy_data)
+            except Exception:
+                regime = 'no_data'
+
+            patterns = detect_all_patterns(candles, ticker, timeframe=timeframe)
+
+            for p in patterns:
+                atr = self._atr_from_candles(candles)
+                if atr > 0 and (p.zone_high - p.zone_low) / atr < _MIN_ZONE_ATR_RATIO:
+                    continue
+                patterns_detected += 1
+                outcome = _check_outcome(p, future)
+
+                key = f'{ticker.upper()}|{p.pattern_type}|{timeframe}|{regime}'
+                if key not in buckets:
+                    buckets[key] = _AggBucket()
+                b = buckets[key]
+                b.n += 1
+                if outcome.hit_t1:
+                    b.hit_t1 += 1
+                    if outcome.candles_to_target:
+                        b.candles.append(outcome.candles_to_target)
+                if outcome.hit_t2:
+                    b.hit_t2 += 1
+                if outcome.hit_t3:
+                    b.hit_t3 += 1
+                if outcome.stopped_out:
+                    b.stop_out += 1
+
+        if not buckets:
+            return {'patterns_detected': 0, 'calibration_rows_written': 0}
+
+        now = datetime.now(timezone.utc).isoformat()
+        rows_written = 0
+        conn = sqlite3.connect(self._db_path, timeout=20)
+        try:
+            _ensure_table(conn)
+            for key, bucket in buckets.items():
+                parts = key.split('|')
+                _t, pt, tf, reg = parts[0], parts[1], parts[2], parts[3]
+                regime_val = None if reg == 'no_data' else reg
+                _upsert_calibration(conn, _t, pt, tf, regime_val, bucket, now)
+                rows_written += 1
+            conn.commit()
+        finally:
+            conn.close()
+
+        return {
+            'patterns_detected':        patterns_detected,
+            'calibration_rows_written': rows_written,
+        }
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
