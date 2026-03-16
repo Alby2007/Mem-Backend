@@ -383,12 +383,12 @@ class YFinanceAdapter(BaseIngestAdapter):
         'Referer': 'https://finance.yahoo.com',
     }
 
-    def _fetch_chart_candles(self, sym: str, session) -> list:
-        """Fetch 6mo daily candles via Yahoo chart API. Returns list of
+    def _fetch_chart_candles(self, sym: str, session, interval: str = '1d', range_: str = '6mo') -> list:
+        """Fetch candles via Yahoo chart API. Returns list of
         (ts_iso, open, high, low, close, volume) or empty list on error."""
         import requests as _req
         url = f'https://query1.finance.yahoo.com/v8/finance/chart/{sym}'
-        params = {'range': '6mo', 'interval': '1d', 'includeAdjustedClose': 'true'}
+        params = {'range': range_, 'interval': interval, 'includeAdjustedClose': 'true'}
         try:
             r = session.get(url, params=params, headers=self._CHART_HEADERS, timeout=15)
             if r.status_code == 429:
@@ -469,6 +469,29 @@ class YFinanceAdapter(BaseIngestAdapter):
                 cached += 1
             except Exception as e:
                 self._logger.debug('ohlcv_cache write failed for %s: %s', sym, e)
+
+            # ── Intraday candles (15m, 1h) — same chart API, works on OCI ───
+            for intraday_interval, intraday_range in (('15m', '60d'), ('1h', '60d')):
+                try:
+                    intra_rows = self._fetch_chart_candles(
+                        sym, session,
+                        interval=intraday_interval,
+                        range_=intraday_range,
+                    )
+                    if intra_rows and intra_rows is not _SENTINEL_RATE_LIMITED:
+                        intra_db_rows = [
+                            (sym, intraday_interval, ts, o, h, l, c, v, now_iso)
+                            for ts, o, h, l, c, v in intra_rows
+                        ]
+                        conn.executemany(
+                            """INSERT OR REPLACE INTO ohlcv_cache
+                               (ticker, interval, ts, open, high, low, close, volume, cached_at)
+                               VALUES (?,?,?,?,?,?,?,?,?)""",
+                            intra_db_rows,
+                        )
+                        conn.commit()
+                except Exception as _ie:
+                    self._logger.debug('ohlcv_cache intraday write failed %s/%s: %s', sym, intraday_interval, _ie)
 
         conn.close()
         self._logger.info('ohlcv_cache: cached daily candles for %d/%d tickers', cached, len(active_tickers))

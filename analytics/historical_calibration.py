@@ -698,6 +698,29 @@ class HistoricalCalibrator:
         except Exception:
             return 'no_data'
 
+    @staticmethod
+    def _df_from_cache_intraday(db_path: str, ticker: str, interval: str) -> Optional['pd.DataFrame']:
+        """Read intraday candles from ohlcv_cache for the given ticker and interval."""
+        try:
+            conn = sqlite3.connect(db_path, timeout=10)
+            try:
+                rows = conn.execute(
+                    """SELECT ts, open, high, low, close, volume
+                       FROM ohlcv_cache
+                       WHERE ticker=? AND interval=?
+                       ORDER BY ts ASC""",
+                    (ticker, interval),
+                ).fetchall()
+            finally:
+                conn.close()
+            if not rows:
+                return None
+            df = pd.DataFrame(rows, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+            df['Date'] = pd.to_datetime(df['Date'], utc=True)
+            return df.set_index('Date').sort_index()
+        except Exception:
+            return None
+
     def calibrate_ticker_intraday(
         self,
         ticker: str,
@@ -707,7 +730,8 @@ class HistoricalCalibrator:
     ) -> Dict[str, int]:
         """
         Run sliding-window calibration for intraday timeframes (15m, 1h, 4h).
-        Uses per-ticker yfinance fetch since ohlcv_cache only has 1d data.
+        Reads from ohlcv_cache first (populated by YFinanceAdapter every 300s).
+        Falls back to yfinance direct fetch (works locally; silently skipped on OCI).
         Skips tickers already calibrated for this timeframe within 7 days.
         """
         if not HAS_DEPS or not HAS_DETECTOR or not HAS_CALIBRATION:
@@ -740,14 +764,24 @@ class HistoricalCalibrator:
         except Exception:
             pass
 
-        try:
-            t = yf.Ticker(ticker)
-            df = t.history(period=yf_period, interval=yf_interval, auto_adjust=True)
-            if df is None or df.empty or len(df) < window_size + forward_horizon:
-                return {'patterns_detected': 0, 'calibration_rows_written': 0}
-            df.index = pd.to_datetime(df.index, utc=True)
-        except Exception as e:
-            _logger.debug('intraday calibration fetch failed %s/%s: %s', ticker, timeframe, e)
+        # ── Prefer ohlcv_cache (populated by YFinanceAdapter chart API) ──────
+        cache_interval = yf_interval  # '15m', '1h' — matches what YFinanceAdapter writes
+        df = self._df_from_cache_intraday(self._db_path, ticker, cache_interval)
+
+        if df is None or len(df) < window_size + forward_horizon:
+            # Fall back to yfinance direct fetch (works locally, fails silently on OCI)
+            try:
+                t = yf.Ticker(ticker)
+                df = t.history(period=yf_period, interval=yf_interval, auto_adjust=True)
+                if df is not None and not df.empty:
+                    df.index = pd.to_datetime(df.index, utc=True)
+                else:
+                    df = None
+            except Exception as e:
+                _logger.debug('intraday calibration fetch failed %s/%s: %s', ticker, timeframe, e)
+                df = None
+
+        if df is None or df.empty or len(df) < window_size + forward_horizon:
             return {'patterns_detected': 0, 'calibration_rows_written': 0}
 
         if timeframe == '4h' and yf_interval == '1h':
