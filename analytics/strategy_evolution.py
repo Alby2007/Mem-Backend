@@ -63,7 +63,7 @@ class StrategyEvolution:
             if perf:
                 scored.append({**cfg, **perf})
 
-        min_eval = 25  # default; per-bot override below
+        min_eval = 15  # default; per-bot override below
 
         # Separate by maturity
         mature   = [b for b in scored if b.get('total_closed', 0) >= b.get('min_trades_eval', min_eval)]
@@ -130,7 +130,7 @@ class StrategyEvolution:
         # Kill failing bots
         for bot in kills:
             # NEVER kill immature bots — they haven't had a chance to trade
-            if bot.get('total_closed', 0) < bot.get('min_trades_eval', 25):
+            if bot.get('total_closed', 0) < bot.get('min_trades_eval', 15):
                 continue
             bot_id = bot['bot_id']
             runner.kill_bot(bot_id, reason=f'fitness={bot.get("fitness",0):.3f} dd={bot.get("max_drawdown_pct",0):.1%}')
