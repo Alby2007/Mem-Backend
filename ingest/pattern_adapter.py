@@ -429,6 +429,7 @@ class PatternAdapter:
             kb_conviction = kb_ctx['conviction'],
             kb_regime     = kb_ctx['regime'],
             kb_signal_dir = kb_ctx['signal_dir'],
+            db_path       = self.db_path,
         )
 
         inserted = 0

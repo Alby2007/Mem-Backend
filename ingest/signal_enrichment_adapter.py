@@ -328,6 +328,8 @@ def _compute_position_sizing_atoms(
     macro_event_risk: str = '',
     sector_tailwind: str = '',
     db_path: str = '',
+    dominant_pattern_type: str = '',
+    dominant_timeframe: str = '',
 ) -> List[RawAtom]:
     """
     Compute conviction_tier, volatility_scalar, position_size_pct.
@@ -482,14 +484,16 @@ def _compute_position_sizing_atoms(
                 get_global_baseline as _get_baseline,
             )
             import math as _math
+            _pat_type = dominant_pattern_type or 'mitigation'
+            _tf       = dominant_timeframe    or '1d'
             _cal = _get_cal(
                 ticker        = ticker,
-                pattern_type  = 'fvg',
-                timeframe     = '1d',
+                pattern_type  = _pat_type,
+                timeframe     = _tf,
                 db_path       = db_path,
                 market_regime = None,
             )
-            _baseline = _get_baseline('fvg', '1d', db_path) or _CAL_FALLBACK
+            _baseline = _get_baseline(_pat_type, _tf, db_path) or _CAL_FALLBACK
         except Exception:
             _cal      = None
             _baseline = _CAL_FALLBACK
@@ -1318,6 +1322,24 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
         enriched = 0
         skipped  = 0
 
+        # Pre-fetch dominant pattern type per ticker (most common open pattern)
+        _dominant_patterns: dict = {}
+        try:
+            _pconn = sqlite3.connect(self._db_path, timeout=10)
+            _rows = _pconn.execute("""
+                SELECT ticker, pattern_type, timeframe, COUNT(*) as cnt
+                FROM pattern_signals
+                WHERE status NOT IN ('filled','broken','expired')
+                GROUP BY ticker, pattern_type, timeframe
+                ORDER BY ticker, cnt DESC
+            """).fetchall()
+            _pconn.close()
+            for _pticker, _ptype, _ptf, _ in _rows:
+                if _pticker.lower() not in _dominant_patterns:
+                    _dominant_patterns[_pticker.lower()] = (_ptype, _ptf)
+        except Exception:
+            pass
+
         for ticker, preds in ticker_atoms.items():
             # Skip empty or invalid ticker subjects
             if not ticker or not ticker.strip():
@@ -1473,6 +1495,7 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                 inv_atoms[2].object if len(inv_atoms) >= 3
                 else preds.get('thesis_risk_level', '')
             )
+            _dom = _dominant_patterns.get(ticker, ('', ''))
             pos_atoms = _compute_position_sizing_atoms(
                 ticker, sig_quality, thesis_rl, macro_conf, vol_30d, src_base, meta,
                 insider_conviction=preds.get('insider_conviction', ''),
@@ -1480,6 +1503,8 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                 macro_event_risk=market_atoms.get('macro_event_risk', ''),
                 sector_tailwind=preds.get('sector_tailwind', ''),
                 db_path=self._db_path,
+                dominant_pattern_type=_dom[0],
+                dominant_timeframe=_dom[1],
             )
 
             # ── Cross-engine input 3: regime-conditional conviction modulation ─

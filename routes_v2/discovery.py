@@ -870,6 +870,59 @@ def _score_pattern_for_user(pat: dict, facts: dict, user_prefs: dict, pipeline_t
     if conviction == 'avoid':
         score -= 20
 
+    # ── Calibration bonus (0–30) ──────────────────────────────────────────────
+    _MIN_CAL_SAMPLES = 10
+    _CAL_BONUS_MAX   = 30
+    try:
+        import math as _math
+        ticker_upper = ticker.upper()
+        pat_type     = pat.get('pattern_type', '')
+        tf           = pat.get('timeframe', '')
+        current_regime = facts.get('market_regime', '') or facts.get('price_regime', '')
+
+        cal_row = None
+        if current_regime:
+            cal_row = conn.execute("""
+                SELECT hit_rate_t1, hit_rate_t2, stopped_out_rate,
+                       sample_size, calibration_confidence
+                FROM signal_calibration
+                WHERE UPPER(ticker) = ?
+                  AND pattern_type  = ?
+                  AND timeframe     = ?
+                  AND market_regime = ?
+                  AND sample_size  >= ?
+                ORDER BY sample_size DESC
+                LIMIT 1
+            """, (ticker_upper, pat_type, tf, current_regime, _MIN_CAL_SAMPLES)).fetchone()
+
+        if not cal_row:
+            cal_row = conn.execute("""
+                SELECT hit_rate_t1, hit_rate_t2, stopped_out_rate,
+                       sample_size, calibration_confidence
+                FROM signal_calibration
+                WHERE UPPER(ticker) = ?
+                  AND pattern_type  = ?
+                  AND timeframe     = ?
+                  AND (market_regime IS NULL OR market_regime = '')
+                  AND sample_size  >= ?
+                ORDER BY sample_size DESC
+                LIMIT 1
+            """, (ticker_upper, pat_type, tf, _MIN_CAL_SAMPLES)).fetchone()
+
+        if cal_row:
+            hit_rate   = cal_row[0] or 0.0
+            stop_rate  = cal_row[2] or 1.0
+            n          = cal_row[3] or 0
+            size_weight = min(1.0, _math.log(n + 1) / _math.log(201))
+            hit_score   = max(0.0, (hit_rate - 0.5) * 2.0)
+            stop_penalty = stop_rate * 0.5
+            cal_bonus = _CAL_BONUS_MAX * hit_score * size_weight * (1.0 - stop_penalty)
+            score += round(cal_bonus, 2)
+            if cal_bonus > 5:
+                reasons.append(f'\u25ce {(hit_rate * 100):.0f}% hist')
+    except Exception:
+        pass
+
     return (round(score, 2), reasons)
 
 

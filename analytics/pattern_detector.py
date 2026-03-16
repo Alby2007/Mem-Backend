@@ -675,6 +675,7 @@ def detect_all_patterns(
     kb_conviction: str  = '',
     kb_regime:     str  = '',
     kb_signal_dir: str  = '',
+    db_path:       str  = '',
 ) -> List[PatternSignal]:
     """
     Run all 7 detectors in a single pass over `candles`.
@@ -739,4 +740,30 @@ def detect_all_patterns(
     )
 
     all_signals.sort(key=lambda s: s.quality_score, reverse=True)
+
+    # ── Calibration lift (optional, requires db_path) ──────────────────────────
+    if db_path and all_signals:
+        try:
+            import sqlite3 as _sq
+            _conn = _sq.connect(db_path, timeout=5)
+            for sig in all_signals:
+                _row = _conn.execute("""
+                    SELECT hit_rate_t1, sample_size
+                    FROM signal_calibration
+                    WHERE UPPER(ticker) = UPPER(?)
+                      AND pattern_type = ?
+                      AND timeframe    = ?
+                      AND sample_size >= 10
+                    ORDER BY sample_size DESC
+                    LIMIT 1
+                """, (sig.ticker, sig.pattern_type, sig.timeframe)).fetchone()
+                if _row:
+                    _hr, _n = _row
+                    if _hr >= 0.6:
+                        _lift = (_hr - 0.6) * 0.4 * min(1.0, math.log(_n + 1) / math.log(201))
+                        sig.quality_score = round(min(1.0, sig.quality_score + _lift), 4)
+            _conn.close()
+        except Exception:
+            pass
+
     return all_signals
