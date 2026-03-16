@@ -231,10 +231,11 @@ def _check_outcome(
         h, l, c = candle.high, candle.low, candle.close
 
         if is_bullish:
-            # T1: price enters the zone (low dips into zone)
+            # T1: candle must close inside or within 0.5× zone width below zone_high
             if not outcome.hit_t1 and l <= zh and h >= zl:
-                outcome.hit_t1          = True
-                outcome.candles_to_target = i
+                if c <= zh and c >= zl - (zh - zl) * 0.5:
+                    outcome.hit_t1          = True
+                    outcome.candles_to_target = i
             # T2: close confirms inside zone or below zone_low
             if outcome.hit_t1 and not outcome.hit_t2 and c <= zh and c >= zl - 0.5 * zs:
                 outcome.hit_t2 = True
@@ -247,9 +248,11 @@ def _check_outcome(
                 break
         else:
             # Bearish pattern
+            # T1: candle must close inside or within 0.5× zone width above zone_low
             if not outcome.hit_t1 and h >= zl and l <= zh:
-                outcome.hit_t1          = True
-                outcome.candles_to_target = i
+                if c >= zl and c <= zh + (zh - zl) * 0.5:
+                    outcome.hit_t1          = True
+                    outcome.candles_to_target = i
             if outcome.hit_t1 and not outcome.hit_t2 and c >= zl and c <= zh + 0.5 * zs:
                 outcome.hit_t2 = True
             if outcome.hit_t1 and not outcome.hit_t3 and c > zh + _T3_EXTENSION * zs:

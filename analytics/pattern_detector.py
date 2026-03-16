@@ -119,10 +119,16 @@ def _zone_size_pct(zone_high: float, zone_low: float) -> float:
     return (zone_high - zone_low) / base * 100.0
 
 
-def _gap_score(zone_high: float, zone_low: float, atr_val: float) -> float:
-    """Normalised gap size vs ATR, capped at 1.0."""
+def _gap_score(zone_high: float, zone_low: float, atr_val: float,
+               impulse_volume: float = 0.0, avg_volume: float = 0.0) -> float:
+    """Normalised gap size vs ATR, capped at 1.0. Optionally scaled by volume ratio."""
     gap = zone_high - zone_low
-    return min(gap / (atr_val * 2.0), 1.0) if atr_val > 0 else 0.0
+    base = min(gap / (atr_val * 2.0), 1.0) if atr_val > 0 else 0.0
+    if impulse_volume > 0 and avg_volume > 0:
+        vol_mult = min(1.5, max(0.5, impulse_volume / avg_volume))
+    else:
+        vol_mult = 1.0
+    return min(base * vol_mult, 1.0)
 
 
 def _recency_score(candle_idx: int, total: int) -> float:
@@ -146,8 +152,12 @@ def _kb_scores(
     # KB data upgrades (1.0) or downgrades (0.0) from this low baseline.
     conv  = 1.0 if kb_conviction in ('high', 'strong', 'confirmed') else (
             0.0 if kb_conviction in ('low', 'weak', 'avoid') else 0.2)
-    regime = 1.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_on', 'bullish', 'near_52w_high', 'near_high', 'mid_range')) else (
-             0.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_off', 'bearish', 'near_52w_low', 'near_low')) else 0.2)
+    if direction == 'bearish':
+        regime = 1.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_off', 'bearish', 'near_52w_low', 'near_low', 'contraction')) else (
+                 0.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_on', 'near_52w_high', 'near_high', 'expansion')) else 0.2)
+    else:
+        regime = 1.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_on', 'bullish', 'near_52w_high', 'near_high', 'mid_range')) else (
+                 0.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_off', 'bearish', 'near_52w_low', 'near_low', 'contraction')) else 0.2)
     sig   = 1.0 if (
         (direction == 'bullish' and kb_signal_dir in ('long', 'bullish', 'buy')) or
         (direction == 'bearish' and kb_signal_dir in ('short', 'bearish', 'sell'))
@@ -765,6 +775,10 @@ def detect_all_patterns(
                     if _hr >= 0.6:
                         _lift = (_hr - 0.6) * 0.4 * min(1.0, math.log(_n + 1) / math.log(201))
                         sig.quality_score = round(min(1.0, sig.quality_score + _lift), 4)
+                        _lifted_count += 1
+                    elif _hr < 0.35 and _n >= 20:
+                        _penalty = (0.35 - _hr) * 0.3 * min(1.0, math.log(_n + 1) / math.log(201))
+                        sig.quality_score = round(max(0.0, sig.quality_score - _penalty), 4)
                         _lifted_count += 1
             _conn.close()
             if _lifted_count > 0:
