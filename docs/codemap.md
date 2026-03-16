@@ -9,10 +9,11 @@ Complete file-by-file reference for the Trading Galaxy codebase.
 ### `api_v2.py`
 FastAPI application — main entry point. Served by **Gunicorn + UvicornWorker** on port 5050.
 
-- Initialises `KnowledgeGraph`, `decay_worker`, `IngestScheduler`, and `SeedSyncClient` at startup
+- Initialises `KnowledgeGraph`, `decay_worker`, `IngestScheduler`, and `SeedSyncClient` at startup (all inside `_lifespan` **before** `yield` — startup runs on launch, shutdown runs after `yield`)
 - Registers all `routes_v2/` routers
 - Optional dependencies imported with graceful fallback (`HAS_AUTH`, `HAS_PRODUCT_LAYER`, `HAS_LIMITER`, etc.)
 - Rate limiting via `slowapi` (`middleware/fastapi_rate_limiter.py`); exempt for localhost and `EVAL_MODE=1`
+- CORS/CSRF: `_ALLOWED_ORIGINS` (exact match) + `_ALLOWED_ORIGIN_SUFFIXES` (suffix match, includes `*.pages.dev` for Cloudflare Pages preview deployments incl. Meridian Operations Terminal)
 
 **Key globals:** `app`, `_kg`, `_decay_worker`, `_ingest_scheduler`, `DB_PATH` (via `extensions.py`)
 

@@ -4,7 +4,7 @@ Base URL: `https://api.trading-galaxy.uk` (production) · `http://localhost:5050
 
 **Framework:** FastAPI (`api_v2.py`), served by Gunicorn + UvicornWorker.
 
-**CORS:** Cross-origin requests are accepted from `https://trading-galaxy.uk`, `https://www.trading-galaxy.uk`, `https://app.trading-galaxy.uk`, `http://localhost:3000`, and `http://localhost:5173`. All methods and headers are allowed (`allow_methods=["*"]`, `allow_headers=["*"]`).
+**CORS:** Cross-origin requests are accepted from the `_ALLOWED_ORIGINS` exact-match set plus `_ALLOWED_ORIGIN_SUFFIXES` suffix matches. Exact origins: `trading-galaxy.uk`, `www.trading-galaxy.uk`, `app.trading-galaxy.uk`, `meridian-operations-terminal.uk`, `www.meridian-operations-terminal.uk`, `localhost:3000/5173/8080`. Suffix wildcards: `*.trycloudflare.com`, `*.ngrok-free.app`, `*.ngrok.io`, `*.pages.dev` (covers all CF Pages preview URLs). All methods and headers are allowed. Caddy reflects the exact `Origin` header so `credentials: 'include'` works correctly from all allowed origins.
 
 **Rate limiting:** `slowapi` (in-memory). Exempt for `EVAL_MODE=1` and localhost. `/waitlist` is 3/hour per IP; chat and other sensitive endpoints are individually gated.
 

@@ -43,7 +43,8 @@ def _advance_to_active(db_path: str, followup_id: int, ticker: str, price: float
             """UPDATE tip_followups
                SET status = 'active',
                    entry_price = COALESCE(entry_price, ?),
-                   opened_at = COALESCE(opened_at, ?)
+                   opened_at = COALESCE(opened_at, ?),
+                   initiated_by = 'system'
                WHERE id = ? AND status = 'staged'""",
             (price, datetime.now(timezone.utc).isoformat(), followup_id),
         )

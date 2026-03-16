@@ -340,32 +340,41 @@ The system is configured for UK/LSE-first operation:
 
 ## Frontend
 
-Two SPAs, both zero-build vanilla JS, served from a single publish dir (`static/`):
+Two separate clients consume `https://api.trading-galaxy.uk`:
+
+### Trading Galaxy App
+
+Zero-build vanilla JS, served from `static/` publish dir (Cloudflare Pages `mem-backend2`):
 
 | File | Served at | Purpose |
 |---|---|---|
 | `static/index.html` | `https://trading-galaxy.uk/` | Marketing landing page |
-| `static/login/index.html` | `https://trading-galaxy.uk/login` (+ all SPA routes via `_redirects`) | Main app — auth + all screens |
-| `static/login/css/app.css` | External stylesheet for the app | Extracted from inline `<style>` |
-| `static/login/js/*.js` | 17 JS files loaded in order | Extracted from inline `<script>` |
+| `static/login/index.html` | `https://trading-galaxy.uk/login` + SPA routes | Main app — auth + all screens |
+| `static/login/css/app.css` | External stylesheet | Extracted styles |
+| `static/login/js/*.js` | 17 JS files loaded in order | Extracted scripts |
+| `static/auth/index.html` | `https://trading-galaxy.uk/auth/` | Standalone auth page |
 
 **Screens:** Auth · Dashboard · Portfolio · Chat · Tips · Patterns · Network · History · Paper Trader · Subscription · Profile
 
-**Session restore:** on boot the SPA calls `GET /auth/me` via the `tg_access` HttpOnly cookie. If 401, it silently attempts `POST /auth/refresh` once. If that fails too, it shows the auth screen in-place (no page redirect).
+**Session restore:** on boot calls `GET /auth/me` via `tg_access` HttpOnly cookie. If 401, silently attempts `POST /auth/refresh`. If that fails, shows auth screen in-place.
 
-The `API` constant is environment-aware:
-```js
-const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? 'http://localhost:5050'
-    : 'https://api.trading-galaxy.uk';
-```
+All fetch calls use `credentials: 'include'` to send HttpOnly cookies cross-origin. API base auto-selects `http://localhost:5050` in dev, `https://api.trading-galaxy.uk` in production.
 
-All fetch calls use `credentials: 'include'` to send HttpOnly cookies cross-origin.
+### Meridian Operations Terminal
 
-**Portfolio screen — three entry paths:**
-1. **Screenshot upload** — drop/click broker screenshot → `POST /users/{id}/history/screenshot` → `llava` vision model extracts holdings JSON → auto-populates rows
-2. **FTSE sector quick-add** — `[+ FTSE Banks]` `[+ FTSE Energy]` `[+ FTSE Mining]` `[+ FTSE Pharma]` `[+ FTSE Tech]` buttons
-3. **Manual add with autocomplete** — seeds from `GET /universe/coverage`, falls back to hardcoded FTSE top-25 list; `.L` suffix aware
+React 18 + Vite SPA. Separate repo at `C:\Users\alber\CascadeProjects\Meridian Operations Terminal`.
+
+| Property | Value |
+|---|---|
+| Production URL | `https://meridian-operations-terminal-co.pages.dev` |
+| CF Pages project | `meridian-operations-terminal-co` |
+| Custom domain | `meridian-operations-terminal.uk` (DNS pending) |
+| API | same `https://api.trading-galaxy.uk` backend |
+| Auth | Bearer token in memory; refresh token in sessionStorage (`mot_refresh`) |
+
+**Screens:** Atlas (market intelligence) · Dispatch (morning briefing) · Crucible (decision queue) · Forge (kanban pipeline, premium) · Sentinel (positions) · Network/Fleet Intel · Oracle (AI chat, premium) · Subscriptions
+
+See `docs/frontend.md` Part 2 for full screen-level documentation.
 
 ---
 
@@ -474,17 +483,24 @@ One-shot full deploy (backend + frontend):
 
 ### CORS
 
-Allowed origins (configured in `api_v2.py` via FastAPI `CORSMiddleware`):
+Configured in `api_v2.py` via two mechanisms:
 
-| Origin | Purpose |
+1. **`_ALLOWED_ORIGINS` frozenset** — exact-match allowlist checked by CSRF middleware and `CORSMiddleware`
+2. **`_ALLOWED_ORIGIN_SUFFIXES` tuple** — suffix-match allowlist (no regex needed for these)
+
+| Origin / Suffix | Purpose |
 |---|---|
-| `https://trading-galaxy.uk` | App frontend (Cloudflare Pages) |
-| `https://www.trading-galaxy.uk` | App frontend www |
-| `https://app.trading-galaxy.uk` | App subdomain |
-| `http://localhost:3000` | Local dev |
-| `http://localhost:5173` | Vite local dev |
+| `https://trading-galaxy.uk` | TG app (CF Pages) |
+| `https://www.trading-galaxy.uk` | TG app www |
+| `https://app.trading-galaxy.uk` | TG app subdomain |
+| `https://meridian-operations-terminal.uk` | Meridian custom domain |
+| `https://www.meridian-operations-terminal.uk` | Meridian www |
+| `http://localhost:3000` / `:5173` / `:8080` | Local dev |
+| `*.trycloudflare.com` | Cloudflare dev tunnels |
+| `*.ngrok-free.app` / `*.ngrok.io` | ngrok tunnels |
+| `*.pages.dev` | All Cloudflare Pages preview deployments (includes `meridian-operations-terminal-co.pages.dev`) |
 
-Allowed methods: `GET POST PATCH OPTIONS`. Allowed headers: `Authorization Content-Type`.
+**Caddy** (`/etc/caddy/Caddyfile`) reflects the exact request `Origin` header rather than returning `*`, ensuring `Access-Control-Allow-Credentials: true` is browser-compatible. The Caddy `respond @options 204` block handles preflight immediately without forwarding to FastAPI.
 
 ---
 

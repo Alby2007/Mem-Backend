@@ -1,8 +1,24 @@
-# Frontend — Comprehensive Reference
+# Frontend
 
-**File:** `static/login/index.html` (CSS: `static/login/css/app.css`, JS: `static/login/js/*.js`)  
-**Served at:** `https://trading-galaxy.uk/login` + all SPA routes (Cloudflare Pages — project `mem-backend2`, publish dir `static/`)  
+Two separate frontend clients consume the Trading Galaxy API at `https://api.trading-galaxy.uk`:
+
+| Client | Repo path | Hosted at | Stack |
+|---|---|---|---|
+| **Trading Galaxy App** | `static/` in this repo | `https://trading-galaxy.uk` (CF Pages `mem-backend2`) | Vanilla JS, zero-build, zero deps |
+| **Meridian Operations Terminal** | `C:\Users\alber\CascadeProjects\Meridian Operations Terminal` | `https://meridian-operations-terminal-co.pages.dev` (CF Pages `meridian-operations-terminal-co`) | React + Vite, Cloudflare Pages |
+
+---
+
+# Part 1 — Trading Galaxy App
+
+**Files:** `static/login/index.html` · `static/login/css/app.css` · `static/login/js/*.js`  
+**Served at:** `https://trading-galaxy.uk/login` + all SPA routes  
 **Architecture:** Zero build step, zero dependencies, zero bundler. CSS and JS extracted into separate files, loaded via `<link>` and `<script src>` tags.
+
+**Deploy:**
+```bash
+npx wrangler pages deploy static --project-name mem-backend2 --branch master --commit-dirty=true
+```
 
 ---
 
@@ -479,33 +495,28 @@ Widget click → onTelegramAuth(tgData) → POST /auth/telegram → { access_tok
 
 ### `_saveSession(token, userId, tgData?)`
 
+Access token is set as an **HttpOnly cookie** (`tg_access`) by the backend — JS never touches it directly. Only `user_id` (non-sensitive) goes to `localStorage`.
+
 ```js
-state.token  = token;
+state.token  = token;   // kept in memory for Authorization header fallback
 state.userId = userId;
-localStorage.setItem('tg_token',   token);
-localStorage.setItem('tg_user_id', userId);
-if (tgData) localStorage.setItem('tg_user_data', JSON.stringify(tgData));
+try { localStorage.setItem('tg_user_id', userId); } catch { /* storage blocked */ }
+if (tgData) { try { localStorage.setItem('tg_user_data', JSON.stringify(tgData)); } catch {} }
 _renderTgChip(tgData, userId);
 ```
 
 ### Session restore on page load
 
-On `DOMContentLoaded`:
-```js
-const t = localStorage.getItem('tg_token');
-const u = localStorage.getItem('tg_user_id');
-if (t && u) { state.token = t; state.userId = u; showScreen('dashboard'); }
-else         { showScreen('auth'); }
-```
+On boot: calls `GET /auth/me` using the `tg_access` HttpOnly cookie (`credentials: 'include'`). If 401, silently attempts `POST /auth/refresh` once using the `tg_refresh` cookie. If that also fails, shows the auth screen in-place — no page redirect.
 
 ### `signOut()`
 
+Calls `POST /auth/logout` to clear HttpOnly cookies server-side, then clears in-memory state and localStorage display data.
+
 ```js
 state.token = null; state.userId = null; state.holdings = [];
-localStorage.removeItem('tg_token');
-localStorage.removeItem('tg_user_id');
-localStorage.removeItem('tg_user_data');
-localStorage.removeItem(`simulated_${userId}`);
+try { localStorage.removeItem('tg_user_id'); localStorage.removeItem('tg_user_data'); } catch {}
+try { localStorage.removeItem(`simulated_${userId}`); } catch {}
 showScreen('auth');
 ```
 
@@ -580,10 +591,11 @@ connect-src 'self' https://api.trading-galaxy.uk;
 
 | Key | Value | Set by | Cleared by |
 |---|---|---|---|
-| `tg_token` | JWT access token string | `_saveSession()` | `signOut()` |
 | `tg_user_id` | User ID string | `_saveSession()` | `signOut()` |
 | `tg_user_data` | JSON of Telegram user object | `_saveSession()` (Telegram flow only) | `signOut()` |
 | `simulated_{userId}` | JSON of simulated profile `{title, description, ...}` | Generate test portfolio / test profile select | `signOut()`, real portfolio submit, "Clear simulated flag" |
+
+**Note:** The JWT access token (`tg_access`) and refresh token (`tg_refresh`) are **HttpOnly cookies** set by the backend — they are not accessible from JS and do not appear in `localStorage`.
 
 ---
 
@@ -632,3 +644,226 @@ if (name === 'myscreen') loadMyScreen();
   <span class="nav-label">My Screen</span>
 </div>
 ```
+
+---
+
+# Part 2 — Meridian Operations Terminal
+
+**Repo:** `C:\Users\alber\CascadeProjects\Meridian Operations Terminal`  
+**Production URL:** `https://meridian-operations-terminal-co.pages.dev`  
+**Custom domain (DNS not yet live):** `meridian-operations-terminal.uk`  
+**CF Pages project:** `meridian-operations-terminal-co` (auto-deploys from `Alby2007/Meridian-Operations-Terminal` `main` branch)  
+**API backend:** same as Trading Galaxy — `https://api.trading-galaxy.uk`
+
+---
+
+## Technology Stack
+
+| Concern | Solution |
+|---|---|
+| Framework | React 18 + React Router v6 |
+| Build tool | Vite |
+| Styling | Custom CSS (`src/theme.css`) with CSS variables |
+| API config | `VITE_API_URL` env var (`.env.production` = `https://api.trading-galaxy.uk`) |
+| Hosting | Cloudflare Pages (auto-deploy from GitHub `main`) |
+| Auth tokens | Access token in memory only; refresh token in `sessionStorage`/`localStorage` (key: `mot_refresh`) |
+
+---
+
+## Project Structure
+
+```
+src/
+  App.jsx          # Router, RequireAuth guard, MainShell, screen routing
+  api.js           # apiFetch wrapper — Bearer token + auto-refresh on 401
+  auth.js          # login / register / logout / refreshToken / checkSession
+  main.jsx         # Vite entry point
+  theme.css        # All CSS (CSS variables + component styles)
+  screens/
+    Landing.jsx       # Public marketing/landing page (/)
+    Login.jsx         # Email/password login form (/login)
+    Register.jsx      # Registration form (/register)
+    Atlas.jsx         # Market intelligence — grid, radar, treemap views
+    Briefing.jsx      # Morning Briefing — overnight P&L, regime, fleet, pattern pool (DISPATCH)
+    DecisionQueue.jsx # Pattern decision queue — CRUCIBLE
+    Forge.jsx         # Kanban pipeline for trade lifecycle (premium) — FORGE
+    Positions.jsx     # Live positions tracker — SENTINEL
+    FleetIntel.jsx    # Bot fleet convergence signals + signal leaderboard — NETWORK
+    Oracle.jsx        # KB-grounded AI chat with overlay mode (premium) — ORACLE
+    Command.jsx       # Quick-access command overlay (key 9)
+    Profile.jsx       # User profile, tip config, account settings
+    Subscriptions.jsx # Tier/plan management
+  components/
+    StatusBar.jsx      # Top navigation bar
+    ParticleNetwork.jsx # Animated particle background on auth screens
+    SplashScreen.jsx   # Loading screen during session check
+    AtlasGrid.jsx      # Atlas grid view component
+    AtlasRadar.jsx     # Atlas radar chart
+    AtlasTreemap.jsx   # Atlas treemap
+    ForgeCard.jsx      # Kanban card with TradingView chart panel
+    PatternCard.jsx    # Pattern signal card
+    PatternDetail.jsx  # Expanded pattern detail
+    Ledger.jsx         # Trade logging overlay (open from Crucible/Forge)
+    PositionRow.jsx    # Single position row
+    KbPanel.jsx        # KB intelligence side panel
+    CalibrationBadge.jsx
+    ConvergenceCard.jsx
+    EpistemicFooter.jsx
+    OracleEmpty.jsx / OracleMessage.jsx
+    PrecedentCard.jsx / TemporalCard.jsx / TransitionCard.jsx
+    TickerAutocomplete.jsx
+```
+
+---
+
+## Routing
+
+| Path | Component | Auth required |
+|---|---|---|
+| `/` | `Landing` | No |
+| `/login` | `Login` (wrapped in `auth-shell` + `ParticleNetwork`) | No |
+| `/register` | `Register` (wrapped in `auth-shell` + `ParticleNetwork`) | No |
+| `/:userId/home` | `MainShell` (via `RequireAuth`) | Yes |
+| `*` | Redirect to `/` | — |
+
+`RequireAuth` calls `checkSession()` (= `refreshToken()`) on mount. Shows `SplashScreen` during the check. Redirects to `/login` if no valid session.
+
+---
+
+## Screens (inside MainShell)
+
+All screens are rendered inside `MainShell` — no page navigation, just state-driven switching. Keyboard shortcuts: `1`–`8` for screens, `9` for Command overlay, `0` for Profile.
+
+| Key | Screen | Component | Tier gate |
+|---|---|---|---|
+| `atlas` | Atlas | `Atlas.jsx` | Free+ |
+| `dispatch` | Morning Briefing | `Briefing.jsx` | Free+ |
+| `crucible` | Decision Queue | `DecisionQueue.jsx` | Free+ |
+| `forge` | Trade Pipeline (Kanban) | `Forge.jsx` | Premium+ |
+| `sentinel` | Positions | `Positions.jsx` | Free+ |
+| `network` | Fleet Intelligence | `FleetIntel.jsx` | Free+ |
+| `oracle` | AI Chat | `Oracle.jsx` | Premium+ |
+| `subscriptions` | Plans | `Subscriptions.jsx` | Free+ |
+
+Locked screens show `LockedScreen` component with a "View Plans" CTA.
+
+---
+
+## Screen Details
+
+### Dispatch (Morning Briefing)
+`GET /ops/briefing?user_id=` — falls back to two separate calls (`/private-fleet/status` + `/private-fleet/closed-positions`) if the briefing endpoint is not ready.
+
+Three-column layout:
+- **Left** — Overnight Activity (closed count, win rate, avg R, gross R) + Observatory (last run, findings count)
+- **Centre** — Market Regime badge + Macro Proxies (SPY/HYG/TLT last price + regime)
+- **Right** — Fleet Overnight (open positions, active bots, convergence) + Pattern Pool (total open, actionable, quality buckets)
+
+Auto-refreshes every 60s.
+
+---
+
+### Forge (Trade Pipeline)
+`GET /ops/pipeline` — 6-column Kanban board: **Detected → Watching → Staged → Active → Assessing → Complete**.
+
+- **Detected** column: de-duplicated by ticker (one card per ticker shown), personalised suggestions from the KB signal pipeline
+- Drag-and-drop between columns (HTML5 drag events)
+- **Selected card** opens a persistent TradingView chart panel on the right side of the board
+- Chart panel maps ticker suffix to TradingView exchange prefix (`.L` → `LSE:`, `.T` → `TSE:`, etc.)
+- Account size loaded from `GET /users/{id}/tip-config` and `localStorage meridian_command_v1`
+- `ForgeCard` component handles card rendering, position sizing display, and chart toggle
+
+---
+
+### Sentinel (Positions)
+`GET /users/{id}/private-fleet/positions` — live open positions from the paper fleet.
+
+---
+
+### Fleet Intelligence
+Three sections, refreshes every 30s:
+1. **Convergence Signals** — computed client-side from open positions: groups by `ticker|direction`, shows cards where ≥3 bots are in the same direction
+2. **Signal Leaderboard** — `GET /users/{id}/private-fleet/report?min_observations=3&limit=10` — top calibration cells by hit rate
+3. **Observatory** — `GET /users/{id}/private-fleet/calibration-obs?limit=200` — signal cell stats (total observations, outcome breakdown)
+
+---
+
+### Oracle (AI Chat)
+`POST /chat` with `{ user_id, session_id, message, overlay_mode }`.
+
+- **Overlay mode** toggle (◈ button) — includes chart overlay context in the KB retrieval
+- **Workflow commands** (＋ button) — `/setup`, `/regime`, `/calibration` prefill the textarea
+- **Ticker autocomplete** — triggered by `$` prefix in textarea, resolves against universe
+- Auto-resizes textarea up to 120px
+- Session ID is `s_{Date.now()}`, persists for the tab lifetime
+- Workflow state tracked via `data.workflow` in response — shows cancel banner
+
+---
+
+### Atlas
+Multi-view market intelligence panel with `AtlasGrid`, `AtlasRadar`, `AtlasTreemap` sub-components.
+
+---
+
+### Command Overlay
+`Command.jsx` — quick-access overlay toggled by key `9`. Allows fast navigation and common actions without leaving the current screen.
+
+---
+
+## Authentication (`src/auth.js`)
+
+Security model: **access token in memory only** (never localStorage — XSS protection). Refresh token in `sessionStorage` first, `localStorage` fallback (key: `mot_refresh`).
+
+| Function | Purpose |
+|---|---|
+| `login(email, password)` | `POST /auth/token` → stores access token in `_memoryToken`, stores refresh token |
+| `register(email, password, betaPassword)` | `POST /auth/register` → calls `login()` |
+| `logout()` | `POST /auth/logout` → clears `mot_refresh` from storage, clears `_memoryToken` |
+| `refreshToken()` | `POST /auth/refresh` with stored `mot_refresh` → updates `_memoryToken` |
+| `checkSession()` | Alias for `refreshToken()` — used by `RequireAuth` on mount |
+| `getToken()` | Returns `_memoryToken` |
+| `getUserId()` | Returns `_userId` |
+
+---
+
+## API Layer (`src/api.js`)
+
+`apiFetch(path, options)` — all API calls go through this:
+- Reads `getToken()` and injects `Authorization: Bearer <token>` header
+- On `401`: attempts `refreshToken()` once, retries the original request if successful
+- Throws on non-OK responses (callers handle errors)
+- Base URL: `import.meta.env.VITE_API_URL` (set in `.env.production`)
+
+---
+
+## Tier Access
+
+| Tier | Accessible screens |
+|---|---|
+| `free` | atlas, dispatch, crucible, sentinel, network, subscriptions |
+| `premium` | all screens (adds forge, oracle) |
+| `pro` | all screens (same as premium) |
+
+Tier is loaded from `GET /users/{id}/profile` on `MainShell` mount.
+
+---
+
+## Local Development
+
+```bash
+cd "C:\Users\alber\CascadeProjects\Meridian Operations Terminal"
+npm install
+npm run dev      # Vite dev server, uses VITE_API_URL from .env.local
+```
+
+`.env.local` sets `VITE_API_URL=https://api.trading-galaxy.uk` (points at production API).
+
+## Deployment
+
+Auto-deploys from GitHub `main` via Cloudflare Pages. To force deploy manually:
+
+```bash
+npx wrangler pages deploy dist --project-name meridian-operations-terminal-co --branch main --commit-dirty=true
+```
+
+(Vite must build first: `npm run build` outputs to `dist/`)

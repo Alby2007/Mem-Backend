@@ -68,7 +68,8 @@ def _advance_to_assessing(
             f"""UPDATE tip_followups
                SET status = ?,
                    exit_price = ?,
-                   closed_at = ?
+                   closed_at = ?,
+                   initiated_by = 'system'
                    {r_clause}
                WHERE id = ? AND status = 'active'""",
             params,

@@ -1003,6 +1003,7 @@ class PipelineStageRequest(BaseModel):
     target_2: float | None = None
     target_entry: float | None = None
     target_exit: float | None = None
+    initiated_by: str | None = None
 
 
 @router.get('/ops/pipeline/detected')
@@ -1256,6 +1257,9 @@ async def pipeline_stage(followup_id: int, data: PipelineStageRequest, current_u
         if data.note is not None:
             updates.append('user_note = ?')
             params.append(data.note[:500])
+        if data.initiated_by is not None:
+            updates.append('initiated_by = ?')
+            params.append(data.initiated_by)
         if data.stage in ('complete', 'assessing'):
             from datetime import datetime, timezone
             updates.append('closed_at = ?')
