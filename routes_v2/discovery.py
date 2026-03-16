@@ -711,6 +711,28 @@ async def get_corpus_bulk(current_user: str = Depends(get_current_user)):
         conn.close()
 
 
+@router.get('/ops/sentinel/positions')
+async def sentinel_positions(current_user: str = Depends(get_current_user)):
+    """All open paper positions across all bots — for SENTINEL convergence view."""
+    _dev_gate(current_user)
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("""
+            SELECT pp.ticker, pp.direction,
+                   pp.entry_price, pp.stop, pp.t1, pp.t2,
+                   pp.opened_at, pp.pnl_r, pp.bot_id, pp.user_id,
+                   pbc.strategy_name, pbc.pattern_types, pbc.sectors
+            FROM paper_positions pp
+            LEFT JOIN paper_bot_configs pbc ON pbc.bot_id = pp.bot_id
+            WHERE pp.status = 'open'
+            ORDER BY pp.opened_at DESC
+        """).fetchall()
+        return {'positions': [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
 # ── FORGE Pipeline ────────────────────────────────────────────────────────────
 
 import json as _json
