@@ -129,7 +129,7 @@ async def _lifespan(app: FastAPI):
 
         # Derived signals — sector rotation, enrichment (no external API needed)
         scheduler.register(SectorRotationAdapter(db_path=db_path), interval_sec=3600)
-        scheduler.register(SignalEnrichmentAdapter(db_path=db_path), interval_sec=3600)
+        scheduler.register(SignalEnrichmentAdapter(db_path=db_path), interval_sec=900)
 
         # SEC real-time filings — 8-K atom feed
         scheduler.register(EDGARRealtimeAdapter(db_path=db_path), interval_sec=1800)

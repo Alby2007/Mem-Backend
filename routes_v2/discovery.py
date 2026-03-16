@@ -924,6 +924,7 @@ def _detected_for_user(conn, user_id: str, limit: int = 15) -> list[dict]:
            WHERE status NOT IN ('filled','broken','expired')
              AND quality_score >= 0.35"""
     ).fetchall()
+    pat_rows = [r for r in pat_rows if r['kb_conviction'] or r['kb_signal_dir']]
 
     # Group by ticker
     pats_by_ticker: dict[str, list] = {}
