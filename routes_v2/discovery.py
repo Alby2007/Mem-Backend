@@ -779,7 +779,10 @@ async def network_matrix(current_user: str = Depends(get_current_user)):
               )
             GROUP BY pattern_type, market_regime
         """).fetchall()
-        return {'matrix': [dict(r) for r in rows]}
+        total_cells = conn.execute(
+            "SELECT COUNT(*) FROM signal_calibration WHERE sample_size >= 10"
+        ).fetchone()[0]
+        return {'matrix': [dict(r) for r in rows], 'total_cells': total_cells}
     finally:
         conn.close()
 
