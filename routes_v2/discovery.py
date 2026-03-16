@@ -910,6 +910,8 @@ def _score_pattern_for_user(pat: dict, facts: dict, user_prefs: dict, pipeline_t
             """, (ticker_upper, pat_type, tf, _MIN_CAL_SAMPLES)).fetchone()
 
         is_tf_fallback = False
+        _tf_discount   = 1.0
+        _TF_DISCOUNT   = {'15m': 0.5, '1h': 0.65, '4h': 0.8}
         if not cal_row and tf != '1d':
             if current_regime:
                 cal_row = conn.execute("""
@@ -936,30 +938,26 @@ def _score_pattern_for_user(pat: dict, facts: dict, user_prefs: dict, pipeline_t
                     ORDER BY sample_size DESC LIMIT 1
                 """, (ticker_upper, pat_type, _MIN_CAL_SAMPLES)).fetchone()
             if cal_row:
-                _TF_DISCOUNT = {'15m': 0.5, '1h': 0.65, '4h': 0.8}
-                discount = _TF_DISCOUNT.get(tf, 0.6)
-                cal_row = (
-                    cal_row[0] * discount,
-                    cal_row[1],
-                    cal_row[2],
-                    cal_row[3],
-                    cal_row[4],
-                )
+                _tf_discount   = _TF_DISCOUNT.get(tf, 0.6)
                 is_tf_fallback = True
 
         if cal_row:
-            hit_rate   = cal_row[0] or 0.0
-            stop_rate  = cal_row[2] or 1.0
-            n          = cal_row[3] or 0
-            size_weight = min(1.0, _math.log(n + 1) / _math.log(201))
-            hit_score   = max(0.0, (hit_rate - 0.5) * 2.0)
+            _CAL_BASELINE       = 0.50
+            _CAL_BASELINE_PROXY = 0.35
+            baseline     = _CAL_BASELINE_PROXY if is_tf_fallback else _CAL_BASELINE
+            hit_rate     = cal_row[0] or 0.0
+            stop_rate    = cal_row[2] or 1.0
+            n            = cal_row[3] or 0
+            size_weight  = min(1.0, _math.log(n + 1) / _math.log(201))
+            hit_score    = max(0.0, (hit_rate - baseline) * 2.0)
             stop_penalty = stop_rate * 0.5
-            cal_bonus = _CAL_BONUS_MAX * hit_score * size_weight * (1.0 - stop_penalty)
+            cal_bonus    = _CAL_BONUS_MAX * hit_score * size_weight * (1.0 - stop_penalty)
+            if is_tf_fallback:
+                cal_bonus *= _tf_discount
             score += round(cal_bonus, 2)
             if cal_bonus > 5:
                 if is_tf_fallback:
-                    _raw_hr = (cal_row[0] / _TF_DISCOUNT.get(tf, 0.6)) * 100
-                    reasons.append(f'\u25ce {_raw_hr:.0f}% 1d')
+                    reasons.append(f'\u25ce {(hit_rate * 100):.0f}% 1d')
                 else:
                     reasons.append(f'\u25ce {(hit_rate * 100):.0f}% hist')
     except Exception:
