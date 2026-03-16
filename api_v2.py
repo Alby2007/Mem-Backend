@@ -206,6 +206,9 @@ async def _lifespan(app: FastAPI):
         from ingest.signal_decay_adapter import SignalDecayAdapter
         scheduler.register(SignalDecayAdapter(db_path=db_path), interval_sec=21600)
 
+        from ingest.kb_cleanup_adapter import KBCleanupAdapter
+        scheduler.register(KBCleanupAdapter(db_path=db_path), interval_sec=21600)
+
         # Strategy evolution — fitness scoring, kill/spawn cycle every 6h
         from ingest.strategy_evolution_adapter import StrategyEvolutionAdapter
         scheduler.register(StrategyEvolutionAdapter(db_path=db_path), interval_sec=21600)
