@@ -819,6 +819,22 @@ class BotRunner:
                         skips += 1
                         continue
 
+                # near_52w_high + bullish hard skip.
+                # Ledger data: 12 resolved predictions in this regime, 41.7% hit rate
+                # vs 65.2% overall — negative edge for bullish entries into exhaustion.
+                # Bearish setups at near_52w_high are fine (fade/reversal logic).
+                if direction == 'bullish':
+                    _pr = self._get_ticker_atom(ticker, 'price_regime', conn)
+                    if _pr and _pr.lower() in ('near_52w_high', 'near_high'):
+                        skips += 1
+                        conn.execute(
+                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                            (user_id, 'skip', ticker,
+                             f'near_52w_high skip: bullish entry into exhaustion (hit rate 41.7% vs 65.2% avg)',
+                             bot_id, now_iso)
+                        )
+                        continue
+
                 # Post-query regime filter
                 if reg_list and regime:
                     if not any(r in regime for r in reg_list):

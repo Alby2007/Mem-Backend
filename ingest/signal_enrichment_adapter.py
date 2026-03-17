@@ -396,7 +396,13 @@ def _compute_position_sizing_atoms(
     elif sq == 'confirmed':
         tier = 'medium'
         ct_rule = 'CT-M1_confirmed'
-    # CT-LOW continued (tight but not strong, or macro unconfirmed)
+    # CT-LOW continued (tight but not strong, extended, or macro unconfirmed)
+    elif sq == 'extended':
+        # Extended signal (bullish but near_52w_high) — legitimate setup only at
+        # reduced size. 'medium' was giving these the same weight as confirmed signals;
+        # ledger data shows near_52w_high bullish hit rate of 41.7% vs 65% overall.
+        tier = 'low'
+        ct_rule = 'CT-L4_extended'
     elif rl == 'tight':
         tier = 'low'
         ct_rule = 'CT-L2_tight_risk'
