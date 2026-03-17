@@ -790,16 +790,21 @@ class BotRunner:
                 # Fix 6: 1 entry per scan cycle maximum
                 if entries >= 1:
                     break
-                if ticker in open_tickers or ticker in _global_open or ticker in cooled:
+                # Same-bot dedup + stopped-out cooldown
+                if ticker in open_tickers or ticker in cooled:
                     skips += 1
                     continue
-                # Fix 5: Fleet-wide ticker concentration cap
+                # Fleet-wide ticker concentration cap — allows up to _FLEET_MAX_PER_TICKER
+                # bots to hold the same ticker, but no more.
+                # Uses in-memory _fleet_ticker_count (updated on each entry this cycle)
+                # plus a re-check against the DB inside the INSERT to guard against
+                # race conditions between concurrent bot threads.
                 if _fleet_ticker_count.get(ticker, 0) >= _FLEET_MAX_PER_TICKER:
                     skips += 1
                     conn.execute(
                         "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
                         (user_id, 'skip', ticker,
-                         f'Fleet concentration cap: {_fleet_ticker_count[ticker]} bots already hold {ticker}',
+                         f'Fleet cap ({_FLEET_MAX_PER_TICKER}): {_fleet_ticker_count.get(ticker,0)} bots already hold {ticker}',
                          bot_id, now_iso)
                     )
                     continue
@@ -969,6 +974,24 @@ class BotRunner:
                         continue
                     qty = round(remaining_cash / entry_p, 4)
                     pos_value = round(entry_p * qty, 2)
+
+                # Race-condition guard: re-check fleet count inside this connection
+                # right before INSERT. Two threads may both pass the in-memory check
+                # above simultaneously before either commits — this closes that window.
+                _live_fleet_count = conn.execute(
+                    "SELECT COUNT(*) FROM paper_positions "
+                    "WHERE user_id=? AND ticker=? AND status='open'",
+                    (user_id, ticker)
+                ).fetchone()[0]
+                if _live_fleet_count >= _FLEET_MAX_PER_TICKER:
+                    skips += 1
+                    conn.execute(
+                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                        (user_id, 'skip', ticker,
+                         f'Race guard: {_live_fleet_count} open positions for {ticker} at commit time',
+                         bot_id, now_iso)
+                    )
+                    continue
 
                 # Deduct from bot balance
                 conn.execute(
