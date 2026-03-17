@@ -339,7 +339,10 @@ class StateSnapshotAdapter(BaseIngestAdapter):
 
             ticker_states: Dict[str, dict] = {}
             for ticker in watchlist:
-                state = _read_ticker_state(conn, ticker)
+                # Facts are stored lowercase; ticker from DynamicWatchlist is uppercase.
+                # Query with lowercase, but store subject with original case so it
+                # matches ohlcv_cache (which is uppercase) for forward-return lookups.
+                state = _read_ticker_state(conn, ticker.lower())
                 if state:
                     ticker_states[ticker] = state
 

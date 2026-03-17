@@ -123,6 +123,35 @@ class KBCleanupAdapter(BaseIngestAdapter):
                 _logger.debug('[kb_cleanup] refresh_tokens pass skipped: %s', e)
                 counts['refresh_tokens_deleted'] = 0
 
+            # ── Pass 5: prediction ledger bulk resolution ────────────────────
+            pl_resolved = 0
+            try:
+                unresolved = conn.execute(
+                    """SELECT DISTINCT LOWER(pl.ticker) as t, f.object as price
+                       FROM prediction_ledger pl
+                       JOIN facts f ON LOWER(f.subject) = LOWER(pl.ticker)
+                           AND f.predicate = 'last_price'
+                       WHERE pl.outcome IS NULL"""
+                ).fetchall()
+                if unresolved:
+                    from analytics.prediction_ledger import PredictionLedger
+                    _pl = PredictionLedger(self._db)
+                    for ticker_l, price_str in unresolved:
+                        try:
+                            price = float(str(price_str).split()[0].replace(',', ''))
+                            _pl.on_price_written(ticker_l, price)
+                            pl_resolved += 1
+                        except Exception:
+                            pass
+                conn.execute(
+                    """UPDATE prediction_ledger SET outcome='expired', resolved_at=datetime('now')
+                       WHERE outcome IS NULL AND expires_at < datetime('now')"""
+                )
+                conn.commit()
+            except Exception as e:
+                _logger.debug('[kb_cleanup] prediction ledger pass skipped: %s', e)
+            counts['prediction_ledger_swept'] = pl_resolved
+
             after = conn.execute('SELECT COUNT(*) FROM facts').fetchone()[0]
             counts['facts_before'] = before
             counts['facts_after'] = after
@@ -130,12 +159,13 @@ class KBCleanupAdapter(BaseIngestAdapter):
 
             _logger.info(
                 '[kb_cleanup] %d → %d facts (-%d): '
-                'decay=%d, theses=%d, dupes=%d | refresh_tokens=%d',
+                'decay=%d, theses=%d, dupes=%d | refresh_tokens=%d | pl_swept=%d',
                 before, after, before - after,
                 counts['decay_facts_deleted'],
                 counts['old_theses_deleted'],
                 counts['duplicate_macro_deleted'],
                 counts['refresh_tokens_deleted'],
+                counts['prediction_ledger_swept'],
             )
 
         finally:
@@ -167,6 +197,7 @@ class KBCleanupAdapter(BaseIngestAdapter):
                 'old_theses_deleted':      str(raw.get('old_theses_deleted', 0)),
                 'duplicate_macro_deleted': str(raw.get('duplicate_macro_deleted', 0)),
                 'refresh_tokens_deleted':  str(raw.get('refresh_tokens_deleted', 0)),
+                'prediction_ledger_swept': str(raw.get('prediction_ledger_swept', 0)),
             },
             upsert = True,
         )]

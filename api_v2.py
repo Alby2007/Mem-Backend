@@ -187,6 +187,11 @@ async def _lifespan(app: FastAPI):
         from ingest.historical_calibration_adapter import HistoricalCalibrationAdapter
         scheduler.register(HistoricalCalibrationAdapter(db_path=db_path), interval_sec=86400)
 
+        # Daily signal snapshot — captures conviction tiers for forward-looking backtest.
+        # Each snapshot is one data point; after 30+ days the backtest has statistical power.
+        from ingest.signal_snapshot_adapter import SignalSnapshotAdapter
+        scheduler.register(SignalSnapshotAdapter(db_path=db_path), interval_sec=86400)
+
         # State snapshots — full market state vectors every 6h for temporal search
         from ingest.state_snapshot_adapter import StateSnapshotAdapter
         scheduler.register(StateSnapshotAdapter(db_path=db_path), interval_sec=21600)

@@ -86,10 +86,17 @@ def _forward_returns(
     snapshot_at: str,
     db_path: str,
 ) -> Tuple[Optional[float], Optional[float]]:
-    """Look up 1w and 1m price returns after snapshot_at from ohlcv_cache."""
+    """Look up 1w and 1m price returns after snapshot_at from ohlcv_cache.
+
+    For global scope (subject='market'), SPY is used as a proxy since 'market'
+    has no ohlcv_cache row. For ticker scope, the subject IS the ticker.
+    """
     try:
         from analytics.temporal_search import compute_forward_outcomes
-        return compute_forward_outcomes(subject, snapshot_at, db_path)
+        # Global scope uses 'market' as subject — ohlcv_cache has no 'market' rows.
+        # Use SPY as the market proxy for forward return calculations.
+        lookup = 'SPY' if subject.lower() in ('market', 'global', 'us_macro') else subject
+        return compute_forward_outcomes(lookup, snapshot_at, db_path)
     except Exception:
         pass
     return None, None
@@ -220,6 +227,35 @@ class TransitionEngine:
                 _log.debug('build_transitions: insert failed: %s', exc)
 
         conn.commit()
+
+        # Back-fill forward returns for any existing rows with NULL values.
+        # These were written before the global-scope fix or before ohlcv data arrived.
+        try:
+            null_rows = conn.execute(
+                """SELECT id, subject, transition_at FROM state_transitions
+                   WHERE scope=? AND subject=?
+                   AND (forward_return_1w IS NULL OR forward_return_1m IS NULL)""",
+                (scope, subject),
+            ).fetchall()
+            updated = 0
+            for row_id, row_subject, trans_at in null_rows:
+                try:
+                    r1w_u, r1m_u = _forward_returns(row_subject, trans_at, self._db_path)
+                    if r1w_u is not None or r1m_u is not None:
+                        conn.execute(
+                            "UPDATE state_transitions SET forward_return_1w=?, forward_return_1m=? WHERE id=?",
+                            (r1w_u, r1m_u, row_id),
+                        )
+                        updated += 1
+                except Exception:
+                    pass
+            if updated:
+                conn.commit()
+                _log.info('build_transitions: back-filled %d forward return rows (%s/%s)',
+                          updated, scope, subject)
+        except Exception as e:
+            _log.debug('build_transitions: back-fill failed: %s', e)
+
         conn.close()
         _log.info('build_transitions(%s/%s): %d rows written from %d snapshots', scope, subject, written, len(rows))
         return written
