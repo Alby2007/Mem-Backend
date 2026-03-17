@@ -175,10 +175,18 @@ def _parse_form4_document(cik: str, accession: str) -> List[dict]:
     """
     Fetch the primary Form 4 XML document and extract transactions.
     Returns list of {code, value_usd, role} dicts.
+
+    Bugs fixed vs original:
+      1. Index URL was '{accession}-index.json' — SEC returns 404.
+         Correct path is just 'index.json' in the filing directory.
+      2. Type filter was f.get('type') == '4' — SEC always returns type='text.gif'.
+         Correct filter is endswith('.xml') with no type check.
+      3. Only parsed nonDerivativeTransaction — derivativeTransaction
+         (RSU awards, options exercises) are now also included.
     """
     acc_clean = accession.replace('-', '')
     base_url = f'https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc_clean}/'
-    idx_url  = base_url + f'{accession}-index.json'
+    idx_url  = base_url + 'index.json'          # FIX 1: was {accession}-index.json
 
     try:
         resp = requests.get(
@@ -188,11 +196,12 @@ def _parse_form4_document(cik: str, accession: str) -> List[dict]:
         )
         resp.raise_for_status()
         idx = resp.json()
-        # Find the primary XML document
+        # FIX 2: match on .xml extension only — type is always 'text.gif' from SEC
         xml_file = None
-        for f in idx.get('directory', {}).get('item', []):
-            if f.get('type') == '4' and f.get('name', '').endswith('.xml'):
-                xml_file = f['name']
+        for item in idx.get('directory', {}).get('item', []):
+            name = item.get('name', '')
+            if name.endswith('.xml') and not name.endswith('-index.xml'):
+                xml_file = name
                 break
         if not xml_file:
             return []
@@ -231,23 +240,38 @@ def _parse_form4_document(cik: str, accession: str) -> List[dict]:
             else:
                 role = 'officer'
 
-    # Parse non-derivative transactions
-    for txn in root.findall('.//nonDerivativeTransaction'):
-        code_el  = txn.find('transactionCoding/transactionCode')
-        shares_el = txn.find('transactionAmounts/transactionShares/value')
-        price_el  = txn.find('transactionAmounts/transactionPricePerShare/value')
-        if code_el is None:
-            continue
-        code = (code_el.text or '').strip().upper()
-        if code not in _BUY_CODES and code not in _SELL_CODES:
-            continue
-        try:
-            shares = float(shares_el.text) if shares_el is not None and shares_el.text else 0.0
-            price  = float(price_el.text)  if price_el  is not None and price_el.text  else 0.0
-            value  = shares * price
-        except ValueError:
-            continue
-        transactions.append({'code': code, 'value_usd': value, 'role': role})
+    # FIX 3: parse both non-derivative AND derivative transactions.
+    # Non-derivative = direct stock purchases/sales (P/S codes, real $ value).
+    # Derivative = RSU awards/options exercises (A/M codes, often $0 price but shares have value).
+    # For derivatives with $0 price, use underlying shares * last_price approximation (skip if 0).
+    txn_sources = [
+        ('.//nonDerivativeTransaction', False),
+        ('.//derivativeTransaction',    True),
+    ]
+    for xpath, is_derivative in txn_sources:
+        for txn in root.findall(xpath):
+            code_el   = txn.find('transactionCoding/transactionCode')
+            shares_el = txn.find('transactionAmounts/transactionShares/value')
+            price_el  = txn.find('transactionAmounts/transactionPricePerShare/value')
+            # Derivative: try underlyingSecurity shares as fallback
+            if shares_el is None and is_derivative:
+                shares_el = txn.find('underlyingSecurity/underlyingSecurityShares/value')
+            if code_el is None:
+                continue
+            code = (code_el.text or '').strip().upper()
+            if code not in _BUY_CODES and code not in _SELL_CODES:
+                continue
+            try:
+                shares = float(shares_el.text) if shares_el is not None and shares_el.text else 0.0
+                price  = float(price_el.text)  if price_el  is not None and price_el.text  else 0.0
+                value  = shares * price
+                # Derivative awards at $0 price still represent value — skip them for
+                # conviction scoring (we can't compute dollar value without live price)
+                if value == 0 and is_derivative:
+                    continue
+            except ValueError:
+                continue
+            transactions.append({'code': code, 'value_usd': value, 'role': role})
 
     return transactions
 
