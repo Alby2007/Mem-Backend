@@ -103,8 +103,20 @@ def _make_access_token(user_id: str, email: str, token_version: int = 0) -> str:
     return _jwt.encode(payload, _SECRET_KEY, algorithm='HS256')
 
 
-def _make_token(user_id: str, email: str) -> str:
-    return _make_access_token(user_id, email)
+def _make_token(user_id: str, email: str, db_path: str = '') -> str:
+    """Convenience wrapper that reads token_version from DB when db_path is supplied."""
+    tv = 0
+    if db_path:
+        try:
+            _c = sqlite3.connect(db_path, timeout=3)
+            _r = _c.execute(
+                "SELECT token_version FROM user_auth WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            _c.close()
+            tv = int(_r[0]) if _r and _r[0] is not None else 0
+        except Exception:
+            pass
+    return _make_access_token(user_id, email, token_version=tv)
 
 
 def _decode_token(token: str) -> dict:
@@ -182,7 +194,18 @@ def rotate_refresh_token(db_path: str, refresh_token: str) -> dict:
     finally:
         conn.close()
 
-    access_token  = _make_access_token(user_id, email)
+    # Read current token_version so refreshed token carries correct version
+    try:
+        _tv_conn = sqlite3.connect(db_path, timeout=5)
+        _tv_row  = _tv_conn.execute(
+            "SELECT token_version FROM user_auth WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        _tv_conn.close()
+        tv = int(_tv_row[0]) if _tv_row and _tv_row[0] is not None else 0
+    except Exception:
+        tv = 0
+
+    access_token  = _make_access_token(user_id, email, token_version=tv)
     refresh_data  = issue_refresh_token(db_path, user_id)
     return {
         'access_token':  access_token,
