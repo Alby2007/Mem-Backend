@@ -160,10 +160,10 @@ async def ledger_track_record():
                 SELECT COUNT(*) as n,
                        AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit') THEN 1.0 ELSE 0.0 END) as hit_rate,
                        AVG(brier_t1) as avg_brier,
-                       MIN(created_at) as earliest
+                       MIN(issued_at) as earliest
                 FROM prediction_ledger
                 WHERE outcome IS NOT NULL AND outcome != 'expired'
-                  AND created_at >= ?
+                  AND issued_at >= ?
             """, (cutoff,)).fetchone()
             resolved = row['n'] or 0
             hit_rate = round(row['hit_rate'], 3) if row['hit_rate'] is not None else None
@@ -188,7 +188,7 @@ async def ledger_track_record():
                        AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit') THEN 1.0 ELSE 0.0 END) as hr
                 FROM prediction_ledger
                 WHERE outcome IS NOT NULL AND outcome != 'expired'
-                  AND created_at >= ?
+                  AND issued_at >= ?
                 GROUP BY pattern_type
                 HAVING n >= 5
                 ORDER BY hr DESC
