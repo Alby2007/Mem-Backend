@@ -1,27 +1,24 @@
 """
 ingest/kb_cleanup_adapter.py — Scheduled KB Garbage Collection
 
-Runs every 6 hours. Prunes three categories of bloat that accumulate
-continuously and would otherwise inflate the facts table to 180k+ rows
-within a week:
+Runs every 6 hours. Prunes four categories of bloat:
 
   1. Stale pattern decay facts
      Predicates: pattern_hours_remaining, pattern_decay_pct, pattern_estimated_expiry
-     These are recalculated every 900s. Any row older than 2 hours is dead weight.
+     Recalculated every 900s — anything older than 2 hours is dead weight.
      Expected recovery: ~75,000 rows/week
 
   2. Old thesis objects
      Subject pattern: thesis_{ticker}_{user}_{YYYYMMDD}
-     ThesisGeneratorAdapter runs every 21,600s and generates ~500 thesis objects
-     per cycle, each with ~19 child facts. Keeps only today's date suffix,
-     deletes everything older.
-     Expected recovery: ~46,000 rows/week
+     Keeps only today's date suffix. Expected recovery: ~46,000 rows/week
 
   3. Duplicate macro facts
      Predicates: inflation_environment, regime_label, central_bank_stance
-     Written by multiple adapters without consistent upsert keys. Keeps the
-     lowest rowid (first written) per (subject, predicate) pair.
-     Expected recovery: ~1,000 rows/week
+     Keeps lowest rowid per (subject, predicate). Recovery: ~1,000 rows/week
+
+  4. Stale refresh tokens
+     Tokens expired >7 days ago or revoked >30 days ago serve no purpose.
+     Without cleanup this table grows unbounded (~1k rows/month).
 
 INTERVAL: 21600s (every 6 hours)
 Runs VACUUM after each cycle to reclaim disk space from deleted rows.
@@ -53,8 +50,8 @@ _DUPLICATE_MACRO_PREDICATES = (
 
 class KBCleanupAdapter(BaseIngestAdapter):
     """
-    Scheduled garbage collector for the facts table.
-    Runs three targeted DELETE passes then VACUUMs the DB.
+    Scheduled garbage collector for the facts table and auth tables.
+    Runs four targeted DELETE passes then VACUUMs the DB.
     """
 
     name = 'kb_cleanup_adapter'
@@ -84,7 +81,6 @@ class KBCleanupAdapter(BaseIngestAdapter):
             counts['decay_facts_deleted'] = r1.rowcount
 
             # ── Pass 2: old thesis objects ─────────────────────────────────
-            # Keep only today's date suffix (YYYYMMDD), delete older ones.
             today_suffix = datetime.now(timezone.utc).strftime('%Y%m%d')
             r2 = conn.execute(
                 """DELETE FROM facts
@@ -112,6 +108,21 @@ class KBCleanupAdapter(BaseIngestAdapter):
             conn.commit()
             counts['duplicate_macro_deleted'] = r3.rowcount
 
+            # ── Pass 4: stale refresh tokens ──────────────────────────────
+            # Tokens expired >7 days ago are permanently dead.
+            # Revoked tokens >30 days old are audit-safe to remove.
+            try:
+                r4 = conn.execute(
+                    """DELETE FROM refresh_tokens
+                       WHERE expires_at < datetime('now', '-7 days')
+                       OR (revoked = 1 AND issued_at < datetime('now', '-30 days'))"""
+                )
+                conn.commit()
+                counts['refresh_tokens_deleted'] = r4.rowcount
+            except Exception as e:
+                _logger.debug('[kb_cleanup] refresh_tokens pass skipped: %s', e)
+                counts['refresh_tokens_deleted'] = 0
+
             after = conn.execute('SELECT COUNT(*) FROM facts').fetchone()[0]
             counts['facts_before'] = before
             counts['facts_after'] = after
@@ -119,11 +130,12 @@ class KBCleanupAdapter(BaseIngestAdapter):
 
             _logger.info(
                 '[kb_cleanup] %d → %d facts (-%d): '
-                'decay=%d, theses=%d, dupes=%d',
+                'decay=%d, theses=%d, dupes=%d | refresh_tokens=%d',
                 before, after, before - after,
                 counts['decay_facts_deleted'],
                 counts['old_theses_deleted'],
                 counts['duplicate_macro_deleted'],
+                counts['refresh_tokens_deleted'],
             )
 
         finally:
@@ -154,6 +166,7 @@ class KBCleanupAdapter(BaseIngestAdapter):
                 'decay_facts_deleted':     str(raw.get('decay_facts_deleted', 0)),
                 'old_theses_deleted':      str(raw.get('old_theses_deleted', 0)),
                 'duplicate_macro_deleted': str(raw.get('duplicate_macro_deleted', 0)),
+                'refresh_tokens_deleted':  str(raw.get('refresh_tokens_deleted', 0)),
             },
             upsert = True,
         )]

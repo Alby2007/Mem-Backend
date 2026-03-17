@@ -405,6 +405,12 @@ async def change_password(
         conn.execute("UPDATE user_auth SET password_hash=? WHERE user_id=?", (new_hash, user_id))
         conn.commit()
         conn.close()
+        # Revoke all existing access tokens — old tokens invalid immediately
+        try:
+            from middleware.auth import revoke_user_tokens
+            revoke_user_tokens(ext.DB_PATH, user_id)
+        except Exception:
+            pass
         ext.log_audit_event(ext.DB_PATH, action="password_change", user_id=user_id,
                             ip_address=request.client.host if request.client else None,
                             user_agent=request.headers.get("user-agent"),

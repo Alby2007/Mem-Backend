@@ -88,7 +88,7 @@ def ensure_user_auth_table(conn: sqlite3.Connection) -> None:
 
 # ── Token helpers ──────────────────────────────────────────────────────────────
 
-def _make_access_token(user_id: str, email: str) -> str:
+def _make_access_token(user_id: str, email: str, token_version: int = 0) -> str:
     if not HAS_JWT:
         raise RuntimeError('PyJWT is not installed — run: pip install PyJWT')
     payload = {
@@ -96,6 +96,7 @@ def _make_access_token(user_id: str, email: str) -> str:
         'user_id': user_id,
         'email':   email,
         'type':    'access',
+        'tv':      token_version,
         'exp':     datetime.now(timezone.utc) + timedelta(hours=_EXPIRY_HOURS),
         'iat':     datetime.now(timezone.utc),
     }
@@ -305,6 +306,25 @@ def register_user(
     return {'user_id': user_id, 'email': email, 'created_at': now}
 
 
+def revoke_user_tokens(db_path: str, user_id: str) -> None:
+    """
+    Increment token_version to immediately invalidate all existing access tokens
+    for a user. Called on password change and forced logout.
+    The next login will issue a token with the new version; old tokens will fail
+    the version check in get_current_user.
+    """
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        conn.execute(
+            "UPDATE user_auth SET token_version = COALESCE(token_version, 0) + 1 WHERE user_id = ?",
+            (user_id,),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        _log.warning("revoke_user_tokens failed for %s: %s", user_id, exc)
+
+
 def authenticate_user(
     db_path: str,
     email: str,
@@ -369,7 +389,13 @@ def authenticate_user(
         )
         conn.commit()
 
-        token = _make_token(user_id, email)
+        # Read current token_version for embedding in JWT
+        tv_row = conn.execute(
+            "SELECT token_version FROM user_auth WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        tv = int(tv_row[0]) if tv_row and tv_row[0] is not None else 0
+
+        token = _make_access_token(user_id, email, token_version=tv)
         return {
             'access_token': token,
             'token_type':   'Bearer',

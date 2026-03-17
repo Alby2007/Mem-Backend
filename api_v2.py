@@ -541,6 +541,18 @@ def create_fastapi_app() -> FastAPI:
                 )
         return await call_next(request)
 
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"]  = "nosniff"
+        response.headers["X-Frame-Options"]          = "DENY"
+        response.headers["Referrer-Policy"]          = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"]       = "camera=(), microphone=(), geolocation=()"
+        response.headers["X-XSS-Protection"]         = "1; mode=block"
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+
     # Dynamic CORS: reflect exact origin for allowed origins so credentials work
     _cors_allow_origins = list(_ALLOWED_ORIGINS)
     _cors_allow_origins_regex = r"https://[a-z0-9\-]+\.trycloudflare\.com|https://[a-z0-9\-]+\.ngrok-free\.app|https://[a-z0-9\-]+\.ngrok\.io|https://[a-z0-9\-]+\.pages\.dev"
