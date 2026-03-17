@@ -64,6 +64,453 @@ async def telegram_webhook(request: Request):
     return {"ok": True}
 
 
+# ── Oracle command dispatcher ─────────────────────────────────────────────────
+
+import time as _time_module
+
+# Link codes for existing Meridian accounts: code → {user_id, expires}
+# Populated by POST /auth/telegram/link-code (authenticated endpoint)
+_TG_LINK_CODES: dict = {}
+
+
+def _e(text: str) -> str:
+    """Escape freeform text for Telegram MarkdownV2."""
+    _SPECIAL = r'\_*[]()~`>#+-=|{}.!'
+    result = []
+    for ch in str(text):
+        if ch in _SPECIAL:
+            result.append('\\')
+        result.append(ch)
+    return ''.join(result)
+
+
+def _send(chat_id: str, text: str, parse_mode: str = 'MarkdownV2') -> None:
+    _tg_api("sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
+
+
+def _handle_tg_command(chat_id: str, text: str) -> None:
+    """Dispatch slash commands for the Oracle Telegram bot."""
+    parts = text.strip().split(maxsplit=1)
+    cmd   = parts[0].lower().split('@')[0]   # strip @botname suffix
+    arg   = parts[1].strip() if len(parts) > 1 else ''
+
+    # ── /start [CODE] ─────────────────────────────────────────────────────
+    if cmd == '/start':
+        code = arg.strip().upper()
+        if code:
+            # Try login code flow (new account via Telegram)
+            try:
+                from routes_v2.auth import _TG_LOGIN_CODES
+                if code in _TG_LOGIN_CODES:
+                    entry = _TG_LOGIN_CODES[code]
+                    if _time_module.time() < entry['expires']:
+                        entry['chat_id'] = chat_id
+                        entry['user_data'] = {}
+                        _send(chat_id,
+                              r"✅ *Account linked\." + "\n\n"
+                              r"Return to the Meridian dashboard to complete setup\.")
+                        return
+                    else:
+                        _send(chat_id,
+                              r"⚠️ Code expired\. Generate a new one in Meridian › Profile › Oracle Bot\.")
+                        return
+            except Exception:
+                pass
+        _send(chat_id,
+              "👋 *Oracle — Trading Galaxy*\n\n"
+              r"I'm your AI trading assistant, connected to the live knowledge base\." + "\n\n"
+              "*Commands:*\n"
+              r"  /briefing — Daily market summary" + "\n"
+              r"  /regime — Current market regime" + "\n"
+              r"  /signals TICKER — Signal for any ticker" + "\n"
+              r"  /positions — Your open paper positions" + "\n"
+              r"  /track — System accuracy record" + "\n"
+              r"  /link CODE — Link your Meridian account" + "\n"
+              r"  /help — This message" + "\n\n"
+              r"_Or just ask me anything in plain English\._")
+        return
+
+    # ── /link CODE ────────────────────────────────────────────────────────
+    if cmd == '/link':
+        code = arg.strip().upper()
+        if not code:
+            _send(chat_id,
+                  r"Usage: /link YOUR\_CODE" + "\n\n"
+                  r"Generate a code in Meridian › Profile › Oracle Bot\.")
+            return
+        try:
+            # Clean expired codes
+            expired = [k for k, v in _TG_LINK_CODES.items()
+                       if v['expires'] < _time_module.time()]
+            for k in expired:
+                del _TG_LINK_CODES[k]
+
+            entry = _TG_LINK_CODES.get(code)
+            if not entry:
+                _send(chat_id,
+                      r"⚠️ Code not found\. Generate a new one in Meridian › Profile › Oracle Bot\.")
+                return
+            if _time_module.time() > entry['expires']:
+                del _TG_LINK_CODES[code]
+                _send(chat_id,
+                      r"⚠️ Code expired\. Generate a new one in Meridian › Profile › Oracle Bot\.")
+                return
+
+            user_id = entry['user_id']
+            del _TG_LINK_CODES[code]
+
+            conn_link = sqlite3.connect(ext.DB_PATH, timeout=10)
+            try:
+                conn_link.execute(
+                    "UPDATE user_preferences SET telegram_chat_id=? WHERE user_id=?",
+                    (str(chat_id), user_id)
+                )
+                conn_link.commit()
+            finally:
+                conn_link.close()
+
+            _send(chat_id,
+                  r"✅ *Oracle connected\.*" + "\n\n"
+                  r"Your Meridian account is now linked\. "
+                  r"You'll receive daily briefings and tips here\." + "\n\n"
+                  r"Try /briefing or ask me anything\.")
+        except Exception as e:
+            _logger.error("_handle_tg_command /link error: %s", e)
+            _send(chat_id, r"⚠️ Something went wrong\. Please try again\.")
+        return
+
+    # ── /help ─────────────────────────────────────────────────────────────
+    if cmd == '/help':
+        _send(chat_id,
+              r"*Oracle Commands*" + "\n\n"
+              r"/briefing — Daily market summary" + "\n"
+              r"/regime — Current market regime \+ top patterns" + "\n"
+              r"/signals TICKER — Live signals for any ticker" + "\n"
+              r"/positions — Your open paper positions" + "\n"
+              r"/track — System prediction accuracy" + "\n"
+              r"/link CODE — Link your Meridian account" + "\n\n"
+              r"_Or ask anything in plain English\._")
+        return
+
+    # ── /regime ───────────────────────────────────────────────────────────
+    if cmd == '/regime':
+        try:
+            conn_r = sqlite3.connect(ext.DB_PATH, timeout=5)
+            regime_row = conn_r.execute(
+                "SELECT object FROM facts WHERE subject='market' AND predicate='market_regime' "
+                "ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            signal_row = conn_r.execute(
+                "SELECT object FROM facts WHERE subject='market' AND predicate='signal_direction' "
+                "ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            regime_val = regime_row[0] if regime_row else 'unknown'
+            top_pats = conn_r.execute("""
+                SELECT pattern_type, ROUND(AVG(hit_rate_t1)*100) as hr, SUM(sample_size) as n
+                FROM signal_calibration
+                WHERE market_regime=? AND sample_size >= 20
+                GROUP BY pattern_type ORDER BY hr DESC LIMIT 4
+            """, (regime_val,)).fetchall()
+            fwd_row = conn_r.execute("""
+                SELECT ROUND(AVG(forward_return_1w)*100, 2) as avg_1w, COUNT(*) as n
+                FROM state_transitions WHERE scope='global'
+                AND from_state_id LIKE ? AND forward_return_1w IS NOT NULL
+            """, (f'%{regime_val.split("_")[0]}%',)).fetchone()
+            conn_r.close()
+
+            regime_emoji = (
+                '🔴' if 'risk_off' in regime_val or 'contraction' in regime_val else
+                '🟢' if 'risk_on' in regime_val or 'expansion' in regime_val else '🟡'
+            )
+            lines = [
+                f"{regime_emoji} *Regime:* {_e(regime_val.replace('_', ' ').title())}",
+                f"📡 *Signal:* {_e((signal_row[0] if signal_row else 'neutral').title())}",
+            ]
+            if fwd_row and fwd_row[0] is not None and (fwd_row[1] or 0) >= 3:
+                arrow = '↑' if fwd_row[0] > 0 else '↓'
+                lines.append(
+                    f"📊 *Hist fwd 1w:* {arrow} {_e(str(fwd_row[0]))}% "
+                    f"\\(n\\={_e(str(fwd_row[1]))}\\)"
+                )
+            if top_pats:
+                lines.append("\n*Top Patterns in Regime:*")
+                for pt, hr, n in top_pats:
+                    bar_len = int((hr or 0) // 10)
+                    bar = '█' * bar_len + '░' * (10 - bar_len)
+                    lines.append(
+                        f"  {_e(pt.replace('_', ' '))} `{bar}` {_e(str(int(hr or 0)))}%"
+                    )
+            _send(chat_id, '\n'.join(lines))
+        except Exception as e:
+            _logger.error("_handle_tg_command /regime error: %s", e)
+            _send(chat_id, r"⚠️ Could not load regime data\.")
+        return
+
+    # ── /briefing ─────────────────────────────────────────────────────────
+    if cmd == '/briefing':
+        try:
+            from datetime import datetime, timezone, timedelta
+            conn_b = sqlite3.connect(ext.DB_PATH, timeout=5)
+            row_b = conn_b.execute(
+                "SELECT user_id FROM user_preferences WHERE telegram_chat_id=? LIMIT 1",
+                (str(chat_id),)
+            ).fetchone()
+            user_id_b = row_b[0] if row_b else None
+            regime_row_b = conn_b.execute(
+                "SELECT object FROM facts WHERE subject='market' AND predicate='market_regime' "
+                "ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            yesterday = (datetime.now(timezone.utc) - timedelta(hours=20)).isoformat()
+            night = conn_b.execute("""
+                SELECT COUNT(*) as n,
+                       SUM(CASE WHEN status IN ('t1_hit','t2_hit','t1_hit_partial') THEN 1 ELSE 0 END) as wins,
+                       ROUND(AVG(pnl_r), 2) as avg_r
+                FROM paper_positions
+                WHERE status IN ('t1_hit','t2_hit','stopped_out','t1_hit_partial')
+                  AND user_id NOT IN ('system_discovery','observatory_engine')
+                  AND opened_at >= ?
+            """, (yesterday,)).fetchone()
+            opps = conn_b.execute("""
+                SELECT ticker, pattern_type, direction, ROUND(quality_score, 3)
+                FROM pattern_signals
+                WHERE status NOT IN ('filled','broken','expired')
+                  AND kb_conviction NOT IN ('avoid','') AND kb_conviction IS NOT NULL
+                ORDER BY quality_score DESC LIMIT 5
+            """).fetchall()
+            open_count = 0
+            if user_id_b:
+                open_count = conn_b.execute(
+                    "SELECT COUNT(*) FROM paper_positions WHERE user_id=? AND status='open'",
+                    (user_id_b,)
+                ).fetchone()[0]
+            conn_b.close()
+
+            regime_val_b = regime_row_b[0] if regime_row_b else 'unknown'
+            regime_emoji_b = (
+                '🔴' if 'risk_off' in regime_val_b else
+                '🟢' if 'risk_on' in regime_val_b else '🟡'
+            )
+            lines = [
+                "*📋 Morning Briefing*",
+                f"{regime_emoji_b} *{_e(regime_val_b.replace('_', ' ').title())}*",
+                "",
+            ]
+            if night and night[0]:
+                wr = f"{int(night[1] / night[0] * 100)}%" if night[0] else '—'
+                avg_r_str = (
+                    f"{'+'  if night[2] and night[2] >= 0 else ''}{night[2]}R"
+                    if night[2] else '—'
+                )
+                lines.append(
+                    f"*Overnight:* {_e(str(night[0]))} trades · "
+                    f"{_e(wr)} win rate · avg {_e(avg_r_str)}"
+                )
+            if user_id_b and open_count:
+                lines.append(f"*Open positions:* {_e(str(open_count))}")
+            if opps:
+                lines.append("\n*Top Setups:*")
+                for ticker_b, pt_b, dir_b, qs_b in opps:
+                    arrow_b = '📈' if dir_b == 'bullish' else '📉'
+                    lines.append(
+                        f"  {arrow_b} {_e(ticker_b)} {_e(pt_b.replace('_', ' '))} "
+                        f"\\(q\\={_e(str(qs_b))}\\)"
+                    )
+            lines.append("\n" + r"_Ask about any ticker or use /signals TICKER_")
+            _send(chat_id, '\n'.join(lines))
+        except Exception as e:
+            _logger.error("_handle_tg_command /briefing error: %s", e)
+            _send(chat_id, r"⚠️ Could not load briefing\.")
+        return
+
+    # ── /signals TICKER ───────────────────────────────────────────────────
+    if cmd == '/signals':
+        ticker = arg.upper().strip()
+        if not ticker:
+            _send(chat_id, r"Usage: /signals TICKER — e\.g\. /signals AAPL")
+            return
+        try:
+            conn_s = sqlite3.connect(ext.DB_PATH, timeout=5)
+            preds = [
+                'conviction_tier', 'signal_direction', 'signal_quality', 'price_regime',
+                'macro_confirmation', 'last_price', 'price_target', 'upside_pct',
+                'auto_thesis', 'sector_tailwind',
+            ]
+            rows_s = conn_s.execute(
+                f"SELECT predicate, object FROM facts WHERE LOWER(subject)=? "
+                f"AND predicate IN ({','.join('?' * len(preds))}) ORDER BY timestamp DESC",
+                [ticker.lower()] + preds
+            ).fetchall()
+            patterns_s = conn_s.execute("""
+                SELECT pattern_type, direction, timeframe, ROUND(quality_score, 3)
+                FROM pattern_signals
+                WHERE UPPER(ticker)=? AND status NOT IN ('filled','broken','expired')
+                ORDER BY quality_score DESC LIMIT 3
+            """, (ticker,)).fetchall()
+            conn_s.close()
+
+            d = {p: v for p, v in rows_s}
+            if not d and not patterns_s:
+                _send(chat_id,
+                      f"No KB data for {_e(ticker)}\\. Try asking me in plain English\\.")
+                return
+
+            lines = [f"*📊 {_e(ticker)}*\n"]
+            if d.get('conviction_tier'):
+                tier_s = d['conviction_tier']
+                t_emoji = (
+                    '🟢' if tier_s == 'high' else
+                    '🟡' if tier_s == 'medium' else
+                    '🔴' if tier_s == 'avoid' else '⚪'
+                )
+                lines.append(f"{t_emoji} *Conviction:* {_e(tier_s.title())}")
+            if d.get('signal_direction'):
+                arr = (
+                    '📈' if d['signal_direction'] == 'bullish' else
+                    '📉' if d['signal_direction'] == 'bearish' else '➡️'
+                )
+                lines.append(f"{arr} *Signal:* {_e(d['signal_direction'].title())}")
+            if d.get('signal_quality'):
+                lines.append(f"🎯 *Quality:* {_e(d['signal_quality'].title())}")
+            if d.get('macro_confirmation'):
+                lines.append(
+                    f"🌍 *Macro:* {_e(d['macro_confirmation'].replace('_', ' ').title())}"
+                )
+            if d.get('last_price'):
+                regime_sfx = (
+                    f" \\({_e(d['price_regime'].replace('_', ' '))}\\)"
+                    if d.get('price_regime') else ''
+                )
+                lines.append(f"💰 *Price:* {_e(d['last_price'])}{regime_sfx}")
+            if d.get('price_target') and d.get('upside_pct'):
+                lines.append(
+                    f"🎯 *Target:* {_e(d['price_target'])} "
+                    f"\\({_e(d['upside_pct'])}% upside\\)"
+                )
+            if d.get('auto_thesis') and len(d['auto_thesis']) > 20:
+                thesis_short = d['auto_thesis'][:200] + (
+                    '…' if len(d['auto_thesis']) > 200 else ''
+                )
+                lines.append(f"\n📝 _{_e(thesis_short)}_")
+            if patterns_s:
+                lines.append("\n*Open Patterns:*")
+                for pt_s, dir_s, tf_s, qs_s in patterns_s:
+                    a_s = '📈' if dir_s == 'bullish' else '📉'
+                    lines.append(
+                        f"  {a_s} {_e(pt_s.replace('_', ' '))} {_e(tf_s)} "
+                        f"\\(q\\={_e(str(qs_s))}\\)"
+                    )
+            _send(chat_id, '\n'.join(lines))
+        except Exception as e:
+            _logger.error("_handle_tg_command /signals error: %s", e)
+            _send(chat_id, r"⚠️ Could not load signals\.")
+        return
+
+    # ── /positions ────────────────────────────────────────────────────────
+    if cmd == '/positions':
+        try:
+            conn_p = sqlite3.connect(ext.DB_PATH, timeout=5)
+            row_p = conn_p.execute(
+                "SELECT user_id FROM user_preferences WHERE telegram_chat_id=? LIMIT 1",
+                (str(chat_id),)
+            ).fetchone()
+            if not row_p:
+                conn_p.close()
+                _send(chat_id,
+                      r"⚠️ No account linked\. Use /link CODE or connect in Meridian Profile\.")
+                return
+            user_id_p = row_p[0]
+            positions_p = conn_p.execute("""
+                SELECT ticker, direction, entry_price, stop, t1, opened_at
+                FROM paper_positions WHERE user_id=? AND status='open'
+                ORDER BY opened_at DESC LIMIT 10
+            """, (user_id_p,)).fetchall()
+            conn_p.close()
+
+            if not positions_p:
+                _send(chat_id, r"No open positions\.")
+                return
+
+            from datetime import datetime, timezone
+            now_p = datetime.now(timezone.utc)
+            lines = [f"*📋 Open Positions \\({_e(str(len(positions_p)))}\\)*\n"]
+            for ticker_p, dir_p, entry_p, stop_p, t1_p, opened_p in positions_p:
+                try:
+                    dt_p = datetime.fromisoformat(opened_p.replace('Z', '+00:00'))
+                    age_p = f"{(now_p - dt_p).days}d"
+                except Exception:
+                    age_p = "?"
+                a_p = '📈' if dir_p == 'bullish' else '📉'
+                rr_str = ''
+                if entry_p and t1_p and stop_p and abs(entry_p - stop_p) > 0:
+                    rr_val = abs(t1_p - entry_p) / abs(entry_p - stop_p)
+                    rr_str = f" R:R {_e(f'{rr_val:.1f}')}"
+                lines.append(
+                    f"{a_p} *{_e(ticker_p)}* @ {_e(str(round(entry_p, 4)))} "
+                    f"\\| Stop {_e(str(round(stop_p, 4)))} "
+                    f"\\| T1 {_e(str(round(t1_p, 4)))}{rr_str} "
+                    f"\\| _{_e(age_p)}_"
+                )
+            _send(chat_id, '\n'.join(lines))
+        except Exception as e:
+            _logger.error("_handle_tg_command /positions error: %s", e)
+            _send(chat_id, r"⚠️ Could not load positions\.")
+        return
+
+    # ── /track ────────────────────────────────────────────────────────────
+    if cmd == '/track':
+        try:
+            conn_t = sqlite3.connect(ext.DB_PATH, timeout=5)
+            row_t = conn_t.execute("""
+                SELECT COUNT(*) as n,
+                       AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit') THEN 1.0 ELSE 0.0 END) as hr,
+                       AVG(brier_t1) as brier
+                FROM prediction_ledger
+                WHERE outcome IS NOT NULL AND outcome != 'expired'
+            """).fetchone()
+            by_pat_t = conn_t.execute("""
+                SELECT pattern_type, COUNT(*) as n,
+                       ROUND(AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit')
+                                      THEN 1.0 ELSE 0.0 END) * 100) as hr
+                FROM prediction_ledger
+                WHERE outcome IS NOT NULL AND outcome != 'expired'
+                GROUP BY pattern_type ORDER BY hr DESC
+            """).fetchall()
+            conn_t.close()
+
+            n_t, hr_t, brier_t = row_t
+            hr_str_t = f"{int(hr_t * 100)}%" if hr_t else "—"
+            brier_str_t = f"{round(brier_t, 3)}" if brier_t else "—"
+            brier_lbl = (
+                "excellent" if brier_t and brier_t < 0.10 else
+                "good"      if brier_t and brier_t < 0.15 else
+                "calibrating" if brier_t and brier_t < 0.25 else "developing"
+            )
+            lines = [
+                r"*📈 System Track Record*" + "\n",
+                f"✅ *{_e(hr_str_t)}* T1 hit rate",
+                f"📊 *{_e(str(n_t or 0))}* predictions resolved",
+                f"🎯 Brier: {_e(brier_str_t)} \\({_e(brier_lbl)}\\)\n",
+            ]
+            if by_pat_t:
+                lines.append("*By Pattern:*")
+                for pt_t, n_pt, hr_pt in by_pat_t:
+                    bar_t = '█' * int((hr_pt or 0) // 10) + '░' * (10 - int((hr_pt or 0) // 10))
+                    e_t = '🟢' if hr_pt and hr_pt >= 60 else '🟡' if hr_pt and hr_pt >= 40 else '🔴'
+                    lines.append(
+                        f"  {e_t} {_e(pt_t.replace('_', ' '))} `{bar_t}` "
+                        f"{_e(str(int(hr_pt or 0)))}%"
+                    )
+            lines.append("\n" + r"_View full record at trading\-galaxy\.uk_")
+            _send(chat_id, '\n'.join(lines))
+        except Exception as e:
+            _logger.error("_handle_tg_command /track error: %s", e)
+            _send(chat_id, r"⚠️ Could not load track record\.")
+        return
+
+    # Unknown command — fall through to the LLM handler below
+    pass
+
+
 def _handle_tg_message(msg: dict) -> None:
     chat_id = str(msg.get("chat", {}).get("id", ""))
     text    = (msg.get("text") or "").strip()
@@ -71,12 +518,7 @@ def _handle_tg_message(msg: dict) -> None:
         return
 
     if text.startswith("/"):
-        if text == "/start":
-            _tg_api("sendMessage", {
-                "chat_id":    chat_id,
-                "text":       "👋 *Trading Galaxy Bot*\n\nYour account is linked\\. Ask me anything about your portfolio, market signals, or geopolitical risks\\.",
-                "parse_mode": "MarkdownV2",
-            })
+        _handle_tg_command(chat_id, text)
         return
 
     if not ext.HAS_PRODUCT_LAYER:
@@ -501,7 +943,6 @@ async def telegram_callback(request: Request):
             action_map = {"taking": "taking_it","more": "tell_me_more","skip": "not_for_me",
                           "taking_it": "taking_it","tell_me_more": "tell_me_more","not_for_me": "not_for_me"}
             action = action_map.get(parts[2], parts[2])
-            # Direct call — no test_request_context needed in FastAPI
             from routes_v2.patterns import tip_feedback_action as _tfa
             from pydantic import BaseModel as _BM
             class _TFR(_BM):

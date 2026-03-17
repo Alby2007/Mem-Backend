@@ -217,6 +217,49 @@ async def auth_telegram_code():
     return {"code": code}
 
 
+
+
+@router.post("/auth/telegram/link-code")
+async def auth_telegram_link_code(request: Request):
+    """
+    Authenticated: generate a 5-minute link code for an existing Meridian account.
+    User sends /link CODE to the Oracle bot which writes their chat_id and confirms.
+    Returns: {code, bot_username, expires_in, instruction}
+    """
+    user_id = await get_current_user(request)
+    if not user_id:
+        raise HTTPException(401, detail="Authentication required")
+
+    code = secrets.token_hex(4).upper()
+    expires_at = time.time() + 300
+
+    try:
+        from routes_v2.telegram import _TG_LINK_CODES
+        expired_keys = [k for k, v in _TG_LINK_CODES.items() if v["expires"] < time.time()]
+        for k in expired_keys:
+            del _TG_LINK_CODES[k]
+        _TG_LINK_CODES[code] = {"user_id": user_id, "expires": expires_at}
+    except Exception as e:
+        raise HTTPException(500, detail=f"Could not create link code: {e}")
+
+    bot_username = None
+    try:
+        import requests as _rq
+        _token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        if _token:
+            _me = _rq.get(f"https://api.telegram.org/bot{_token}/getMe", timeout=5)
+            if _me.status_code == 200:
+                bot_username = _me.json().get("result", {}).get("username")
+    except Exception:
+        pass
+
+    return {
+        "code":         code,
+        "bot_username": bot_username,
+        "expires_in":   300,
+        "instruction":  f"Send /link {code} to @{bot_username or 'TradingGalaxyBot'} on Telegram",
+    }
+
 @router.post("/auth/telegram/verify")
 async def auth_telegram_verify(data: TelegramVerifyRequest, response: Response):
     if not ext.HAS_AUTH:
