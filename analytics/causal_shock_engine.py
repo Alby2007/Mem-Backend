@@ -61,11 +61,11 @@ _log = logging.getLogger(__name__)
 # Predicates that trigger shock propagation and the subjects they live on.
 # Format: predicate → expected subject (None = any subject)
 _SHOCK_TRIGGERS: Dict[str, Optional[str]] = {
-    'boe_base_rate':       'uk_macro',
-    'central_bank_stance': 'uk_macro',
-    'fed_funds_rate':      'us_macro',
+    'boe_base_rate':       'uk_macro',    # BoEAdapter writes on uk_macro
+    'central_bank_stance': None,           # LLM writes on fed/us_macro/uk_macro — accept any
+    'fed_funds_rate':      None,           # may be written on us_macro or fed
     'uk_cpi_yoy':          'uk_macro',
-    'inflation_rate':      'us_macro',
+    'inflation_rate':      None,           # written on us_macro or uk_macro
 }
 
 # Minimum delta (numeric) or True (string change) to fire propagation
@@ -226,7 +226,7 @@ class CausalShockEngine:
         Traverses causal graph from the shock predicate and writes
         causal_signal atoms to all terminal-node tickers.
         """
-        from knowledge.causal_graph import traverse_causal, get_affected_tickers
+        from knowledge.causal_graph import traverse_causal
 
         # Map predicate + direction to a causal graph seed concept
         seed_concept = self._seed_concept(shock)
@@ -235,65 +235,64 @@ class CausalShockEngine:
 
         conn = sqlite3.connect(self._db, timeout=10)
         try:
-            chain = traverse_causal(conn, seed_concept, max_depth=_TRAVERSAL_DEPTH)
-            if not chain:
-                _log.debug('CausalShockEngine: no causal chain from %s', seed_concept)
-                return None
-
-            affected = get_affected_tickers(conn, chain)
+            result = traverse_causal(conn, seed_concept, max_depth=_TRAVERSAL_DEPTH)
         finally:
             conn.close()
 
-        if not affected:
+        if not result or not result.get('chain'):
+            _log.debug('CausalShockEngine: no causal chain from %s', seed_concept)
+            return None
+
+        # Build flat list of {ticker, node, confidence} from affected_tickers dict
+        # affected_tickers = { terminal_node: [ticker, ...] }
+        affected_map = result.get('affected_tickers', {})
+        if not affected_map:
             return None
 
         now_iso = datetime.now(timezone.utc).isoformat()
         atoms_written = 0
+        all_tickers: list = []
 
-        for ticker_info in affected:
-            ticker      = ticker_info.get('ticker') or ticker_info.get('subject', '')
-            node        = ticker_info.get('node', seed_concept)
-            edge_weight = ticker_info.get('confidence', 0.7)
-
-            if not ticker:
-                continue
-
-            confidence = min(
-                _CONF_MAX,
-                max(_CONF_MIN, shock.magnitude * edge_weight * _PROP_SCALAR),
+        for node, tickers in affected_map.items():
+            # Get the confidence of the edge leading to this terminal node
+            edge_weight = next(
+                (h['confidence'] for h in result['chain'] if h['effect'] == node),
+                0.7,
             )
+            for ticker in tickers:
+                if not ticker:
+                    continue
+                confidence = min(
+                    _CONF_MAX,
+                    max(_CONF_MIN, shock.magnitude * edge_weight * _PROP_SCALAR),
+                )
+                signal_value = (
+                    f'{seed_concept} '
+                    f'(magnitude={shock.magnitude:.2f}, '
+                    f'via={node})'
+                )
+                self._write_causal_atom(
+                    subject    = ticker.lower(),
+                    predicate  = 'causal_signal',
+                    object_val = signal_value,
+                    confidence = round(confidence, 3),
+                    metadata   = {
+                        'shock_source':    shock.predicate,
+                        'shock_subject':   shock.subject,
+                        'seed_concept':    seed_concept,
+                        'terminal_node':   node,
+                        'magnitude':       shock.magnitude,
+                        'direction':       shock.direction,
+                        'edge_weight':     edge_weight,
+                        'half_life_hours': _HALF_LIFE_HOURS,
+                        'old_value':       shock.old_value,
+                        'new_value':       shock.new_value,
+                        'propagated_at':   now_iso,
+                    },
+                )
+                atoms_written += 1
+                all_tickers.append(ticker)
 
-            signal_value = (
-                f'{seed_concept} '
-                f'(magnitude={shock.magnitude:.2f}, '
-                f'via={node})'
-            )
-
-            self._write_causal_atom(
-                subject    = ticker,
-                predicate  = 'causal_signal',
-                object_val = signal_value,
-                confidence = round(confidence, 3),
-                metadata   = {
-                    'shock_source':      shock.predicate,
-                    'shock_subject':     shock.subject,
-                    'seed_concept':      seed_concept,
-                    'terminal_node':     node,
-                    'magnitude':         shock.magnitude,
-                    'direction':         shock.direction,
-                    'edge_weight':       edge_weight,
-                    'half_life_hours':   _HALF_LIFE_HOURS,
-                    'old_value':         shock.old_value,
-                    'new_value':         shock.new_value,
-                    'propagated_at':     now_iso,
-                },
-            )
-            atoms_written += 1
-
-        ticker_list = [
-            (t.get('ticker') or t.get('subject', ''))
-            for t in affected if (t.get('ticker') or t.get('subject', ''))
-        ]
         summary = (
             f'{shock.predicate} {shock.direction} '
             f'(magnitude={shock.magnitude:.2f}) → '
@@ -302,12 +301,12 @@ class CausalShockEngine:
         _log.info('CausalShockEngine: %s', summary)
 
         return ShockPropagationEvent(
-            shock            = shock,
-            affected_tickers = ticker_list,
-            atoms_written    = atoms_written,
-            traversal_depth  = len(chain),
-            propagated_at    = now_iso,
-            summary          = summary,
+            shock             = shock,
+            affected_tickers  = all_tickers,
+            atoms_written     = atoms_written,
+            traversal_depth   = len(result['chain']),
+            propagated_at     = now_iso,
+            summary           = summary,
         )
 
     def _seed_concept(self, shock: Shock) -> Optional[str]:
@@ -316,7 +315,8 @@ class CausalShockEngine:
         d = shock.direction
 
         if p == 'boe_base_rate':
-            return 'boe_base_rate_cut' if d == 'decrease' else 'boe_base_rate_hike'
+            # Map to fed_rate causal chain — same transmission mechanism
+            return 'fed_rate_cut' if d == 'decrease' else 'fed_rate_hike'
 
         if p == 'fed_funds_rate':
             return 'fed_rate_cut' if d == 'decrease' else 'fed_rate_hike'
@@ -326,9 +326,14 @@ class CausalShockEngine:
 
         if p == 'central_bank_stance':
             new = shock.new_value.lower()
-            if 'accommodative' in new or 'dovish' in new or 'easing' in new:
+            # Dovish / easing signals
+            if any(w in new for w in ('accommodative', 'dovish', 'easing', 'cuts',
+                                       'cut', 'potential_rate_cuts', 'lower_rates',
+                                       'pause', 'hold_with_cuts_expected')):
                 return 'fed_rate_cut'
-            if 'restrictive' in new or 'hawkish' in new or 'tightening' in new:
+            # Hawkish / tightening signals
+            if any(w in new for w in ('restrictive', 'hawkish', 'tightening',
+                                       'higher_for_longer', 'hike', 'rates_on_hold_hawkish')):
                 return 'fed_rate_hike'
             return None
 
@@ -367,23 +372,20 @@ class CausalShockEngine:
         try:
             conn = sqlite3.connect(self._db, timeout=10)
             try:
+                # Delete any existing causal_signal atom for this ticker
+                # (latest shock always wins — decay handled by kb_cleanup)
+                conn.execute(
+                    "DELETE FROM facts WHERE subject=? AND predicate=? AND source=?",
+                    (subject.lower(), predicate, _CAUSAL_SOURCE),
+                )
                 conn.execute(
                     """INSERT INTO facts
-                       (subject, predicate, object, confidence, source,
-                        authority, half_life_hours, created_at, updated_at, metadata)
-                       VALUES (?,?,?,?,?,?,?,?,?,?)
-                       ON CONFLICT(subject, predicate, source)
-                       DO UPDATE SET
-                         object=excluded.object,
-                         confidence=excluded.confidence,
-                         updated_at=excluded.updated_at,
-                         metadata=excluded.metadata""",
+                       (subject, predicate, object, confidence, source, timestamp, metadata)
+                       VALUES (?,?,?,?,?,?,?)""",
                     (
                         subject.lower(), predicate, object_val,
                         confidence, _CAUSAL_SOURCE,
-                        0.75,               # authority weight
-                        _HALF_LIFE_HOURS,
-                        now_iso, now_iso,
+                        now_iso,
                         json.dumps(metadata),
                     ),
                 )
