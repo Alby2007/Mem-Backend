@@ -421,3 +421,49 @@ def get_calibration(
         return result
     finally:
         conn.close()
+
+
+def get_pattern_baseline(
+    pattern_type: str,
+    timeframe: str,
+    db_path: str,
+    min_proven_cells: int = 10,
+) -> Optional[float]:
+    """
+    Return the aggregate T1 hit rate across all proven cells for a given
+    pattern_type + timeframe. Used as a fallback probability when no
+    ticker-specific calibration exists, and as a ceiling cap on individual
+    ticker calibration to prevent overconfidence.
+
+    Only cells with sample_size >= 20 (proven) contribute.
+    Returns None if fewer than min_proven_cells proven cells exist.
+
+    Typical values (from 5M+ historical samples):
+      breaker        4h → 27.7%
+      mitigation     4h → 34.6%
+      ifvg           4h → 25.4%
+      liquidity_void 4h → 42.7%
+      order_block    4h → 23.0%
+      fvg            4h → 11.6%
+    """
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        row = conn.execute(
+            """SELECT AVG(hit_rate_t1) as avg_t1,
+                      MAX(hit_rate_t1) as max_t1,
+                      COUNT(*) as proven_cells,
+                      SUM(sample_size) as total_samples
+               FROM signal_calibration
+               WHERE pattern_type=? AND timeframe=? AND sample_size >= 20
+                 AND hit_rate_t1 IS NOT NULL""",
+            (pattern_type, timeframe),
+        ).fetchone()
+
+        if not row or not row[0] or (row[2] or 0) < min_proven_cells:
+            return None
+
+        return round(float(row[0]), 4)
+    except Exception:
+        return None
+    finally:
+        conn.close()

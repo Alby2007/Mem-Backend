@@ -1039,19 +1039,44 @@ class BotRunner:
                 )
                 try:
                     if hasattr(ext, 'prediction_ledger') and ext.prediction_ledger is not None:
-                        cal_hr = float(c.get('cal_hit_rate') or quality or 0.5)
-                        cal_hr = max(0.05, min(0.95, cal_hr))
+                        _pt  = c.get('pattern_type', 'unknown')
+                        _tf  = c.get('timeframe', '4h')
+
+                        # Tier 1: ticker-level calibration (most specific)
+                        _cal_hr = c.get('cal_hit_rate')
+
+                        # Tier 2: pattern-type aggregate baseline (fallback when
+                        # no ticker-specific calibration exists). This replaces the
+                        # old `quality or 0.5` fallback — quality_score is a signal
+                        # strength metric, NOT a hit probability.
+                        if not _cal_hr:
+                            from analytics.signal_calibration import get_pattern_baseline
+                            _cal_hr = get_pattern_baseline(_pt, _tf, self.db_path)
+
+                        # Tier 3: hard prior of 0.35 (below-50% conservative default)
+                        if not _cal_hr:
+                            _cal_hr = 0.35
+
+                        # Cap at pattern baseline ceiling: individual ticker calibration
+                        # can't claim higher probability than the pattern-type average.
+                        # Prevents a small-sample ticker cell from overstating confidence.
+                        from analytics.signal_calibration import get_pattern_baseline as _gpb
+                        _ceiling = _gpb(_pt, _tf, self.db_path)
+                        if _ceiling and _cal_hr > _ceiling:
+                            _cal_hr = _ceiling
+
+                        _cal_hr = max(0.05, min(0.95, float(_cal_hr)))
                         ext.prediction_ledger.record_prediction(
                             ticker=ticker,
-                            pattern_type=c.get('pattern_type', 'unknown'),
-                            timeframe=c.get('timeframe', '4h'),
+                            pattern_type=_pt,
+                            timeframe=_tf,
                             entry_price=entry_p,
                             target_1=t1_p,
                             target_2=t2_p,
                             stop_loss=stop_p,
-                            p_hit_t1=round(cal_hr, 4),
-                            p_hit_t2=round(cal_hr * 0.6, 4),
-                            p_stopped_out=round(1.0 - cal_hr, 4),
+                            p_hit_t1=round(_cal_hr, 4),
+                            p_hit_t2=round(_cal_hr * 0.6, 4),
+                            p_stopped_out=round(1.0 - _cal_hr, 4),
                             market_regime=regime or None,
                             conviction_tier=(c.get('kb_conviction') or '').lower() or None,
                             source='paper_bot',
