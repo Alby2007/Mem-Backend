@@ -28,12 +28,12 @@ _logger = logging.getLogger(__name__)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _tg_api(method: str, payload: dict) -> bool:
+def _tg_api(method: str, payload: dict, token: str = '') -> bool:
     try:
         import requests as _rq
     except ImportError:
         return False
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
     if not token:
         return False
     try:
@@ -84,15 +84,17 @@ def _e(text: str) -> str:
     return ''.join(result)
 
 
-def _send(chat_id: str, text: str, parse_mode: str = 'MarkdownV2') -> None:
-    _tg_api("sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
+def _send(chat_id: str, text: str, parse_mode: str = 'MarkdownV2', token: str = '') -> None:
+    _tg_api("sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}, token=token)
 
 
-def _handle_tg_command(chat_id: str, text: str) -> None:
+def _handle_tg_command(chat_id: str, text: str, token: str = '') -> None:
     """Dispatch slash commands for the Oracle Telegram bot."""
     parts = text.strip().split(maxsplit=1)
     cmd   = parts[0].lower().split('@')[0]   # strip @botname suffix
     arg   = parts[1].strip() if len(parts) > 1 else ''
+    import functools as _ft
+    _s = _ft.partial(_send, token=token)
 
     # ── /start [CODE] ─────────────────────────────────────────────────────
     if cmd == '/start':
@@ -106,17 +108,17 @@ def _handle_tg_command(chat_id: str, text: str) -> None:
                     if _time_module.time() < entry['expires']:
                         entry['chat_id'] = chat_id
                         entry['user_data'] = {}
-                        _send(chat_id,
+                        _s(chat_id,
                               r"✅ *Account linked\." + "\n\n"
                               r"Return to the Meridian dashboard to complete setup\.")
                         return
                     else:
-                        _send(chat_id,
+                        _s(chat_id,
                               r"⚠️ Code expired\. Generate a new one in Meridian › Profile › Oracle Bot\.")
                         return
             except Exception:
                 pass
-        _send(chat_id,
+        _s(chat_id,
               "👋 *Oracle — Trading Galaxy*\n\n"
               r"I'm your AI trading assistant, connected to the live knowledge base\." + "\n\n"
               "*Commands:*\n"
@@ -134,7 +136,7 @@ def _handle_tg_command(chat_id: str, text: str) -> None:
     if cmd == '/link':
         code = arg.strip().upper()
         if not code:
-            _send(chat_id,
+            _s(chat_id,
                   r"Usage: /link YOUR\_CODE" + "\n\n"
                   r"Generate a code in Meridian › Profile › Oracle Bot\.")
             return
@@ -147,12 +149,12 @@ def _handle_tg_command(chat_id: str, text: str) -> None:
 
             entry = _TG_LINK_CODES.get(code)
             if not entry:
-                _send(chat_id,
+                _s(chat_id,
                       r"⚠️ Code not found\. Generate a new one in Meridian › Profile › Oracle Bot\.")
                 return
             if _time_module.time() > entry['expires']:
                 del _TG_LINK_CODES[code]
-                _send(chat_id,
+                _s(chat_id,
                       r"⚠️ Code expired\. Generate a new one in Meridian › Profile › Oracle Bot\.")
                 return
 
@@ -169,19 +171,19 @@ def _handle_tg_command(chat_id: str, text: str) -> None:
             finally:
                 conn_link.close()
 
-            _send(chat_id,
+            _s(chat_id,
                   r"✅ *Oracle connected\.*" + "\n\n"
                   r"Your Meridian account is now linked\. "
                   r"You'll receive daily briefings and tips here\." + "\n\n"
                   r"Try /briefing or ask me anything\.")
         except Exception as e:
             _logger.error("_handle_tg_command /link error: %s", e)
-            _send(chat_id, r"⚠️ Something went wrong\. Please try again\.")
+            _s(chat_id, r"⚠️ Something went wrong\. Please try again\.")
         return
 
     # ── /help ─────────────────────────────────────────────────────────────
     if cmd == '/help':
-        _send(chat_id,
+        _s(chat_id,
               r"*Oracle Commands*" + "\n\n"
               r"/briefing — Daily market summary" + "\n"
               r"/regime — Current market regime \+ top patterns" + "\n"
@@ -240,10 +242,10 @@ def _handle_tg_command(chat_id: str, text: str) -> None:
                     lines.append(
                         f"  {_e(pt.replace('_', ' '))} `{bar}` {_e(str(int(hr or 0)))}%"
                     )
-            _send(chat_id, '\n'.join(lines))
+            _s(chat_id, '\n'.join(lines))
         except Exception as e:
             _logger.error("_handle_tg_command /regime error: %s", e)
-            _send(chat_id, r"⚠️ Could not load regime data\.")
+            _s(chat_id, r"⚠️ Could not load regime data\.")
         return
 
     # ── /briefing ─────────────────────────────────────────────────────────
@@ -316,17 +318,17 @@ def _handle_tg_command(chat_id: str, text: str) -> None:
                         f"\\(q\\={_e(str(qs_b))}\\)"
                     )
             lines.append("\n" + r"_Ask about any ticker or use /signals TICKER_")
-            _send(chat_id, '\n'.join(lines))
+            _s(chat_id, '\n'.join(lines))
         except Exception as e:
             _logger.error("_handle_tg_command /briefing error: %s", e)
-            _send(chat_id, r"⚠️ Could not load briefing\.")
+            _s(chat_id, r"⚠️ Could not load briefing\.")
         return
 
     # ── /signals TICKER ───────────────────────────────────────────────────
     if cmd == '/signals':
         ticker = arg.upper().strip()
         if not ticker:
-            _send(chat_id, r"Usage: /signals TICKER — e\.g\. /signals AAPL")
+            _s(chat_id, r"Usage: /signals TICKER — e\.g\. /signals AAPL")
             return
         try:
             conn_s = sqlite3.connect(ext.DB_PATH, timeout=5)
@@ -350,7 +352,7 @@ def _handle_tg_command(chat_id: str, text: str) -> None:
 
             d = {p: v for p, v in rows_s}
             if not d and not patterns_s:
-                _send(chat_id,
+                _s(chat_id,
                       f"No KB data for {_e(ticker)}\\. Try asking me in plain English\\.")
                 return
 
@@ -399,10 +401,10 @@ def _handle_tg_command(chat_id: str, text: str) -> None:
                         f"  {a_s} {_e(pt_s.replace('_', ' '))} {_e(tf_s)} "
                         f"\\(q\\={_e(str(qs_s))}\\)"
                     )
-            _send(chat_id, '\n'.join(lines))
+            _s(chat_id, '\n'.join(lines))
         except Exception as e:
             _logger.error("_handle_tg_command /signals error: %s", e)
-            _send(chat_id, r"⚠️ Could not load signals\.")
+            _s(chat_id, r"⚠️ Could not load signals\.")
         return
 
     # ── /positions ────────────────────────────────────────────────────────
@@ -415,7 +417,7 @@ def _handle_tg_command(chat_id: str, text: str) -> None:
             ).fetchone()
             if not row_p:
                 conn_p.close()
-                _send(chat_id,
+                _s(chat_id,
                       r"⚠️ No account linked\. Use /link CODE or connect in Meridian Profile\.")
                 return
             user_id_p = row_p[0]
@@ -427,7 +429,7 @@ def _handle_tg_command(chat_id: str, text: str) -> None:
             conn_p.close()
 
             if not positions_p:
-                _send(chat_id, r"No open positions\.")
+                _s(chat_id, r"No open positions\.")
                 return
 
             from datetime import datetime, timezone
@@ -450,10 +452,10 @@ def _handle_tg_command(chat_id: str, text: str) -> None:
                     f"\\| T1 {_e(str(round(t1_p, 4)))}{rr_str} "
                     f"\\| _{_e(age_p)}_"
                 )
-            _send(chat_id, '\n'.join(lines))
+            _s(chat_id, '\n'.join(lines))
         except Exception as e:
             _logger.error("_handle_tg_command /positions error: %s", e)
-            _send(chat_id, r"⚠️ Could not load positions\.")
+            _s(chat_id, r"⚠️ Could not load positions\.")
         return
 
     # ── /track ────────────────────────────────────────────────────────────
@@ -501,24 +503,24 @@ def _handle_tg_command(chat_id: str, text: str) -> None:
                         f"{_e(str(int(hr_pt or 0)))}%"
                     )
             lines.append("\n" + r"_View full record at trading\-galaxy\.uk_")
-            _send(chat_id, '\n'.join(lines))
+            _s(chat_id, '\n'.join(lines))
         except Exception as e:
             _logger.error("_handle_tg_command /track error: %s", e)
-            _send(chat_id, r"⚠️ Could not load track record\.")
+            _s(chat_id, r"⚠️ Could not load track record\.")
         return
 
     # Unknown command — fall through to the LLM handler below
     pass
 
 
-def _handle_tg_message(msg: dict) -> None:
+def _handle_tg_message(msg: dict, token: str = '') -> None:
     chat_id = str(msg.get("chat", {}).get("id", ""))
     text    = (msg.get("text") or "").strip()
     if not chat_id or not text:
         return
 
     if text.startswith("/"):
-        _handle_tg_command(chat_id, text)
+        _handle_tg_command(chat_id, text, token=token)
         return
 
     if not ext.HAS_PRODUCT_LAYER:
@@ -535,7 +537,7 @@ def _handle_tg_message(msg: dict) -> None:
             "chat_id":    chat_id,
             "text":       "⚠️ Your Telegram account is not linked\\. Visit [trading\\-galaxy\\.uk](https://trading-galaxy.uk) to connect your account\\.",
             "parse_mode": "MarkdownV2",
-        })
+        }, token=token)
         return
 
     session_id = f"TG_{chat_id}"
@@ -717,11 +719,11 @@ def _handle_tg_message(msg: dict) -> None:
 
     if not answer:
         _tg_api("sendMessage", {"chat_id": chat_id,
-                                "text": "⚠️ The AI is temporarily unavailable. Please try again in a moment."})
+                                "text": "⚠️ The AI is temporarily unavailable. Please try again in a moment."}, token=token)
         return
 
     from notifications.telegram_notifier import escape_mdv2
-    _tg_api("sendMessage", {"chat_id": chat_id, "text": escape_mdv2(answer), "parse_mode": "MarkdownV2"})
+    _tg_api("sendMessage", {"chat_id": chat_id, "text": escape_mdv2(answer), "parse_mode": "MarkdownV2"}, token=token)
 
     if _cs is not None:
         try:
@@ -784,6 +786,26 @@ def _handle_tg_callback(cb: dict) -> None:
 
 
 # ── /telegram/bot (legacy) ─────────────────────────────────────────────────────
+
+
+@router.post("/oracle/webhook")
+async def oracle_webhook(request: Request):
+    """Oracle bot webhook — @OracleMeridianBot, same dispatcher as /telegram/webhook."""
+    _oracle_token = os.environ.get("ORACLE_BOT_TOKEN", "")
+
+    _webhook_secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+    if _webhook_secret:
+        sent_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if sent_token != _webhook_secret:
+            return JSONResponse({"ok": False}, status_code=403)
+
+    update = await request.json()
+    if "callback_query" in update:
+        _handle_tg_callback(update["callback_query"])
+    elif "message" in update:
+        _handle_tg_message(update["message"], token=_oracle_token)
+    return {"ok": True}
+
 
 @router.post("/telegram/bot")
 async def telegram_bot_webhook(request: Request):
