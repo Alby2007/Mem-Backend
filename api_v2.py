@@ -131,8 +131,13 @@ async def _lifespan(app: FastAPI):
         scheduler.register(SectorRotationAdapter(db_path=db_path), interval_sec=3600)
         scheduler.register(SignalEnrichmentAdapter(db_path=db_path), interval_sec=900)
 
-        # SEC real-time filings — 8-K atom feed
+        # SEC real-time filings — 8-K atom feed (every 30 min)
         scheduler.register(EDGARRealtimeAdapter(db_path=db_path), interval_sec=1800)
+
+        # SEC EDGAR batch — 8-K/10-Q/10-K/Form4 for 37 tickers (every 6h)
+        # Was never registered — only run manually once on Mar 7, hence stale atoms.
+        from ingest.edgar_adapter import EDGARAdapter
+        scheduler.register(EDGARAdapter(db_path=db_path), interval_sec=21600)
 
         # SEC Form 4 insider transactions — directional signal, no key needed
         scheduler.register(InsiderAdapter(db_path=db_path), interval_sec=3600)
