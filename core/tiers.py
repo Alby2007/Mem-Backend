@@ -28,7 +28,7 @@ TIER_CONFIG: dict = {
         'opportunity_scan':       False,
         'daily_briefing':         False,
         'alerts':                 [],
-        'min_pattern_quality':    0.75,
+        'min_pattern_quality':    0.45,
         'min_asymmetry':          2.0,
     },
     'basic': {
@@ -45,7 +45,7 @@ TIER_CONFIG: dict = {
         'opportunity_scan':       False,
         'daily_briefing':         False,
         'alerts':                 ['zone', 'thesis'],
-        'min_pattern_quality':    0.75,
+        'min_pattern_quality':    0.45,
         'min_asymmetry':          2.0,
     },
     'pro': {
@@ -62,7 +62,7 @@ TIER_CONFIG: dict = {
         'opportunity_scan':       True,
         'daily_briefing':         True,
         'alerts':                 ['zone', 'thesis', 'profit_lock', 'trailing'],
-        'min_pattern_quality':    0.75,
+        'min_pattern_quality':    0.45,
         'min_asymmetry':          2.0,
     },
     'premium': {
@@ -79,7 +79,7 @@ TIER_CONFIG: dict = {
         'opportunity_scan':       True,
         'daily_briefing':         True,
         'alerts':                 ['zone', 'thesis', 'profit_lock', 'trailing', 't3', 'realtime'],
-        'min_pattern_quality':    0.75,
+        'min_pattern_quality':    0.45,
         'min_asymmetry':          2.0,
     },
 }

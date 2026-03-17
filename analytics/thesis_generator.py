@@ -398,6 +398,7 @@ class ThesisGenerator:
                     results.append({
                         'ticker':       ticker.upper(),
                         'direction':    direction,
+                        'premise':      premise,
                         'n_categories': n_cats,
                         'score':        score,
                         'thesis_id':    thesis_id,

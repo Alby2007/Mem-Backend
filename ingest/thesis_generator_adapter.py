@@ -31,7 +31,7 @@ class ThesisGeneratorAdapter(BaseIngestAdapter):
             atoms.append(RawAtom(
                 subject=ticker,
                 predicate='auto_thesis',
-                object=r['direction'],
+                object=r.get('premise') or r['direction'],
                 confidence=r['score'],
                 source=self.name,
             ))

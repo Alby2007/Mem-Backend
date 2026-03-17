@@ -358,18 +358,102 @@ class PredictionLedger:
             regime_breakdown = self._regime_breakdown(conn)
             calibration_curve = self._calibration_curve(conn)
 
+            # ── by_pattern breakdown ──────────────────────────────────────
+            pat_rows = conn.execute("""
+                SELECT pattern_type,
+                       COUNT(*) as predictions,
+                       AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit') THEN 1.0 ELSE 0.0 END) as hit_rate,
+                       AVG(p_hit_t1) as avg_stated,
+                       AVG(brier_t1) as avg_brier,
+                       SUM(CASE WHEN outcome = 'stopped_out' THEN 1 ELSE 0 END) as stops
+                FROM prediction_ledger
+                WHERE outcome IS NOT NULL AND outcome != 'expired'
+                GROUP BY pattern_type
+                ORDER BY predictions DESC
+            """).fetchall()
+            by_pattern = [
+                {
+                    'pattern_type':          r[0],
+                    'predictions':           r[1],
+                    'hit_rate':              round(r[2], 3) if r[2] is not None else None,
+                    'avg_stated_confidence': round(r[3], 3) if r[3] is not None else None,
+                    'overconfidence_gap':    round((r[3] or 0) - (r[2] or 0), 3) if r[2] is not None and r[3] is not None else None,
+                    'avg_brier':             round(r[4], 3) if r[4] is not None else None,
+                    'stops':                 r[5],
+                }
+                for r in pat_rows
+            ]
+
+            # ── by_conviction breakdown ───────────────────────────────────
+            conv_rows = conn.execute("""
+                SELECT conviction_tier,
+                       COUNT(*) as predictions,
+                       AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit') THEN 1.0 ELSE 0.0 END) as hit_rate,
+                       AVG(brier_t1) as avg_brier
+                FROM prediction_ledger
+                WHERE outcome IS NOT NULL AND outcome != 'expired'
+                  AND conviction_tier IS NOT NULL
+                GROUP BY conviction_tier
+                ORDER BY predictions DESC
+            """).fetchall()
+            by_conviction = [
+                {
+                    'conviction_tier': r[0],
+                    'predictions':     r[1],
+                    'hit_rate':        round(r[2], 3) if r[2] is not None else None,
+                    'avg_brier':       round(r[3], 3) if r[3] is not None else None,
+                }
+                for r in conv_rows
+            ]
+
+            # ── by_regime breakdown ───────────────────────────────────────
+            reg_rows = conn.execute("""
+                SELECT market_regime,
+                       COUNT(*) as predictions,
+                       AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit') THEN 1.0 ELSE 0.0 END) as hit_rate
+                FROM prediction_ledger
+                WHERE outcome IS NOT NULL AND outcome != 'expired'
+                  AND market_regime IS NOT NULL
+                GROUP BY market_regime
+                ORDER BY predictions DESC
+            """).fetchall()
+            by_regime = [
+                {
+                    'market_regime': r[0],
+                    'predictions':   r[1],
+                    'hit_rate':      round(r[2], 3) if r[2] is not None else None,
+                    'verdict':       'avoid' if (r[2] or 0) < 0.4 else ('strong' if (r[2] or 0) >= 0.65 else 'normal'),
+                }
+                for r in reg_rows
+            ]
+
+            # ── snapshot / forward backtest readiness ────────────────────
+            try:
+                from analytics.backtest import list_snapshots as _list_snaps
+                snap_dates = _list_snaps(self._db_path)
+                snapshot_count = len(snap_dates)
+            except Exception:
+                snapshot_count = 0
+            forward_backtest_ready = snapshot_count >= 2
+
             return {
-                'total_predictions': total,
-                'resolved':          resolved,
-                'open':              open_,
-                'brier_score':       brier_score,
-                'vs_benchmark':      round((brier_score - 0.25), 4) if brier_score is not None else None,
-                'note':              (
+                'total_predictions':      total,
+                'resolved':               resolved,
+                'open':                   open_,
+                'open_count':             open_,
+                'brier_score':            brier_score,
+                'vs_benchmark':           round((brier_score - 0.25), 4) if brier_score is not None else None,
+                'note':                   (
                     'vs_benchmark < 0 means better than random guessing (0.25). '
                     'Perfect calibration = 0.0.'
                 ),
-                'regime_breakdown':  regime_breakdown,
-                'calibration_curve': calibration_curve,
+                'regime_breakdown':       regime_breakdown,
+                'calibration_curve':      calibration_curve,
+                'by_pattern':             by_pattern,
+                'by_conviction':          by_conviction,
+                'by_regime':              by_regime,
+                'snapshot_count':         snapshot_count,
+                'forward_backtest_ready': forward_backtest_ready,
             }
         finally:
             conn.close()

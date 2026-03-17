@@ -446,12 +446,56 @@ async def ops_briefing(user_id: str = Depends(get_current_user)):
             'actionable': actionable or 0,
         }
 
+        # ── Top opportunities ─────────────────────────────────────────
+        opp_rows = conn.execute("""
+            SELECT
+                ps.ticker,
+                ps.pattern_type,
+                ps.direction,
+                ROUND(ps.quality_score, 4) as quality_score,
+                ps.timeframe,
+                ps.kb_conviction as conviction_tier,
+                ps.kb_signal_dir as signal_direction,
+                f1.object as sector,
+                f2.object as price_regime
+            FROM pattern_signals ps
+            LEFT JOIN facts f1
+                ON LOWER(f1.subject) = LOWER(ps.ticker)
+                AND f1.predicate = 'sector'
+            LEFT JOIN facts f2
+                ON LOWER(f2.subject) = LOWER(ps.ticker)
+                AND f2.predicate = 'price_regime'
+            WHERE ps.status NOT IN ('filled', 'broken', 'expired')
+              AND ps.kb_conviction NOT IN ('avoid', '')
+              AND (
+                  ps.direction != 'bullish'
+                  OR LOWER(COALESCE(f2.object, '')) NOT IN ('near_52w_high', 'near_high')
+              )
+            ORDER BY ps.quality_score DESC
+            LIMIT 5
+        """).fetchall()
+        opportunities = [
+            {
+                'ticker':           r['ticker'],
+                'pattern_type':     r['pattern_type'],
+                'direction':        r['direction'],
+                'quality_score':    r['quality_score'],
+                'timeframe':        r['timeframe'],
+                'conviction_tier':  r['conviction_tier'],
+                'signal_direction': r['signal_direction'],
+                'sector':           r['sector'],
+                'price_regime':     r['price_regime'],
+            }
+            for r in opp_rows
+        ]
+
         return {
-            'regime': regime,
-            'overnight': overnight,
-            'fleet': fleet,
-            'observatory': observatory,
-            'patterns': patterns,
+            'regime':        regime,
+            'overnight':     overnight,
+            'fleet':         fleet,
+            'observatory':   observatory,
+            'patterns':      patterns,
+            'opportunities': opportunities,
         }
     finally:
         conn.close()

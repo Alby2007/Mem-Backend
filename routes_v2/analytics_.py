@@ -145,6 +145,128 @@ async def portfolio_summary():
         raise HTTPException(500, detail=str(e))
 
 
+@router.get("/ledger/track-record")
+async def ledger_track_record():
+    """Public aggregate track record — no auth required."""
+    import sqlite3 as _sq
+    from datetime import datetime, timezone, timedelta
+    try:
+        conn = _sq.connect(ext.DB_PATH, timeout=10)
+        conn.row_factory = _sq.Row
+        try:
+            # Resolved predictions in last 30d
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+            row = conn.execute("""
+                SELECT COUNT(*) as n,
+                       AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit') THEN 1.0 ELSE 0.0 END) as hit_rate,
+                       AVG(brier_t1) as avg_brier,
+                       MIN(created_at) as earliest
+                FROM prediction_ledger
+                WHERE outcome IS NOT NULL AND outcome != 'expired'
+                  AND created_at >= ?
+            """, (cutoff,)).fetchone()
+            resolved = row['n'] or 0
+            hit_rate = round(row['hit_rate'], 3) if row['hit_rate'] is not None else None
+            avg_brier = round(row['avg_brier'], 3) if row['avg_brier'] is not None else None
+            period_days = 30
+
+            if avg_brier is None:
+                brier_label = 'no_data'
+            elif avg_brier < 0.10:
+                brier_label = 'excellent'
+            elif avg_brier < 0.15:
+                brier_label = 'good'
+            elif avg_brier < 0.25:
+                brier_label = 'calibrating'
+            else:
+                brier_label = 'poor'
+
+            # Best / worst pattern by hit rate (min 5 predictions)
+            pat_rows = conn.execute("""
+                SELECT pattern_type,
+                       COUNT(*) as n,
+                       AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit') THEN 1.0 ELSE 0.0 END) as hr
+                FROM prediction_ledger
+                WHERE outcome IS NOT NULL AND outcome != 'expired'
+                  AND created_at >= ?
+                GROUP BY pattern_type
+                HAVING n >= 5
+                ORDER BY hr DESC
+            """, (cutoff,)).fetchall()
+            best_pattern  = pat_rows[0]['pattern_type']  if pat_rows else None
+            worst_pattern = pat_rows[-1]['pattern_type'] if pat_rows else None
+
+            # Current regime from facts table
+            regime_row = conn.execute("""
+                SELECT object FROM facts
+                WHERE subject = 'market' AND predicate = 'market_regime'
+                ORDER BY timestamp DESC LIMIT 1
+            """).fetchone()
+            current_regime = regime_row['object'] if regime_row else None
+
+            # Top pattern in current regime
+            top_regime_pat = None
+            top_regime_hr  = None
+            if current_regime:
+                rp = conn.execute("""
+                    SELECT pattern_type,
+                           AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit') THEN 1.0 ELSE 0.0 END) as hr,
+                           COUNT(*) as n
+                    FROM prediction_ledger
+                    WHERE outcome IS NOT NULL AND outcome != 'expired'
+                      AND market_regime = ?
+                    GROUP BY pattern_type
+                    HAVING n >= 3
+                    ORDER BY hr DESC LIMIT 1
+                """, (current_regime,)).fetchone()
+                if rp:
+                    top_regime_pat = rp['pattern_type']
+                    top_regime_hr  = round(rp['hr'], 3)
+
+            return {
+                'resolved_predictions': resolved,
+                'hit_rate_t1':          hit_rate,
+                'avg_brier':            avg_brier,
+                'brier_label':          brier_label,
+                'period_days':          period_days,
+                'best_pattern':         best_pattern,
+                'worst_pattern':        worst_pattern,
+                'regime_edge': {
+                    'current_regime': current_regime,
+                    'top_pattern':    top_regime_pat,
+                    'top_hit_rate':   top_regime_hr,
+                },
+                'last_updated': datetime.now(timezone.utc).isoformat(),
+            }
+        finally:
+            conn.close()
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
+@router.get("/analytics/forward-backtest")
+async def forward_backtest_status():
+    """Forward backtest readiness — shows result once 2+ snapshots exist."""
+    if not ext.HAS_ANALYTICS:
+        raise HTTPException(503, detail="analytics module not available")
+    try:
+        from analytics.backtest import list_snapshots, run_backtest
+        dates = list_snapshots(ext.DB_PATH)
+        if len(dates) < 2:
+            return {
+                'ready':            False,
+                'snapshots_taken':  len(dates),
+                'snapshots_needed': 2,
+                'next_snapshot':    'tomorrow 00:00 UTC',
+                'message':          f'{2 - len(dates)} more snapshot(s) needed before first result',
+            }
+        result = run_backtest(ext.DB_PATH)
+        return {'ready': True, 'snapshots': len(dates), **result}
+    except Exception as e:
+        _logger.error("forward-backtest failed: %s", e)
+        raise HTTPException(500, detail=str(e))
+
+
 @router.get("/ledger/performance")
 async def ledger_performance():
     if ext.prediction_ledger is None:

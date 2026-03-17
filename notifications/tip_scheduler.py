@@ -372,13 +372,13 @@ def _validate_tip(row: dict, tier: str, is_weekly: bool = False,
     """
     from core.tiers import get_tier as _gt
     config = _gt(tier)
-    min_quality   = config.get('min_pattern_quality', 0.75)
+    ABSOLUTE_FLOOR = 0.40
     min_asymmetry = config.get('min_asymmetry', 2.0)
     warnings: list = []
 
     quality = row.get('quality_score') or 0.0
-    if quality < min_quality:
-        return False, f"quality {quality:.2f} below threshold {min_quality}", warnings
+    if quality < ABSOLUTE_FLOOR:
+        return False, f"quality {quality:.2f} below floor {ABSOLUTE_FLOOR}", warnings
 
     zone_high = row.get('zone_high', 0.0)
     zone_low  = row.get('zone_low', 0.0)
