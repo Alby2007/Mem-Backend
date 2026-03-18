@@ -356,6 +356,135 @@ async def pattern_precedent(pattern_id: int, _user: str = Depends(get_current_us
     }
 
 
+@router.get("/patterns/{pattern_id}/historical-match")
+async def pattern_historical_match(
+    pattern_id: int,
+    limit: int = 8,
+    _user: str = Depends(get_current_user),
+):
+    """
+    Returns both aggregate stats AND individual top match instances
+    for displaying a 'Seen this before' panel in the frontend.
+
+    Extends /precedent with:
+    - top_matches: list of individual historical instances with dates + outcomes
+    - options_context: current options regime for the ticker (if available)
+    - polymarket_context: relevant prediction market probabilities (if available)
+    """
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        row = conn.execute(
+            """SELECT ticker, pattern_type, timeframe, kb_conviction,
+                      kb_regime, kb_signal_dir, direction
+               FROM pattern_signals WHERE id = ?""",
+            (pattern_id,),
+        ).fetchone()
+        if row is None:
+            conn.close()
+            raise HTTPException(404, detail="pattern not found")
+
+        ticker, pattern_type, timeframe, conviction, regime, signal_dir, direction = row
+
+        fact_rows = conn.execute(
+            """SELECT predicate, object, confidence FROM facts
+               WHERE LOWER(subject) = LOWER(?)
+               ORDER BY confidence DESC LIMIT 60""",
+            (ticker,),
+        ).fetchall()
+        conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    atom_list = [
+        {'predicate': r[0], 'object': r[1], 'confidence': r[2], 'subject': ticker}
+        for r in fact_rows
+    ]
+    atom_list.append({'predicate': 'pattern_type',  'object': pattern_type, 'subject': ticker, 'confidence': 0.9})
+    if regime:
+        atom_list.append({'predicate': 'regime_label', 'object': regime, 'subject': ticker, 'confidence': 0.9})
+
+    try:
+        from analytics.state_matcher import match_historical_state
+        precedent = match_historical_state(atom_list, ext.DB_PATH)
+    except Exception:
+        precedent = None
+
+    if not precedent or precedent.match_count < 5:
+        return {"match_count": 0, "top_matches": [], "aggregate": None}
+
+    # Pull options context for this ticker
+    options_ctx = {}
+    try:
+        conn2 = sqlite3.connect(ext.DB_PATH, timeout=5)
+        for pred in ['options_regime', 'put_call_ratio', 'iv_rank', 'smart_money_signal', 'skew_regime']:
+            r = conn2.execute(
+                "SELECT object FROM facts WHERE LOWER(subject)=LOWER(?) AND predicate=? ORDER BY timestamp DESC LIMIT 1",
+                (ticker, pred),
+            ).fetchone()
+            if r:
+                options_ctx[pred] = r[0]
+        conn2.close()
+    except Exception:
+        pass
+
+    # Pull relevant polymarket context
+    poly_ctx = []
+    try:
+        conn3 = sqlite3.connect(ext.DB_PATH, timeout=5)
+        poly_rows = conn3.execute(
+            """SELECT predicate, object, JSON_EXTRACT(metadata,'$.question') as q
+               FROM facts WHERE source LIKE '%polymarket%'
+               AND predicate LIKE '%_yes_prob'
+               ORDER BY timestamp DESC LIMIT 10""",
+        ).fetchall()
+        conn3.close()
+        for pred, prob_str, question in poly_rows:
+            try:
+                poly_ctx.append({
+                    'slug':     pred.replace('_yes_prob', ''),
+                    'question': question,
+                    'prob':     round(float(prob_str), 3),
+                })
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return {
+        "match_count":   precedent.match_count,
+        "aggregate": {
+            "hit_rate_t1":    round(precedent.weighted_hit_t1, 3),
+            "hit_rate_t2":    round(precedent.weighted_hit_t2, 3),
+            "stopped_rate":   round(precedent.weighted_stopped, 3),
+            "avg_r":          round(precedent.weighted_avg_r, 2) if precedent.weighted_avg_r is not None else None,
+            "avg_similarity": round(precedent.avg_similarity, 2),
+            "best_regime":    precedent.best_regime,
+            "worst_regime":   precedent.worst_regime,
+            "confidence":     precedent.confidence,
+            "recency_note":   precedent.recency_note,
+        },
+        "top_matches": [
+            {
+                "date":       m.snapshot_at[:10],
+                "subject":    m.subject,
+                "similarity": round(m.similarity, 2),
+                "outcome_1w": m.outcome_1w,
+                "outcome_1m": m.outcome_1m,
+                "state":      m.state,
+            }
+            for m in (precedent.top_matches or [])[:int(limit)]
+        ],
+        "options_context":    options_ctx,
+        "polymarket_context": poly_ctx[:5],
+        "ticker":       ticker,
+        "pattern_type": pattern_type,
+        "timeframe":    timeframe,
+        "direction":    direction,
+    }
+
+
 @router.get("/patterns/{pattern_id}")
 async def pattern_detail(pattern_id: int, user_id: Optional[str] = None):
     if not ext.HAS_PATTERN_LAYER:

@@ -187,6 +187,15 @@ async def _lifespan(app: FastAPI):
         from ingest.historical_calibration_adapter import HistoricalCalibrationAdapter
         scheduler.register(HistoricalCalibrationAdapter(db_path=db_path), interval_sec=86400)
 
+        # Options flow — IV rank, put/call ratio, smart money signals, skew
+        # ~66s per cycle (44 tickers × 1.5s), well within the 6h interval
+        try:
+            from ingest.options_adapter import OptionsAdapter
+            scheduler.register(OptionsAdapter(db_path=db_path), interval_sec=21600)
+            _logger.info('OptionsAdapter registered (6h interval)')
+        except Exception as _oa_e:
+            _logger.warning('OptionsAdapter registration failed: %s', _oa_e)
+
         # Daily signal snapshot — captures conviction tiers for forward-looking backtest.
         # Each snapshot is one data point; after 30+ days the backtest has statistical power.
         from ingest.signal_snapshot_adapter import SignalSnapshotAdapter

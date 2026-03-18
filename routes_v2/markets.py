@@ -721,3 +721,60 @@ async def opportunities():
         }
     except Exception as e:
         raise HTTPException(500, detail=str(e))
+
+
+def _prob_label(p: float) -> str:
+    if p >= 0.70: return 'high'
+    if p >= 0.50: return 'likely'
+    if p >= 0.30: return 'unlikely'
+    return 'low'
+
+
+@router.get("/markets/prediction-odds")
+async def prediction_odds(_: str = Depends(get_current_user)):
+    """
+    Return all live Polymarket prediction market probabilities from the KB.
+    Groups by category. Used by the Scenario screen and Dispatch card.
+    """
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    try:
+        rows = conn.execute(
+            """SELECT predicate, object, timestamp,
+                      JSON_EXTRACT(metadata, '$.question') as question,
+                      JSON_EXTRACT(metadata, '$.category') as category
+               FROM facts
+               WHERE source LIKE '%polymarket%'
+                 AND predicate LIKE '%_yes_prob'
+               ORDER BY timestamp DESC""",
+        ).fetchall()
+    finally:
+        conn.close()
+
+    markets = {}
+    for predicate, prob_str, ts, question, category in rows:
+        slug = predicate.replace('_yes_prob', '')
+        if slug not in markets:
+            try:
+                prob = float(prob_str)
+            except (ValueError, TypeError):
+                continue
+            markets[slug] = {
+                'slug':     slug,
+                'question': question or slug.replace('_', ' ').title(),
+                'category': category or 'macro',
+                'prob':     round(prob, 3),
+                'label':    _prob_label(prob),
+                'updated':  ts,
+            }
+
+    grouped = {}
+    for m in markets.values():
+        cat = m['category']
+        grouped.setdefault(cat, []).append(m)
+
+    return {
+        'markets':      list(markets.values()),
+        'by_category':  grouped,
+        'total':        len(markets),
+        'as_of':        max((m['updated'] for m in markets.values()), default=None),
+    }

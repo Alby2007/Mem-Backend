@@ -43,29 +43,32 @@ _MIN_VOLUME_USD = 10_000
 # category: 'fed_policy' | 'trade_war' | 'geopolitical' | 'macro' | 'energy'
 _CURATED_MARKETS: List[Tuple[str, str, str, str]] = [
     # Fed policy
-    ('fed rate cut',        'fed_policy',    'fed_rate_cut_2025',        'Fed rate cut in 2025'),
-    ('federal reserve cut', 'fed_policy',    'fed_rate_cut_2025',        'Fed rate cut in 2025'),
-    ('fed funds rate',      'fed_policy',    'fed_funds_target',         'Fed funds rate target'),
-    ('rate cut march',      'fed_policy',    'fed_cut_march',            'Fed rate cut March 2025'),
-    ('rate cut june',       'fed_policy',    'fed_cut_june',             'Fed rate cut June 2025'),
+    ('fed rate cut',        'fed_policy',   'fed_rate_cut_2025',       'Fed rate cut in 2025'),
+    ('fed rate hike',       'fed_policy',   'fed_rate_hike_2025',      'Fed rate hike in 2025'),
+    ('rate cut march',      'fed_policy',   'fed_cut_march',           'Fed rate cut March 2025'),
+    ('rate cut june',       'fed_policy',   'fed_cut_june',            'Fed rate cut June 2025'),
+    ('fed funds rate',      'fed_policy',   'fed_funds_target',        'Fed funds rate target'),
     # Trade / tariffs
-    ('us china tariff',     'trade_war',     'us_china_tariff',          'US-China tariff escalation'),
-    ('china tariff',        'trade_war',     'us_china_tariff',          'US-China tariff escalation'),
-    ('us tariff',           'trade_war',     'us_tariff_broad',          'Broad US tariff policy'),
-    ('trade war',           'trade_war',     'trade_war_escalation',     'Global trade war escalation'),
+    ('us china tariff',     'trade_war',    'us_china_tariff',         'US-China tariff escalation'),
+    ('us tariff',           'trade_war',    'us_tariff_broad',         'Broad US tariff policy'),
+    ('trade war',           'trade_war',    'trade_war_escalation',    'Global trade war escalation'),
     # Geopolitical
-    ('ukraine ceasefire',   'geopolitical',  'ukraine_ceasefire',        'Ukraine ceasefire agreement'),
-    ('ukraine russia',      'geopolitical',  'ukraine_russia_peace',     'Ukraine-Russia peace deal'),
-    ('israel gaza',         'geopolitical',  'israel_gaza_ceasefire',    'Israel-Gaza ceasefire'),
-    ('iran nuclear',        'geopolitical',  'iran_nuclear',             'Iran nuclear deal/conflict'),
-    ('taiwan',              'geopolitical',  'china_taiwan_conflict',    'China-Taiwan conflict'),
-    # Macro / energy
-    ('oil price',           'energy',        'oil_price_target',         'Oil price outcome'),
-    ('recession 2025',      'macro',         'us_recession_2025',        'US recession 2025'),
-    ('recession 2026',      'macro',         'us_recession_2026',        'US recession 2026'),
-    ('inflation',           'macro',         'us_inflation_path',        'US inflation trajectory'),
-    ('sp500',               'macro',         'sp500_outcome',            'S&P 500 level outcome'),
-    ('bitcoin',             'macro',         'btc_price_outcome',        'Bitcoin price outcome'),
+    ('ukraine ceasefire',   'geopolitical', 'ukraine_ceasefire',       'Ukraine ceasefire'),
+    ('ukraine russia',      'geopolitical', 'ukraine_russia_peace',    'Ukraine-Russia peace deal'),
+    ('israel gaza',         'geopolitical', 'israel_gaza_ceasefire',   'Israel-Gaza ceasefire'),
+    ('iran nuclear',        'geopolitical', 'iran_nuclear',            'Iran nuclear deal/conflict'),
+    ('taiwan',              'geopolitical', 'china_taiwan_conflict',   'China-Taiwan conflict'),
+    # Macro / economic
+    ('recession 2025',      'macro',        'us_recession_2025',       'US recession 2025'),
+    ('recession 2026',      'macro',        'us_recession_2026',       'US recession 2026'),
+    ('inflation',           'macro',        'us_inflation_path',       'US inflation trajectory'),
+    ('sp500',               'macro',        'sp500_outcome',           'S&P 500 outcome'),
+    ('us gdp',              'macro',        'us_gdp_growth',           'US GDP growth'),
+    # Energy / commodities
+    ('oil price',           'energy',       'oil_price_target',        'Oil price outcome'),
+    ('natural gas',         'energy',       'natgas_price',            'Natural gas price'),
+    # Crypto
+    ('bitcoin',             'crypto',       'btc_price_outcome',       'Bitcoin price outcome'),
 ]
 
 
