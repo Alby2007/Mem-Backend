@@ -512,6 +512,147 @@ async def dev_upgrade_premium(request: Request):
     return {"ok": True, "user_id": user_id, "tier": "premium"}
 
 
+class GoogleAuthRequest(BaseModel):
+    credential: str
+
+
+@router.get("/auth/google/client-id")
+async def google_client_id():
+    cid = os.environ.get("GOOGLE_CLIENT_ID", "")
+    if not cid:
+        raise HTTPException(503, detail="Google OAuth not configured")
+    return {"client_id": cid}
+
+
+@router.post("/auth/google")
+@limiter.limit(RATE_LIMITS["auth"])
+async def auth_google(request: Request, data: GoogleAuthRequest, response: Response):
+    if not ext.HAS_AUTH:
+        raise HTTPException(503, detail="auth not available")
+
+    google_client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
+    if not google_client_id:
+        raise HTTPException(503, detail="Google OAuth not configured")
+
+    # 1. Verify token with Google
+    try:
+        import requests as _rq
+        r = _rq.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": data.credential},
+            timeout=8,
+        )
+        if r.status_code != 200:
+            raise HTTPException(401, detail="Invalid Google token")
+        gdata = r.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(401, detail=f"Google token verification failed: {e}")
+
+    # 2. Validate audience
+    if gdata.get("aud") != google_client_id:
+        raise HTTPException(401, detail="Token audience mismatch")
+
+    google_sub   = gdata.get("sub", "")
+    google_email = gdata.get("email", "").lower().strip()
+    google_name  = gdata.get("name", "")
+
+    if not google_sub or not google_email:
+        raise HTTPException(401, detail="Incomplete Google token claims")
+
+    try:
+        from datetime import datetime, timezone
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # 3. Look up by oauth_sub
+        row = conn.execute(
+            "SELECT user_id, email FROM user_auth "
+            "WHERE oauth_provider='google' AND oauth_sub=?",
+            (google_sub,)
+        ).fetchone()
+
+        is_new_user = False
+
+        if row:
+            user_id = row[0]
+            email   = row[1]
+        else:
+            # Check if email exists with password account
+            existing = conn.execute(
+                "SELECT user_id, oauth_provider FROM user_auth WHERE email=?",
+                (google_email,)
+            ).fetchone()
+
+            if existing and not existing[1]:
+                conn.close()
+                raise HTTPException(409, detail="account_exists_with_password")
+
+            # New account — derive unique user_id from email prefix
+            base   = google_email.split('@')[0]
+            base   = ''.join(c for c in base if c.isalnum()).lower()[:12]
+            suffix = secrets.token_hex(2)
+            user_id = f"{base}_{suffix}"
+            email   = google_email
+
+            conn.execute(
+                "INSERT INTO user_auth "
+                "(user_id, email, password_hash, oauth_provider, oauth_sub, display_name, created_at) "
+                "VALUES (?, ?, '__oauth__', 'google', ?, ?, ?)",
+                (user_id, email, google_sub, google_name, now_iso)
+            )
+            conn.commit()
+
+            if ext.HAS_PRODUCT_LAYER:
+                try:
+                    ext.create_user(ext.DB_PATH, user_id)
+                except Exception:
+                    pass
+
+            is_new_user = True
+            ext.log_audit_event(ext.DB_PATH, action="register_oauth", user_id=user_id,
+                                ip_address=request.client.host if request.client else None,
+                                user_agent=request.headers.get("user-agent"),
+                                outcome="success", detail={"provider": "google"})
+
+        # 4. Update last_login
+        conn.execute(
+            "UPDATE user_auth SET last_login=? WHERE user_id=?",
+            (now_iso, user_id)
+        )
+        conn.commit()
+        conn.close()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    # 5. Issue tokens
+    from middleware.auth import _make_token, issue_refresh_token
+    access_token  = _make_token(user_id, email, db_path=ext.DB_PATH)
+    refresh_data  = issue_refresh_token(ext.DB_PATH, user_id)
+    refresh_token = refresh_data.get("refresh_token", "")
+
+    _set_auth_cookies(response, access_token, refresh_token)
+
+    ext.log_audit_event(ext.DB_PATH, action="login_oauth", user_id=user_id,
+                        ip_address=request.client.host if request.client else None,
+                        user_agent=request.headers.get("user-agent"),
+                        outcome="success", detail={"provider": "google"})
+
+    return {
+        "access_token":  access_token,
+        "refresh_token": refresh_token,
+        "token_type":    "bearer",
+        "user_id":       user_id,
+        "email":         email,
+        "display_name":  google_name,
+        "is_new_user":   is_new_user,
+    }
+
+
 @router.post("/admin/users/{target_user_id}/set-dev")
 async def admin_set_dev(
     target_user_id: str,

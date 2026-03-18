@@ -84,6 +84,21 @@ def ensure_user_auth_table(conn: sqlite3.Connection) -> None:
     conn.execute(_DDL_USER_AUTH)
     conn.execute(_DDL_REFRESH_TOKENS)
     conn.commit()
+    for ddl in [
+        "ALTER TABLE user_auth ADD COLUMN oauth_provider TEXT",
+        "ALTER TABLE user_auth ADD COLUMN oauth_sub TEXT",
+    ]:
+        try:
+            conn.execute(ddl)
+            conn.commit()
+        except Exception:
+            pass
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_user_auth_oauth
+        ON user_auth (oauth_provider, oauth_sub)
+        WHERE oauth_provider IS NOT NULL
+    """)
+    conn.commit()
 
 
 # ── Token helpers ──────────────────────────────────────────────────────────────
@@ -361,7 +376,7 @@ def authenticate_user(
     try:
         ensure_user_auth_table(conn)
         row = conn.execute(
-            """SELECT user_id, password_hash, failed_attempts, locked_until
+            """SELECT user_id, password_hash, failed_attempts, locked_until, oauth_provider
                FROM user_auth WHERE email = ?""",
             (email.lower().strip(),),
         ).fetchone()
@@ -372,7 +387,10 @@ def authenticate_user(
                 _check_password(password, _DUMMY_HASH)
             raise ValueError('invalid email or password')
 
-        user_id, password_hash, failed_attempts, locked_until = row
+        user_id, password_hash, failed_attempts, locked_until, oauth_provider = row
+
+        if oauth_provider:
+            raise ValueError('google_account_use_oauth')
 
         # Check lockout
         if locked_until:
