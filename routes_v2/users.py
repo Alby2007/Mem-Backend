@@ -1128,9 +1128,14 @@ async def user_model_get(user_id: str, _: str = Depends(user_path_auth)):
 
         # Concentration risk
         n_sectors = len(sector_map)
-        concentration_risk = 'diversified' if n_sectors >= 5 else (
-            'concentrated' if n_sectors <= 2 else 'moderate'
-        )
+        if total_pos == 0:
+            concentration_risk = 'none'
+        elif n_sectors >= 5:
+            concentration_risk = 'diversified'
+        elif n_sectors <= 2:
+            concentration_risk = 'concentrated'
+        else:
+            concentration_risk = 'moderate'
 
         # Thesis conflicts: bullish in risk-off, or overweight single sector
         regime_row = conn.execute(
