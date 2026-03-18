@@ -2,21 +2,24 @@
 ingest/polymarket_adapter.py — Polymarket Prediction Market Adapter
 
 Fetches prediction market odds from Polymarket's Gamma API for a curated
-list of macro and geopolitical markets. Prediction market probabilities are
-calibrated, forward-looking signals that complement the KB's backward-looking
-historical data.
+list of macro and geopolitical markets. Uses direct slug-based fetching
+rather than keyword search (the ?q= search param is non-functional on the
+Gamma API and returns stale 2020 markets regardless of query text).
 
-No API key required. Free public API.
-Endpoint: https://gamma-api.polymarket.com/markets
+ATOMS PRODUCED
+==============
+  subject         predicate                    value
+  ─────────────────────────────────────────────────────────────────
+  polymarket      {atom_slug}_yes_prob         float 0..1 (YES price)
+  polymarket      {atom_slug}_volume           float (total USD volume)
+  macro_risk      {category}_market            "{label}:{prob}" roll-up
 
-Atoms produced:
-  - polymarket | {slug}_yes_prob  | {float 0..1}     — current YES probability
-  - polymarket | {slug}_volume    | {float}           — total volume USD (liquidity)
-  - macro_risk | fed_policy_market   | {label}        — roll-up category atoms
-  - macro_risk | trade_war_market    | {label}
-  - macro_risk | geopolitical_market | {label}
+CURATED MARKETS
+===============
+12 high-liquidity markets across fed_policy, geopolitical, macro, crypto.
+Minimum volume: $400k to ensure price discovery is meaningful.
+Slugs are fixed to specific market IDs — update when markets expire.
 
-Source: prediction_market_polymarket  (authority 0.73, half-life 1d)
 Schedule: 3600s (hourly — prediction markets move fast)
 """
 
@@ -26,7 +29,6 @@ import json as _json
 import logging
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from ingest.base import BaseIngestAdapter, RawAtom
@@ -34,64 +36,49 @@ from ingest.base import BaseIngestAdapter, RawAtom
 _logger = logging.getLogger(__name__)
 
 _GAMMA_BASE = 'https://gamma-api.polymarket.com/markets'
+_MIN_VOLUME = 400_000   # ignore markets with < $400k volume (thin / unreliable)
 
-# Minimum liquidity filter — ignore markets with < $10k volume (too thin / unreliable)
-_MIN_VOLUME_USD = 10_000
+# ── Curated market list ─────────────────────────────────────────────────────
+# (atom_slug, category, polymarket_slug, description)
+# Fetch via GET /markets?slug={polymarket_slug}
+# YES price = outcomePrices[0] (JSON-encoded string array)
+# Last verified: 2026-03-18
 
-# Curated market list: (slug_keyword, category, atom_slug, description)
-# slug_keyword is matched against the Polymarket market question/slug
-# category: 'fed_policy' | 'trade_war' | 'geopolitical' | 'macro' | 'energy'
 _CURATED_MARKETS: List[Tuple[str, str, str, str]] = [
     # Fed policy
-    ('fed rate cut',        'fed_policy',   'fed_rate_cut_2025',       'Fed rate cut in 2025'),
-    ('fed rate hike',       'fed_policy',   'fed_rate_hike_2025',      'Fed rate hike in 2025'),
-    ('rate cut march',      'fed_policy',   'fed_cut_march',           'Fed rate cut March 2025'),
-    ('rate cut june',       'fed_policy',   'fed_cut_june',            'Fed rate cut June 2025'),
-    ('fed funds rate',      'fed_policy',   'fed_funds_target',        'Fed funds rate target'),
-    # Trade / tariffs
-    ('us china tariff',     'trade_war',    'us_china_tariff',         'US-China tariff escalation'),
-    ('us tariff',           'trade_war',    'us_tariff_broad',         'Broad US tariff policy'),
-    ('trade war',           'trade_war',    'trade_war_escalation',    'Global trade war escalation'),
+    ('fed_cuts_none_2026',      'fed_policy',   'will-no-fed-rate-cuts-happen-in-2026',         'No Fed rate cuts in 2026'),
+    ('fed_1cut_2026',           'fed_policy',   'will-1-fed-rate-cut-happen-in-2026',           '1 Fed rate cut in 2026'),
+    ('fed_2cuts_2026',          'fed_policy',   'will-2-fed-rate-cuts-happen-in-2026',          '2 Fed rate cuts in 2026'),
+    ('fed_3cuts_2026',          'fed_policy',   'will-3-fed-rate-cuts-happen-in-2026',          '3 Fed rate cuts in 2026'),
     # Geopolitical
-    ('ukraine ceasefire',   'geopolitical', 'ukraine_ceasefire',       'Ukraine ceasefire'),
-    ('ukraine russia',      'geopolitical', 'ukraine_russia_peace',    'Ukraine-Russia peace deal'),
-    ('israel gaza',         'geopolitical', 'israel_gaza_ceasefire',   'Israel-Gaza ceasefire'),
-    ('iran nuclear',        'geopolitical', 'iran_nuclear',            'Iran nuclear deal/conflict'),
-    ('taiwan',              'geopolitical', 'china_taiwan_conflict',   'China-Taiwan conflict'),
-    # Macro / economic
-    ('recession 2025',      'macro',        'us_recession_2025',       'US recession 2025'),
-    ('recession 2026',      'macro',        'us_recession_2026',       'US recession 2026'),
-    ('inflation',           'macro',        'us_inflation_path',       'US inflation trajectory'),
-    ('sp500',               'macro',        'sp500_outcome',           'S&P 500 outcome'),
-    ('us gdp',              'macro',        'us_gdp_growth',           'US GDP growth'),
-    # Energy / commodities
-    ('oil price',           'energy',       'oil_price_target',        'Oil price outcome'),
-    ('natural gas',         'energy',       'natgas_price',            'Natural gas price'),
+    ('ukraine_ceasefire_mar31', 'geopolitical', 'russia-x-ukraine-ceasefire-by-march-31-2026',  'Ukraine ceasefire by Mar 31 2026'),
+    ('ukraine_ceasefire_2026',  'geopolitical', 'russia-x-ukraine-ceasefire-before-2027',       'Ukraine ceasefire by end 2026'),
+    ('taiwan_invasion_2026',    'geopolitical', 'will-china-invade-taiwan-before-2027',         'China invades Taiwan by end 2026'),
+    ('taiwan_blockade_jun30',   'geopolitical', 'will-china-blockade-taiwan-by-june-30',        'China blockade Taiwan by Jun 30'),
+    ('zelenskyy_out_2026',      'geopolitical', 'zelenskyy-out-as-ukraine-president-before-2027','Zelenskyy out as president 2026'),
+    # Macro
+    ('us_recession_2026',       'macro',        'us-recession-by-end-of-2026',                  'US recession by end 2026'),
     # Crypto
-    ('bitcoin',             'crypto',       'btc_price_outcome',       'Bitcoin price outcome'),
+    ('btc_150k_mar31',          'crypto',       'will-bitcoin-hit-150k-by-march-31-2026',       'Bitcoin $150k by Mar 31 2026'),
+    ('btc_150k_jun30',          'crypto',       'will-bitcoin-hit-150k-by-june-30-2026',        'Bitcoin $150k by Jun 30 2026'),
 ]
 
 
 def _prob_label(prob: float) -> str:
     """Convert probability to a directional label for roll-up atoms."""
-    if prob >= 0.70:
-        return 'high_probability'
-    if prob >= 0.50:
-        return 'likely'
-    if prob >= 0.30:
-        return 'unlikely'
+    if prob >= 0.70: return 'high_probability'
+    if prob >= 0.50: return 'likely'
+    if prob >= 0.30: return 'unlikely'
     return 'low_probability'
 
 
-def _fetch_markets(keyword: str) -> List[Dict[str, Any]]:
-    """Fetch markets matching a keyword from Gamma API."""
-    params = {
-        'q':         keyword,
-        'limit':     5,
-        'active':    'true',
-        'closed':    'false',
-    }
-    url = _GAMMA_BASE + '?' + urllib.parse.urlencode(params)
+def _fetch_market_by_slug(slug: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch a single market by its exact Polymarket slug.
+    Returns the market dict or None on failure.
+    Uses direct slug param which is reliable (unlike ?q= text search).
+    """
+    url = _GAMMA_BASE + '?' + urllib.parse.urlencode({'slug': slug})
     try:
         req = urllib.request.Request(
             url,
@@ -99,177 +86,123 @@ def _fetch_markets(keyword: str) -> List[Dict[str, Any]]:
         )
         with urllib.request.urlopen(req, timeout=20) as resp:
             data = _json.loads(resp.read().decode('utf-8', errors='replace'))
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict) and 'markets' in data:
-            return data['markets']
-        return []
+        markets = data if isinstance(data, list) else data.get('markets', [])
+        return markets[0] if markets else None
     except Exception as exc:
-        _logger.debug('Polymarket fetch failed for %r: %s', keyword, exc)
-        return []
-
-
-def _best_market(markets: List[Dict[str, Any]], keyword: str) -> Optional[Dict[str, Any]]:
-    """Pick the highest-volume market above the liquidity filter."""
-    keyword_lower = keyword.lower()
-    candidates = []
-    for m in markets:
-        question = (m.get('question') or m.get('title') or '').lower()
-        if keyword_lower not in question:
-            continue
-        try:
-            vol = float(m.get('volume', 0) or m.get('volumeNum', 0) or 0)
-        except (TypeError, ValueError):
-            vol = 0.0
-        if vol < _MIN_VOLUME_USD:
-            continue
-        candidates.append((vol, m))
-    if not candidates:
+        _logger.debug('Polymarket slug fetch failed for %r: %s', slug, exc)
         return None
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    return candidates[0][1]
 
 
 def _extract_yes_prob(market: Dict[str, Any]) -> Optional[float]:
-    """Extract the YES probability from a Polymarket market dict."""
-    # Gamma API returns outcomePrices as JSON string array, e.g. '["0.72", "0.28"]'
-    outcome_prices = market.get('outcomePrices')
-    if outcome_prices:
-        try:
-            if isinstance(outcome_prices, str):
-                prices = _json.loads(outcome_prices)
-            else:
-                prices = outcome_prices
-            # First entry is YES price
-            return round(float(prices[0]), 4)
-        except (ValueError, IndexError, _json.JSONDecodeError):
-            pass
-
-    # Fallback: bestBid/bestAsk midpoint
-    bid = market.get('bestBid')
-    ask = market.get('bestAsk')
-    if bid is not None and ask is not None:
-        try:
-            return round((float(bid) + float(ask)) / 2, 4)
-        except (TypeError, ValueError):
-            pass
-
-    # Fallback: lastTradePrice
-    ltp = market.get('lastTradePrice') or market.get('price')
-    if ltp is not None:
-        try:
-            return round(float(ltp), 4)
-        except (TypeError, ValueError):
-            pass
-
-    return None
+    """
+    Extract YES probability from market dict.
+    outcomePrices is a JSON-encoded string like '["0.355", "0.645"]'
+    where [0] = YES price, [1] = NO price.
+    """
+    prices_raw = market.get('outcomePrices')
+    if not prices_raw:
+        return None
+    try:
+        prices = _json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+        return float(prices[0])
+    except (ValueError, TypeError, IndexError):
+        return None
 
 
 class PolymarketAdapter(BaseIngestAdapter):
     """
-    Polymarket prediction market adapter.
-
-    Fetches YES probabilities and liquidity for a curated list of macro and
-    geopolitical markets. Provides calibrated forward-looking signals.
-    No API key required.
+    Fetches prediction market probabilities from Polymarket via direct slug lookup.
+    Produces atoms for each curated market plus category-level roll-ups.
     """
 
+    name = 'polymarket_adapter'
+
     def __init__(self):
-        super().__init__(name='polymarket')
+        super().__init__(self.name)
 
     def fetch(self) -> List[RawAtom]:
-        now_iso = datetime.now(timezone.utc).isoformat()
-        source  = 'prediction_market_polymarket'
-        meta_base = {'fetched_at': now_iso, 'source_url': _GAMMA_BASE}
-
         atoms: List[RawAtom] = []
-        seen_slugs: Dict[str, bool] = {}
 
         # Category roll-up accumulators: category → list of (prob, slug)
-        category_probs: Dict[str, List[float]] = {}
+        category_probs: Dict[str, List[Tuple[float, str]]] = {}
 
-        for keyword, category, atom_slug, description in _CURATED_MARKETS:
-            # Avoid duplicate slug writes from overlapping keyword matches
-            if atom_slug in seen_slugs:
+        for atom_slug, category, poly_slug, description in _CURATED_MARKETS:
+            market = _fetch_market_by_slug(poly_slug)
+            if not market:
+                _logger.debug('Polymarket: no market found for slug %r', poly_slug)
                 continue
 
-            markets = _fetch_markets(keyword)
-            market  = _best_market(markets, keyword)
-            if not market:
-                _logger.debug('Polymarket: no liquid market found for %r', keyword)
+            # Volume check
+            vol_raw = market.get('volumeNum') or market.get('volume') or 0
+            try:
+                vol = float(vol_raw)
+            except (ValueError, TypeError):
+                vol = 0.0
+            if vol < _MIN_VOLUME:
+                _logger.debug('Polymarket: skipping %r (volume $%.0f < $%.0f)', poly_slug, vol, _MIN_VOLUME)
                 continue
 
             yes_prob = _extract_yes_prob(market)
             if yes_prob is None:
-                _logger.debug('Polymarket: could not extract YES prob for %r', keyword)
+                _logger.debug('Polymarket: could not extract YES prob for %r', poly_slug)
                 continue
 
-            try:
-                volume = float(market.get('volume', 0) or market.get('volumeNum', 0) or 0)
-            except (TypeError, ValueError):
-                volume = 0.0
+            question = market.get('question', description)[:200]
 
-            question = market.get('question') or market.get('title') or description
-            seen_slugs[atom_slug] = True
-
+            # YES probability atom
             atoms.append(RawAtom(
                 subject='polymarket',
                 predicate=f'{atom_slug}_yes_prob',
-                object=str(yes_prob),
-                confidence=0.73,
-                source=source,
-                metadata={
-                    **meta_base,
-                    'question':    question[:200],
-                    'category':    category,
-                    'description': description,
-                    'market_id':   market.get('id', ''),
-                },
+                object=str(round(yes_prob, 4)),
+                confidence=min(0.95, 0.5 + vol / 50_000_000),  # higher vol → higher confidence
+                source=f'polymarket_{atom_slug}',
                 upsert=True,
+                metadata={
+                    'question':    question,
+                    'category':    category,
+                    'slug':        poly_slug,
+                    'volume_usd':  round(vol, 2),
+                    'label':       _prob_label(yes_prob),
+                },
             ))
+
+            # Volume atom
             atoms.append(RawAtom(
                 subject='polymarket',
                 predicate=f'{atom_slug}_volume',
-                object=str(round(volume, 0)),
-                confidence=0.73,
-                source=source,
-                metadata={**meta_base, 'question': question[:200], 'category': category},
+                object=str(round(vol, 2)),
+                confidence=0.90,
+                source=f'polymarket_{atom_slug}',
                 upsert=True,
+                metadata={'question': question, 'category': category},
             ))
 
-            category_probs.setdefault(category, []).append(yes_prob)
+            # Accumulate for category roll-up
+            category_probs.setdefault(category, []).append((yes_prob, atom_slug))
 
-        # ── Category roll-up atoms ─────────────────────────────────────────────
-        _CATEGORY_PREDICATES = {
-            'fed_policy':    'fed_policy_market',
-            'trade_war':     'trade_war_market',
-            'geopolitical':  'geopolitical_market',
-            'macro':         'macro_market',
-            'energy':        'energy_market',
-        }
-        for cat, probs in category_probs.items():
-            if not probs:
+            _logger.info(
+                'Polymarket %s: YES=%.3f vol=$%.0fM',
+                atom_slug, yes_prob, vol / 1_000_000,
+            )
+
+        # Category-level roll-up atoms (e.g. macro_risk.fed_policy_market)
+        for cat, entries in category_probs.items():
+            if not entries:
                 continue
-            avg_prob = sum(probs) / len(probs)
-            label    = _prob_label(avg_prob)
-            predicate = _CATEGORY_PREDICATES.get(cat, f'{cat}_market')
+            avg_prob = sum(p for p, _ in entries) / len(entries)
+            label = _prob_label(avg_prob)
             atoms.append(RawAtom(
                 subject='macro_risk',
-                predicate=predicate,
-                object=f'{label}:{round(avg_prob, 2)}',
-                confidence=0.70,
-                source=source,
-                metadata={
-                    **meta_base,
-                    'category':     cat,
-                    'avg_prob':     round(avg_prob, 4),
-                    'market_count': len(probs),
-                },
+                predicate=f'{cat}_market',
+                object=f'{label}:{round(avg_prob, 3)}',
+                confidence=0.80,
+                source='polymarket_rollup',
                 upsert=True,
+                metadata={'category': cat, 'markets': [s for _, s in entries]},
             ))
 
-        self._logger.info(
-            'Polymarket adapter: %d markets processed, %d atoms produced',
-            len(seen_slugs), len(atoms),
-        )
+        _logger.info('PolymarketAdapter: %d atoms from %d curated markets', len(atoms), len(_CURATED_MARKETS))
         return atoms
+
+    def transform(self, raw: List[RawAtom]) -> List[RawAtom]:
+        return raw
