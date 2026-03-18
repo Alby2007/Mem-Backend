@@ -133,7 +133,7 @@ class StrategyEvolution:
                         # leaving capital idle in a maxed-out exploit bot.
                         _RECYCLE_FLOOR = init_bal * 6
                         excess = max(0.0, cur_bal - _RECYCLE_FLOOR)
-                        recycle_amt = round(excess * 0.20, 2)  # 20% of excess above 6x floor
+                        recycle_amt = round(excess * 0.25, 2)  # 25% of excess above 6x floor (threshold = 50% of initial)
                         if recycle_amt >= init_bal * 0.5:
                             # Enough to meaningfully seed a new bot — trim exploit, bank the rest
                             new_exploit_bal = round(cur_bal - recycle_amt, 2)
