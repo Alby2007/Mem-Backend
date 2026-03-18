@@ -467,3 +467,53 @@ def get_pattern_baseline(
         return None
     finally:
         conn.close()
+
+
+def get_regime_aware_baseline(
+    pattern_type: str,
+    timeframe: str,
+    market_regime: str,
+    db_path: str,
+    min_cells: int = 5,
+    min_samples: int = 1000,
+) -> Optional[float]:
+    """
+    Return the sample-weighted mean hit_rate_t1 for a given
+    (pattern_type, timeframe, market_regime) combination.
+
+    Implements a two-level fallback:
+    1. Exact regime match — most accurate, regime-aware probability
+    2. Returns None if insufficient data — caller falls back to overall baseline
+
+    This replaces the TODO(baseline-regime) in get_pattern_baseline.
+    With 5M+ samples across regimes, per-regime baselines are now reliable.
+
+    Typical regime-specific values vs overall baseline (1h):
+      breaker  risk_off_contraction: ~30%   vs 35.2% overall
+      breaker  risk_on_expansion:    ~58%   vs 35.2% overall  (small sample)
+      mitigation risk_off_contraction: ~44% vs 38.4% overall
+      liquidity_void risk_off_contraction: ~51% vs 46.1% overall
+    """
+    if not market_regime:
+        return None
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        rows = conn.execute(
+            """SELECT hit_rate_t1, sample_size
+               FROM signal_calibration
+               WHERE pattern_type=? AND timeframe=? AND market_regime=?
+                 AND hit_rate_t1 IS NOT NULL AND sample_size >= 20""",
+            (pattern_type, timeframe, market_regime),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if len(rows) < min_cells:
+        return None
+
+    total_n  = sum(r[1] for r in rows)
+    if total_n < min_samples:
+        return None
+
+    weighted = sum(r[0] * r[1] for r in rows)
+    return weighted / total_n

@@ -1042,26 +1042,38 @@ class BotRunner:
                         _pt  = c.get('pattern_type', 'unknown')
                         _tf  = c.get('timeframe', '4h')
 
-                        # Tier 1: ticker-level calibration (most specific)
+                        # Tier 1: ticker-level calibration for current regime (most specific)
                         _cal_hr = c.get('cal_hit_rate')
 
-                        # Tier 2: pattern-type aggregate baseline (fallback when
-                        # no ticker-specific calibration exists). This replaces the
-                        # old `quality or 0.5` fallback — quality_score is a signal
-                        # strength metric, NOT a hit probability.
+                        # Tier 2: regime-aware pattern baseline — uses the actual
+                        # hit rate for this pattern×timeframe IN THE CURRENT REGIME.
+                        # e.g. breaker 1h in risk_off_contraction: ~30% vs 35% overall
+                        # e.g. liquidity_void 1h in risk_off_contraction: ~51% vs 46% overall
+                        if not _cal_hr and _market_regime:
+                            from analytics.signal_calibration import get_regime_aware_baseline
+                            _cal_hr = get_regime_aware_baseline(
+                                _pt, _tf, _market_regime, self.db_path
+                            )
+
+                        # Tier 3: overall pattern baseline (regime-agnostic fallback)
                         if not _cal_hr:
                             from analytics.signal_calibration import get_pattern_baseline
                             _cal_hr = get_pattern_baseline(_pt, _tf, self.db_path)
 
-                        # Tier 3: hard prior of 0.35 (below-50% conservative default)
+                        # Tier 4: hard prior of 0.35 (below-50% conservative default)
                         if not _cal_hr:
                             _cal_hr = 0.35
 
-                        # Cap at pattern baseline ceiling: individual ticker calibration
-                        # can't claim higher probability than the pattern-type average.
-                        # Prevents a small-sample ticker cell from overstating confidence.
-                        from analytics.signal_calibration import get_pattern_baseline as _gpb
-                        _ceiling = _gpb(_pt, _tf, self.db_path)
+                        # Cap at REGIME-AWARE ceiling first, then overall ceiling.
+                        # Prevents a small-sample ticker cell from overstating confidence
+                        # relative to what the pattern actually achieves in this regime.
+                        from analytics.signal_calibration import (
+                            get_regime_aware_baseline as _grab,
+                            get_pattern_baseline as _gpb,
+                        )
+                        _ceiling = _grab(_pt, _tf, _market_regime, self.db_path) if _market_regime else None
+                        if _ceiling is None:
+                            _ceiling = _gpb(_pt, _tf, self.db_path)
                         if _ceiling and _cal_hr > _ceiling:
                             _cal_hr = _ceiling
 
