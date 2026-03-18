@@ -1444,7 +1444,7 @@ class BotRunner:
             min_eval = config.get('min_trades_eval', 25)
             if total < min_eval:
                 tier = 'immature'
-            elif fitness <= 0 or max_drawdown_pct > 0.40:
+            elif fitness <= 0 or max_drawdown_pct > 0.60:
                 tier = 'failing'
             else:
                 tier = 'viable'  # elite is assigned by evolution engine

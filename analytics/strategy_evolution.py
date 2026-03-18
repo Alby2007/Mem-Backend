@@ -135,7 +135,7 @@ class StrategyEvolution:
                                         f'Elite (balance capped at £{cur_bal:,.0f})',
                                         now_iso)
 
-                elif fitness > 0 and max_dd <= 0.40:
+                elif fitness > 0 and max_dd <= 0.60:
                     # Viable
                     viables.append(bot)
                     self._log_event(user_id, 'evolution_viable', bot_id,
