@@ -128,8 +128,27 @@ class StrategyEvolution:
                                         f'Promotion blocked: negative balance £{cur_bal:,.0f}',
                                         now_iso)
                     else:
-                        # Already at cap — just update role, no balance change
-                        self._update_bot(bot_id, {'role': 'exploit', 'promoted_at': now_iso})
+                        # At the 8x cap — redistribute excess above 6x to seed a new explorer.
+                        # This recycles accumulated profits back into the fleet rather than
+                        # leaving capital idle in a maxed-out exploit bot.
+                        _RECYCLE_FLOOR = init_bal * 6
+                        excess = max(0.0, cur_bal - _RECYCLE_FLOOR)
+                        recycle_amt = round(excess * 0.20, 2)  # 20% of excess above 6x floor
+                        if recycle_amt >= init_bal * 0.5:
+                            # Enough to meaningfully seed a new bot — trim exploit, bank the rest
+                            new_exploit_bal = round(cur_bal - recycle_amt, 2)
+                            self._update_bot(bot_id, {
+                                'role': 'exploit',
+                                'promoted_at': now_iso,
+                                'virtual_balance': new_exploit_bal,
+                            })
+                            self._log_event(user_id, 'evolution_capital_recycle', bot_id,
+                                            f'Capital recycled: £{recycle_amt:,.0f} carved off '
+                                            f'(exploit {cur_bal:,.0f}→{new_exploit_bal:,.0f})',
+                                            now_iso)
+                            summary['recycled_capital'] = summary.get('recycled_capital', 0) + recycle_amt
+                        else:
+                            self._update_bot(bot_id, {'role': 'exploit', 'promoted_at': now_iso})
                         summary['elites'] += 1
                         self._log_event(user_id, 'evolution_promote', bot_id,
                                         f'Elite (balance capped at £{cur_bal:,.0f})',
@@ -171,7 +190,7 @@ class StrategyEvolution:
             # Spawn one replacement per kill
             replacement = self._spawn_replacement(elites, viables, user_id, now_iso)
             if replacement:
-                per_bot_balance = self._avg_initial_balance(user_id)
+                per_bot_balance = summary.pop('recycled_capital', None) or self._avg_initial_balance(user_id)
                 new_bot_id = self._insert_bot(user_id, replacement, per_bot_balance, now_iso)
                 if new_bot_id:
                     runner.start_bot(new_bot_id, startup_delay=30)
