@@ -733,6 +733,68 @@ def _handle_tg_message(msg: dict, token: str = '') -> None:
             pass
 
 
+def _handle_exec_callback(chat_id: str, data: str) -> None:
+    """
+    Handle exec:{followup_id}:{action} inline keyboard callbacks.
+    action: yes | skip | delay
+    """
+    from users.user_store import get_user_by_chat_id
+    from services.execution_gateway import deliver_execution_signal
+    from datetime import datetime, timezone, timedelta
+
+    parts = data.split(":")
+    if len(parts) < 3:
+        return
+    try:
+        followup_id = int(parts[1])
+    except ValueError:
+        return
+    action = parts[2]
+
+    user_id = get_user_by_chat_id(ext.DB_PATH, chat_id)
+    if not user_id:
+        _send(chat_id, "⚠️ Could not identify your account\\. Please reconnect in Meridian\\.")
+        return
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+
+    if action == "yes":
+        delivered = deliver_execution_signal(ext.DB_PATH, followup_id, user_id)
+        conn.execute(
+            "UPDATE tip_followups SET status='active', opened_at=?, initiated_by='user_confirm' WHERE id=? AND user_id=?",
+            (now_iso, followup_id, user_id),
+        )
+        conn.commit()
+        conn.close()
+        if delivered:
+            _send(chat_id, "✅ *Execution signal sent\\!*\n_Your broker automation will place the order\\._")
+        else:
+            _send(chat_id, "✅ *Confirmed\\!*\n_No webhook configured — open your broker manually\\._")
+
+    elif action == "skip":
+        conn.execute(
+            "UPDATE tip_followups SET status='cancelled', updated_at=? WHERE id=? AND user_id=?",
+            (now_iso, followup_id, user_id),
+        )
+        conn.commit()
+        conn.close()
+        _send(chat_id, "❌ Trade skipped\\.")  
+
+    elif action == "delay":
+        new_expiry = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        conn.execute(
+            "UPDATE tip_followups SET status='staged', expires_at=?, updated_at=? WHERE id=? AND user_id=?",
+            (new_expiry, now_iso, followup_id, user_id),
+        )
+        conn.commit()
+        conn.close()
+        _send(chat_id, "⏰ Alert snoozed 1h — I'll re\\-alert when price hits the zone\\.")  
+
+    else:
+        conn.close()
+
+
 def _handle_tg_callback(cb: dict) -> None:
     callback_id = cb.get("id", "")
     chat_id = str(cb.get("from", {}).get("id", ""))
@@ -740,6 +802,9 @@ def _handle_tg_callback(cb: dict) -> None:
 
     _tg_api("answerCallbackQuery", {"callback_query_id": callback_id})
 
+    if data.startswith("exec:"):
+        _handle_exec_callback(chat_id, data)
+        return
     if not data.startswith("pos:"):
         return
     parts = data.split(":")

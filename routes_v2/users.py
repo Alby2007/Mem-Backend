@@ -1887,3 +1887,40 @@ async def admin_set_tier(data: SetTierRequest, request: Request):
     except Exception as e:
         raise HTTPException(500, detail=str(e))
     return {"ok": True, "user_id": uid, "tier": tier}
+
+
+class WebhookSettingsRequest(BaseModel):
+    broker_webhook_url: Optional[str] = None
+    broker_webhook_secret: Optional[str] = None
+
+
+@router.post("/users/{user_id}/settings/webhook")
+async def save_webhook_settings(
+    user_id: str,
+    data: WebhookSettingsRequest,
+    _: str = Depends(user_path_auth),
+):
+    """Save broker webhook URL + signing secret."""
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.execute(
+        "UPDATE user_preferences SET broker_webhook_url=?, broker_webhook_secret=? WHERE user_id=?",
+        (data.broker_webhook_url, data.broker_webhook_secret, user_id),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "webhook_configured": bool(data.broker_webhook_url)}
+
+
+@router.get("/users/{user_id}/settings/webhook")
+async def get_webhook_settings(user_id: str, _: str = Depends(user_path_auth)):
+    """Return webhook config — URL shown, secret masked."""
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    row = conn.execute(
+        "SELECT broker_webhook_url, broker_webhook_secret FROM user_preferences WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    return {
+        "webhook_url":        row[0] if row else None,
+        "webhook_secret_set": bool(row and row[1]),
+    }

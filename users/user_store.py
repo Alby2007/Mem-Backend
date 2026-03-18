@@ -128,6 +128,8 @@ _PREFERENCES_MIGRATIONS = [
     "ALTER TABLE user_preferences ADD COLUMN style_risk_tolerance TEXT DEFAULT 'moderate'",
     "ALTER TABLE user_preferences ADD COLUMN style_timeframe TEXT DEFAULT 'swing'",
     "ALTER TABLE user_preferences ADD COLUMN style_sector_focus TEXT DEFAULT '[]'",
+    "ALTER TABLE user_preferences ADD COLUMN broker_webhook_url TEXT DEFAULT NULL",
+    "ALTER TABLE user_preferences ADD COLUMN broker_webhook_secret TEXT DEFAULT NULL",
 ]
 
 _DDL_DELIVERY_LOG = """
