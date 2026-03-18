@@ -472,12 +472,13 @@ def _compute_position_sizing_atoms(
     #   |score| < threshold → label only, no shift (surfaced in ct_rule for LLM)
     #
     # Constants
-    # TODO(prior-scaling): once baseline_sample_count is exposed by get_global_baseline(),
-    #   replace the fixed prior with: _CAL_PRIOR_TOTAL = min(20, baseline_n // 10)
-    #   This makes the prior stronger when the global baseline is itself well-supported
-    #   (e.g. baseline built from 2000 samples → prior_total=20; from 50 → prior_total=5).
-    #   Defer until baseline_n is routinely ≥200 across pattern types.
-    _CAL_PRIOR_TOTAL = 10     # phantom sample count for Bayesian smoothing
+    # Prior-scaling: _CAL_PRIOR_TOTAL is proportional to how well-established
+    # the global baseline is. A baseline built from 250K samples deserves a
+    # stronger prior than one from 200 samples.
+    # Formula: min(20, baseline_n // 10_000) — caps at 20 phantom samples.
+    # At 18K samples (thinnest bucket): prior=1. At 250K: prior=20 (max).
+    # This replaced the hardcoded prior=10 per TODO(prior-scaling).
+    _CAL_PRIOR_TOTAL = 10     # default; overwritten below once baseline_n is known
     _CAL_FALLBACK    = 0.50   # used when global baseline unavailable
     _CAL_THRESHOLD   = 0.30   # |weighted_score| needed to shift a tier
     _CAL_TIER_ORDER  = ['avoid', 'low', 'medium', 'high']
@@ -488,6 +489,7 @@ def _compute_position_sizing_atoms(
             from analytics.signal_calibration import (
                 get_calibration as _get_cal,
                 get_global_baseline as _get_baseline,
+                get_global_baseline_with_n as _get_baseline_n,
             )
             import math as _math
             _pat_type = dominant_pattern_type or 'mitigation'
@@ -499,7 +501,12 @@ def _compute_position_sizing_atoms(
                 db_path       = db_path,
                 market_regime = None,
             )
-            _baseline = _get_baseline(_pat_type, _tf, db_path) or _CAL_FALLBACK
+            _baseline_val, _baseline_n = _get_baseline_n(_pat_type, _tf, db_path)
+            _baseline = _baseline_val or _CAL_FALLBACK
+            # Scale prior strength to baseline quality — more samples = stronger prior
+            # min(20, n // 10_000): 18K samples → prior=1, 100K → prior=10, 250K → prior=20
+            if _baseline_val is not None and _baseline_n > 0:
+                _CAL_PRIOR_TOTAL = min(20, max(1, _baseline_n // 10_000))
         except Exception:
             _cal      = None
             _baseline = _CAL_FALLBACK

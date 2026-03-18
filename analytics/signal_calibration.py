@@ -517,3 +517,41 @@ def get_regime_aware_baseline(
 
     weighted = sum(r[0] * r[1] for r in rows)
     return weighted / total_n
+
+
+def get_global_baseline_with_n(
+    pattern_type: str,
+    timeframe: str,
+    db_path: str,
+    min_samples: int = 30,
+) -> tuple:
+    """
+    Same as get_global_baseline but returns (hit_rate, total_n) tuple so
+    callers can scale their Bayesian prior proportionally to baseline quality.
+
+    Used by signal_enrichment_adapter for TODO(prior-scaling).
+    Returns (None, 0) when insufficient data.
+    """
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        _ensure_table(conn)
+        rows = conn.execute(
+            """SELECT hit_rate_t1, sample_size
+               FROM signal_calibration
+               WHERE pattern_type=? AND timeframe=?
+                 AND hit_rate_t1 IS NOT NULL
+                 AND sample_size >= ?""",
+            (pattern_type, timeframe, min_samples),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return (None, 0)
+
+    total_n  = sum(r[1] for r in rows)
+    if total_n < min_samples:
+        return (None, 0)
+
+    weighted = sum(r[0] * r[1] for r in rows)
+    return (weighted / total_n, total_n)
