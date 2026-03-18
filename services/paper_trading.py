@@ -734,6 +734,7 @@ def monitor_positions(user_id: str) -> dict:
                                 source='paper_bot' if pos.get('bot_id') else 'user',
                                 bot_id=pos.get('bot_id'),
                                 conn=conn,
+                                pnl_r=t1_pnl_r,
                             )
                     except Exception as _cal_t1_e:
                         _logger.debug('t1 calibration feedback failed for %s: %s', ticker, _cal_t1_e)
@@ -796,6 +797,7 @@ def monitor_positions(user_id: str) -> dict:
                                 source='paper_bot' if pos.get('bot_id') else 'user',
                                 bot_id=pos.get('bot_id'),
                                 conn=conn,
+                                pnl_r=pnl_r,
                             )
                 except Exception as _cal_e:
                     _logger.debug('calibration feedback failed for %s: %s', ticker, _cal_e)

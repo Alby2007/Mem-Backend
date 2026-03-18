@@ -146,6 +146,7 @@ def update_calibration(
     source: str = 'user',
     bot_id: Optional[str] = None,
     conn=None,
+    pnl_r: Optional[float] = None,
 ) -> None:
     """
     Update the calibration row for (ticker, pattern_type, timeframe, market_regime)
@@ -154,6 +155,8 @@ def update_calibration(
     outcome values: 'hit_t1' | 'hit_t2' | 'hit_t3' | 'stopped_out' | 'pending' | 'skipped'
     Only hit_t* and stopped_out are counted (pending/skipped ignored).
     source: 'user' | 'paper_bot' | 'system' | 'backtest'
+    pnl_r: actual R-multiple realised (optional — written to calibration_observations
+           and used to update outcome_r_multiple on the calibration row)
     """
     if outcome not in ('hit_t1', 'hit_t2', 'hit_t3', 'stopped_out'):
         return
@@ -198,12 +201,25 @@ def update_calibration(
 
         conf_score = _confidence_score(new_n)
 
+        # Lookup sector for this ticker (used on INSERT; existing rows retain theirs)
+        _sector_row = conn.execute(
+            "SELECT object FROM facts WHERE UPPER(subject)=? AND predicate='sector'"
+            " ORDER BY timestamp DESC LIMIT 1",
+            (ticker,),
+        ).fetchone()
+        _sector = _sector_row[0] if _sector_row else None
+
+        # Compute updated outcome_r_multiple if pnl_r provided
+        _r_mult_update = ''
+        if pnl_r is not None:
+            _r_mult_update = ', outcome_r_multiple=ROUND((COALESCE(outcome_r_multiple,0)*sample_size + ?) / (sample_size+1), 4)'
+
         conn.execute(
-            """INSERT INTO signal_calibration
+            f"""INSERT INTO signal_calibration
                (ticker, pattern_type, timeframe, market_regime, sample_size,
                 hit_rate_t1, hit_rate_t2, hit_rate_t3, stopped_out_rate,
-                calibration_confidence, last_updated)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                calibration_confidence, last_updated, sector)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(ticker, pattern_type, timeframe, market_regime)
                DO UPDATE SET
                  sample_size=excluded.sample_size,
@@ -212,10 +228,13 @@ def update_calibration(
                  hit_rate_t3=excluded.hit_rate_t3,
                  stopped_out_rate=excluded.stopped_out_rate,
                  calibration_confidence=excluded.calibration_confidence,
-                 last_updated=excluded.last_updated""",
+                 last_updated=excluded.last_updated,
+                 sector=COALESCE(signal_calibration.sector, excluded.sector)
+                 {_r_mult_update}""",
             (ticker, pattern_type, timeframe, market_regime, new_n,
              round(new_hr1, 4), round(new_hr2, 4), round(new_hr3, 4),
-             round(new_sor, 4), round(conf_score, 4), now),
+             round(new_sor, 4), round(conf_score, 4), now, _sector)
+            + ((pnl_r,) if pnl_r is not None else ()),
         )
         # Increment per-source observation counter on the calibration row
         if source == 'paper_bot':
@@ -239,10 +258,10 @@ def update_calibration(
             conn.execute(
                 """INSERT INTO calibration_observations
                    (ticker, pattern_type, timeframe, market_regime,
-                    outcome, source, bot_id, observed_at)
-                   VALUES (?,?,?,?,?,?,?,?)""",
+                    outcome, source, bot_id, pnl_r, observed_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
                 (ticker, pattern_type, timeframe, market_regime,
-                 outcome, source, bot_id, now),
+                 outcome, source, bot_id, pnl_r, now),
             )
             # Cascade: T2/T3 hit implies T1 was also hit — insert synthetic record
             # so the observation log is consistent with the incremental mean update.
@@ -250,10 +269,10 @@ def update_calibration(
                 conn.execute(
                     """INSERT INTO calibration_observations
                        (ticker, pattern_type, timeframe, market_regime,
-                        outcome, source, bot_id, observed_at)
-                       VALUES (?,?,?,?,?,?,?,?)""",
+                        outcome, source, bot_id, pnl_r, observed_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
                     (ticker, pattern_type, timeframe, market_regime,
-                     'hit_t1', source, bot_id, now),
+                     'hit_t1', source, bot_id, None, now),
                 )
         except Exception:
             pass
