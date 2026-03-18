@@ -484,6 +484,85 @@ async def pattern_historical_match(
     }
 
 
+@router.get("/patterns/{pattern_id}/adversarial")
+async def pattern_adversarial(pattern_id: int, _user: str = Depends(get_current_user)):
+    """
+    Run adversarial stress testing on a single pattern signal.
+
+    Tests the signal under 6 pre-committed scenarios and returns:
+    - robustness_label: 'robust' | 'moderate' | 'fragile'
+    - survival_rate: 0.0–1.0 (fraction of scenarios where conviction unchanged)
+    - per-scenario breakdown with tier_before, tier_after, survived
+    - earnings_proximity_warning if pre_earnings_flag=within_7d in KB
+    - baseline_tier: current conviction tier before stress
+
+    Typical response time: 50-100ms (reads KB atoms, reruns enrichment per scenario).
+    """
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        row = conn.execute(
+            """SELECT ticker, pattern_type, timeframe, kb_conviction,
+                      kb_regime, kb_signal_dir, direction, quality_score
+               FROM pattern_signals WHERE id = ?""",
+            (pattern_id,),
+        ).fetchone()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    if row is None:
+        raise HTTPException(404, detail="pattern not found")
+
+    ticker, pattern_type, timeframe, conviction, regime, signal_dir, direction, quality = row
+
+    try:
+        from analytics.adversarial_tester import AdversarialTester
+        tester = AdversarialTester(ext.DB_PATH)
+        result = tester.stress_test_signal(ticker, {
+            'pattern_type':  pattern_type,
+            'timeframe':     timeframe,
+            'direction':     direction,
+            'quality_score': quality,
+            'kb_conviction': conviction,
+        })
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    # Human-readable scenario labels
+    _SCENARIO_LABELS = {
+        'bear_analyst':     'Bearish analyst note',
+        'risk_off_regime':  'Risk-off regime shift',
+        'earnings_miss':    'Earnings miss',
+        'macro_flip':       'Macro crash (2008-style)',
+        'guidance_lowered': 'Guidance lowered',
+        'credit_downgrade': 'Credit spreads blow out',
+    }
+
+    return {
+        "pattern_id":     pattern_id,
+        "ticker":         ticker,
+        "pattern_type":   pattern_type,
+        "direction":      direction,
+        "baseline_tier":  result.baseline_tier,
+        "robustness_label":       result.robustness_label,
+        "survival_rate":          round(result.survival_rate, 3),
+        "scenarios_tested":       result.scenarios_tested,
+        "earnings_warning":       result.earnings_proximity_warning,
+        "invalidating_scenarios": result.invalidating_scenarios,
+        "scenarios": [
+            {
+                "name":        s.scenario,
+                "label":       _SCENARIO_LABELS.get(s.scenario, s.scenario),
+                "survived":    s.survived,
+                "tier_before": s.tier_before,
+                "tier_after":  s.tier_after,
+                "delta":       s.delta,
+            }
+            for s in result.scenario_outcomes
+        ],
+    }
+
+
 @router.get("/patterns/{pattern_id}")
 async def pattern_detail(pattern_id: int, user_id: Optional[str] = None):
     if not ext.HAS_PATTERN_LAYER:
