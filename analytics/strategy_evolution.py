@@ -104,16 +104,35 @@ class StrategyEvolution:
                                     f'Elite: fitness={fitness:.3f} WR={bot.get("win_rate",0):.0%} '
                                     f'avgR={bot.get("avg_r",0):.2f} {bot.get("total_closed",0)} trades',
                                     now_iso)
-                    # Increase capital 50%
-                    self._update_bot(bot_id, {
-                        'role': 'exploit',
-                        'promoted_at': now_iso,
-                        'virtual_balance': round(float(bot.get('virtual_balance', 5000)) * 1.5, 2),
-                    })
-                    summary['elites'] += 1
-                    self._log_event(user_id, 'evolution_promote', bot_id,
-                                    f'Capital +50% → £{float(bot.get("virtual_balance",5000))*1.5:.0f}',
-                                    now_iso)
+                    # Increase capital 50% — but ONLY if balance is positive
+                    # and below 8x initial (prevents runaway compounding from bugs)
+                    cur_bal  = float(bot.get('virtual_balance', 5000))
+                    init_bal = float(bot.get('initial_balance', 5000)) or 5000
+                    _MAX_BAL = init_bal * 8
+                    if cur_bal > 0 and cur_bal < _MAX_BAL:
+                        new_bal = round(min(cur_bal * 1.5, _MAX_BAL), 2)
+                        self._update_bot(bot_id, {
+                            'role': 'exploit',
+                            'promoted_at': now_iso,
+                            'virtual_balance': new_bal,
+                        })
+                        summary['elites'] += 1
+                        self._log_event(user_id, 'evolution_promote', bot_id,
+                                        f'Capital +50% → £{new_bal:,.0f}',
+                                        now_iso)
+                    elif cur_bal <= 0:
+                        # Negative balance — demote to failing instead of promoting
+                        kills.append(bot)
+                        self._log_event(user_id, 'evolution_promote_blocked', bot_id,
+                                        f'Promotion blocked: negative balance £{cur_bal:,.0f}',
+                                        now_iso)
+                    else:
+                        # Already at cap — just update role, no balance change
+                        self._update_bot(bot_id, {'role': 'exploit', 'promoted_at': now_iso})
+                        summary['elites'] += 1
+                        self._log_event(user_id, 'evolution_promote', bot_id,
+                                        f'Elite (balance capped at £{cur_bal:,.0f})',
+                                        now_iso)
 
                 elif fitness > 0 and max_dd <= 0.40:
                     # Viable
@@ -126,6 +145,13 @@ class StrategyEvolution:
                 else:
                     # Failing
                     kills.append(bot)
+
+                # Hard kill: negative virtual_balance regardless of fitness rank
+                if float(bot.get('virtual_balance', 0)) < 0 and bot not in kills:
+                    kills.append(bot)
+                    self._log_event(user_id, 'evolution_negative_balance', bot_id,
+                                    f'Hard kill: negative balance £{float(bot.get("virtual_balance",0)):,.0f}',
+                                    now_iso)
 
         # Kill failing bots
         for bot in kills:
