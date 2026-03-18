@@ -467,12 +467,11 @@ async def pattern_historical_match(
         },
         "top_matches": [
             {
-                "date":       m.snapshot_at[:10],
-                "subject":    m.subject,
-                "similarity": round(m.similarity, 2),
-                "outcome_1w": m.outcome_1w,
-                "outcome_1m": m.outcome_1m,
-                "state":      m.state,
+                "ticker":       m.get('ticker', ''),
+                "pattern_type": m.get('pattern_type', ''),
+                "regime":       m.get('regime', ''),
+                "similarity":   round(float(m.get('similarity', 0)), 2),
+                "hit_rate_t1":  round(float(m.get('hit_rate_t1', 0)), 3),
             }
             for m in (precedent.top_matches or [])[:int(limit)]
         ],
