@@ -763,6 +763,26 @@ async def user_alerts(user_id: str, all: str = "false", limit: int = 50,
         raise HTTPException(500, detail=str(e))
 
 
+
+@router.post("/users/{user_id}/onboarding-complete")
+async def user_onboarding_complete(
+    user_id: str,
+    _: str = Depends(user_path_auth),
+):
+    """Mark onboarding as complete for this user."""
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        conn.execute(
+            "UPDATE user_preferences SET onboarding_complete=1 WHERE user_id=?",
+            (user_id,)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+    return {"ok": True, "onboarding_complete": True}
+
+
 @router.get("/users/{user_id}/onboarding-status")
 async def user_onboarding_status(user_id: str, _: str = Depends(user_path_auth)):
     if not ext.HAS_PRODUCT_LAYER:
@@ -797,7 +817,13 @@ async def user_onboarding_status(user_id: str, _: str = Depends(user_path_auth))
         "tip_config_set":      tip_config_set,
         "account_size_set":    account_size_set,
         "preferences_set":     len(sector_list) > 0,
-        "complete":            all([portfolio_submitted, telegram_connected, tip_config_set, account_size_set]),
+        # Use the explicit onboarding_complete flag if set — this is what the
+        # "ENTER TERMINAL" button writes. The step-check fallback was causing
+        # the onboarding to re-trigger every login for users who completed it
+        # but hadn't filled every optional step (Telegram, tip config, etc).
+        "complete": bool(onboarding_complete) or all([
+            portfolio_submitted, telegram_connected, tip_config_set, account_size_set
+        ]),
     }
 
 
