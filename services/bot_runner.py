@@ -858,9 +858,14 @@ class BotRunner:
                         skips += 1
                         continue
 
-                # Fix 4: Cold-start quality floor — no calibration data → require higher quality
+                # Cold-start quality floor — no calibration data → require HIGHER quality
+                # (was incorrectly lowering the bar to 0.70 for zero-cal patterns,
+                #  which let quality=0.73 through a min_qual=0.78 bot)
                 cal_samples = c.get('cal_samples') or 0
-                effective_min_qual = 0.70 if cal_samples == 0 else min_qual
+                if cal_samples == 0:
+                    effective_min_qual = max(min_qual, 0.75)  # stricter without data
+                else:
+                    effective_min_qual = min_qual
                 if quality < effective_min_qual:
                     skips += 1
                     continue
@@ -1044,6 +1049,13 @@ class BotRunner:
                      f'{c.get("pattern_type","?")} {direction} | q={quality:.2f} | {reason}',
                      bot_id)
                 )
+                # Mark pattern as filled so no other bot picks it up in subsequent scans.
+                # This is the core fix for duplicate concentration — without this, the same
+                # pattern appears in every scan cycle for every bot indefinitely.
+                conn.execute(
+                    "UPDATE pattern_signals SET status='filled' WHERE id=?",
+                    (c['id'],)
+                )
                 open_tickers.add(ticker)
                 open_slots_used += 1
                 _fleet_ticker_count[ticker] = _fleet_ticker_count.get(ticker, 0) + 1
@@ -1176,9 +1188,13 @@ class BotRunner:
                 elif not pos['partial_closed'] and price >= t1:
                     half_qty = round(qty / 2, 6)
                     partial_val = round(price * half_qty, 2)
+                    pnl_r_partial = compute_pnl_r(direction, entry, price, stop_)
                     conn.execute(
-                        'UPDATE paper_positions SET partial_closed=1, quantity=? WHERE id=?',
-                        (half_qty, pos['id'])
+                        """UPDATE paper_positions
+                           SET partial_closed=1, quantity=?, status='t1_hit_partial',
+                               pnl_r=?
+                           WHERE id=?""",
+                        (half_qty, pnl_r_partial, pos['id'])
                     )
                     conn.execute(
                         "UPDATE paper_bot_configs SET virtual_balance = virtual_balance + ? WHERE bot_id=?",
@@ -1187,7 +1203,7 @@ class BotRunner:
                     conn.execute(
                         "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
                         (user_id, 't1_hit', ticker,
-                         f't1_hit at {price:.4f} partial close {half_qty} units £{partial_val:,.2f}',
+                         f't1_hit at {price:.4f} partial close {half_qty} units £{partial_val:,.2f} pnl_r={pnl_r_partial:+.2f}',
                          bot_id, now_iso)
                     )
             else:
@@ -1199,9 +1215,13 @@ class BotRunner:
                     half_qty = round(qty / 2, 6)
                     # Short partial: return entry*qty + profit (entry-price)*qty = (2*entry-price)*qty
                     partial_val = round((2 * entry - price) * half_qty, 2)
+                    pnl_r_partial = compute_pnl_r(direction, entry, price, stop_)
                     conn.execute(
-                        'UPDATE paper_positions SET partial_closed=1, quantity=? WHERE id=?',
-                        (half_qty, pos['id'])
+                        """UPDATE paper_positions
+                           SET partial_closed=1, quantity=?, status='t1_hit_partial',
+                               pnl_r=?
+                           WHERE id=?""",
+                        (half_qty, pnl_r_partial, pos['id'])
                     )
                     conn.execute(
                         "UPDATE paper_bot_configs SET virtual_balance = virtual_balance + ? WHERE bot_id=?",
@@ -1210,9 +1230,34 @@ class BotRunner:
                     conn.execute(
                         "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
                         (user_id, 't1_hit', ticker,
-                         f't1_hit at {price:.4f} partial close {half_qty} units £{partial_val:,.2f}',
+                         f't1_hit at {price:.4f} partial close {half_qty} units £{partial_val:,.2f} pnl_r={pnl_r_partial:+.2f}',
                          bot_id, now_iso)
                     )
+
+            # Max hold time: expire positions open > 10 days with no resolution.
+            # Prevents zombie positions in instruments with stale/missing price data.
+            if not new_status:
+                opened_dt = pos['opened_at']
+                if opened_dt:
+                    try:
+                        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                        opened = _dt.fromisoformat(opened_dt.replace('Z', '+00:00'))
+                        age_days = (_dt.now(_tz.utc) - opened).days
+                        if age_days >= 10:
+                            new_status = 'stopped_out'
+                            exit_p = entry  # neutral exit — no price data
+                            _logger.info(
+                                'Bot %s: expiring %s after %d days (no price resolution)',
+                                bot_id, ticker, age_days
+                            )
+                            conn.execute(
+                                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                                (user_id, 'skip', ticker,
+                                 f'Position expired after {age_days}d — no price resolution, neutral exit',
+                                 bot_id, now_iso)
+                            )
+                    except Exception:
+                        pass
 
             if new_status and exit_p is not None:
                 pnl_r = compute_pnl_r(direction, entry, exit_p, stop_)
