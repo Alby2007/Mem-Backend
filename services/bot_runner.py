@@ -674,6 +674,23 @@ class BotRunner:
                 _fleet_ticker_count[r['ticker']] = r['cnt']
             _FLEET_MAX_PER_TICKER = 2  # no more than 2 bots long the same ticker simultaneously
 
+            # HARD GUARD: never open new positions with a negative balance.
+            # A negative balance means more has been deducted than the bot ever had —
+            # allowing further entries would compound the insolvency.
+            # The bot is not killed here — evolution handles that — but entry is blocked.
+            if balance <= 0:
+                self._write_bot_equity(bot_id, conn, balance, len(open_tickers), now_iso)
+                conn.execute(
+                    "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                    (user_id, 'skip', 'ALL',
+                     f'Scan blocked: negative balance £{balance:,.2f} — no new entries until recovered',
+                     bot_id, now_iso)
+                )
+                conn.commit()
+                conn.close()
+                return {'skipped': True, 'reason': f'negative_balance: £{balance:,.2f}',
+                        'entries': 0, 'skips': 0}
+
             if open_slots_used >= max_pos:
                 self._write_bot_equity(bot_id, conn, balance, len(open_tickers), now_iso)
                 conn.commit()

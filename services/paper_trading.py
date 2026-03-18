@@ -1096,7 +1096,10 @@ def _should_enter(candidate: dict, remaining_cash: float, risk_per_trade: float)
     if quality < 0.60 and conviction not in ('high', 'confirmed', 'strong'):
         return False, f'quality {quality:.2f} below 0.60 without high conviction', 1.0
 
-    # Hard reject: insufficient cash (below minimum viable 2× risk)
+    # Hard reject: negative or insufficient cash
+    if remaining_cash <= 0:
+        return False, f'negative/zero cash: £{remaining_cash:.0f}', 1.0
+    # Hard reject: below minimum viable 2× risk
     if remaining_cash < risk_per_trade * 2:
         return False, f'insufficient cash {remaining_cash:.0f} < {risk_per_trade * 2:.0f}', 1.0
 
