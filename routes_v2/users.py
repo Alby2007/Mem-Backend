@@ -1078,13 +1078,175 @@ async def user_inferred_preferences(user_id: str, _: str = Depends(user_path_aut
 
 @router.get("/users/{user_id}/model")
 async def user_model_get(user_id: str, _: str = Depends(user_path_auth)):
-    if not ext.HAS_PRODUCT_LAYER:
-        raise HTTPException(503, detail="product layer not available")
+    """
+    Live trader model derived from open paper positions + calibration + KB state.
+    Works without manual portfolio submission — uses actual positions as data source.
+    Falls back gracefully when no positions exist (shows fleet-level calibration edge).
+    """
     try:
-        model = ext.get_user_model(ext.DB_PATH, user_id)
-        if model is None:
-            raise HTTPException(404, detail="no model found — submit portfolio first")
-        return model
+        import json as _json
+        from datetime import datetime, timezone as _tz
+        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+
+        # ── Open positions for this user ──────────────────────────────────────
+        pos_rows = conn.execute("""
+            SELECT pp.ticker, pp.direction, pp.entry_price, pp.stop,
+                   f.object as sector
+            FROM paper_positions pp
+            LEFT JOIN facts f ON UPPER(f.subject)=pp.ticker AND f.predicate='sector'
+            WHERE pp.user_id=? AND pp.status='open'
+        """, (user_id,)).fetchall()
+
+        # ── Implicit exposures from positions ────────────────────────────────
+        directions = {'bullish': 0, 'bearish': 0}
+        sector_map: dict = {}
+        for p in pos_rows:
+            d = (p['direction'] or '').lower()
+            if d in directions:
+                directions[d] += 1
+            sec = p['sector']
+            if sec:
+                sector_map[sec] = sector_map.get(sec, 0) + 1
+
+        total_pos = len(pos_rows)
+        sector_list = sorted(
+            [
+                {
+                    'sector': s,
+                    'count': c,
+                    'pct': round(c / total_pos, 3) if total_pos else 0,
+                    'direction_bias': 'bullish' if sum(
+                        1 for p in pos_rows if (p['sector'] or '') == s
+                        and (p['direction'] or '').lower() == 'bullish'
+                    ) >= c / 2 else 'bearish',
+                }
+                for s, c in sector_map.items()
+            ],
+            key=lambda x: x['count'], reverse=True
+        )
+
+        # Concentration risk
+        n_sectors = len(sector_map)
+        concentration_risk = 'diversified' if n_sectors >= 5 else (
+            'concentrated' if n_sectors <= 2 else 'moderate'
+        )
+
+        # Thesis conflicts: bullish in risk-off, or overweight single sector
+        regime_row = conn.execute(
+            "SELECT object FROM facts WHERE LOWER(subject)='market'"
+            " AND predicate='signal_direction' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        market_signal = (regime_row[0] if regime_row else '').lower()
+
+        thesis_conflicts = []
+        if directions['bullish'] > 0 and 'bear' in market_signal:
+            thesis_conflicts.append(
+                f"{directions['bullish']} bullish positions vs bearish market signal"
+            )
+        if sector_list and sector_list[0]['pct'] > 0.5:
+            thesis_conflicts.append(
+                f">{round(sector_list[0]['pct']*100)}% concentrated in {sector_list[0]['sector']}"
+            )
+
+        # ── Calibration edge (fleet-wide, best patterns by hit_rate) ─────────
+        cal_rows = conn.execute("""
+            SELECT pattern_type, AVG(hit_rate_t1) as hit_rate, SUM(sample_size) as samples,
+                   AVG(outcome_r_multiple) as avg_r
+            FROM signal_calibration
+            WHERE sample_size >= 20 AND hit_rate_t1 IS NOT NULL AND hit_rate_t1 < 1.0
+            GROUP BY pattern_type
+            HAVING samples >= 50
+            ORDER BY hit_rate DESC
+            LIMIT 8
+        """).fetchall()
+
+        top_patterns = [
+            {
+                'pattern_type': r['pattern_type'],
+                'hit_rate':     round(float(r['hit_rate']), 3),
+                'samples':      int(r['samples']),
+                'avg_r':        round(float(r['avg_r']), 2) if r['avg_r'] else None,
+            }
+            for r in cal_rows[:4]
+        ]
+        weak_patterns = [
+            {
+                'pattern_type': r['pattern_type'],
+                'hit_rate':     round(float(r['hit_rate']), 3),
+                'samples':      int(r['samples']),
+            }
+            for r in reversed(cal_rows[-2:])
+        ] if len(cal_rows) >= 4 else []
+
+        # Best / worst regime from calibration
+        regime_perf = conn.execute("""
+            SELECT market_regime, AVG(hit_rate_t1) as avg_hit
+            FROM signal_calibration
+            WHERE market_regime IS NOT NULL AND market_regime != ''
+              AND sample_size >= 20 AND hit_rate_t1 IS NOT NULL AND hit_rate_t1 < 1.0
+            GROUP BY market_regime HAVING SUM(sample_size) >= 100
+            ORDER BY avg_hit DESC
+        """).fetchall()
+
+        best_regime  = regime_perf[0]['market_regime'].replace('_', ' ') if regime_perf else None
+        worst_regime = regime_perf[-1]['market_regime'].replace('_', ' ') if len(regime_perf) > 1 else None
+
+        # ── Polymarket macro context ──────────────────────────────────────────
+        macro_rows = conn.execute("""
+            SELECT predicate, object FROM facts
+            WHERE source LIKE '%polymarket%' AND predicate LIKE '%_yes_prob'
+            ORDER BY CAST(object AS FLOAT) DESC LIMIT 5
+        """).fetchall()
+        macro_signals = [
+            {
+                'slug':  r['predicate'].replace('_yes_prob', ''),
+                'prob':  round(float(r['object']), 3),
+            }
+            for r in macro_rows
+        ]
+
+        # ── Recommendations ───────────────────────────────────────────────────
+        recommendations = []
+        if thesis_conflicts:
+            recommendations.append(
+                "Resolve thesis conflicts before adding new positions"
+            )
+        if concentration_risk == 'concentrated' and total_pos > 0:
+            recommendations.append(
+                f"High sector concentration — consider diversifying beyond {sector_list[0]['sector'] if sector_list else 'current sectors'}"
+            )
+        if top_patterns:
+            best = top_patterns[0]
+            recommendations.append(
+                f"Your edge is strongest in {best['pattern_type'].replace('_',' ')} patterns "
+                f"({best['hit_rate']*100:.0f}% hit rate over {best['samples']} samples)"
+            )
+        if best_regime:
+            recommendations.append(f"Calibration edge is highest in {best_regime} regime")
+
+        conn.close()
+
+        return {
+            'user_id':             user_id,
+            'computed_at':         datetime.now(_tz.utc).isoformat(),
+            'open_position_count': total_pos,
+            'implicit_exposures': {
+                'directions':         directions,
+                'sectors':            sector_list,
+                'concentration_risk': concentration_risk,
+                'thesis_conflicts':   thesis_conflicts,
+            },
+            'calibration_edge': {
+                'top_patterns':    top_patterns,
+                'weakest_patterns': weak_patterns,
+                'best_regime':     best_regime,
+                'worst_regime':    worst_regime,
+            },
+            'macro_context': macro_signals,
+            'recommendations': recommendations,
+        }
+
     except HTTPException:
         raise
     except Exception as e:
