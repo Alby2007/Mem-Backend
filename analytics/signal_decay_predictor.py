@@ -88,13 +88,21 @@ class SignalDecayPredictor:
         obj: str,
         confidence: float = 0.85,
     ) -> None:
+        """
+        Delete-then-insert so the value always overwrites regardless of whether
+        the object changed. The facts unique constraint is (subject, predicate, object)
+        — not (subject, predicate, source) — so updating a numeric value like
+        pattern_decay_pct from 0.079 to 0.082 would INSERT a new row under the
+        old ON CONFLICT approach, causing unbounded row accumulation across restarts.
+        """
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
+            "DELETE FROM facts WHERE LOWER(subject)=? AND predicate=? AND source='signal_decay_predictor'",
+            (subject.lower(), predicate),
+        )
+        conn.execute(
             """INSERT INTO facts (subject, predicate, object, confidence, source, timestamp)
-               VALUES (?, ?, ?, ?, 'signal_decay_predictor', ?)
-               ON CONFLICT(subject, predicate, object)
-               DO UPDATE SET confidence=excluded.confidence, source=excluded.source,
-                             timestamp=excluded.timestamp""",
+               VALUES (?, ?, ?, ?, 'signal_decay_predictor', ?)""",
             (subject.lower(), predicate, str(obj), confidence, now),
         )
 
