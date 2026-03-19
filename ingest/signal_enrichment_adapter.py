@@ -156,6 +156,7 @@ def _read_kb_atoms(
                 'next_earnings',
                 'price_regime',
                 'return_1w', 'return_1m',
+                'high_52w', 'low_52w',
                 'skew_regime', 'iv_skew_ratio',
                 'tail_risk', 'spy_skew_regime', 'spy_skew_ratio',
                 'insider_conviction', 'short_squeeze_potential',
