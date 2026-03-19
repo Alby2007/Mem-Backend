@@ -329,6 +329,14 @@ async def pf_calibration_obs(
 async def ops_briefing(user_id: str = Depends(get_current_user)):
     """Aggregated briefing for the Meridian Operations Terminal."""
     _dev_gate(user_id)
+
+    # 30s in-process cache — briefing is called every 60s by Dispatch
+    # and costs 6-8s per call due to pattern join queries
+    import time as _t
+    _now = _t.time()
+    if _briefing_cache['data'] is not None and (_now - _briefing_cache['ts']) < _BRIEFING_TTL:
+        return _briefing_cache['data']
+
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     try:
@@ -447,31 +455,27 @@ async def ops_briefing(user_id: str = Depends(get_current_user)):
         }
 
         # ── Top opportunities ─────────────────────────────────────────
+        # CTE approach: fetch top patterns via index first, then join small result set
+        # (was 5800ms due to full table scan + LOWER() join blocking indexes)
         opp_rows = conn.execute("""
-            SELECT
-                ps.ticker,
-                ps.pattern_type,
-                ps.direction,
-                ROUND(ps.quality_score, 4) as quality_score,
-                ps.timeframe,
-                ps.kb_conviction as conviction_tier,
-                ps.kb_signal_dir as signal_direction,
-                f1.object as sector,
-                f2.object as price_regime
-            FROM pattern_signals ps
-            LEFT JOIN facts f1
-                ON LOWER(f1.subject) = LOWER(ps.ticker)
-                AND f1.predicate = 'sector'
-            LEFT JOIN facts f2
-                ON LOWER(f2.subject) = LOWER(ps.ticker)
-                AND f2.predicate = 'price_regime'
-            WHERE ps.status NOT IN ('filled', 'broken', 'expired')
-              AND ps.kb_conviction NOT IN ('avoid', '')
-              AND (
-                  ps.direction != 'bullish'
-                  OR LOWER(COALESCE(f2.object, '')) NOT IN ('near_52w_high', 'near_high')
-              )
-            ORDER BY ps.quality_score DESC
+            WITH top_patterns AS (
+                SELECT ticker, pattern_type, direction,
+                       ROUND(quality_score, 4) as quality_score,
+                       timeframe, kb_conviction, kb_signal_dir
+                FROM pattern_signals
+                WHERE status NOT IN ('filled', 'broken', 'expired')
+                  AND kb_conviction NOT IN ('avoid', '')
+                ORDER BY quality_score DESC
+                LIMIT 50
+            )
+            SELECT tp.*,
+                   f1.object as sector,
+                   f2.object as price_regime
+            FROM top_patterns tp
+            LEFT JOIN facts f1 ON UPPER(f1.subject) = tp.ticker AND f1.predicate = 'sector'
+            LEFT JOIN facts f2 ON UPPER(f2.subject) = tp.ticker AND f2.predicate = 'price_regime'
+            WHERE tp.direction != 'bullish'
+               OR LOWER(COALESCE(f2.object, '')) NOT IN ('near_52w_high', 'near_high')
             LIMIT 5
         """).fetchall()
         opportunities = [
@@ -481,15 +485,15 @@ async def ops_briefing(user_id: str = Depends(get_current_user)):
                 'direction':        r['direction'],
                 'quality_score':    r['quality_score'],
                 'timeframe':        r['timeframe'],
-                'conviction_tier':  r['conviction_tier'],
-                'signal_direction': r['signal_direction'],
+                'conviction_tier':  r['kb_conviction'],
+                'signal_direction': r['kb_signal_dir'],
                 'sector':           r['sector'],
                 'price_regime':     r['price_regime'],
             }
             for r in opp_rows
         ]
 
-        return {
+        result = {
             'regime':        regime,
             'overnight':     overnight,
             'fleet':         fleet,
@@ -497,6 +501,9 @@ async def ops_briefing(user_id: str = Depends(get_current_user)):
             'patterns':      patterns,
             'opportunities': opportunities,
         }
+        _briefing_cache['data'] = result
+        _briefing_cache['ts']   = _t.time()
+        return result
     finally:
         conn.close()
 
@@ -507,6 +514,10 @@ import time as _time
 
 _corpus_cache: dict = {'data': None, 'ts': 0}
 _CORPUS_TTL = 300  # 5 minutes
+
+# Briefing cache: 30s TTL — called every 60s by Dispatch, costs 6-8s per call without cache
+_briefing_cache: dict = {'data': None, 'ts': 0.0}
+_BRIEFING_TTL = 30  # seconds
 
 
 def _resolve_market_object(ticker: str, facts: dict, pats: list, pos: list) -> dict:
