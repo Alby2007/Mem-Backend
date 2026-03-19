@@ -913,11 +913,31 @@ class BotRunner:
                     continue
 
                 # ── Pre-entry live price validation ───────────────────────────
-                # Skip if live price already past stop (instant stop-out) or
-                # >5% from zone midpoint (stale pattern / price moved away).
+                # Skip if live price already past stop (instant stop-out),
+                # >5% from zone midpoint (stale pattern), OR already at/past T2
+                # (trade has already played out — entering would be a ghost win).
                 _live_prices = fetch_live_prices([ticker])
                 _live_price = _live_prices.get(ticker)
                 if _live_price and _live_price > 0:
+                    # Hard block: price already at or past T2 — the move is done
+                    if direction == 'bullish' and _live_price >= t2_p:
+                        skips += 1
+                        conn.execute(
+                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                            (user_id, 'skip', ticker,
+                             f'Price {_live_price:.4f} already at/past T2 {t2_p:.4f} — move complete, skipping',
+                             bot_id, now_iso)
+                        )
+                        continue
+                    if direction == 'bearish' and _live_price <= t2_p:
+                        skips += 1
+                        conn.execute(
+                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                            (user_id, 'skip', ticker,
+                             f'Price {_live_price:.4f} already at/past T2 {t2_p:.4f} — move complete, skipping',
+                             bot_id, now_iso)
+                        )
+                        continue
                     _ticker_upper = ticker.upper()
                     _stale_pct = 0.08 if (
                         _ticker_upper.endswith('=F') or _ticker_upper.endswith('=X')
