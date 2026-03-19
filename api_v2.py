@@ -251,6 +251,14 @@ async def _lifespan(app: FastAPI):
         # Polymarket prediction markets — macro/geo odds; no key needed
         scheduler.register(PolymarketAdapter(), interval_sec=3600)
 
+        # Daily edge report — z-scores, WR trends, new calibration discoveries
+        try:
+            from ingest.edge_report_adapter import EdgeReportAdapter
+            scheduler.register(EdgeReportAdapter(db_path=db_path), interval_sec=86400)
+            _logger.info('EdgeReportAdapter registered (24h interval)')
+        except Exception as _er_e:
+            _logger.warning('EdgeReportAdapter registration failed: %s', _er_e)
+
         app.state.scheduler = scheduler
         # Stagger startup: each adapter gets a unique delay so they don't all
         # hammer SQLite simultaneously. Heavy writers are spread 20s apart.
@@ -606,14 +614,14 @@ def create_fastapi_app() -> FastAPI:
         health, auth, chat, billing, paper,
         markets, analytics_, patterns, network, waitlist, thesis,
         ingest_routes, kb, users, telegram, scenario, discovery, status as status_routes,
-        debate,
+        debate, performance,
     )
     for _router in [
         health.router, auth.router, chat.router, billing.router, paper.router,
         markets.router, analytics_.router, patterns.router, network.router,
         waitlist.router, thesis.router, ingest_routes.router, kb.router,
         users.router, telegram.router, scenario.router, discovery.router,
-        status_routes.router, debate.router,
+        status_routes.router, debate.router, performance.router,
     ]:
         app.include_router(_router)
 

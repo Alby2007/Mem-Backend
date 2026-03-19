@@ -142,6 +142,7 @@ def _kb_scores(
     kb_regime:     str,
     kb_signal_dir: str,
     direction:     str,
+    timeframe:     str = '',
 ) -> Tuple[float, float, float]:
     """
     Return (conviction_score, regime_score, signal_score) each 0.0 or 1.0.
@@ -150,8 +151,18 @@ def _kb_scores(
     # 0.5 allowed an unenriched pattern (gap=1.0, recency=0.95) to score ~0.74,
     # above every bot floor and the 0.72 quality-only gate. 0.2 puts it at ~0.53.
     # KB data upgrades (1.0) or downgrades (0.0) from this low baseline.
-    conv  = 1.0 if kb_conviction in ('high', 'strong', 'confirmed') else (
-            0.0 if kb_conviction in ('low', 'weak', 'avoid') else 0.2)
+    #
+    # Conviction inversion for bearish short-TF patterns:
+    # Live data shows IFVG bearish high conviction WR=46% vs medium WR=92%.
+    # High analyst coverage = more dip buyers = harder to fall on 5m/15m.
+    short_tf = timeframe in ('1m', '5m', '15m')
+    if direction == 'bearish' and short_tf:
+        conv = 0.0 if kb_conviction in ('high', 'strong', 'confirmed') else (
+               1.0 if kb_conviction in ('medium',) else (
+               0.6 if kb_conviction in ('low',) else 0.3))
+    else:
+        conv  = 1.0 if kb_conviction in ('high', 'strong', 'confirmed') else (
+                0.0 if kb_conviction in ('low', 'weak', 'avoid') else 0.2)
     if direction == 'bearish':
         regime = 1.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_off', 'bearish', 'near_52w_low', 'near_low', 'contraction')) else (
                  0.0 if kb_regime and any(x in kb_regime.lower() for x in ('risk_on', 'near_52w_high', 'near_high', 'expansion')) else 0.2)
@@ -189,6 +200,7 @@ def _quality(
     kb_regime:     str,
     kb_signal_dir: str,
     sector:        str = '',
+    timeframe:     str = '',
 ) -> float:
     """Compute composite quality score 0.0–1.0.
 
@@ -211,7 +223,7 @@ def _quality(
         # penalisation of FX zones that happen to be near yearly highs/lows.
         score = gap * 0.65 + rec * 0.35
     else:
-        conv, regime_s, sig = _kb_scores(kb_conviction, kb_regime, kb_signal_dir, direction)
+        conv, regime_s, sig = _kb_scores(kb_conviction, kb_regime, kb_signal_dir, direction, timeframe)
         score = (
             conv    * 0.25 +
             regime_s * 0.20 +
@@ -251,7 +263,8 @@ def _detect_fvg(
             # Guard: reject zero/negative zones (e.g. .KS partial candle data)
             if zh > 0 and zl > 0 and zh > zl:
                 q = _quality('fvg', 'bullish', zh, zl, i, n, atr_val,
-                             kb_conviction, kb_regime, kb_signal_dir, sector=sector)
+                             kb_conviction, kb_regime, kb_signal_dir,
+                             sector=sector, timeframe=timeframe)
                 signals.append(PatternSignal(
                     pattern_type  = 'fvg',
                     ticker        = ticker,
@@ -276,7 +289,8 @@ def _detect_fvg(
             # Guard: reject zero/negative zones (e.g. .KS partial candle data)
             if zh > 0 and zl > 0 and zh > zl:
                 q = _quality('fvg', 'bearish', zh, zl, i, n, atr_val,
-                             kb_conviction, kb_regime, kb_signal_dir, sector=sector)
+                             kb_conviction, kb_regime, kb_signal_dir,
+                             sector=sector, timeframe=timeframe)
                 signals.append(PatternSignal(
                     pattern_type  = 'fvg',
                     ticker        = ticker,
@@ -435,7 +449,8 @@ def _detect_order_blocks(
             zl = curr.low
             if zh > zl:
                 q = _quality('order_block', 'bullish', zh, zl, i, n, atr_val,
-                             kb_conviction, kb_regime, kb_signal_dir, sector=sector)
+                             kb_conviction, kb_regime, kb_signal_dir,
+                             sector=sector, timeframe=timeframe)
                 signals.append(PatternSignal(
                     pattern_type  = 'order_block',
                     ticker        = ticker,
@@ -459,7 +474,8 @@ def _detect_order_blocks(
             zl = curr.low
             if zh > zl:
                 q = _quality('order_block', 'bearish', zh, zl, i, n, atr_val,
-                             kb_conviction, kb_regime, kb_signal_dir, sector=sector)
+                             kb_conviction, kb_regime, kb_signal_dir,
+                             sector=sector, timeframe=timeframe)
                 signals.append(PatternSignal(
                     pattern_type  = 'order_block',
                     ticker        = ticker,
@@ -568,7 +584,8 @@ def _detect_liquidity_voids(
             if zh <= zl or zl <= 0:
                 continue
             q = _quality('liquidity_void', direction, zh, zl, i, n, atr_val,
-                         kb_conviction, kb_regime, kb_signal_dir, sector=sector)
+                         kb_conviction, kb_regime, kb_signal_dir,
+                         sector=sector, timeframe=timeframe)
             signals.append(PatternSignal(
                 pattern_type  = 'liquidity_void',
                 ticker        = ticker,
@@ -649,7 +666,8 @@ def _detect_mitigation_blocks(
                     # Close must be inside the zone (not blow through)
                     if zl <= later.close <= zh:
                         q = _quality('mitigation', 'bullish', zh, zl, i, n, atr_val,
-                                     kb_conviction, kb_regime, kb_signal_dir, sector=sector)
+                                     kb_conviction, kb_regime, kb_signal_dir,
+                                     sector=sector, timeframe=timeframe)
                         signals.append(PatternSignal(
                             pattern_type  = 'mitigation',
                             ticker        = ticker,
@@ -685,7 +703,8 @@ def _detect_mitigation_blocks(
                         continue
                     if zl <= later.close <= zh:
                         q = _quality('mitigation', 'bearish', zh, zl, i, n, atr_val,
-                                     kb_conviction, kb_regime, kb_signal_dir, sector=sector)
+                                     kb_conviction, kb_regime, kb_signal_dir,
+                                     sector=sector, timeframe=timeframe)
                         signals.append(PatternSignal(
                             pattern_type  = 'mitigation',
                             ticker        = ticker,

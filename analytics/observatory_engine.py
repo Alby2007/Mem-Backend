@@ -644,6 +644,81 @@ class _DeliverySensor:
         return findings
 
 
+# ── Sensor 5: EdgeCoverageSensor ────────────────────────────────────────────────
+class _EdgeCoverageSensor:
+    """
+    Finds calibration edges (HR>=0.60, samples>=2000, tickers>=2)
+    not covered by any active sector-targeted bot. Fires when uncovered edges exist.
+    Closes the loop: as live observations fill cells, new edges emerge and
+    the Observatory proposes bots automatically.
+    """
+
+    def scan(self, conn: sqlite3.Connection) -> list[Finding]:
+        findings: list[Finding] = []
+        try:
+            from analytics.edge_miner import scan_calibration_edges, genome_from_edge
+            db_path = conn.execute("PRAGMA database_list").fetchone()
+            # Re-use the same DB via the connection's path
+            import sqlite3 as _sq
+            db_file = None
+            for row in conn.execute("PRAGMA database_list"):
+                if row[1] == 'main':
+                    db_file = row[2]
+                    break
+            if not db_file:
+                return findings
+            candidates = scan_calibration_edges(
+                min_hr=0.60,
+                min_samples=2000,
+                min_tickers=2,
+                db_path=db_file,
+            )
+        except Exception as e:
+            _log.warning('EdgeCoverageSensor: edge scan failed: %s', e)
+            return findings
+
+        for candidate in candidates:
+            if candidate.already_covered:
+                continue
+            if candidate.avg_hr < 0.62:
+                continue
+
+            if candidate.avg_hr >= 0.67 and candidate.samples >= 5000:
+                severity = 'high'
+                auto_eligible = candidate.samples >= 10000
+            else:
+                severity = 'medium'
+                auto_eligible = False
+
+            genome = candidate.genome.copy()
+            genome['obs'] = candidate.samples
+            genome['hit_rate'] = candidate.avg_hr
+
+            findings.append(Finding(
+                sensor='edge_coverage',
+                severity=severity,
+                subject=f'{candidate.sector}/{candidate.pattern_type}/{candidate.timeframe}',
+                description=(
+                    f'Uncovered edge: {candidate.sector} {candidate.pattern_type} {candidate.timeframe} '
+                    f'HR={candidate.avg_hr:.1%} n={candidate.samples:,} tickers={candidate.tickers}'
+                ),
+                action_type='create_bot',
+                action_params=genome,
+                auto_eligible=auto_eligible,
+                evidence={
+                    'sector':        candidate.sector,
+                    'pattern_type':  candidate.pattern_type,
+                    'timeframe':     candidate.timeframe,
+                    'avg_hr':        candidate.avg_hr,
+                    'samples':       candidate.samples,
+                    'tickers':       candidate.tickers,
+                    'avg_stop_rate': candidate.avg_stop_rate,
+                },
+            ))
+
+        return findings
+
+
 # ── Main engine ─────────────────────────────────────────────────────────────────
 class ObservatoryEngine:
     def __init__(self, db_path: str):
@@ -653,6 +728,7 @@ class ObservatoryEngine:
             _BotPerformanceSensor(),
             _CalibrationSensor(),
             _DeliverySensor(),
+            _EdgeCoverageSensor(),
         ]
 
     # ── Public entry point ─────────────────────────────────────────────────────
