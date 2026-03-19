@@ -194,6 +194,12 @@ async def _lifespan(app: FastAPI):
         from ingest.historical_adapter import HistoricalBackfillAdapter
         scheduler.register(HistoricalBackfillAdapter(db_path=db_path), interval_sec=604800)
 
+        # Pattern signal pruner — deletes broken/expired patterns older than 14 days.
+        # At ~40k broken patterns/day the table grows 280k rows/week without this.
+        # Also forces a WAL checkpoint to keep the DB file size under control.
+        from ingest.pattern_pruner import PatternPrunerAdapter
+        scheduler.register(PatternPrunerAdapter(db_path=db_path), interval_sec=86400)
+
         # Options flow — IV rank, put/call ratio, smart money signals, skew
         # ~66s per cycle (44 tickers × 1.5s), well within the 6h interval
         try:

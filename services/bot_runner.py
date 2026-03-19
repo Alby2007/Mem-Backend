@@ -773,7 +773,7 @@ class BotRunner:
 
             initial = float(config['initial_balance'])
             risk_per_trade = equity * risk_pct / 100.0
-            max_pos_value  = initial * 0.15
+            max_pos_value  = equity * 0.15   # scales with compounded equity, not frozen initial
             remaining_cash = balance
             entries = 0
             skips   = 0
@@ -868,6 +868,17 @@ class BotRunner:
                     effective_min_qual = min_qual
                 if quality < effective_min_qual:
                     skips += 1
+                    continue
+
+                # Conviction gate: block 'avoid' signals — KB says don't trade this ticker
+                if (c.get('kb_conviction') or '').lower() == 'avoid':
+                    skips += 1
+                    conn.execute(
+                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                        (user_id, 'skip', ticker,
+                         f'kb_conviction=avoid: KB flags this ticker as unfavourable',
+                         bot_id, now_iso)
+                    )
                     continue
 
                 # Fix 3: Regime alignment — pattern-level misalignment (hard skip)
