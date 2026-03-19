@@ -914,4 +914,31 @@ class YFinanceAdapter(BaseIngestAdapter):
                 upsert=True,
             ))
 
+            # ── Macro regime proxy: derive signal_direction from 52w position ──
+            # ETFs have no analyst targets, so regime classifier gets signal_direction
+            # from where price sits in its 52w range. near_high → bullish, etc.
+            # This replaces the broken conviction_tier fallback in the regime classifier.
+            _MACRO_PROXIES = {'SPY', 'HYG', 'TLT', 'GLD', 'UUP'}
+            if symbol.upper() in _MACRO_PROXIES:
+                try:
+                    _h, _l, _p = float(high_52), float(low_52), float(price)
+                    if _h > _l:
+                        _ratio = (_p - _l) / (_h - _l)
+                        _etf_dir = 'bullish' if _ratio >= 0.70 else ('bearish' if _ratio <= 0.30 else 'neutral')
+                        atoms.append(RawAtom(
+                            subject=symbol,
+                            predicate='signal_direction',
+                            object=_etf_dir,
+                            confidence=0.70,
+                            source=f'derived_52w_position_{symbol.lower()}',
+                            metadata={
+                                'derived_from': '52w_range_position',
+                                'pct_of_range': round(_ratio * 100, 1),
+                                'as_of': now_iso,
+                            },
+                            upsert=True,
+                        ))
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
+
         return atoms

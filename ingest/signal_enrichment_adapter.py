@@ -916,6 +916,7 @@ _USD_PROXY   = 'uup'   # US dollar index — near_high = strong USD (risk-off)
 
 # Regime labels
 _REGIME_RISK_ON_EXPANSION   = 'risk_on_expansion'
+_REGIME_RISK_ON_CORRECTION  = 'risk_on_correction'   # near highs but negative short-term momentum
 _REGIME_RISK_OFF_CONTRACTION = 'risk_off_contraction'
 _REGIME_STAGFLATION         = 'stagflation'
 _REGIME_RECOVERY            = 'recovery'
@@ -972,19 +973,26 @@ def _classify_market_regime(
                   stagflation | recovery | no_data
     """
     def _sig_from_atoms(proxy: str) -> str:
-        """Get signal direction, falling back to conviction_tier derivation."""
+        """Get signal direction from KB atoms.
+
+        Fallback uses price_regime (52w position) NOT conviction_tier.
+        conviction_tier is a trading entry signal, not a macro indicator —
+        conviction_tier=low means 'don't trade this ticker now', which is
+        completely different from 'this asset is in a downtrend'.
+        """
         atoms = ticker_atoms.get(proxy, {})
         sig = atoms.get('signal_direction', '')
         if sig:
             return sig
-        ct = atoms.get('conviction_tier', '')
-        if ct in ('high', 'confirmed', 'strong', 'medium'):
+        # Fallback: use price_regime (where price sits in 52w range)
+        pr = atoms.get('price_regime', '')
+        if pr in ('near_high', 'near_52w_high'):
             return 'bullish'
-        if ct in ('avoid', 'low'):  # low = weak/not-tradeable = bearish lean for regime
+        if pr in ('near_low', 'near_52w_low'):
             return 'bearish'
-        return ''
+        return ''  # mid_range or missing → no signal, skip this proxy
 
-    # Build extended proxy signals — prefer signal_direction, fall back to conviction_tier
+    # Build proxy signals — signal_direction preferred, price_regime as fallback
     spy_sig = macro_signals.get(_MARKET_PROXY) or _sig_from_atoms(_MARKET_PROXY)
     hyg_sig = macro_signals.get(_CREDIT_PROXY) or _sig_from_atoms(_CREDIT_PROXY)
     tlt_sig = macro_signals.get(_RATES_PROXY)  or _sig_from_atoms(_RATES_PROXY)
@@ -992,10 +1000,8 @@ def _classify_market_regime(
     uup_sig = _sig_from_atoms(_USD_PROXY)
 
     if not spy_sig and not hyg_sig:
-        # Only true no_data if conviction_tier also absent for both proxies
-        if not ticker_atoms.get(_MARKET_PROXY) and not ticker_atoms.get(_CREDIT_PROXY):
-            return _REGIME_NO_DATA
-        # Partial data — fall through to classification
+        # Both primary proxies missing — genuine no_data
+        return _REGIME_NO_DATA
 
     spy_bull = spy_sig in _BULLISH_SIGNALS
     spy_bear = spy_sig in _BEARISH_SIGNALS
@@ -1004,15 +1010,32 @@ def _classify_market_regime(
     tlt_bull = tlt_sig in _BULLISH_SIGNALS
     gld_bull = gld_sig in _BULLISH_SIGNALS
 
+    # Momentum helper: read SPY short-term return from KB atoms
+    def _spy_momentum() -> float:
+        try:
+            return float(ticker_atoms.get(_MARKET_PROXY, {}).get('return_1w', 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _risk_on_or_correction() -> str:
+        """When SPY+HYG look bullish, check if we're in a pullback within expansion."""
+        ret_1w = _spy_momentum()
+        return _REGIME_RISK_ON_CORRECTION if ret_1w < -1.5 else _REGIME_RISK_ON_EXPANSION
+
     # RECOVERY: equities up + credit tight + rates falling (Fed-pivot / early cycle)
     if spy_bull and hyg_bull and tlt_bull:
         return _REGIME_RECOVERY
 
-    # RISK_ON_EXPANSION: equities up + credit tight + rates NOT falling
+    # RISK_ON_EXPANSION or RISK_ON_CORRECTION:
+    # Equities up + credit tight + rates NOT falling
+    # If SPY is near highs but short-term momentum is negative (>1.5% weekly drop),
+    # call it a correction within expansion rather than full expansion.
     if spy_bull and hyg_bull and not tlt_bull:
-        return _REGIME_RISK_ON_EXPANSION
+        return _risk_on_or_correction()
 
-    # RISK_OFF_CONTRACTION: equities down + credit selling off
+    # RISK_OFF_CONTRACTION: equities down + credit selling off simultaneously
+    # Requires BOTH to be bearish — if credit (HYG) is still near highs, it's
+    # not a true contraction regardless of equity direction.
     if spy_bear and hyg_bear:
         return _REGIME_RISK_OFF_CONTRACTION
 
@@ -1020,9 +1043,9 @@ def _classify_market_regime(
     if gld_bull and not spy_bull:
         return _REGIME_STAGFLATION
 
-    # Residual: equities up but mixed credit, or data too thin
+    # Residual: equities up but mixed/missing credit signal
     if spy_bull:
-        return _REGIME_RISK_ON_EXPANSION
+        return _risk_on_or_correction()
 
     return _REGIME_RECOVERY
 
