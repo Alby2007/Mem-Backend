@@ -719,6 +719,88 @@ class _EdgeCoverageSensor:
         return findings
 
 
+# ── Sensor 6: ExchangeEdgeSensor ────────────────────────────────────────────────
+class _ExchangeEdgeSensor:
+    """
+    Finds exchange×pattern×timeframe combinations with strong edges
+    (edge_gap >= 0.25, samples >= 5000, tickers >= 8) not covered by any active bot.
+    Uses scan_exchange_edges() from edge_miner.
+
+    Severity:
+    - 'high'   if edge_gap >= 0.32 and samples >= 10000
+    - 'medium' otherwise
+    """
+
+    def scan(self, conn: sqlite3.Connection) -> list[Finding]:
+        findings: list[Finding] = []
+        try:
+            db_file = None
+            for row in conn.execute("PRAGMA database_list"):
+                if row[1] == 'main':
+                    db_file = row[2]
+                    break
+            if not db_file:
+                return findings
+
+            from analytics.edge_miner import scan_exchange_edges
+            candidates = scan_exchange_edges(
+                min_gap=0.22,
+                min_samples=5000,
+                min_tickers=5,
+                db_path=db_file,
+            )
+        except Exception as e:
+            _log.warning('ExchangeEdgeSensor: scan failed: %s', e)
+            return findings
+
+        for candidate in candidates:
+            if candidate.already_covered:
+                continue
+            if candidate.tickers < 8 or candidate.edge_gap < 0.25:
+                continue
+
+            if candidate.edge_gap >= 0.32 and candidate.samples >= 10000:
+                severity = 'high'
+            else:
+                severity = 'medium'
+
+            findings.append(Finding(
+                sensor='exchange_edge',
+                severity=severity,
+                subject=f'{candidate.exchange_suffix}/{candidate.pattern_type}/{candidate.timeframe}',
+                description=(
+                    f'Uncovered exchange edge: {candidate.exchange_suffix} '
+                    f'{candidate.pattern_type} {candidate.timeframe} '
+                    f'edge_gap={candidate.edge_gap:.1%} HR={candidate.avg_hr:.1%} '
+                    f'n={candidate.samples:,} tickers={candidate.tickers}'
+                ),
+                action_type='create_bot',
+                action_params={
+                    'exchanges':     [candidate.exchange_suffix],
+                    'pattern_types': [candidate.pattern_type],
+                    'timeframes':    [candidate.timeframe],
+                    'min_quality':   round(min(0.80, candidate.avg_hr + 0.08), 2),
+                    'risk_pct':      round(min(2.5, max(1.0, candidate.edge_gap * 8)), 1),
+                    'max_positions': 3,
+                    'obs':           candidate.samples,
+                    'hit_rate':      candidate.avg_hr,
+                },
+                auto_eligible=False,
+                evidence={
+                    'exchange_suffix': candidate.exchange_suffix,
+                    'pattern_type':    candidate.pattern_type,
+                    'timeframe':       candidate.timeframe,
+                    'avg_hr':          candidate.avg_hr,
+                    'avg_stop':        candidate.avg_stop,
+                    'edge_gap':        candidate.edge_gap,
+                    'samples':         candidate.samples,
+                    'tickers':         candidate.tickers,
+                },
+            ))
+
+        return findings
+
+
 # ── Main engine ─────────────────────────────────────────────────────────────────
 class ObservatoryEngine:
     def __init__(self, db_path: str):
@@ -729,6 +811,7 @@ class ObservatoryEngine:
             _CalibrationSensor(),
             _DeliverySensor(),
             _EdgeCoverageSensor(),
+            _ExchangeEdgeSensor(),
         ]
 
     # ── Public entry point ─────────────────────────────────────────────────────

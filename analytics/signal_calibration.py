@@ -97,6 +97,7 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
         ('outcome_r_multiple',   'REAL'),
         ('bot_observations',     'INTEGER DEFAULT 0'),
         ('user_observations',    'INTEGER DEFAULT 0'),
+        ('direction',            'TEXT'),
     ]:
         if _col not in _existing_cols:
             conn.execute(f'ALTER TABLE signal_calibration ADD COLUMN {_col} {_type}')
@@ -104,6 +105,17 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         'CREATE INDEX IF NOT EXISTS idx_calibration_pattern_tf '
         'ON signal_calibration(pattern_type, timeframe)'
+    )
+    # Partial unique index for directional cells (historical NULL rows use the
+    # original UNIQUE constraint; directional cells get their own separate key)
+    conn.execute(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_sc_directional '
+        'ON signal_calibration(ticker, pattern_type, timeframe, market_regime, direction) '
+        'WHERE direction IS NOT NULL'
+    )
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_sc_direction '
+        'ON signal_calibration(pattern_type, direction, timeframe)'
     )
     # Observation-level log for source tracking, correction factor, and auditing
     conn.execute("""
@@ -113,6 +125,7 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
             pattern_type  TEXT NOT NULL,
             timeframe     TEXT NOT NULL,
             market_regime TEXT,
+            direction     TEXT,
             outcome       TEXT NOT NULL,
             source        TEXT NOT NULL DEFAULT 'user',
             bot_id        TEXT,
@@ -123,6 +136,12 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
             observed_at   TEXT NOT NULL
         )
     """)
+    # Idempotent: add direction column to calibration_observations if missing
+    _existing_obs_cols = {
+        row[1] for row in conn.execute('PRAGMA table_info(calibration_observations)').fetchall()
+    }
+    if 'direction' not in _existing_obs_cols:
+        conn.execute('ALTER TABLE calibration_observations ADD COLUMN direction TEXT')
     conn.execute(
         'CREATE INDEX IF NOT EXISTS idx_cal_obs_source '
         'ON calibration_observations(source)'
@@ -147,6 +166,7 @@ def update_calibration(
     bot_id: Optional[str] = None,
     conn=None,
     pnl_r: Optional[float] = None,
+    direction: Optional[str] = None,
 ) -> None:
     """
     Update the calibration row for (ticker, pattern_type, timeframe, market_regime)
@@ -170,15 +190,27 @@ def update_calibration(
         if _owns_conn:
             _ensure_table(conn)
 
-        # Fetch existing row
-        row = conn.execute(
-            """SELECT sample_size, hit_rate_t1, hit_rate_t2, hit_rate_t3,
-                      stopped_out_rate, avg_time_to_target_hours
-               FROM signal_calibration
-               WHERE ticker=? AND pattern_type=? AND timeframe=?
-                 AND (market_regime=? OR (market_regime IS NULL AND ? IS NULL))""",
-            (ticker, pattern_type, timeframe, market_regime, market_regime),
-        ).fetchone()
+        # Fetch existing row — directional rows are separate from NULL rows
+        if direction is not None:
+            row = conn.execute(
+                """SELECT sample_size, hit_rate_t1, hit_rate_t2, hit_rate_t3,
+                          stopped_out_rate, avg_time_to_target_hours
+                   FROM signal_calibration
+                   WHERE ticker=? AND pattern_type=? AND timeframe=?
+                     AND (market_regime=? OR (market_regime IS NULL AND ? IS NULL))
+                     AND direction=?""",
+                (ticker, pattern_type, timeframe, market_regime, market_regime, direction),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """SELECT sample_size, hit_rate_t1, hit_rate_t2, hit_rate_t3,
+                          stopped_out_rate, avg_time_to_target_hours
+                   FROM signal_calibration
+                   WHERE ticker=? AND pattern_type=? AND timeframe=?
+                     AND (market_regime=? OR (market_regime IS NULL AND ? IS NULL))
+                     AND direction IS NULL""",
+                (ticker, pattern_type, timeframe, market_regime, market_regime),
+            ).fetchone()
 
         if row:
             n, hr1, hr2, hr3, sor, atth = row
@@ -214,28 +246,54 @@ def update_calibration(
         if pnl_r is not None:
             _r_mult_update = ', outcome_r_multiple=ROUND((COALESCE(outcome_r_multiple,0)*sample_size + ?) / (sample_size+1), 4)'
 
-        conn.execute(
-            f"""INSERT INTO signal_calibration
-               (ticker, pattern_type, timeframe, market_regime, sample_size,
-                hit_rate_t1, hit_rate_t2, hit_rate_t3, stopped_out_rate,
-                calibration_confidence, last_updated, sector)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(ticker, pattern_type, timeframe, market_regime)
-               DO UPDATE SET
-                 sample_size=excluded.sample_size,
-                 hit_rate_t1=excluded.hit_rate_t1,
-                 hit_rate_t2=excluded.hit_rate_t2,
-                 hit_rate_t3=excluded.hit_rate_t3,
-                 stopped_out_rate=excluded.stopped_out_rate,
-                 calibration_confidence=excluded.calibration_confidence,
-                 last_updated=excluded.last_updated,
-                 sector=COALESCE(signal_calibration.sector, excluded.sector)
-                 {_r_mult_update}""",
-            (ticker, pattern_type, timeframe, market_regime, new_n,
-             round(new_hr1, 4), round(new_hr2, 4), round(new_hr3, 4),
-             round(new_sor, 4), round(conf_score, 4), now, _sector)
-            + ((pnl_r,) if pnl_r is not None else ()),
-        )
+        if direction is not None:
+            # Directional rows use the partial unique index (direction IS NOT NULL)
+            conn.execute(
+                f"""INSERT INTO signal_calibration
+                   (ticker, pattern_type, timeframe, market_regime, direction, sample_size,
+                    hit_rate_t1, hit_rate_t2, hit_rate_t3, stopped_out_rate,
+                    calibration_confidence, last_updated, sector)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(ticker, pattern_type, timeframe, market_regime, direction)
+                   WHERE direction IS NOT NULL
+                   DO UPDATE SET
+                     sample_size=excluded.sample_size,
+                     hit_rate_t1=excluded.hit_rate_t1,
+                     hit_rate_t2=excluded.hit_rate_t2,
+                     hit_rate_t3=excluded.hit_rate_t3,
+                     stopped_out_rate=excluded.stopped_out_rate,
+                     calibration_confidence=excluded.calibration_confidence,
+                     last_updated=excluded.last_updated,
+                     sector=COALESCE(signal_calibration.sector, excluded.sector)
+                     {_r_mult_update}""",
+                (ticker, pattern_type, timeframe, market_regime, direction, new_n,
+                 round(new_hr1, 4), round(new_hr2, 4), round(new_hr3, 4),
+                 round(new_sor, 4), round(conf_score, 4), now, _sector)
+                + ((pnl_r,) if pnl_r is not None else ()),
+            )
+        else:
+            conn.execute(
+                f"""INSERT INTO signal_calibration
+                   (ticker, pattern_type, timeframe, market_regime, sample_size,
+                    hit_rate_t1, hit_rate_t2, hit_rate_t3, stopped_out_rate,
+                    calibration_confidence, last_updated, sector)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(ticker, pattern_type, timeframe, market_regime)
+                   DO UPDATE SET
+                     sample_size=excluded.sample_size,
+                     hit_rate_t1=excluded.hit_rate_t1,
+                     hit_rate_t2=excluded.hit_rate_t2,
+                     hit_rate_t3=excluded.hit_rate_t3,
+                     stopped_out_rate=excluded.stopped_out_rate,
+                     calibration_confidence=excluded.calibration_confidence,
+                     last_updated=excluded.last_updated,
+                     sector=COALESCE(signal_calibration.sector, excluded.sector)
+                     {_r_mult_update}""",
+                (ticker, pattern_type, timeframe, market_regime, new_n,
+                 round(new_hr1, 4), round(new_hr2, 4), round(new_hr3, 4),
+                 round(new_sor, 4), round(conf_score, 4), now, _sector)
+                + ((pnl_r,) if pnl_r is not None else ()),
+            )
         # Increment per-source observation counter on the calibration row
         if source == 'paper_bot':
             conn.execute(
@@ -257,10 +315,10 @@ def update_calibration(
         try:
             conn.execute(
                 """INSERT INTO calibration_observations
-                   (ticker, pattern_type, timeframe, market_regime,
+                   (ticker, pattern_type, timeframe, market_regime, direction,
                     outcome, source, bot_id, pnl_r, observed_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                (ticker, pattern_type, timeframe, market_regime,
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (ticker, pattern_type, timeframe, market_regime, direction,
                  outcome, source, bot_id, pnl_r, now),
             )
             # Cascade: T2/T3 hit implies T1 was also hit — insert synthetic record
@@ -268,10 +326,10 @@ def update_calibration(
             if outcome in ('hit_t2', 'hit_t3'):
                 conn.execute(
                     """INSERT INTO calibration_observations
-                       (ticker, pattern_type, timeframe, market_regime,
+                       (ticker, pattern_type, timeframe, market_regime, direction,
                         outcome, source, bot_id, pnl_r, observed_at)
-                       VALUES (?,?,?,?,?,?,?,?,?)""",
-                    (ticker, pattern_type, timeframe, market_regime,
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    (ticker, pattern_type, timeframe, market_regime, direction,
                      'hit_t1', source, bot_id, None, now),
                 )
         except Exception:
@@ -365,11 +423,17 @@ def get_calibration(
     db_path: str,
     market_regime: Optional[str] = None,
     corrected: bool = True,
+    direction: Optional[str] = None,
 ) -> Optional[CalibrationResult]:
     """
     Return CalibrationResult for the given key, or None if < 10 samples.
-    If market_regime is provided, tries exact match first then falls back
-    to regime-agnostic row.
+
+    Fallback hierarchy (most specific → least specific):
+      1. (ticker, pattern, tf, regime,  direction)   — most precise
+      2. (ticker, pattern, tf, regime,  NULL)         — regime-aware, undirected
+      3. (ticker, pattern, tf, NULL,    direction)    — direction-aware, regime-agnostic
+      4. (ticker, pattern, tf, NULL,    NULL)         — historical baseline
+
     When corrected=True and the cell has no user observations, applies the
     global correction factor from calibration_correction to adjust for
     paper-trading optimism.
@@ -379,25 +443,43 @@ def get_calibration(
     try:
         _ensure_table(conn)
 
+        _sel = """SELECT ticker, pattern_type, timeframe, market_regime, sample_size,
+                         hit_rate_t1, hit_rate_t2, hit_rate_t3, stopped_out_rate,
+                         avg_time_to_target_hours, calibration_confidence, last_updated
+                  FROM signal_calibration"""
+
         row = None
-        if market_regime:
+
+        # Tier 1: exact (regime + direction)
+        if market_regime and direction:
             row = conn.execute(
-                """SELECT ticker, pattern_type, timeframe, market_regime, sample_size,
-                          hit_rate_t1, hit_rate_t2, hit_rate_t3, stopped_out_rate,
-                          avg_time_to_target_hours, calibration_confidence, last_updated
-                   FROM signal_calibration
-                   WHERE ticker=? AND pattern_type=? AND timeframe=? AND market_regime=?""",
+                f"{_sel} WHERE ticker=? AND pattern_type=? AND timeframe=?"
+                " AND market_regime=? AND direction=?",
+                (ticker, pattern_type, timeframe, market_regime, direction),
+            ).fetchone()
+
+        # Tier 2: (regime, direction=NULL)
+        if row is None and market_regime:
+            row = conn.execute(
+                f"{_sel} WHERE ticker=? AND pattern_type=? AND timeframe=?"
+                " AND market_regime=? AND direction IS NULL",
                 (ticker, pattern_type, timeframe, market_regime),
             ).fetchone()
 
+        # Tier 3: (regime=NULL, direction)
+        if row is None and direction:
+            row = conn.execute(
+                f"{_sel} WHERE ticker=? AND pattern_type=? AND timeframe=?"
+                " AND market_regime IS NULL AND direction=?",
+                (ticker, pattern_type, timeframe, direction),
+            ).fetchone()
+
+        # Tier 4: fully agnostic fallback (highest sample_size wins)
         if row is None:
             row = conn.execute(
-                """SELECT ticker, pattern_type, timeframe, market_regime, sample_size,
-                          hit_rate_t1, hit_rate_t2, hit_rate_t3, stopped_out_rate,
-                          avg_time_to_target_hours, calibration_confidence, last_updated
-                   FROM signal_calibration
-                   WHERE ticker=? AND pattern_type=? AND timeframe=?
-                   ORDER BY sample_size DESC LIMIT 1""",
+                f"{_sel} WHERE ticker=? AND pattern_type=? AND timeframe=?"
+                " AND direction IS NULL"
+                " ORDER BY sample_size DESC LIMIT 1",
                 (ticker, pattern_type, timeframe),
             ).fetchone()
 
@@ -447,6 +529,7 @@ def get_pattern_baseline(
     timeframe: str,
     db_path: str,
     min_proven_cells: int = 10,
+    direction: Optional[str] = None,
 ) -> Optional[float]:
     """
     Return the aggregate T1 hit rate across all proven cells for a given
@@ -467,15 +550,18 @@ def get_pattern_baseline(
     """
     conn = sqlite3.connect(db_path, timeout=10)
     try:
+        _dir_clause = 'AND direction=?' if direction else 'AND (direction IS NULL OR direction=direction)'
+        _dir_params = (direction,) if direction else ()
         row = conn.execute(
-            """SELECT AVG(hit_rate_t1) as avg_t1,
+            f"""SELECT AVG(hit_rate_t1) as avg_t1,
                       MAX(hit_rate_t1) as max_t1,
                       COUNT(*) as proven_cells,
                       SUM(sample_size) as total_samples
                FROM signal_calibration
                WHERE pattern_type=? AND timeframe=? AND sample_size >= 20
-                 AND hit_rate_t1 IS NOT NULL""",
-            (pattern_type, timeframe),
+                 AND hit_rate_t1 IS NOT NULL
+                 {_dir_clause}""",
+            (pattern_type, timeframe) + _dir_params,
         ).fetchone()
 
         if not row or not row[0] or (row[2] or 0) < min_proven_cells:
@@ -495,6 +581,7 @@ def get_regime_aware_baseline(
     db_path: str,
     min_cells: int = 5,
     min_samples: int = 1000,
+    direction: Optional[str] = None,
 ) -> Optional[float]:
     """
     Return the sample-weighted mean hit_rate_t1 for a given
@@ -517,12 +604,15 @@ def get_regime_aware_baseline(
         return None
     conn = sqlite3.connect(db_path, timeout=10)
     try:
+        _dir_clause = 'AND direction=?' if direction else 'AND (direction IS NULL OR direction=direction)'
+        _dir_params = (direction,) if direction else ()
         rows = conn.execute(
-            """SELECT hit_rate_t1, sample_size
+            f"""SELECT hit_rate_t1, sample_size
                FROM signal_calibration
                WHERE pattern_type=? AND timeframe=? AND market_regime=?
-                 AND hit_rate_t1 IS NOT NULL AND sample_size >= 20""",
-            (pattern_type, timeframe, market_regime),
+                 AND hit_rate_t1 IS NOT NULL AND sample_size >= 20
+                 {_dir_clause}""",
+            (pattern_type, timeframe, market_regime) + _dir_params,
         ).fetchall()
     finally:
         conn.close()

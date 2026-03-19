@@ -1353,6 +1353,7 @@ class BotRunner:
                         if pat:
                             _outcome_map = {'t1_hit': 'hit_t1', 't2_hit': 'hit_t2', 'stopped_out': 'stopped_out'}
                             outcome = _outcome_map.get(new_status, 'stopped_out')
+                            _pos_dir = pos.get('direction') or None
                             update_calibration(
                                 ticker=ticker,
                                 pattern_type=(pat[0] or 'unknown'),
@@ -1363,6 +1364,7 @@ class BotRunner:
                                 source='paper_bot',
                                 bot_id=bot_id,
                                 conn=conn,
+                                direction=_pos_dir,
                             )
                     except Exception as _ce:
                         _logger.debug('bot calibration update failed %s: %s', ticker, _ce)

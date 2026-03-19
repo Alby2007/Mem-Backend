@@ -187,6 +187,16 @@ _TECHNICAL_ONLY_SECTORS = frozenset({
     'silver', 'gold', 'platinum', 'energy',
 })
 
+# Pattern-type × timeframe quality nudges derived from 5.1M calibration samples.
+# liq_void 15m is the structurally strongest pattern (HR=55-64% across exchanges).
+# fvg is consistently worst (HR=11-22%); order_block 15m has a 60% stop rate.
+_PATTERN_BOOSTS: dict[str, dict[str, float]] = {
+    'liquidity_void': {'15m': +0.05, '1h': +0.02},
+    'mitigation':     {'1d':  +0.02},
+    'fvg':            {'15m': -0.10, '1h': -0.08},
+    'order_block':    {'15m': -0.05},
+}
+
 
 def _quality(
     pattern_type:  str,
@@ -231,7 +241,8 @@ def _quality(
             gap     * 0.25 +
             rec     * 0.15
         )
-    return round(min(max(score, 0.0), 1.0), 4)
+    boost = _PATTERN_BOOSTS.get(pattern_type, {}).get(timeframe, 0.0)
+    return round(min(max(score + boost, 0.0), 1.0), 4)
 
 
 # ── Individual detectors ───────────────────────────────────────────────────────

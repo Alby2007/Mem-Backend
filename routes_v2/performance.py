@@ -266,6 +266,50 @@ async def mcp_edge_miner_scan(
     }
 
 
+# ── GET /mcp/tools/edge_miner/exchange_scan ───────────────────────────────────
+
+@router.get("/mcp/tools/edge_miner/exchange_scan")
+async def mcp_exchange_scan(
+    min_gap: float = Query(0.22, ge=0.05, le=1.0),
+    min_samples: int = Query(5000, ge=100),
+    min_tickers: int = Query(5, ge=1),
+    _: str = Depends(get_current_user),
+):
+    """
+    Return ranked exchange×pattern×timeframe edges by edge_gap (HR - stop_rate).
+    already_covered=true means an active bot already targets this exchange+pattern+tf.
+    """
+    try:
+        from analytics.edge_miner import scan_exchange_edges
+        candidates = scan_exchange_edges(
+            min_gap=min_gap,
+            min_samples=min_samples,
+            min_tickers=min_tickers,
+            db_path=ext.DB_PATH,
+        )
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    return {
+        'total':           len(candidates),
+        'uncovered_count': sum(1 for c in candidates if not c.already_covered),
+        'candidates': [
+            {
+                'exchange_suffix': c.exchange_suffix,
+                'pattern_type':   c.pattern_type,
+                'timeframe':      c.timeframe,
+                'avg_hr':         c.avg_hr,
+                'avg_stop':       c.avg_stop,
+                'edge_gap':       c.edge_gap,
+                'samples':        c.samples,
+                'tickers':        c.tickers,
+                'already_covered': c.already_covered,
+            }
+            for c in candidates
+        ],
+    }
+
+
 # ── GET /mcp/tools/performance/edge_report ────────────────────────────────────
 
 @router.get("/mcp/tools/performance/edge_report")

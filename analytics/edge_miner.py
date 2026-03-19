@@ -171,6 +171,134 @@ def scan_calibration_edges(
     return candidates
 
 
+@dataclass
+class ExchangeEdgeCandidate:
+    exchange_suffix: str    # e.g. '.L', '.AX', '.KS', 'US'
+    pattern_type:   str
+    timeframe:      str
+    avg_hr:         float
+    avg_stop:       float
+    edge_gap:       float
+    samples:        int
+    tickers:        int
+    already_covered: bool
+
+
+def _covered_exchange_cells(conn: sqlite3.Connection) -> set[tuple[str, str, str]]:
+    """
+    Return set of (exchange_suffix, pattern_type, timeframe) cells covered by active bots.
+    A bot with no exchange filter is treated as covering nothing exchange-specific.
+    """
+    covered: set[tuple[str, str, str]] = set()
+    try:
+        rows = conn.execute(
+            "SELECT exchanges, pattern_types, timeframes FROM paper_bot_configs "
+            "WHERE active=1 AND killed_at IS NULL"
+        ).fetchall()
+    except Exception as e:
+        _log.warning('edge_miner: exchange bot query failed: %s', e)
+        return covered
+
+    for (ex_json, pt_json, tf_json) in rows:
+        try:
+            exchanges = json.loads(ex_json or '[]') or []
+        except Exception:
+            exchanges = []
+        try:
+            patterns = json.loads(pt_json or '[]') or []
+        except Exception:
+            patterns = []
+        try:
+            timeframes = json.loads(tf_json or '[]') or []
+        except Exception:
+            timeframes = []
+
+        if not exchanges:
+            continue
+
+        for ex in exchanges:
+            for pt in patterns:
+                if timeframes:
+                    for tf in timeframes:
+                        covered.add((ex.lower(), pt.lower(), tf.lower()))
+                else:
+                    covered.add((ex.lower(), pt.lower(), ''))
+
+    return covered
+
+
+def scan_exchange_edges(
+    min_gap: float = 0.22,
+    min_samples: int = 5000,
+    min_tickers: int = 5,
+    db_path: str = DB_PATH,
+) -> list[ExchangeEdgeCandidate]:
+    """
+    Scan for exchange×pattern×timeframe edges grouped by ticker exchange suffix.
+    Scoped to universe_tickers to avoid noise from one-off historical data.
+
+    edge_gap = avg_hr - avg_stop_rate (profit expectancy proxy).
+    Returns ranked list sorted by edge_gap desc.
+    already_covered=True means an active bot already targets this exchange+pattern+tf.
+    """
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        # Check whether universe_tickers table exists; if not, omit the JOIN
+        _has_universe = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='universe_tickers'"
+        ).fetchone() is not None
+
+        _join = "JOIN universe_tickers ut ON ut.ticker = sc.ticker" if _has_universe else ""
+
+        rows = conn.execute(
+            f"""SELECT
+                   CASE WHEN sc.ticker LIKE '%.%'
+                        THEN '.' || LOWER(SUBSTR(sc.ticker, INSTR(sc.ticker, '.')+1))
+                        ELSE 'US'
+                   END AS exchange_suffix,
+                   LOWER(sc.pattern_type)      AS pattern_type,
+                   sc.timeframe,
+                   AVG(sc.hit_rate_t1)          AS avg_hr,
+                   AVG(sc.stopped_out_rate)     AS avg_stop,
+                   AVG(sc.hit_rate_t1) - AVG(sc.stopped_out_rate) AS edge_gap,
+                   SUM(sc.sample_size)          AS total_n,
+                   COUNT(DISTINCT sc.ticker)    AS tickers
+               FROM signal_calibration sc
+               {_join}
+               WHERE sc.sample_size >= 100
+                 AND sc.hit_rate_t1 IS NOT NULL
+                 AND sc.stopped_out_rate IS NOT NULL
+               GROUP BY exchange_suffix, LOWER(sc.pattern_type), sc.timeframe
+               HAVING total_n >= ? AND tickers >= ? AND edge_gap >= ?
+               ORDER BY edge_gap DESC""",
+            (min_samples, min_tickers, min_gap),
+        ).fetchall()
+        covered = _covered_exchange_cells(conn)
+        conn.close()
+    except Exception as e:
+        _log.error('edge_miner: exchange scan failed: %s', e)
+        return []
+
+    candidates: list[ExchangeEdgeCandidate] = []
+    for (exchange_suffix, pattern_type, timeframe, avg_hr, avg_stop, edge_gap,
+         total_n, tickers) in rows:
+        cell = (exchange_suffix.lower(), pattern_type.lower(), (timeframe or '').lower())
+        already_covered = cell in covered
+        candidates.append(ExchangeEdgeCandidate(
+            exchange_suffix=exchange_suffix,
+            pattern_type=pattern_type,
+            timeframe=timeframe or '',
+            avg_hr=round(float(avg_hr), 4),
+            avg_stop=round(float(avg_stop or 0), 4),
+            edge_gap=round(float(edge_gap), 4),
+            samples=int(total_n),
+            tickers=int(tickers),
+            already_covered=already_covered,
+        ))
+
+    return candidates
+
+
 def edge_miner_summary(
     min_hr: float = 0.60,
     min_samples: int = 2000,
