@@ -895,13 +895,21 @@ class BotRunner:
                     skips += 1
                     continue
 
-                # Conviction gate: block 'avoid' signals — KB says don't trade this ticker
-                if (c.get('kb_conviction') or '').lower() == 'avoid':
+                # Conviction gate: block 'avoid' signals on DAILY+ timeframes only.
+                # On 1d+ timeframes, fundamentals influence multi-day moves → avoid is valid.
+                # On 15m/1h, price zones fill on microstructure mechanics regardless of
+                # analyst consensus. Data shows avoid-tagged tickers (V, LYFT, PYPL, MA etc)
+                # have 60-74% calibration HR on liq_void 15m — blocking them is leaving edge
+                # on the table. Short-TF patterns don't care about analyst conviction.
+                _SHORT_TF = ('1m', '3m', '5m', '15m', '30m', '1h')
+                _cand_tf   = (c.get('timeframe') or '').lower()
+                _is_short_tf = _cand_tf in _SHORT_TF
+                if (c.get('kb_conviction') or '').lower() == 'avoid' and not _is_short_tf:
                     skips += 1
                     conn.execute(
                         "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
                         (user_id, 'skip', ticker,
-                         f'kb_conviction=avoid: KB flags this ticker as unfavourable',
+                         f'kb_conviction=avoid on {_cand_tf}: fundamentals-based block (daily+ only)',
                          bot_id, now_iso)
                     )
                     continue
