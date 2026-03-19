@@ -187,6 +187,13 @@ async def _lifespan(app: FastAPI):
         from ingest.historical_calibration_adapter import HistoricalCalibrationAdapter
         scheduler.register(HistoricalCalibrationAdapter(db_path=db_path), interval_sec=86400)
 
+        # Historical OHLCV backfill — 52w high/low, returns, volatility, momentum for all tickers
+        # Runs weekly (7 days). ~2 min runtime. Writes ~19 atoms per ticker covering:
+        # high_52w, low_52w, return_1w/1m/3m/6m/1y, volatility_30d/90d, drawdown_from_52w_high etc.
+        # Critical for quality_score gap component and proxy signal_direction computation.
+        from ingest.historical_adapter import HistoricalBackfillAdapter
+        scheduler.register(HistoricalBackfillAdapter(db_path=db_path), interval_sec=604800)
+
         # Options flow — IV rank, put/call ratio, smart money signals, skew
         # ~66s per cycle (44 tickers × 1.5s), well within the 6h interval
         try:
