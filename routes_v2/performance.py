@@ -376,7 +376,7 @@ async def regime_split_scan(
     min_null_hr: float = 0.65,
     min_null_n:  int   = 200,
     min_hr_lift: float = 0.15,
-    db: str = Depends(get_db_path),
+    _: str = Depends(get_current_user),
 ):
     """
     Find edges hidden by regime mixing in aggregate calibration.
@@ -388,7 +388,7 @@ async def regime_split_scan(
         min_null_hr=min_null_hr,
         min_null_n=min_null_n,
         min_hr_lift=min_hr_lift,
-        db_path=db,
+        db_path=ext.DB_PATH,
     )
     return {
         "count": len(candidates),
