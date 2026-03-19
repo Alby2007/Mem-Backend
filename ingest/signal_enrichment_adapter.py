@@ -1783,28 +1783,37 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                 _regime     = _current_market_regime
 
                 if _conviction or _signal_dir or _regime:
-                    # Update kb fields AND recompute quality_score using updated KB values.
-                    # quality_score is computed at detection time but kb_regime/conviction/signal
-                    # change as KB is enriched — so we must recompute to reflect current state.
-                    # Import lazily to avoid circular dependency.
+                    # Update kb fields and partially recompute quality_score.
+                    # pattern_signals doesn't store atr_val/candle_idx/total_candles,
+                    # so we reconstruct the KB components only and preserve the
+                    # original gap+recency contribution via: q = kb_part + old_remainder.
+                    #
+                    # KB part weights: conv=0.25, regime=0.20, sig=0.15 → total 0.60
+                    # gap+rec part:    gap=0.25, rec=0.15 → total 0.40
+                    # We recompute KB part and preserve old gap+rec portion.
                     try:
-                        from analytics.pattern_detector import _quality as _pq_fn
+                        from analytics.pattern_detector import _kb_scores as _kbs_fn
                         _open_pats = _pconn.execute(
-                            """SELECT id, pattern_type, direction,
-                                      zone_high, zone_low, candle_idx, total_candles, atr_val
+                            """SELECT id, direction, quality_score
                                FROM pattern_signals
                                WHERE ticker=? AND status NOT IN ('filled','broken','expired')""",
                             (_pticker,)
                         ).fetchall()
                         for _op in _open_pats:
-                            _pid, _ptype, _pdir, _zh, _zl, _cidx, _total, _atr = _op
-                            _new_q = _pq_fn(
-                                _ptype, _pdir,
-                                float(_zh or 0), float(_zl or 0),
-                                int(_cidx or 0), int(_total or 1),
-                                float(_atr or 0),
-                                _conviction, _regime, _signal_dir
+                            _pid, _pdir, _old_q = _op
+                            _old_q = float(_old_q or 0)
+                            # Compute new KB components with updated values
+                            _conv_s, _regime_s, _sig_s = _kbs_fn(
+                                _conviction, _regime, _signal_dir, _pdir or ''
                             )
+                            _new_kb_part = _conv_s * 0.25 + _regime_s * 0.20 + _sig_s * 0.15
+                            # Estimate old KB part using stored kb_* values (pre-update)
+                            _old_conv  = 1.0 if _conviction in ('high','strong','confirmed') else (
+                                         0.0 if _conviction in ('low','weak','avoid') else 0.2)
+                            _old_kb_part = _old_conv * 0.25 + 0.2 * 0.20 + 0.2 * 0.15
+                            # old gap+rec = old_q - old_kb_part (clamp to [0, 0.40])
+                            _old_gap_rec = max(0.0, min(0.40, _old_q - _old_kb_part))
+                            _new_q = round(min(1.0, _new_kb_part + _old_gap_rec), 4)
                             _pconn.execute(
                                 """UPDATE pattern_signals
                                    SET kb_conviction = CASE WHEN ? != '' THEN ? ELSE kb_conviction END,
@@ -1821,7 +1830,7 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                             )
                         _pat_updated += len(_open_pats)
                     except Exception as _qe:
-                        # Fallback: update kb fields without recomputing quality
+                        _logger.warning('[signal_enrichment] quality recompute failed for %s: %s', _pticker, _qe)
                         _n = _pconn.execute("""
                             UPDATE pattern_signals
                             SET kb_conviction = CASE WHEN ? != '' THEN ? ELSE kb_conviction END,
