@@ -1230,12 +1230,22 @@ async def user_model_get(user_id: str, _: str = Depends(user_path_auth)):
         if best_regime:
             recommendations.append(f"Calibration edge is highest in {best_regime} regime")
 
+        # Alpaca equity from connected broker account
+        alpaca_row = conn.execute(
+            "SELECT alpaca_equity, alpaca_currency FROM user_preferences WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        alpaca_equity   = float(alpaca_row[0]) if alpaca_row and alpaca_row[0] is not None else None
+        alpaca_currency = alpaca_row[1] if alpaca_row else 'USD'
+
         conn.close()
 
         return {
             'user_id':             user_id,
             'computed_at':         datetime.now(_tz.utc).isoformat(),
             'open_position_count': total_pos,
+            'alpaca_equity':       alpaca_equity,
+            'alpaca_currency':     alpaca_currency,
             'implicit_exposures': {
                 'directions':         directions,
                 'sectors':            sector_list,
@@ -1924,3 +1934,165 @@ async def get_webhook_settings(user_id: str, _: str = Depends(user_path_auth)):
         "webhook_url":        row[0] if row else None,
         "webhook_secret_set": bool(row and row[1]),
     }
+
+
+# ── Alpaca Broker Connector ────────────────────────────────────────────────────
+
+class AlpacaConnectRequest(BaseModel):
+    api_key:      str
+    secret_key:   str
+    account_type: str  # 'paper' | 'live'
+
+
+def _alpaca_fetch(api_key: str, secret_key: str, account_type: str, path: str) -> dict:
+    """Hit Alpaca REST API. Raises ValueError on 401, RuntimeError on other errors."""
+    import urllib.request as _req
+    import urllib.error  as _err
+    base = ('https://paper-api.alpaca.markets' if account_type == 'paper'
+            else 'https://api.alpaca.markets')
+    request = _req.Request(
+        f"{base}{path}",
+        headers={
+            'APCA-API-KEY-ID':     api_key,
+            'APCA-API-SECRET-KEY': secret_key,
+            'Content-Type': 'application/json',
+        },
+    )
+    try:
+        resp = _req.urlopen(request, timeout=10)
+        return json.loads(resp.read())
+    except _err.HTTPError as e:
+        body = e.read().decode()
+        if e.code == 401:
+            raise ValueError(f"Alpaca auth failed: {body}")
+        raise RuntimeError(f"Alpaca HTTP {e.code}: {body[:200]}")
+    except Exception as exc:
+        raise RuntimeError(f"Alpaca request failed: {exc}")
+
+
+@router.post("/users/{user_id}/broker/alpaca/connect")
+async def alpaca_connect(
+    user_id: str,
+    data: AlpacaConnectRequest,
+    _: str = Depends(user_path_auth),
+):
+    """Verify Alpaca API keys and store them. Fetches live equity on connect."""
+    if data.account_type not in ('paper', 'live'):
+        raise HTTPException(400, detail="account_type must be 'paper' or 'live'")
+    if not data.api_key or not data.secret_key:
+        raise HTTPException(400, detail="api_key and secret_key are required")
+
+    try:
+        account = _alpaca_fetch(data.api_key, data.secret_key, data.account_type, '/v2/account')
+    except ValueError as e:
+        raise HTTPException(401, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(502, detail=str(e))
+
+    equity   = float(account.get('equity', 0) or 0)
+    currency = account.get('currency', 'USD') or 'USD'
+    now_iso  = datetime.now(timezone.utc).isoformat()
+
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.execute(
+        """UPDATE user_preferences
+           SET alpaca_api_key=?, alpaca_secret_key=?, alpaca_account_type=?,
+               alpaca_equity=?, alpaca_currency=?, alpaca_last_sync=?
+           WHERE user_id=?""",
+        (data.api_key, data.secret_key, data.account_type,
+         equity, currency, now_iso, user_id),
+    )
+    conn.commit()
+    conn.close()
+    return {
+        'connected':    True,
+        'broker':       'alpaca',
+        'account_type': data.account_type,
+        'equity':       equity,
+        'currency':     currency,
+        'last_sync_at': now_iso,
+        'sync_status':  'active',
+    }
+
+
+@router.get("/users/{user_id}/broker/status")
+async def broker_status(user_id: str, _: str = Depends(user_path_auth)):
+    """Return current broker connection state."""
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    row = conn.execute(
+        """SELECT alpaca_api_key, alpaca_account_type, alpaca_equity,
+                  alpaca_currency, alpaca_last_sync
+           FROM user_preferences WHERE user_id=?""",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    if not row or not row[0]:
+        return {'connected': False}
+    return {
+        'connected':    True,
+        'broker':       'alpaca',
+        'account_type': row[1] or 'paper',
+        'equity':       float(row[2]) if row[2] is not None else None,
+        'currency':     row[3] or 'USD',
+        'last_sync_at': row[4],
+        'sync_status':  'active',
+    }
+
+
+@router.post("/users/{user_id}/broker/alpaca/sync")
+async def alpaca_sync(user_id: str, _: str = Depends(user_path_auth)):
+    """Re-fetch equity from Alpaca and update stored value."""
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    row = conn.execute(
+        "SELECT alpaca_api_key, alpaca_secret_key, alpaca_account_type FROM user_preferences WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    if not row or not row[0]:
+        conn.close()
+        raise HTTPException(400, detail="No Alpaca account connected")
+    api_key, secret_key, account_type = row
+    conn.close()
+
+    try:
+        account = _alpaca_fetch(api_key, secret_key, account_type or 'paper', '/v2/account')
+    except ValueError as e:
+        raise HTTPException(401, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(502, detail=str(e))
+
+    equity   = float(account.get('equity', 0) or 0)
+    currency = account.get('currency', 'USD') or 'USD'
+    now_iso  = datetime.now(timezone.utc).isoformat()
+
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.execute(
+        "UPDATE user_preferences SET alpaca_equity=?, alpaca_currency=?, alpaca_last_sync=? WHERE user_id=?",
+        (equity, currency, now_iso, user_id),
+    )
+    conn.commit()
+    conn.close()
+    return {
+        'connected':    True,
+        'broker':       'alpaca',
+        'account_type': account_type,
+        'equity':       equity,
+        'currency':     currency,
+        'last_sync_at': now_iso,
+        'sync_status':  'active',
+    }
+
+
+@router.delete("/users/{user_id}/broker/alpaca")
+async def alpaca_disconnect(user_id: str, _: str = Depends(user_path_auth)):
+    """Clear stored Alpaca credentials."""
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    conn.execute(
+        """UPDATE user_preferences
+           SET alpaca_api_key=NULL, alpaca_secret_key=NULL, alpaca_account_type=NULL,
+               alpaca_equity=NULL, alpaca_currency=NULL, alpaca_last_sync=NULL
+           WHERE user_id=?""",
+        (user_id,),
+    )
+    conn.commit()
+    conn.close()
+    return {'ok': True, 'connected': False}
