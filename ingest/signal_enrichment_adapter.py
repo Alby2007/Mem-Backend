@@ -1350,13 +1350,58 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
 
         ticker_atoms, macro_signals = _read_kb_atoms(self._db_path)
 
+        # ── Macro proxy signal_direction refresh ─────────────────────────────
+        # SPY/HYG/TLT/GLD/UUP are in the Polygon universe so yfinance skips them.
+        # Write signal_direction every enrichment cycle using KB 52w range data.
+        # This ensures the regime classifier always has fresh proxy signals.
+        _proxy_atoms: List[RawAtom] = []
+        _MACRO_PROXIES_ENRICH = {'spy': ('high_52w', 'low_52w', 'last_price'),
+                                  'hyg': ('high_52w', 'low_52w', 'last_price'),
+                                  'tlt': ('high_52w', 'low_52w', 'last_price'),
+                                  'gld': ('high_52w', 'low_52w', 'last_price'),
+                                  'uup': ('high_52w', 'low_52w', 'last_price')}
+        for _proxy in _MACRO_PROXIES_ENRICH:
+            _pa = ticker_atoms.get(_proxy, {})
+            try:
+                _p  = float(_pa.get('last_price', 0) or 0)
+                _h  = float(_pa.get('high_52w', 0) or 0)
+                _l  = float(_pa.get('low_52w', 0) or 0)
+                if _p > 0 and _h > _l:
+                    _ratio   = (_p - _l) / (_h - _l)
+                    _etf_dir = 'bullish' if _ratio >= 0.70 else ('bearish' if _ratio <= 0.30 else 'neutral')
+                    _proxy_atoms.append(RawAtom(
+                        subject=_proxy.upper(),
+                        predicate='signal_direction',
+                        object=_etf_dir,
+                        confidence=0.70,
+                        source=f'derived_52w_position_{_proxy}',
+                        metadata={
+                            'derived_from': '52w_range_position',
+                            'pct_of_range': round(_ratio * 100, 1),
+                            'as_of': now_iso,
+                        },
+                        upsert=True,
+                    ))
+                    # Refresh ticker_atoms so macro_signals picks up the new value
+                    if _proxy not in ticker_atoms:
+                        ticker_atoms[_proxy] = {}
+                    ticker_atoms[_proxy]['signal_direction'] = _etf_dir
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+        # Add proxy atoms to the main atoms list so they get pushed to the KB
+        atoms: List[RawAtom] = list(_proxy_atoms)
+        # Recompute macro_signals with refreshed proxy atoms
+        macro_signals = {
+            proxy: ticker_atoms.get(proxy, {}).get('signal_direction', '')
+            for proxy in (_CREDIT_PROXY, _RATES_PROXY, _MARKET_PROXY)
+        }
+
         # Extract market-level atoms (subject='market') for skew filter.
         # tail_risk and spy_skew_regime are written by OptionsAdapter — may be
         # absent on startup (1800s interval vs 300s here).  Empty dict is safe;
         # _compute_skew_filter_atoms handles missing keys gracefully.
         market_atoms: Dict[str, str] = ticker_atoms.get('market', {})
 
-        atoms: List[RawAtom] = []
         enriched = 0
         skipped  = 0
 
