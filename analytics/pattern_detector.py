@@ -232,6 +232,7 @@ def _detect_fvg(
     kb_conviction: str,
     kb_regime:     str,
     kb_signal_dir: str,
+    sector:        str = '',
 ) -> List[PatternSignal]:
     """
     Fair Value Gap — 3-candle imbalance.
@@ -413,6 +414,7 @@ def _detect_order_blocks(
     kb_conviction: str,
     kb_regime:     str,
     kb_signal_dir: str,
+    sector:        str = '',
 ) -> List[PatternSignal]:
     """
     Order Block — last opposite-direction candle before a strong impulsive move.
@@ -538,6 +540,7 @@ def _detect_liquidity_voids(
     kb_conviction: str,
     kb_regime:     str,
     kb_signal_dir: str,
+    sector:        str = '',
 ) -> List[PatternSignal]:
     """
     Liquidity Void — large single-candle move with minimal wicks.
@@ -598,6 +601,7 @@ def _detect_mitigation_blocks(
     kb_conviction: str,
     kb_regime:     str,
     kb_signal_dir: str,
+    sector:        str = '',
 ) -> List[PatternSignal]:
     """
     Mitigation Block — a counter-swing candle embedded in a confirmed trend that
