@@ -49,6 +49,9 @@ TIP_EDGE_GATE: dict[tuple[str, str], float] = {
     ('fvg',                  '15m'):     -0.626,  # 🚫 worst pattern
     ('fvg',                  '1h'):      -0.705,  # 🚫 worst pattern
     ('fvg',                  '4h'):      -0.925,  # 🚫 worst pattern
+    # Extrapolated: ifvg 4h not in calibration data but trend is clear
+    # (15m=-0.16, 1h=-0.34, 1d=-0.46 — consistently worsens with TF)
+    ('ifvg',                 '4h'):      -0.350,  # 🚫 extrapolated, conservative
 }
 
 # Minimum edge gap for a pattern×TF to be sent as a tip.
