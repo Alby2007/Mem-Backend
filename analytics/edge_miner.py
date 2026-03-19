@@ -106,7 +106,7 @@ def _covered_cells(conn: sqlite3.Connection) -> set[tuple[str, str, str]]:
 
 
 def scan_calibration_edges(
-    min_hr: float = 0.60,
+    min_hr: float = 0.55,
     min_samples: int = 2000,
     min_tickers: int = 2,
     db_path: str = DB_PATH,
@@ -133,17 +133,17 @@ def scan_calibration_edges(
                    AVG(sc.hit_rate_t1)    AS avg_hr,
                    SUM(sc.sample_size)    AS total_samples,
                    COUNT(DISTINCT sc.ticker) AS ticker_count,
-                   AVG(sc.stop_rate)      AS avg_stop_rate
+                   AVG(sc.stopped_out_rate)      AS avg_stop_rate
                FROM signal_calibration sc
                WHERE sc.sector IS NOT NULL
                  AND sc.sector != ''
                  AND sc.sector != 'unknown'
-                 AND sc.hit_rate_t1 >= ?
-                 AND sc.sample_size  >= ?
+                 AND sc.hit_rate_t1 IS NOT NULL
+                 AND sc.sample_size  >= 100
                GROUP BY LOWER(sc.sector), LOWER(sc.pattern_type), sc.timeframe
-               HAVING total_samples >= ? AND ticker_count >= ?
+               HAVING total_samples >= ? AND ticker_count >= ? AND avg_hr >= ?
                ORDER BY avg_hr DESC""",
-            (min_hr, min_samples // 4, min_samples, min_tickers),
+            (min_samples, min_tickers, min_hr),
         ).fetchall()
         covered = _covered_cells(conn)
         conn.close()

@@ -18,6 +18,8 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import List
 
+import extensions as ext
+
 _log = logging.getLogger(__name__)
 
 _DDL_PATTERN_PERFORMANCE = """
@@ -203,7 +205,9 @@ def _write_kb_facts(conn: sqlite3.Connection, report: List[dict]) -> None:
 class EdgeReportAdapter:
     name = 'edge_report_adapter'
 
-    def __init__(self, db_path: str = DB_PATH):
+    def __init__(self, db_path: str = ''):
+        if not db_path:
+            db_path = ext.DB_PATH
         self.db_path = db_path
 
     def fetch(self):
