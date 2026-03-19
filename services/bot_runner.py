@@ -555,6 +555,9 @@ class BotRunner:
                     if ex.startswith('.'):
                         exc_parts.append(f"p.ticker LIKE ?")
                         params.append(f'%{ex}')
+                    elif ex == '=F':
+                        exc_parts.append("p.ticker LIKE ?")
+                        params.append('%=F')
                     else:
                         exc_parts.append(f"p.ticker NOT LIKE '%.%'")
                 if exc_parts:
