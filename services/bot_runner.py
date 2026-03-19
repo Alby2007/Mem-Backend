@@ -917,6 +917,38 @@ class BotRunner:
                     )
                     continue
 
+                # Calibration regime gate for ETF/index liq_void 1d patterns.
+                # SPY/QQQ/HYG/TLT liq_void 1d: HR=73-93% in NULL/correction regimes
+                # but HR=10-24% in risk_on_expansion and recovery (bad regimes mask edge).
+                # Skip these patterns when global regime is expansion or recovery.
+                _cand_sector = (c.get('kb_signal_dir') or '')  # repurposed field check
+                _pat_sector = ''
+                try:
+                    _sect_row = conn.execute(
+                        "SELECT object FROM facts WHERE LOWER(subject)=LOWER(?) "
+                        "AND predicate='sector' ORDER BY timestamp DESC LIMIT 1",
+                        (ticker,)
+                    ).fetchone()
+                    _pat_sector = (_sect_row[0] or '').lower() if _sect_row else ''
+                except Exception:
+                    pass
+
+                if (_pat_sector in ('etf', 'index')
+                        and (c.get('pattern_type') or '') == 'liquidity_void'
+                        and (c.get('timeframe') or '') == '1d'):
+                    _bad_etf_regimes = ('risk_on_expansion', 'recovery')
+                    if any(r in (regime or '') for r in _bad_etf_regimes):
+                        skips += 1
+                        conn.execute(
+                            "INSERT INTO paper_agent_log "
+                            "(user_id, event_type, ticker, detail, bot_id, created_at) "
+                            "VALUES (?,?,?,?,?,?)",
+                            (user_id, 'skip', ticker,
+                             f'ETF liq_void 1d blocked: regime={regime} (edge only in corrections)',
+                             bot_id, now_iso)
+                        )
+                        continue
+
                 # Fix 3: Regime alignment — pattern-level misalignment (hard skip)
                 if regime and (
                     (direction == 'bullish' and any(x in regime for x in ('risk_off', 'bearish')))

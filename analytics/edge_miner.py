@@ -340,3 +340,113 @@ def edge_miner_summary(
             for c in candidates
         ],
     }
+
+
+# ── Regime-split edge scanner ─────────────────────────────────────────────────
+
+@dataclass
+class RegimeSplitCandidate:
+    """An edge that is only visible when calibration is split by market_regime."""
+    ticker:          str
+    pattern_type:    str
+    timeframe:       str
+    sector:          str
+    null_regime_hr:  float    # HR when market_regime IS NULL (edge conditions)
+    null_regime_n:   int
+    null_regime_stop: float
+    aggregate_hr:    float    # HR across all regime cells (what EdgeMiner sees)
+    aggregate_n:     int
+    hr_lift:         float    # null_regime_hr - aggregate_hr (how much was hidden)
+    already_covered: bool
+
+
+def scan_regime_split_edges(
+    min_null_hr:     float = 0.65,
+    min_null_n:      int   = 200,
+    min_hr_lift:     float = 0.15,   # null HR must beat aggregate by at least this
+    db_path:         str   = '',
+) -> list[RegimeSplitCandidate]:
+    """
+    Find edges that are invisible in aggregate calibration but strong in
+    NULL-regime cells. This catches edges that bad-regime cells mask.
+
+    Example: SPY liq_void 1d — aggregate HR=55% (below EdgeMiner threshold)
+    but NULL-regime HR=73-93%. The bad cells (risk_on_expansion at 14%)
+    drag the average down. Only visible by splitting.
+
+    Returns candidates ranked by null_regime_hr desc.
+    """
+    if not db_path:
+        import extensions as ext
+        db_path = ext.DB_PATH
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+
+        # Get NULL-regime aggregates per (ticker, pattern_type, timeframe)
+        null_rows = conn.execute("""
+            SELECT ticker, pattern_type, timeframe,
+              COALESCE(sector, '') as sector,
+              SUM(sample_size) as n,
+              AVG(hit_rate_t1) as hr,
+              AVG(stopped_out_rate) as stop
+            FROM signal_calibration
+            WHERE (market_regime IS NULL OR market_regime = '')
+              AND sample_size >= 50
+              AND hit_rate_t1 IS NOT NULL
+            GROUP BY ticker, pattern_type, timeframe
+            HAVING n >= ? AND hr >= ?
+        """, (min_null_n, min_null_hr)).fetchall()
+
+        if not null_rows:
+            return []
+
+        # Get aggregate HR for the same cells
+        tickers = list({r[0] for r in null_rows})
+        agg_map = {}
+        for row in conn.execute("""
+            SELECT ticker, pattern_type, timeframe,
+              SUM(sample_size) as n,
+              AVG(hit_rate_t1) as hr
+            FROM signal_calibration
+            WHERE sample_size >= 50 AND hit_rate_t1 IS NOT NULL
+            GROUP BY ticker, pattern_type, timeframe
+        """).fetchall():
+            agg_map[(row[0], row[1], row[2])] = (row[3], row[4])
+
+        covered = _covered_cells(conn)
+        conn.close()
+
+        candidates = []
+        for (ticker, pattern_type, timeframe, sector, n, hr, stop) in null_rows:
+            agg = agg_map.get((ticker, pattern_type, timeframe), (n, hr))
+            agg_n, agg_hr = agg
+            hr_lift = hr - agg_hr
+            if hr_lift < min_hr_lift:
+                continue
+
+            cell = (ticker, pattern_type, (timeframe or '').lower())
+            # Check coverage at ticker level
+            already = any(
+                c[0] in ('', ticker) and c[1] == pattern_type and c[2] == timeframe
+                for c in covered
+            )
+            candidates.append(RegimeSplitCandidate(
+                ticker=ticker,
+                pattern_type=pattern_type,
+                timeframe=timeframe,
+                sector=sector,
+                null_regime_hr=round(hr, 4),
+                null_regime_n=int(n),
+                null_regime_stop=round(stop, 4),
+                aggregate_hr=round(agg_hr, 4),
+                aggregate_n=int(agg_n),
+                hr_lift=round(hr_lift, 4),
+                already_covered=already,
+            ))
+
+        return sorted(candidates, key=lambda x: -x.null_regime_hr)
+
+    except Exception as e:
+        _log.error('edge_miner: regime_split_scan failed: %s', e)
+        return []
+

@@ -369,3 +369,44 @@ async def mcp_edge_report(_: str = Depends(get_current_user)):
         'confirmed_count':    len(confirmed),
         'total_slices':       len(edges),
     }
+
+
+@router.get("/mcp/tools/edge_miner/regime_split_scan")
+async def regime_split_scan(
+    min_null_hr: float = 0.65,
+    min_null_n:  int   = 200,
+    min_hr_lift: float = 0.15,
+    db: str = Depends(get_db_path),
+):
+    """
+    Find edges hidden by regime mixing in aggregate calibration.
+    Returns (ticker, pattern, tf) cells where NULL-regime HR >> aggregate HR.
+    These are edges that EdgeMiner misses because bad-regime cells drag the average.
+    """
+    from analytics.edge_miner import scan_regime_split_edges
+    candidates = scan_regime_split_edges(
+        min_null_hr=min_null_hr,
+        min_null_n=min_null_n,
+        min_hr_lift=min_hr_lift,
+        db_path=db,
+    )
+    return {
+        "count": len(candidates),
+        "params": {"min_null_hr": min_null_hr, "min_null_n": min_null_n, "min_hr_lift": min_hr_lift},
+        "candidates": [
+            {
+                "ticker":         c.ticker,
+                "pattern_type":   c.pattern_type,
+                "timeframe":      c.timeframe,
+                "sector":         c.sector,
+                "null_regime_hr": c.null_regime_hr,
+                "null_regime_n":  c.null_regime_n,
+                "null_regime_stop": c.null_regime_stop,
+                "aggregate_hr":   c.aggregate_hr,
+                "hr_lift":        c.hr_lift,
+                "already_covered": c.already_covered,
+            }
+            for c in candidates
+        ],
+    }
+

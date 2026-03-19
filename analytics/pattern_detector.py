@@ -185,6 +185,10 @@ def _kb_scores(
 _TECHNICAL_ONLY_SECTORS = frozenset({
     'fx', 'metals', 'oil', 'commodities', 'futures', 'crypto',
     'silver', 'gold', 'platinum', 'energy',
+    # ETFs: no analyst KB (no conviction/signal direction) — use technical formula
+    # Major index ETFs (SPY, QQQ, HYG, TLT) have structural liq_void 1d edges
+    # that the standard formula masks due to missing KB enrichment.
+    'etf', 'index',
 })
 
 # Pattern-type × timeframe quality nudges derived from 5.1M calibration samples.
