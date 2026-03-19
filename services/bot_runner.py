@@ -708,9 +708,9 @@ class BotRunner:
 
             # Build filtered candidate query
             filter_sql, filter_params = self._build_filtered_query(config)
-            quality_floor = max(min_qual - 0.05, 0.55)
+            quality_floor = min_qual  # use configured floor directly, no grace margin
             base_where = (
-                "p.status NOT IN ('filled','broken') "
+                "p.status NOT IN ('filled','broken','expired') "
                 f"AND p.quality_score >= {quality_floor}"
             )
             full_where = f"{base_where} AND {filter_sql}" if filter_sql else base_where
