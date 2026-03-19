@@ -154,6 +154,8 @@ def _read_kb_atoms(
                 'earnings_quality', 'low_52w', 'volatility_30d',
                 'signal_quality', 'thesis_risk_level', 'macro_confirmation',
                 'next_earnings',
+                'price_regime',
+                'return_1w', 'return_1m',
                 'skew_regime', 'iv_skew_ratio',
                 'tail_risk', 'spy_skew_regime', 'spy_skew_ratio',
                 'insider_conviction', 'short_squeeze_potential',
@@ -1754,12 +1756,19 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                 WHERE status NOT IN ('filled','broken','expired')
             """).fetchall()
 
+            # Read current market_regime once — same value for all tickers
+            _market_regime_row = _pconn.execute(
+                "SELECT object FROM facts WHERE LOWER(subject)='market' "
+                "AND predicate='market_regime' ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            _current_market_regime = _market_regime_row[0] if _market_regime_row else ''
+
             _pat_updated = 0
             for (_pticker,) in _open_tickers:
                 _patoms: dict = {}
                 for _prow in _pconn.execute(
                     "SELECT predicate, object FROM facts WHERE LOWER(subject)=? "
-                    "AND predicate IN ('conviction_tier','signal_direction','price_regime') "
+                    "AND predicate IN ('conviction_tier','signal_direction') "
                     "ORDER BY timestamp DESC",
                     (_pticker.lower(),)
                 ).fetchall():
@@ -1768,23 +1777,65 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
 
                 _conviction = _patoms.get('conviction_tier', '')
                 _signal_dir = _patoms.get('signal_direction', '')
-                _regime     = _patoms.get('price_regime', '')
+                # Use market_regime (macro environment) not price_regime (ticker 52w position).
+                # _kb_scores() in pattern_detector.py matches on 'risk_on', 'risk_off',
+                # 'contraction', 'expansion' etc — market_regime has these, price_regime doesn't.
+                _regime     = _current_market_regime
 
                 if _conviction or _signal_dir or _regime:
-                    _n = _pconn.execute("""
-                        UPDATE pattern_signals
-                        SET kb_conviction = CASE WHEN ? != '' THEN ? ELSE kb_conviction END,
-                            kb_signal_dir = CASE WHEN ? != '' THEN ? ELSE kb_signal_dir END,
-                            kb_regime     = CASE WHEN ? != '' THEN ? ELSE kb_regime END
-                        WHERE ticker = ?
-                          AND status NOT IN ('filled','broken','expired')
-                    """, (
-                        _conviction, _conviction,
-                        _signal_dir, _signal_dir,
-                        _regime,     _regime,
-                        _pticker,
-                    )).rowcount
-                    _pat_updated += _n
+                    # Update kb fields AND recompute quality_score using updated KB values.
+                    # quality_score is computed at detection time but kb_regime/conviction/signal
+                    # change as KB is enriched — so we must recompute to reflect current state.
+                    # Import lazily to avoid circular dependency.
+                    try:
+                        from analytics.pattern_detector import _quality as _pq_fn
+                        _open_pats = _pconn.execute(
+                            """SELECT id, pattern_type, direction,
+                                      zone_high, zone_low, candle_idx, total_candles, atr_val
+                               FROM pattern_signals
+                               WHERE ticker=? AND status NOT IN ('filled','broken','expired')""",
+                            (_pticker,)
+                        ).fetchall()
+                        for _op in _open_pats:
+                            _pid, _ptype, _pdir, _zh, _zl, _cidx, _total, _atr = _op
+                            _new_q = _pq_fn(
+                                _ptype, _pdir,
+                                float(_zh or 0), float(_zl or 0),
+                                int(_cidx or 0), int(_total or 1),
+                                float(_atr or 0),
+                                _conviction, _regime, _signal_dir
+                            )
+                            _pconn.execute(
+                                """UPDATE pattern_signals
+                                   SET kb_conviction = CASE WHEN ? != '' THEN ? ELSE kb_conviction END,
+                                       kb_signal_dir = CASE WHEN ? != '' THEN ? ELSE kb_signal_dir END,
+                                       kb_regime     = CASE WHEN ? != '' THEN ? ELSE kb_regime END,
+                                       quality_score = ?
+                                   WHERE id = ?""",
+                                (
+                                    _conviction, _conviction,
+                                    _signal_dir, _signal_dir,
+                                    _regime, _regime,
+                                    _new_q, _pid,
+                                )
+                            )
+                        _pat_updated += len(_open_pats)
+                    except Exception as _qe:
+                        # Fallback: update kb fields without recomputing quality
+                        _n = _pconn.execute("""
+                            UPDATE pattern_signals
+                            SET kb_conviction = CASE WHEN ? != '' THEN ? ELSE kb_conviction END,
+                                kb_signal_dir = CASE WHEN ? != '' THEN ? ELSE kb_signal_dir END,
+                                kb_regime     = CASE WHEN ? != '' THEN ? ELSE kb_regime END
+                            WHERE ticker = ?
+                              AND status NOT IN ('filled','broken','expired')
+                        """, (
+                            _conviction, _conviction,
+                            _signal_dir, _signal_dir,
+                            _regime, _regime,
+                            _pticker,
+                        )).rowcount
+                        _pat_updated += _n
 
             _pconn.commit()
             _pconn.close()
