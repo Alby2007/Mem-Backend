@@ -13,6 +13,60 @@ _ALL_PATTERNS = [
     'fvg', 'ifvg', 'bpr', 'order_block', 'breaker', 'liquidity_void', 'mitigation',
 ]
 
+# ── Calibration edge gate ─────────────────────────────────────────────────────
+# Derived from 5.1M sample calibration dataset: AVG(hit_rate_t1 - stopped_out_rate)
+# per (pattern_type, timeframe) across universe tickers with sample_size >= 100.
+#
+# A pattern×TF is allowed in tips only if its edge gap is positive (HR > stop rate).
+# Negative gap = structural loser — the stop rate exceeds the win rate on average.
+# Any tip sent on a negative-gap pattern is statistically likely to lose.
+#
+# Update this table when calibration accumulates new data (run edge_miner.scan()).
+# NULL means "no calibration data — allow by default (don't penalise unknown)".
+
+TIP_EDGE_GATE: dict[tuple[str, str], float] = {
+    # pattern_type           timeframe   edge_gap
+    ('liquidity_void',       '4h'):      +0.288,  # best single cell (small n, watch)
+    ('liquidity_void',       '15m'):     +0.241,  # ✅ 445k samples — confirmed
+    ('liquidity_void',       '1d'):      +0.224,  # ✅ 155k samples — confirmed
+    ('liquidity_void',       '1h'):      +0.146,  # ✅ 131k samples — confirmed
+    ('mitigation',           '1d'):      +0.169,  # ✅ 706k samples — confirmed
+    ('mitigation',           '15m'):     +0.103,  # 📈 371k samples — modest
+    ('mitigation',           '4h'):      +0.250,  # 📈 small n, monitor
+    ('mitigation',           '1h'):      +0.007,  # ⚠️  near-zero — borderline
+    ('breaker',              '4h'):      +0.006,  # ⚠️  near-zero — borderline
+    ('breaker',              '15m'):     -0.002,  # 🚫 negative — block
+    ('breaker',              '1d'):      -0.013,  # 🚫 negative — block
+    ('breaker',              '1h'):      -0.117,  # 🚫 negative — block
+    ('ifvg',                 '15m'):     -0.161,  # 🚫 confirmed loser
+    ('ifvg',                 '1h'):      -0.340,  # 🚫 confirmed loser
+    ('ifvg',                 '1d'):      -0.463,  # 🚫 confirmed loser
+    ('order_block',          '15m'):     -0.223,  # 🚫 confirmed loser
+    ('order_block',          '4h'):      -0.227,  # 🚫 confirmed loser
+    ('order_block',          '1d'):      -0.298,  # 🚫 confirmed loser
+    ('order_block',          '1h'):      -0.424,  # 🚫 confirmed loser
+    ('fvg',                  '1d'):      -0.569,  # 🚫 worst pattern
+    ('fvg',                  '15m'):     -0.626,  # 🚫 worst pattern
+    ('fvg',                  '1h'):      -0.705,  # 🚫 worst pattern
+    ('fvg',                  '4h'):      -0.925,  # 🚫 worst pattern
+}
+
+# Minimum edge gap for a pattern×TF to be sent as a tip.
+# Set to 0.0 = must be net-positive expected value. Raise to tighten quality.
+TIP_MIN_EDGE_GAP: float = 0.0
+
+
+def tip_pattern_tf_allowed(pattern_type: str, timeframe: str) -> bool:
+    """
+    Return True if the pattern×timeframe combination has a positive calibration
+    edge gap (hit_rate > stop_rate on average across the universe).
+    Unknown combinations (not in TIP_EDGE_GATE) are allowed by default.
+    """
+    gap = TIP_EDGE_GATE.get((pattern_type, timeframe))
+    if gap is None:
+        return True  # no data → don't penalise, allow through
+    return gap >= TIP_MIN_EDGE_GAP
+
 TIER_CONFIG: dict = {
     'free': {
         'price_monthly':          0,
@@ -37,7 +91,7 @@ TIER_CONFIG: dict = {
         'delivery_days':          ['monday', 'wednesday'],
         'briefing_days':          ['monday', 'wednesday'],
         'batch_size':             2,
-        'patterns':               ['fvg', 'ifvg'],
+        'patterns':               ['liquidity_void', 'mitigation'],  # fvg/ifvg have negative edge gaps
         'timeframes':             ['4h', '1d'],
         'targets':                2,
         'chat_queries_per_day':   10,

@@ -221,8 +221,21 @@ def _scan_candidates(
         if user_id in alerted:
             continue
 
-        # Calibration filter: skip only if BOTH personal AND collective are weak
+        # Edge gate: block pattern×timeframe combinations with negative calibration
+        # edge gap (stopped_out_rate >= hit_rate on average across the universe).
+        # Derived from 5.1M sample calibration dataset — see core/tiers.TIP_EDGE_GATE.
+        # fvg, order_block, ifvg 1d, breaker 1h all fail this gate structurally.
         ptype = row['pattern_type']
+        ptf   = row['timeframe']
+        from core.tiers import tip_pattern_tf_allowed
+        if not tip_pattern_tf_allowed(ptype, ptf):
+            _log.debug(
+                'TipScheduler: blocking %s %s %s — negative calibration edge gap',
+                row['ticker'], ptype, ptf,
+            )
+            continue
+
+        # Secondary: personal hit rate check (kept for per-user personalisation)
         personal_rate = personal_hit_rates.get(ptype)
         if personal_rate is not None and personal_rate < 0.40:
             try:
