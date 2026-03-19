@@ -75,14 +75,14 @@ def _read_kb_context(conn: sqlite3.Connection, ticker: str) -> Dict[str, str]:
     Read conviction, regime, and signal_direction atoms from the facts table
     for this ticker. Returns a dict with keys: conviction, regime, signal_dir.
     """
-    ctx: Dict[str, str] = {'conviction': '', 'regime': '', 'signal_dir': ''}
+    ctx: Dict[str, str] = {'conviction': '', 'regime': '', 'signal_dir': '', 'sector': ''}
     try:
         rows = conn.execute(
             """SELECT predicate, object FROM facts
                WHERE LOWER(subject) = LOWER(?)
                  AND predicate IN ('conviction_tier','signal_confidence','signal_direction',
                                    'market_regime','kb_conviction','price_regime',
-                                   'volatility_regime')
+                                   'volatility_regime','sector')
                ORDER BY created_at DESC""",
             (ticker,),
         ).fetchall()
@@ -93,6 +93,8 @@ def _read_kb_context(conn: sqlite3.Connection, ticker: str) -> Dict[str, str]:
                 ctx['regime'] = (value or '').lower()
             elif predicate == 'signal_direction' and not ctx['signal_dir']:
                 ctx['signal_dir'] = (value or '').lower()
+            elif predicate == 'sector' and not ctx['sector']:
+                ctx['sector'] = (value or '').lower()
     except Exception:
         pass
     return ctx
@@ -430,6 +432,7 @@ class PatternAdapter:
             kb_regime     = kb_ctx['regime'],
             kb_signal_dir = kb_ctx['signal_dir'],
             db_path       = self.db_path,
+            sector        = kb_ctx['sector'],
         )
 
         inserted = 0

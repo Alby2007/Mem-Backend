@@ -674,6 +674,17 @@ class BotRunner:
                 _fleet_ticker_count[r['ticker']] = r['cnt']
             _FLEET_MAX_PER_TICKER = 2  # no more than 2 bots long the same ticker simultaneously
 
+            # Pattern-level dedup: track which pattern_ids are already open anywhere
+            # in the fleet. Prevents multiple bots entering the same zone and inflating
+            # trade count (1 observation counted N times = false performance metrics).
+            _open_pattern_ids = {
+                r[0] for r in conn.execute(
+                    "SELECT DISTINCT pattern_id FROM paper_positions "
+                    "WHERE user_id=? AND status='open' AND pattern_id IS NOT NULL",
+                    (user_id,)
+                ).fetchall()
+            }
+
             # HARD GUARD: never open new positions with a negative balance.
             # A negative balance means more has been deducted than the bot ever had —
             # allowing further entries would compound the insolvency.
@@ -822,6 +833,20 @@ class BotRunner:
                         "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
                         (user_id, 'skip', ticker,
                          f'Fleet cap ({_FLEET_MAX_PER_TICKER}): {_fleet_ticker_count.get(ticker,0)} bots already hold {ticker}',
+                         bot_id, now_iso)
+                    )
+                    continue
+
+                # Pattern-level dedup: skip if this exact zone is already open anywhere
+                # in the fleet. One pattern = one independent observation. Multiple bots
+                # entering the same zone inflates trade count and concentrates risk.
+                _cand_pattern_id = c.get('id')
+                if _cand_pattern_id and _cand_pattern_id in _open_pattern_ids:
+                    skips += 1
+                    conn.execute(
+                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                        (user_id, 'skip', ticker,
+                         f'Pattern already open fleet-wide (id={_cand_pattern_id}) — dedup guard',
                          bot_id, now_iso)
                     )
                     continue
@@ -1090,6 +1115,8 @@ class BotRunner:
                 open_tickers.add(ticker)
                 open_slots_used += 1
                 _fleet_ticker_count[ticker] = _fleet_ticker_count.get(ticker, 0) + 1
+                if _cand_pattern_id:
+                    _open_pattern_ids.add(_cand_pattern_id)  # dedup subsequent bots this cycle
                 entries += 1
                 conn.execute(
                     "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",

@@ -168,6 +168,15 @@ def _kb_scores(
     return conv, regime, sig
 
 
+# Instrument classes where KB conviction/signal enrichment is structurally unavailable.
+# For these, the quality formula redistributes the conv+sig weights onto gap+recency
+# so strong technical zones aren't capped below the bot quality floor (0.75).
+_TECHNICAL_ONLY_SECTORS = frozenset({
+    'fx', 'metals', 'oil', 'commodities', 'futures', 'crypto',
+    'silver', 'gold', 'platinum', 'energy',
+})
+
+
 def _quality(
     pattern_type:  str,
     direction:     str,
@@ -179,19 +188,37 @@ def _quality(
     kb_conviction: str,
     kb_regime:     str,
     kb_signal_dir: str,
+    sector:        str = '',
 ) -> float:
-    """Compute composite quality score 0.0–1.0."""
-    conv, regime, sig = _kb_scores(kb_conviction, kb_regime, kb_signal_dir, direction)
-    gap   = _gap_score(zone_high, zone_low, atr_val)
-    rec   = _recency_score(candle_idx, total_candles)
+    """Compute composite quality score 0.0–1.0.
 
-    score = (
-        conv   * 0.25 +
-        regime * 0.20 +
-        sig    * 0.15 +
-        gap    * 0.25 +
-        rec    * 0.15
-    )
+    Standard equity formula (full KB enrichment available):
+      conv×0.25 | regime×0.20 | sig×0.15 | gap×0.25 | rec×0.15
+
+    Technical-only formula (FX, metals, commodities — no analyst KB):
+      gap×0.50 | rec×0.25 | regime×0.25
+    Redistributes conv+sig weights to gap+recency so strong FX/commodity
+    zones aren't penalised for missing analyst data that doesn't exist for them.
+    """
+    gap = _gap_score(zone_high, zone_low, atr_val)
+    rec = _recency_score(candle_idx, total_candles)
+
+    _sec = (sector or '').lower().strip()
+    if _sec in _TECHNICAL_ONLY_SECTORS:
+        # Technical-only formula: pure zone quality + recency, no KB components.
+        # 52w regime position (near_52w_high = bearish) is equity-centric and
+        # doesn't translate to FX/commodities — dropping it prevents systematic
+        # penalisation of FX zones that happen to be near yearly highs/lows.
+        score = gap * 0.65 + rec * 0.35
+    else:
+        conv, regime_s, sig = _kb_scores(kb_conviction, kb_regime, kb_signal_dir, direction)
+        score = (
+            conv    * 0.25 +
+            regime_s * 0.20 +
+            sig     * 0.15 +
+            gap     * 0.25 +
+            rec     * 0.15
+        )
     return round(min(max(score, 0.0), 1.0), 4)
 
 
@@ -223,7 +250,7 @@ def _detect_fvg(
             # Guard: reject zero/negative zones (e.g. .KS partial candle data)
             if zh > 0 and zl > 0 and zh > zl:
                 q = _quality('fvg', 'bullish', zh, zl, i, n, atr_val,
-                             kb_conviction, kb_regime, kb_signal_dir)
+                             kb_conviction, kb_regime, kb_signal_dir, sector=sector)
                 signals.append(PatternSignal(
                     pattern_type  = 'fvg',
                     ticker        = ticker,
@@ -248,7 +275,7 @@ def _detect_fvg(
             # Guard: reject zero/negative zones (e.g. .KS partial candle data)
             if zh > 0 and zl > 0 and zh > zl:
                 q = _quality('fvg', 'bearish', zh, zl, i, n, atr_val,
-                             kb_conviction, kb_regime, kb_signal_dir)
+                             kb_conviction, kb_regime, kb_signal_dir, sector=sector)
                 signals.append(PatternSignal(
                     pattern_type  = 'fvg',
                     ticker        = ticker,
@@ -406,7 +433,7 @@ def _detect_order_blocks(
             zl = curr.low
             if zh > zl:
                 q = _quality('order_block', 'bullish', zh, zl, i, n, atr_val,
-                             kb_conviction, kb_regime, kb_signal_dir)
+                             kb_conviction, kb_regime, kb_signal_dir, sector=sector)
                 signals.append(PatternSignal(
                     pattern_type  = 'order_block',
                     ticker        = ticker,
@@ -430,7 +457,7 @@ def _detect_order_blocks(
             zl = curr.low
             if zh > zl:
                 q = _quality('order_block', 'bearish', zh, zl, i, n, atr_val,
-                             kb_conviction, kb_regime, kb_signal_dir)
+                             kb_conviction, kb_regime, kb_signal_dir, sector=sector)
                 signals.append(PatternSignal(
                     pattern_type  = 'order_block',
                     ticker        = ticker,
@@ -538,7 +565,7 @@ def _detect_liquidity_voids(
             if zh <= zl or zl <= 0:
                 continue
             q = _quality('liquidity_void', direction, zh, zl, i, n, atr_val,
-                         kb_conviction, kb_regime, kb_signal_dir)
+                         kb_conviction, kb_regime, kb_signal_dir, sector=sector)
             signals.append(PatternSignal(
                 pattern_type  = 'liquidity_void',
                 ticker        = ticker,
@@ -618,7 +645,7 @@ def _detect_mitigation_blocks(
                     # Close must be inside the zone (not blow through)
                     if zl <= later.close <= zh:
                         q = _quality('mitigation', 'bullish', zh, zl, i, n, atr_val,
-                                     kb_conviction, kb_regime, kb_signal_dir)
+                                     kb_conviction, kb_regime, kb_signal_dir, sector=sector)
                         signals.append(PatternSignal(
                             pattern_type  = 'mitigation',
                             ticker        = ticker,
@@ -654,7 +681,7 @@ def _detect_mitigation_blocks(
                         continue
                     if zl <= later.close <= zh:
                         q = _quality('mitigation', 'bearish', zh, zl, i, n, atr_val,
-                                     kb_conviction, kb_regime, kb_signal_dir)
+                                     kb_conviction, kb_regime, kb_signal_dir, sector=sector)
                         signals.append(PatternSignal(
                             pattern_type  = 'mitigation',
                             ticker        = ticker,
@@ -686,6 +713,7 @@ def detect_all_patterns(
     kb_regime:     str  = '',
     kb_signal_dir: str  = '',
     db_path:       str  = '',
+    sector:        str  = '',
 ) -> List[PatternSignal]:
     """
     Run all 7 detectors in a single pass over `candles`.
@@ -698,6 +726,8 @@ def detect_all_patterns(
     kb_conviction  KB conviction atom for this ticker (optional).
     kb_regime      KB market_regime atom (optional).
     kb_signal_dir  KB signal_direction atom (optional).
+    sector         Sector label from KB (optional). Used to apply technical-only
+                   quality formula for FX/commodities that lack analyst enrichment.
 
     Returns
     -------
@@ -712,7 +742,7 @@ def detect_all_patterns(
 
     # ── FVG detection + status update ─────────────────────────────────────────
     raw_fvgs = _detect_fvg(candles, ticker, timeframe, atr_val,
-                           kb_conviction, kb_regime, kb_signal_dir)
+                           kb_conviction, kb_regime, kb_signal_dir, sector=sector)
     fvgs = _update_fvg_status(raw_fvgs, candles)
 
     # ── IFVG (from partially-filled FVGs) ─────────────────────────────────────
@@ -726,16 +756,16 @@ def detect_all_patterns(
 
     # ── Order Blocks + Breaker Blocks ─────────────────────────────────────────
     raw_obs = _detect_order_blocks(candles, ticker, timeframe, avg_body_val, atr_val,
-                                   kb_conviction, kb_regime, kb_signal_dir)
+                                   kb_conviction, kb_regime, kb_signal_dir, sector=sector)
     obs, breakers = _update_ob_status(raw_obs, candles)
 
     # ── Liquidity Voids ───────────────────────────────────────────────────────
     lv_signals = _detect_liquidity_voids(candles, ticker, timeframe, avg_body_val, atr_val,
-                                         kb_conviction, kb_regime, kb_signal_dir)
+                                         kb_conviction, kb_regime, kb_signal_dir, sector=sector)
 
     # ── Mitigation Blocks ─────────────────────────────────────────────────────
     mit_signals = _detect_mitigation_blocks(candles, ticker, timeframe, avg_body_val, atr_val,
-                                            kb_conviction, kb_regime, kb_signal_dir)
+                                            kb_conviction, kb_regime, kb_signal_dir, sector=sector)
 
     # ── Combine, filter filled, sort ──────────────────────────────────────────
     # Exclude parent FVGs that were promoted to IFVGs (duplicate zone coverage)
