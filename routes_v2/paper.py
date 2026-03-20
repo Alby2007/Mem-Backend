@@ -574,3 +574,76 @@ async def paper_agent_log_export(user_id: str, _: str = Depends(user_path_auth))
         )
     except Exception as e:
         raise HTTPException(500, detail=str(e))
+
+
+# ── Notifications endpoint (FORGE polling) ─────────────────────────────────
+@router.get("/users/{user_id}/notifications/pending")
+async def notifications_pending(
+    user_id: str,
+    since: str = None,
+    _: str = Depends(user_path_auth),
+):
+    """
+    Return pending in-app notifications for FORGE polling.
+    Surfaces trade events: entries, t1/t2 hits, stops, signal discoveries.
+    ?since=ISO8601 — only return events after this timestamp.
+    """
+    import sqlite3 as _sq
+    from datetime import datetime, timezone, timedelta
+
+    db = _sq.connect(ext.DB_PATH, timeout=10)
+    db.row_factory = _sq.Row
+
+    # Default: last 24h if no since provided
+    since_ts = since or (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+
+    try:
+        rows = db.execute(
+            """SELECT pal.event_type, pal.ticker, pal.detail, pal.created_at,
+                      ps.pattern_type, ps.timeframe, ps.direction,
+                      ROUND(pp.pnl_r, 2) as pnl_r, pp.status
+               FROM paper_agent_log pal
+               LEFT JOIN paper_positions pp ON pp.bot_id = pal.bot_id
+                 AND LOWER(pp.status) = LOWER(pal.event_type)
+                 AND LOWER(ps2.ticker) = LOWER(pal.ticker)
+               LEFT JOIN pattern_signals ps ON ps.id = pp.pattern_id
+               LEFT JOIN pattern_signals ps2 ON ps2.id = pp.pattern_id
+               WHERE pal.user_id = ?
+                 AND pal.event_type IN ('entry','t1_hit','t2_hit','stopped_out','t1_hit_partial')
+                 AND pal.created_at > ?
+               ORDER BY pal.created_at DESC
+               LIMIT 50""",
+            (user_id, since_ts),
+        ).fetchall()
+
+        notifications = []
+        seen = set()
+        for r in rows:
+            key = f"{r['event_type']}:{r['ticker']}:{r['created_at']}"
+            if key in seen:
+                continue
+            seen.add(key)
+            notifications.append({
+                'type': r['event_type'],
+                'ticker': r['ticker'],
+                'detail': r['detail'],
+                'created_at': r['created_at'],
+                'pattern_type': r['pattern_type'],
+                'timeframe': r['timeframe'],
+                'direction': r['direction'],
+                'pnl_r': r['pnl_r'],
+            })
+
+        db.close()
+        return {'notifications': notifications, 'count': len(notifications)}
+
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, detail=str(e))
+
+
+# ── Stress-sim alias (FORGE uses /users/{user_id}/paper/stress) ─────────────
+@router.get("/users/{user_id}/paper/stress")
+async def paper_stress_alias(user_id: str, _: str = Depends(user_path_auth)):
+    """Alias for /users/{user_id}/paper/stress-sim — FORGE compatibility."""
+    return await paper_stress_sim(user_id, _)
