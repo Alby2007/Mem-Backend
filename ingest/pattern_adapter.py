@@ -113,7 +113,7 @@ def _read_ohlcv_cache(db_path: str, ticker: str) -> List[OHLCV]:
         rows = conn.execute(
             """SELECT ts, open, high, low, close, volume
                FROM ohlcv_cache
-               WHERE ticker=? AND interval='1d'
+               WHERE UPPER(ticker)=UPPER(?) AND interval='1d'
                ORDER BY ts ASC""",
             (ticker,),
         ).fetchall()
@@ -365,7 +365,8 @@ class PatternAdapter:
             rows = conn.execute(
                 "SELECT DISTINCT subject FROM facts WHERE predicate='last_price' ORDER BY subject"
             ).fetchall()
-            return [r[0] for r in rows if r[0] and len(r[0]) <= 10]
+            # Uppercase to match ohlcv_cache and universe_tickers which store uppercase
+            return [r[0].upper() for r in rows if r[0] and len(r[0]) <= 10]
         except Exception:
             return []
 
