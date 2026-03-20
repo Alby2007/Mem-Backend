@@ -801,6 +801,90 @@ class _ExchangeEdgeSensor:
         return findings
 
 
+# ── Sensor 7: RegimeSplitEdgeSensor ─────────────────────────────────────────────
+class _RegimeSplitEdgeSensor:
+    """
+    Finds edges hidden by regime mixing in aggregate calibration.
+    An edge is 'hidden' when NULL-regime HR >> aggregate HR because bad regime
+    cells (risk_on_expansion HR=14-24%) mask the true edge.
+
+    Discovery example: SPY/QQQ liq_void 1d — aggregate HR=55% (missed by EdgeMiner),
+    NULL-regime HR=74-99% (the actual edge). Only visible by splitting on market_regime.
+
+    Fires when:
+      - null_regime_hr >= 0.65
+      - null_regime_n >= 200
+      - hr_lift >= 0.15 (null beats aggregate by at least 15pp)
+      - not already covered
+
+    Severity:
+      - 'high'   if null_regime_hr >= 0.80 and null_regime_n >= 400
+      - 'medium' otherwise
+    """
+
+    def scan(self, conn: sqlite3.Connection) -> list[Finding]:
+        findings: list[Finding] = []
+        try:
+            db_file = None
+            for row in conn.execute("PRAGMA database_list"):
+                if row[1] == 'main':
+                    db_file = row[2]
+                    break
+            if not db_file:
+                return findings
+
+            from analytics.edge_miner import scan_regime_split_edges
+            candidates = scan_regime_split_edges(
+                min_null_hr=0.65,
+                min_null_n=200,
+                min_hr_lift=0.15,
+                db_path=db_file,
+            )
+        except Exception as e:
+            _log.warning('RegimeSplitEdgeSensor: scan failed: %s', e)
+            return findings
+
+        for c in candidates:
+            if c.already_covered:
+                continue
+
+            severity = 'high' if (c.null_regime_hr >= 0.80 and c.null_regime_n >= 400) \
+                       else 'medium'
+
+            findings.append(Finding(
+                sensor='regime_split_edge',
+                severity=severity,
+                subject=f'{c.ticker}/{c.pattern_type}/{c.timeframe}',
+                description=(
+                    f'Hidden edge: {c.ticker} {c.pattern_type} {c.timeframe} '
+                    f'NULL-regime HR={c.null_regime_hr:.1%} (n={c.null_regime_n}) '
+                    f'vs aggregate HR={c.aggregate_hr:.1%}. '
+                    f'Lift={c.hr_lift:+.1%}. Hidden by bad-regime cell mixing.'
+                ),
+                action_type='create_bot',
+                action_params={
+                    'ticker':          c.ticker,
+                    'pattern_type':    c.pattern_type,
+                    'timeframe':       c.timeframe,
+                    'sector':          c.sector,
+                    'null_regime_hr':  c.null_regime_hr,
+                    'note': 'Regime-split hidden edge — only trade in non-expansion regimes',
+                },
+                auto_eligible=False,
+                evidence={
+                    'ticker':         c.ticker,
+                    'pattern_type':   c.pattern_type,
+                    'timeframe':      c.timeframe,
+                    'null_regime_hr': c.null_regime_hr,
+                    'null_regime_n':  c.null_regime_n,
+                    'aggregate_hr':   c.aggregate_hr,
+                    'hr_lift':        c.hr_lift,
+                },
+            ))
+
+        return findings
+
+
 # ── Main engine ─────────────────────────────────────────────────────────────────
 class ObservatoryEngine:
     def __init__(self, db_path: str):
@@ -812,6 +896,7 @@ class ObservatoryEngine:
             _DeliverySensor(),
             _EdgeCoverageSensor(),
             _ExchangeEdgeSensor(),
+            _RegimeSplitEdgeSensor(),
         ]
 
     # ── Public entry point ─────────────────────────────────────────────────────

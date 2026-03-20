@@ -921,7 +921,6 @@ class BotRunner:
                 # SPY/QQQ/HYG/TLT liq_void 1d: HR=73-93% in NULL/correction regimes
                 # but HR=10-24% in risk_on_expansion and recovery (bad regimes mask edge).
                 # Skip these patterns when global regime is expansion or recovery.
-                _cand_sector = (c.get('kb_signal_dir') or '')  # repurposed field check
                 _pat_sector = ''
                 try:
                     _sect_row = conn.execute(
@@ -945,6 +944,45 @@ class BotRunner:
                             "VALUES (?,?,?,?,?,?)",
                             (user_id, 'skip', ticker,
                              f'ETF liq_void 1d blocked: regime={regime} (edge only in corrections)',
+                             bot_id, now_iso)
+                        )
+                        continue
+
+                # Open-hour kill zone: block BULLISH 4h/1d entries during LSE/NYSE open spike.
+                # 07–09 UTC = LSE open volatility window. Bullish 4h+ patterns hit false breakouts
+                # and get stopped immediately. Data: WR=20-36% on 50+ trades at this hour.
+                # Bearish patterns exempt — they trade WITH the opening dump, not against it.
+                # Short-TF (15m/1h) exempt — microstructure fills are hour-agnostic.
+                import datetime as _dt
+                _now_utc = _dt.datetime.utcnow()
+                _cand_tf_entry = (c.get('timeframe') or '').lower()
+                if (_now_utc.hour in (7, 8, 9)
+                        and direction == 'bullish'
+                        and _cand_tf_entry in ('4h', '1d')):
+                    skips += 1
+                    conn.execute(
+                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                        (user_id, 'skip', ticker,
+                         f'Open-hour kill zone: bullish {_cand_tf_entry} blocked at {_now_utc.hour:02d}:xx UTC (07-09 LSE open, WR=20-36%)',
+                         bot_id, now_iso)
+                    )
+                    continue
+
+                # Mitigation 1d regime gate.
+                # In risk_on_expansion and recovery, daily mitigation zones get blown through
+                # (price is in a bull trend; zone doesn't provide structural support).
+                # Data: risk_on_expansion HR=38.2% gap=−6.4%, recovery HR=38.3% gap=−8.5%.
+                # Profitable only in risk_off_contraction / correction / null-regime.
+                # Note: risk_on_correction is NOT blocked — corrections are the right time.
+                if ((c.get('pattern_type') or '') == 'mitigation'
+                        and _cand_tf_entry == '1d'):
+                    _bad_mit_regimes = ('risk_on_expansion', 'recovery')
+                    if any(r in (_market_regime or '') for r in _bad_mit_regimes):
+                        skips += 1
+                        conn.execute(
+                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
+                            (user_id, 'skip', ticker,
+                             f'Mitigation 1d blocked: regime={_market_regime} (edge only in risk_off/correction)',
                              bot_id, now_iso)
                         )
                         continue
@@ -1100,6 +1138,28 @@ class BotRunner:
 
                 # Fix 3: apply regime size multiplier on top of calibration multiplier
                 size_mult *= _regime_size_mult
+
+                # T2 run-through bonus: tickers where calibration shows T2/T1 >= 0.95 and
+                # HR >= 70% are fundamentally higher-EV (price runs the full 2R every time).
+                # 1.25× size justified by: BATS.L EV=+1.66R, USDJPY EV=+1.64R, CL=F EV=+1.8R.
+                # Only applies when no other bot already holds the ticker (fleet concentration
+                # check already passed above), keeping fleet risk within bounds.
+                _t2_multiplier = 1.0
+                try:
+                    _t2_cal = get_calibration(
+                        ticker=ticker,
+                        pattern_type=(c.get('pattern_type') or ''),
+                        timeframe=(c.get('timeframe') or '4h'),
+                        db_path=self.db_path,
+                    )
+                    if (_t2_cal and _t2_cal.hit_rate_t2 and _t2_cal.hit_rate_t1
+                            and _t2_cal.hit_rate_t1 > 0
+                            and _t2_cal.hit_rate_t2 / _t2_cal.hit_rate_t1 >= 0.95
+                            and _t2_cal.hit_rate_t1 >= 0.70):
+                        _t2_multiplier = 1.25
+                except Exception:
+                    pass
+                size_mult *= _t2_multiplier
 
                 eff_risk  = risk_per_trade * size_mult
                 qty = min(eff_risk / risk, (max_pos_value * size_mult) / entry_p)

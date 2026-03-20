@@ -299,6 +299,192 @@ def scan_exchange_edges(
     return candidates
 
 
+@dataclass
+class RegimeSplitCandidate:
+    ticker:          str
+    pattern_type:    str
+    timeframe:       str
+    sector:          str
+    null_regime_hr:  float
+    null_regime_n:   int
+    aggregate_hr:    float
+    aggregate_n:     int
+    hr_lift:         float
+    already_covered: bool
+
+
+def _covered_ticker_cells(conn: sqlite3.Connection) -> set[tuple[str, str, str]]:
+    """Return set of (ticker, pattern_type, timeframe) covered by active bots at ticker level."""
+    covered: set[tuple[str, str, str]] = set()
+    try:
+        rows = conn.execute(
+            "SELECT pattern_types, timeframes FROM paper_bot_configs "
+            "WHERE active=1 AND killed_at IS NULL"
+        ).fetchall()
+    except Exception:
+        return covered
+
+    for (pt_json, tf_json) in rows:
+        try:
+            patterns = json.loads(pt_json or '[]') or []
+        except Exception:
+            patterns = []
+        try:
+            timeframes = json.loads(tf_json or '[]') or []
+        except Exception:
+            timeframes = []
+        for pt in patterns:
+            for tf in (timeframes or ['']):
+                covered.add(('*', pt.lower(), tf.lower()))
+    return covered
+
+
+def scan_regime_split_edges(
+    min_null_hr: float = 0.65,
+    min_null_n: int = 200,
+    min_hr_lift: float = 0.15,
+    db_path: str = DB_PATH,
+) -> list[RegimeSplitCandidate]:
+    """
+    Find edges hidden by regime mixing in aggregate calibration.
+    An edge is 'hidden' when the NULL-regime cell HR >> aggregate HR because
+    bad-regime cells (e.g. risk_on_expansion HR=14-24%) drag the average below
+    the EdgeMiner threshold.
+
+    Discovery: SPY/QQQ liq_void 1d — aggregate HR=55% (missed by scan_calibration_edges),
+    NULL-regime HR=74-99% (the real edge). Only visible by splitting on market_regime.
+
+    Returns candidates sorted by null_regime_hr desc.
+    """
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+
+        # NULL-regime cells: rows where market_regime IS NULL
+        null_rows = conn.execute(
+            """SELECT ticker, LOWER(pattern_type), timeframe, sector,
+                      hit_rate_t1, sample_size
+               FROM signal_calibration
+               WHERE market_regime IS NULL
+                 AND direction IS NULL
+                 AND hit_rate_t1 IS NOT NULL
+                 AND sample_size >= ?
+               ORDER BY hit_rate_t1 DESC""",
+            (min_null_n,),
+        ).fetchall()
+
+        # Aggregate HR per (ticker, pattern_type, timeframe): all regime cells combined
+        agg_rows = conn.execute(
+            """SELECT ticker, LOWER(pattern_type), timeframe,
+                      SUM(hit_rate_t1 * sample_size) / SUM(sample_size) AS wtd_hr,
+                      SUM(sample_size) AS total_n
+               FROM signal_calibration
+               WHERE hit_rate_t1 IS NOT NULL
+                 AND direction IS NULL
+               GROUP BY ticker, LOWER(pattern_type), timeframe
+               HAVING total_n >= 50""",
+        ).fetchall()
+
+        covered = _covered_ticker_cells(conn)
+        conn.close()
+    except Exception as e:
+        _log.error('edge_miner: regime split scan failed: %s', e)
+        return []
+
+    # Build aggregate lookup
+    agg_lookup: dict[tuple[str, str, str], tuple[float, int]] = {}
+    for (ticker, pt, tf, wtd_hr, total_n) in agg_rows:
+        agg_lookup[(ticker.upper(), pt, tf or '')] = (float(wtd_hr), int(total_n))
+
+    candidates: list[RegimeSplitCandidate] = []
+    for (ticker, pt, tf, sector, null_hr, null_n) in null_rows:
+        key = (ticker.upper(), pt, tf or '')
+        if key not in agg_lookup:
+            continue
+        agg_hr, agg_n = agg_lookup[key]
+        lift = float(null_hr) - agg_hr
+        if lift < min_hr_lift:
+            continue
+
+        # already_covered if a pattern+tf-matching bot exists (wildcard ticker check)
+        already_covered = ('*', pt, (tf or '').lower()) in covered
+
+        candidates.append(RegimeSplitCandidate(
+            ticker=ticker.upper(),
+            pattern_type=pt,
+            timeframe=tf or '',
+            sector=sector or '',
+            null_regime_hr=round(float(null_hr), 4),
+            null_regime_n=int(null_n),
+            aggregate_hr=round(agg_hr, 4),
+            aggregate_n=agg_n,
+            hr_lift=round(lift, 4),
+            already_covered=already_covered,
+        ))
+
+    candidates.sort(key=lambda c: c.null_regime_hr, reverse=True)
+    return candidates
+
+
+def scan_all_edges(
+    min_hr: float = 0.55,
+    min_samples: int = 2000,
+    min_tickers: int = 2,
+    include_regime_split: bool = True,
+    db_path: str = DB_PATH,
+) -> dict:
+    """
+    Combined scan: sector-aggregate edges + regime-split hidden edges.
+    Returns a unified dict ranked by effective_hr descending.
+    This is the single endpoint Observatory, FORGE, and tip scheduler should call.
+    """
+    sector_edges = scan_calibration_edges(
+        min_hr=min_hr, min_samples=min_samples, min_tickers=min_tickers, db_path=db_path
+    )
+
+    regime_split_edges: list[RegimeSplitCandidate] = []
+    if include_regime_split:
+        regime_split_edges = scan_regime_split_edges(db_path=db_path)
+
+    # Build unified ranked list
+    all_ranked: list[dict] = []
+    for c in sector_edges:
+        all_ranked.append({
+            'type':            'sector_aggregate',
+            'subject':         f"{c.sector}/{c.pattern_type}/{c.timeframe}",
+            'sector':          c.sector,
+            'pattern_type':    c.pattern_type,
+            'timeframe':       c.timeframe,
+            'effective_hr':    c.avg_hr,
+            'samples':         c.samples,
+            'tickers':         c.tickers,
+            'already_covered': c.already_covered,
+            'genome':          c.genome,
+        })
+    for c in regime_split_edges:
+        all_ranked.append({
+            'type':            'regime_split_hidden',
+            'subject':         f"{c.ticker}/{c.pattern_type}/{c.timeframe}",
+            'ticker':          c.ticker,
+            'pattern_type':    c.pattern_type,
+            'timeframe':       c.timeframe,
+            'effective_hr':    c.null_regime_hr,
+            'null_regime_hr':  c.null_regime_hr,
+            'null_regime_n':   c.null_regime_n,
+            'aggregate_hr':    c.aggregate_hr,
+            'hr_lift':         c.hr_lift,
+            'already_covered': c.already_covered,
+        })
+
+    all_ranked.sort(key=lambda x: x['effective_hr'], reverse=True)
+    return {
+        'sector_edges':        [dict(s) for s in all_ranked if s['type'] == 'sector_aggregate'],
+        'regime_split_edges':  [dict(s) for s in all_ranked if s['type'] == 'regime_split_hidden'],
+        'all_ranked':          all_ranked,
+        'total':               len(all_ranked),
+        'uncovered_count':     sum(1 for e in all_ranked if not e['already_covered']),
+    }
+
+
 def edge_miner_summary(
     min_hr: float = 0.60,
     min_samples: int = 2000,

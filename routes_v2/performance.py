@@ -395,18 +395,265 @@ async def regime_split_scan(
         "params": {"min_null_hr": min_null_hr, "min_null_n": min_null_n, "min_hr_lift": min_hr_lift},
         "candidates": [
             {
-                "ticker":         c.ticker,
-                "pattern_type":   c.pattern_type,
-                "timeframe":      c.timeframe,
-                "sector":         c.sector,
-                "null_regime_hr": c.null_regime_hr,
-                "null_regime_n":  c.null_regime_n,
-                "null_regime_stop": c.null_regime_stop,
-                "aggregate_hr":   c.aggregate_hr,
-                "hr_lift":        c.hr_lift,
+                "ticker":          c.ticker,
+                "pattern_type":    c.pattern_type,
+                "timeframe":       c.timeframe,
+                "sector":          c.sector,
+                "null_regime_hr":  c.null_regime_hr,
+                "null_regime_n":   c.null_regime_n,
+                "aggregate_hr":    c.aggregate_hr,
+                "hr_lift":         c.hr_lift,
                 "already_covered": c.already_covered,
             }
             for c in candidates
         ],
     }
 
+
+# ── GET /mcp/tools/performance/direction_split ────────────────────────────────
+
+@router.get("/mcp/tools/performance/direction_split")
+async def mcp_direction_split(
+    pattern_type: Optional[str] = Query(None),
+    timeframe: Optional[str] = Query(None),
+    min_n: int = Query(10, ge=1),
+    _: str = Depends(get_current_user),
+):
+    """
+    Cross-join paper_positions direction data with aggregate calibration HR to surface
+    directional calibration splits.
+
+    Surfaces findings like: 'liq_void 15m bullish: live WR=25% despite 56% calibration'
+    which reveals the aggregate is masking a bearish-only edge.
+
+    verdict values:
+    - LIVE_BEATS_CAL: live WR significantly exceeds calibration
+    - CAL_BEATS_LIVE: calibration HR >> live WR (haven't traded enough yet)
+    - BOTH_STRONG:    both above 60%
+    - BOTH_WEAK:      both below 45%
+    - DIRECTIONAL_MISMATCH: calibration undifferentiated but live data shows direction matters
+    """
+    conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+    try:
+        where_clauses = []
+        params: list = []
+        if pattern_type:
+            where_clauses.append("LOWER(ps.pattern_type) = LOWER(?)")
+            params.append(pattern_type)
+        if timeframe:
+            where_clauses.append("ps.timeframe = ?")
+            params.append(timeframe)
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+        # Group paper_positions by (pattern_type, direction, timeframe) via pattern_signals join
+        pos_rows = conn.execute(
+            f"""SELECT
+                   LOWER(ps.pattern_type) AS pattern_type,
+                   LOWER(pp.direction)    AS direction,
+                   ps.timeframe,
+                   COUNT(*)               AS live_n,
+                   SUM(CASE WHEN pp.status IN ('t1_hit','t2_hit') THEN 1
+                            WHEN pp.pnl_r > 0 THEN 1 ELSE 0 END) AS wins,
+                   AVG(pp.pnl_r)          AS avg_r
+               FROM paper_positions pp
+               JOIN pattern_signals ps ON pp.pattern_id = ps.id
+               {where_sql}
+               GROUP BY LOWER(ps.pattern_type), LOWER(pp.direction), ps.timeframe
+               HAVING live_n >= ?
+               ORDER BY live_n DESC""",
+            params + [min_n],
+        ).fetchall()
+
+        # Pull aggregate calibration HRs for these pattern+tf combos
+        cal_rows = conn.execute(
+            """SELECT LOWER(pattern_type), timeframe,
+                      SUM(hit_rate_t1 * sample_size) / SUM(sample_size) AS wtd_hr
+               FROM signal_calibration
+               WHERE hit_rate_t1 IS NOT NULL AND direction IS NULL
+               GROUP BY LOWER(pattern_type), timeframe"""
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        conn.close()
+        raise HTTPException(500, detail=str(e))
+
+    cal_lookup: dict[tuple[str, str], float] = {
+        (pt, tf): float(hr) for (pt, tf, hr) in cal_rows
+    }
+
+    def _z(wins: int, n: int, prior: float = 0.50) -> float:
+        if n < 1:
+            return 0.0
+        wr = wins / n
+        se = math.sqrt(prior * (1 - prior) / n)
+        return round((wr - prior) / se, 3) if se > 0 else 0.0
+
+    def _verdict(live_wr: float, cal_hr: Optional[float]) -> str:
+        if cal_hr is None:
+            return 'NO_CALIBRATION'
+        diff = live_wr - cal_hr
+        if live_wr >= 0.60 and cal_hr >= 0.60:
+            return 'BOTH_STRONG'
+        if live_wr < 0.45 and cal_hr < 0.45:
+            return 'BOTH_WEAK'
+        if diff >= 0.10:
+            return 'LIVE_BEATS_CAL'
+        if diff <= -0.10:
+            return 'CAL_BEATS_LIVE'
+        return 'DIRECTIONAL_MISMATCH'
+
+    groups = []
+    for (pt, direction, tf, live_n, wins, avg_r) in pos_rows:
+        wins = wins or 0
+        live_wr = round(wins / live_n, 4) if live_n else 0.0
+        z = _z(wins, live_n)
+        cal_hr = cal_lookup.get((pt, tf or ''))
+        divergence = round(live_wr - cal_hr, 4) if cal_hr is not None else None
+        groups.append({
+            'pattern_type':   pt,
+            'direction':      direction,
+            'timeframe':      tf,
+            'live_n':         live_n,
+            'live_wr':        live_wr,
+            'live_avg_r':     round(float(avg_r or 0), 3),
+            'z_score':        z,
+            'calibration_hr': round(cal_hr, 4) if cal_hr is not None else None,
+            'divergence':     divergence,
+            'verdict':        _verdict(live_wr, cal_hr),
+            'edge_confirmed': z >= 1.65 and live_n >= 10,
+        })
+
+    groups.sort(key=lambda g: g['live_wr'], reverse=True)
+    return {
+        'groups':          groups,
+        'total_groups':    len(groups),
+        'confirmed_edges': [g for g in groups if g['edge_confirmed']],
+    }
+
+
+# ── POST /mcp/tools/calibration/backfill_direction ───────────────────────────
+
+@router.post("/mcp/tools/calibration/backfill_direction")
+async def mcp_backfill_direction(
+    min_n: int = Query(5, ge=1),
+    _: str = Depends(get_current_user),
+):
+    """
+    Backfill directional calibration cells from paper_positions outcome data.
+
+    For each (ticker, pattern_type, timeframe) group with n >= min_n real trades
+    split by direction, inserts NEW directional rows alongside existing NULL-direction
+    rows using the partial unique index (direction IS NOT NULL).
+
+    Run once after direction column is deployed. Will immediately populate directional
+    cells for IFVG bearish (57 trades at 87.7% WR), revealing the true directional
+    calibration the aggregate was hiding.
+    """
+    try:
+        conn = sqlite3.connect(ext.DB_PATH, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        inserted = _backfill_direction_cells(conn, min_n=min_n)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    return {'status': 'ok', 'rows_inserted_or_updated': inserted}
+
+
+def _backfill_direction_cells(conn: sqlite3.Connection, min_n: int = 5) -> int:
+    """
+    For each (ticker, pattern_type, timeframe, direction) group with n >= min_n trades
+    in paper_positions (joined to pattern_signals), insert/update directional calibration
+    cells using observed WR as hit_rate_t1 proxy.
+
+    Creates NEW directional rows alongside existing NULL-direction rows via the
+    partial unique index. Does not modify historical NULL cells.
+    """
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    rows = conn.execute(
+        """SELECT
+               UPPER(pp.ticker)       AS ticker,
+               LOWER(ps.pattern_type) AS pattern_type,
+               ps.timeframe,
+               LOWER(pp.direction)    AS direction,
+               COUNT(*)               AS n,
+               SUM(CASE WHEN pp.status IN ('t1_hit','t2_hit') THEN 1
+                        WHEN pp.pnl_r > 0 THEN 1 ELSE 0 END) AS wins,
+               SUM(CASE WHEN pp.status = 'stopped_out' THEN 1
+                        WHEN pp.pnl_r < 0 THEN 1 ELSE 0 END) AS stops,
+               AVG(pp.pnl_r)                                  AS avg_r
+           FROM paper_positions pp
+           JOIN pattern_signals ps ON pp.pattern_id = ps.id
+           WHERE pp.status NOT IN ('open', 'pending')
+             AND pp.direction IS NOT NULL
+             AND ps.pattern_type IS NOT NULL
+           GROUP BY UPPER(pp.ticker), LOWER(ps.pattern_type), ps.timeframe, LOWER(pp.direction)
+           HAVING n >= ?
+           ORDER BY n DESC""",
+        (min_n,),
+    ).fetchall()
+
+    inserted = 0
+    for (ticker, pt, tf, direction, n, wins, stops, avg_r) in rows:
+        wins  = wins  or 0
+        stops = stops or 0
+        hr1   = round(wins / n, 4)
+        sor   = round(stops / n, 4)
+        conf  = min(1.0, round(n / 100.0, 4))
+
+        try:
+            conn.execute(
+                """INSERT INTO signal_calibration
+                   (ticker, pattern_type, timeframe, market_regime, direction,
+                    sample_size, hit_rate_t1, stopped_out_rate,
+                    calibration_confidence, last_updated)
+                   VALUES (?,?,?,NULL,?,?,?,?,?,?)
+                   ON CONFLICT(ticker, pattern_type, timeframe, market_regime, direction)
+                   WHERE direction IS NOT NULL
+                   DO UPDATE SET
+                     sample_size=excluded.sample_size,
+                     hit_rate_t1=excluded.hit_rate_t1,
+                     stopped_out_rate=excluded.stopped_out_rate,
+                     calibration_confidence=excluded.calibration_confidence,
+                     last_updated=excluded.last_updated""",
+                (ticker, pt, tf, direction, n, hr1, sor, conf, now_iso),
+            )
+            inserted += 1
+        except Exception:
+            pass
+
+    return inserted
+
+
+# ── GET /mcp/tools/edge_miner/full_scan ───────────────────────────────────────
+
+@router.get("/mcp/tools/edge_miner/full_scan")
+async def mcp_full_scan(
+    min_hr: float = Query(0.55, ge=0.30, le=1.0),
+    min_samples: int = Query(2000, ge=100),
+    min_tickers: int = Query(2, ge=1),
+    include_regime_split: bool = Query(True),
+    _: str = Depends(get_current_user),
+):
+    """
+    Combined EdgeMiner scan: sector-aggregate edges + regime-split hidden edges.
+    Unified ranking by effective_hr descending.
+    This is the canonical endpoint for Observatory, FORGE screen, and tip scheduler.
+    """
+    try:
+        from analytics.edge_miner import scan_all_edges
+        result = scan_all_edges(
+            min_hr=min_hr,
+            min_samples=min_samples,
+            min_tickers=min_tickers,
+            include_regime_split=include_regime_split,
+            db_path=ext.DB_PATH,
+        )
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+    return result
+>>>>>>> 138b027 (feat: edge cultivation v3 — kill zone, mit gate, regime quality penalty, regime-split EdgeMiner, T2 multiplier, direction_split endpoint, 5m OHLCV, backfill, full_scan)

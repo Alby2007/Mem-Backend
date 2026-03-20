@@ -56,6 +56,7 @@ from users.user_store import (
 # ── Timeframe → yfinance interval + period mapping ────────────────────────────
 
 _TF_MAP = {
+    '5m':  {'interval': '5m',  'period': '5d'},
     '15m': {'interval': '15m', 'period': '5d'},
     '1h':  {'interval': '1h',  'period': '30d'},
     '4h':  {'interval': '1h',  'period': '60d'},   # yf has no 4h; use 1h and resample
@@ -63,7 +64,7 @@ _TF_MAP = {
 }
 
 # Default timeframes run by the adapter
-_DEFAULT_TIMEFRAMES = ['15m', '1h', '4h', '1d']
+_DEFAULT_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d']
 
 _TTL_BY_TIMEFRAME = {'5m': 2, '15m': 5, '1h': 14, '4h': 21, '1d': 60}  # days
 
