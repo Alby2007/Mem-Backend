@@ -260,20 +260,31 @@ def _quality(
         )
     boost = _PATTERN_BOOSTS.get(pattern_type, {}).get(timeframe, 0.0)
 
-    # Zone age modifier — pattern age at detection relative to candle window.
+    # Zone age + IFVG width modifier (combined into _age_boost)
+    # Age data: IFVG day-0 WR=52.6% vs day3-7 WR=79.2% — penalise fresh zones
+    # Width data: IFVG 2.0-2.5% WR=97.2% | <1.5% noisy | >3.5% WR=44%
     # IFVG: fresh zones (day 0) WR=52.6% vs day 3-7 WR=79.2% → penalise new IFVG entries.
     # Breaker: zones decay after day 5 (WR=15.4% at 3-7d) → penalise stale breakers.
     # Order_block: old zones perform best (>7d WR=77.8%) → reward aged OBs.
     # Data: live trade analysis, 182 trades across pattern×age buckets.
     _age_boost = 0.0
+    # IFVG zone width: 2.0-2.5% is sweet spot (WR=97.2%), tiny or huge is bad
+    if pattern_type == 'ifvg' and zone_low > 0:
+        _zsp = (zone_high - zone_low) / zone_low * 100
+        if _zsp < 1.5:
+            _age_boost -= 0.15   # tiny IFVG — noise, WR collapses
+        elif _zsp <= 2.5:
+            _age_boost += 0.10   # sweet spot — WR=97.2%
+        elif _zsp > 3.5:
+            _age_boost -= 0.15   # oversized IFVG — WR=44%, erratic
     if total_candles > 0:
         _age_frac = candle_idx / total_candles   # 0 = fresh, 1 = near-expiry
         if pattern_type == 'ifvg' and _age_frac < 0.10:
-            _age_boost = -0.15   # same-day IFVG: WR=52.6%, penalise
+            _age_boost -= 0.15   # same-day IFVG: WR=52.6%, penalise
         elif pattern_type == 'breaker' and _age_frac > 0.60:
-            _age_boost = -0.15   # stale breaker (>60% of window): decays badly
+            _age_boost -= 0.15   # stale breaker decays badly
         elif pattern_type == 'order_block' and _age_frac > 0.50:
-            _age_boost = +0.10   # aged OB confirms level validity
+            _age_boost += 0.10   # aged OB confirms level validity
 
     # Regime conditioning: penalise bullish setups in risk_on regimes.
     # In a correction/expansion, 'near_52w_low + bullish' is a falling knife.
