@@ -41,18 +41,21 @@ PG_TABLES = frozenset({
     "paper_bot_equity",
 })
 
-HAS_POSTGRES = bool(PG_DSN)
-
 # ── Postgres connection pool ─────────────────────────────────────────────────
-_pg_pool = None  # type: ignore
+_pg_pool = None   # type: ignore
+_pg_checked = False  # True once we've attempted pool init
 
 def _init_pool():
-    """Initialise the threaded connection pool. Called once at startup."""
-    global _pg_pool, HAS_POSTGRES
+    """Initialise the threaded connection pool. Called once lazily."""
+    global _pg_pool, _pg_checked, PG_DSN
     if _pg_pool is not None:
         return _pg_pool
+    if _pg_checked:
+        return None
+    _pg_checked = True
+    # Re-read from env — load_dotenv() may have run after initial import
+    PG_DSN = os.environ.get("PG_DSN", "") or PG_DSN
     if not PG_DSN:
-        HAS_POSTGRES = False
         return None
     try:
         import psycopg2
@@ -64,13 +67,27 @@ def _init_pool():
             dsn=PG_DSN,
             cursor_factory=psycopg2.extras.RealDictCursor,
         )
-        HAS_POSTGRES = True
-        _log.info("PostgreSQL pool initialised (%s)", PG_DSN.split("@")[-1] if "@" in PG_DSN else "local")
+        _log.warning("PostgreSQL pool initialised (%s)", PG_DSN.split("@")[-1] if "@" in PG_DSN else "local")
         return _pg_pool
     except Exception as exc:
         _log.warning("PostgreSQL pool failed: %s — falling back to SQLite", exc)
-        HAS_POSTGRES = False
         return None
+
+
+# HAS_POSTGRES is NOT a static bool — it's a module-level attribute that
+# callers import via `from db import HAS_POSTGRES`.  Because load_dotenv()
+# may run after import, we use __getattr__ so every access re-evaluates.
+# This means `from db import HAS_POSTGRES` in a function body will always
+# get the live value (Python re-runs the import statement each call).
+def __getattr__(name: str):
+    if name == "HAS_POSTGRES":
+        if _pg_pool is not None:
+            return True
+        if _pg_checked:
+            return False
+        # First access — try to init
+        return _init_pool() is not None
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @contextmanager
