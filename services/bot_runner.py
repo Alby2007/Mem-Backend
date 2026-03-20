@@ -1067,6 +1067,36 @@ class BotRunner:
                     except (ValueError, TypeError, Exception):
                         pass
 
+                # Liq_void 15m mid-beta gate:
+                # Live data: liq_void 15m + beta 0.5-1.0 = 11.1% WR, avg -1.13R (n=9)
+                # HIK.L -4.76R, PRU.L -1.43R, AUTO.L -1.36R, GMG.AX -1.05R, ALV.DE -1.02R
+                # All beta 0.65-0.96. Defensive (<0.5): 50% WR. High (>1.0): 20% WR.
+                # Mid-beta liq_voids on 15m get neither the tight zone respect of
+                # defensive stocks nor the momentum follow-through of high-beta stocks.
+                # Broader 1h/1d liq_void for mid-beta is fine — this is 15m specific.
+                if pattern_type == 'liquidity_void' and timeframe == '15m':
+                    try:
+                        _lv_beta = conn.execute(
+                            "SELECT CAST(object AS REAL) FROM facts "
+                            "WHERE UPPER(subject)=UPPER(?) AND predicate='beta' "
+                            "ORDER BY timestamp DESC LIMIT 1",
+                            (ticker,),
+                        ).fetchone()
+                        if _lv_beta and 0.5 <= float(_lv_beta[0]) <= 1.0:
+                            skips += 1
+                            conn.execute(
+                                "INSERT INTO paper_agent_log "
+                                "(user_id, event_type, ticker, detail, bot_id, created_at) "
+                                "VALUES (?,?,?,?,?,?)",
+                                (user_id, 'skip', ticker,
+                                 f'liq_void 15m mid-beta blocked: beta={float(_lv_beta[0]):.2f} '
+                                 f'(0.5-1.0 range) — 11.1% WR in live data',
+                                 bot_id, now_iso),
+                            )
+                            continue
+                    except (ValueError, TypeError, Exception):
+                        pass
+
                 # RSI extreme gates (all pattern types):
                 # 1. Extreme oversold (<30) + bullish = momentum continuation down
                 #    DB1.DE RSI 29.8, BABA RSI 26.6 — these trend down further
