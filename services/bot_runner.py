@@ -635,10 +635,12 @@ class BotRunner:
             except Exception as _ue:
                 _logger.warning('BotRunner pos-monitor: error for %s: %s', user_id, _ue)
 
-    def restore_bots(self, startup_delay: int = 90) -> int:
+    def restore_bots(self, startup_delay: int = 120) -> int:
         """Re-launch all active bots at server startup."""
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA busy_timeout=30000')
             self._ensure_tables(conn)
             rows = conn.execute(
                 "SELECT bot_id FROM paper_bot_configs WHERE active=1 AND killed_at IS NULL"

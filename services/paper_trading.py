@@ -1781,9 +1781,9 @@ def restore_scanners() -> None:
             'SELECT user_id FROM paper_account WHERE agent_running=1 OR account_size_set=1'
         ).fetchall()
         conn.close()
-        for (uid,) in rows:
-            status, _ = start_scanner(uid, startup_delay=60)
-            _logger.info('restore_scanners: %s → %s', uid, status)
+        for i, (uid,) in enumerate(rows):
+            status, _ = start_scanner(uid, startup_delay=120 + i * 15)
+            _logger.info('restore_scanners: %s → %s (delay=%ds)', uid, status, 120 + i * 15)
     except Exception as _e:
         _logger.error('restore_scanners failed: %s', _e)
 
