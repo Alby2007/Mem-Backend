@@ -22,6 +22,8 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
+from middleware.auth import _auth_conn
+
 _log = logging.getLogger(__name__)
 
 _DDL_AUDIT_LOG = """
@@ -68,7 +70,7 @@ def log_audit_event(
         detail_str = json.dumps(detail) if detail else None
         _owned = conn is None
         if _owned:
-            conn = sqlite3.connect(db_path, timeout=5)
+            conn = _auth_conn(timeout=5)
         try:
             ensure_audit_table(conn)
             conn.execute(
@@ -92,7 +94,7 @@ def get_audit_log(
     limit: int = 100,
 ) -> list:
     """Return audit_log rows, optionally filtered by user_id and/or action."""
-    conn = sqlite3.connect(db_path, timeout=10)
+    conn = _auth_conn(timeout=10)
     try:
         ensure_audit_table(conn)
         clauses = []

@@ -38,6 +38,16 @@ _REFRESH_EXPIRY_DAYS  = int(os.environ.get('JWT_REFRESH_EXPIRY_DAYS', '30'))
 _LOCKOUT_MINUTES  = 15
 _MAX_FAILED_ATTEMPTS = 5
 
+
+def _auth_conn(timeout: int = 30) -> sqlite3.Connection:
+    """Return a WAL-mode connection to the dedicated auth DB."""
+    import extensions as _ext
+    path = _ext.AUTH_DB_PATH
+    conn = sqlite3.connect(path, timeout=timeout)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=30000')
+    return conn
+
 try:
     import jwt as _jwt
     HAS_JWT = True
@@ -119,18 +129,17 @@ def _make_access_token(user_id: str, email: str, token_version: int = 0) -> str:
 
 
 def _make_token(user_id: str, email: str, db_path: str = '') -> str:
-    """Convenience wrapper that reads token_version from DB when db_path is supplied."""
+    """Convenience wrapper that reads token_version from auth DB."""
     tv = 0
-    if db_path:
-        try:
-            _c = sqlite3.connect(db_path, timeout=3)
-            _r = _c.execute(
-                "SELECT token_version FROM user_auth WHERE user_id = ?", (user_id,)
-            ).fetchone()
-            _c.close()
-            tv = int(_r[0]) if _r and _r[0] is not None else 0
-        except Exception:
-            pass
+    try:
+        _c = _auth_conn(timeout=3)
+        _r = _c.execute(
+            "SELECT token_version FROM user_auth WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        _c.close()
+        tv = int(_r[0]) if _r and _r[0] is not None else 0
+    except Exception:
+        pass
     return _make_access_token(user_id, email, token_version=tv)
 
 
@@ -151,9 +160,7 @@ def issue_refresh_token(db_path: str, user_id: str) -> dict:
     token_id   = _secrets.token_urlsafe(48)
     now        = datetime.now(timezone.utc)
     expires_at = now + timedelta(days=_REFRESH_EXPIRY_DAYS)
-    conn = sqlite3.connect(db_path, timeout=30)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
+    conn = _auth_conn()
     try:
         ensure_user_auth_table(conn)
         conn.execute(
@@ -173,20 +180,17 @@ def rotate_refresh_token(db_path: str, refresh_token: str) -> dict:
     refresh token pair (rotation).  Raises ValueError if invalid/expired/revoked.
     Returns { access_token, refresh_token, token_type, expires_in, user_id }.
     """
-    # Retry up to 3 times on DB lock — 27 bot threads can momentarily lock the DB
+    # Retry up to 3 times on DB lock — auth DB should be fast but be defensive
     _last_exc = None
     for _attempt in range(3):
         try:
-            conn = sqlite3.connect(db_path, timeout=30)
-            conn.execute('PRAGMA journal_mode=WAL')
-            conn.execute('PRAGMA busy_timeout=30000')
+            conn = _auth_conn()
             break
         except Exception as _e:
             _last_exc = _e
             import time as _time; _time.sleep(0.5 * (_attempt + 1))
     else:
         raise _last_exc
-
     try:
         ensure_user_auth_table(conn)
         row = conn.execute(
@@ -226,7 +230,7 @@ def rotate_refresh_token(db_path: str, refresh_token: str) -> dict:
 
     # Read current token_version so refreshed token carries correct version
     try:
-        _tv_conn = sqlite3.connect(db_path, timeout=5)
+        _tv_conn = _auth_conn(timeout=5)
         _tv_row  = _tv_conn.execute(
             "SELECT token_version FROM user_auth WHERE user_id = ?", (user_id,)
         ).fetchone()
@@ -341,9 +345,7 @@ def register_user(
     now = datetime.now(timezone.utc).isoformat()
     password_hash = _hash_password(password)
 
-    conn = sqlite3.connect(db_path, timeout=30)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
+    conn = _auth_conn()
     try:
         ensure_user_auth_table(conn)
         try:
@@ -369,7 +371,7 @@ def revoke_user_tokens(db_path: str, user_id: str) -> None:
     the version check in get_current_user.
     """
     try:
-        conn = sqlite3.connect(db_path, timeout=10)
+        conn = _auth_conn()
         conn.execute(
             "UPDATE user_auth SET token_version = COALESCE(token_version, 0) + 1 WHERE user_id = ?",
             (user_id,),
@@ -389,9 +391,7 @@ def authenticate_user(
     Verify credentials.  Returns JWT token dict on success.
     Raises ValueError on bad credentials or locked account.
     """
-    conn = sqlite3.connect(db_path, timeout=30)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
+    conn = _auth_conn()
     try:
         ensure_user_auth_table(conn)
         row = conn.execute(

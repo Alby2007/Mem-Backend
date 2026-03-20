@@ -27,6 +27,11 @@ _logger = logging.getLogger(__name__)
 # ── Database ──────────────────────────────────────────────────────────────────
 
 DB_PATH = os.environ.get('TRADING_KB_DB', 'trading_knowledge.db')
+AUTH_DB_PATH = os.environ.get(
+    'TRADING_AUTH_DB',
+    os.path.join(os.path.dirname(DB_PATH), 'auth.db')
+    if os.path.dirname(DB_PATH) else 'auth.db'
+)
 
 # Enable WAL mode for better concurrent read/write performance
 # (paper agent + ingest adapters + live requests all write concurrently)
@@ -36,6 +41,24 @@ try:
     _wal_conn.close()
 except Exception as _e:
     _logger.warning('Failed to enable WAL mode: %s', _e)
+
+# Force WAL checkpoint at startup to reclaim WAL file bloat
+# Safe to run even with concurrent readers — uses PASSIVE mode
+try:
+    _ckpt_conn = sqlite3.connect(DB_PATH, timeout=5)
+    _ckpt_conn.execute('PRAGMA wal_checkpoint(PASSIVE)')
+    _ckpt_conn.close()
+except Exception:
+    pass
+
+# Initialise auth DB (separate file — bot threads can never block logins)
+try:
+    _auth_conn = sqlite3.connect(AUTH_DB_PATH, timeout=5)
+    _auth_conn.execute('PRAGMA journal_mode=WAL')
+    _auth_conn.execute('PRAGMA busy_timeout=30000')
+    _auth_conn.close()
+except Exception as _e:
+    _logger.warning('Failed to initialise auth DB: %s', _e)
 
 kg = KnowledgeGraph(db_path=DB_PATH)
 decay_worker = get_decay_worker(DB_PATH)

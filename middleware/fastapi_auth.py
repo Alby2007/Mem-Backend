@@ -42,9 +42,12 @@ async def get_current_user(
         try:
             import sqlite3 as _sq
             import extensions as _ext
-            row = _sq.connect(_ext.DB_PATH, timeout=3).execute(
+            _conn = _sq.connect(_ext.AUTH_DB_PATH, timeout=5)
+            _conn.execute("PRAGMA busy_timeout=10000")
+            row = _conn.execute(
                 "SELECT token_version FROM user_auth WHERE user_id = ?", (user_id,)
             ).fetchone()
+            _conn.close()
             db_tv = int(row[0]) if row and row[0] is not None else 0
             if int(tv_claim) < db_tv:
                 raise HTTPException(status_code=401, detail="token_revoked")

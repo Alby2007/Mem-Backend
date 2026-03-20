@@ -512,21 +512,29 @@ async def get_profile(user_id: str, current_user: str = Depends(get_current_user
     if current_user != user_id:
         raise HTTPException(403, detail="forbidden")
     try:
-        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
-        conn.row_factory = sqlite3.Row
+        trading_conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        trading_conn.execute('PRAGMA busy_timeout=30000')
+        trading_conn.row_factory = sqlite3.Row
+        auth_conn = sqlite3.connect(ext.AUTH_DB_PATH, timeout=10)
+        auth_conn.execute('PRAGMA busy_timeout=10000')
+        auth_conn.row_factory = sqlite3.Row
         # Ensure new columns exist
         for ddl in [
             "ALTER TABLE user_preferences ADD COLUMN country TEXT",
             "ALTER TABLE user_preferences ADD COLUMN preferred_regions TEXT DEFAULT '[]'",
-            "ALTER TABLE user_auth ADD COLUMN display_name TEXT",
         ]:
             try:
-                conn.execute(ddl)
-                conn.commit()
+                trading_conn.execute(ddl)
+                trading_conn.commit()
             except Exception:
                 pass
+        try:
+            auth_conn.execute("ALTER TABLE user_auth ADD COLUMN display_name TEXT")
+            auth_conn.commit()
+        except Exception:
+            pass
 
-        prefs_row = conn.execute(
+        prefs_row = trading_conn.execute(
             """SELECT tier, timezone, account_currency, experience_level,
                       style_risk_tolerance, style_timeframe, tip_timeframes,
                       tip_markets, tip_pattern_types, selected_sectors,
@@ -534,11 +542,12 @@ async def get_profile(user_id: str, current_user: str = Depends(get_current_user
                       country, preferred_regions
                FROM user_preferences WHERE user_id=?""", (user_id,)
         ).fetchone()
-        auth_row = conn.execute(
+        auth_row = auth_conn.execute(
             "SELECT email, created_at, last_login, display_name FROM user_auth WHERE user_id=?",
             (user_id,)
         ).fetchone()
-        conn.close()
+        trading_conn.close()
+        auth_conn.close()
     except Exception as e:
         raise HTTPException(500, detail=str(e))
 
@@ -570,18 +579,25 @@ async def update_profile(
     if current_user != user_id:
         raise HTTPException(403, detail="forbidden")
     try:
-        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        trading_conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        trading_conn.execute('PRAGMA busy_timeout=30000')
+        auth_conn = sqlite3.connect(ext.AUTH_DB_PATH, timeout=10)
+        auth_conn.execute('PRAGMA busy_timeout=10000')
         # Ensure new columns exist (idempotent)
         for ddl in [
             "ALTER TABLE user_preferences ADD COLUMN country TEXT",
             "ALTER TABLE user_preferences ADD COLUMN preferred_regions TEXT DEFAULT '[]'",
-            "ALTER TABLE user_auth ADD COLUMN display_name TEXT",
         ]:
             try:
-                conn.execute(ddl)
-                conn.commit()
+                trading_conn.execute(ddl)
+                trading_conn.commit()
             except Exception:
                 pass
+        try:
+            auth_conn.execute("ALTER TABLE user_auth ADD COLUMN display_name TEXT")
+            auth_conn.commit()
+        except Exception:
+            pass
         # Ensure other optional columns exist too
         for col_ddl in [
             "ALTER TABLE user_preferences ADD COLUMN experience_level TEXT DEFAULT ''",
@@ -592,15 +608,15 @@ async def update_profile(
             "ALTER TABLE user_preferences ADD COLUMN preferred_broker TEXT DEFAULT ''",
         ]:
             try:
-                conn.execute(col_ddl)
-                conn.commit()
+                trading_conn.execute(col_ddl)
+                trading_conn.commit()
             except Exception:
                 pass
 
         d = data.model_dump(exclude_none=True)
         updated = []
 
-        # Fields that go to user_auth
+        # Fields that go to user_auth (auth DB)
         AUTH_FIELDS = {"display_name"}
         auth_updates, auth_params = [], []
         for field in AUTH_FIELDS:
@@ -610,7 +626,8 @@ async def update_profile(
                 updated.append(field)
         if auth_updates:
             auth_params.append(user_id)
-            conn.execute(f"UPDATE user_auth SET {', '.join(auth_updates)} WHERE user_id=?", auth_params)
+            auth_conn.execute(f"UPDATE user_auth SET {', '.join(auth_updates)} WHERE user_id=?", auth_params)
+            auth_conn.commit()
 
         # JSON list fields
         JSON_FIELDS = {"tip_timeframes", "tip_markets", "tip_pattern_types",
@@ -638,10 +655,11 @@ async def update_profile(
 
         if pref_updates:
             pref_params.append(user_id)
-            conn.execute(f"UPDATE user_preferences SET {', '.join(pref_updates)} WHERE user_id=?", pref_params)
+            trading_conn.execute(f"UPDATE user_preferences SET {', '.join(pref_updates)} WHERE user_id=?", pref_params)
+            trading_conn.commit()
 
-        conn.commit()
-        conn.close()
+        trading_conn.close()
+        auth_conn.close()
     except Exception as e:
         raise HTTPException(500, detail=str(e))
     return {"updated": updated, "user_id": user_id}
@@ -655,15 +673,25 @@ async def delete_account(
     if current_user != user_id:
         raise HTTPException(403, detail="forbidden")
     try:
-        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
-        conn.execute("DELETE FROM user_auth WHERE user_id=?", (user_id,))
-        for tbl in ("user_preferences","refresh_tokens"):
-            try:
-                conn.execute(f"DELETE FROM {tbl} WHERE user_id=?", (user_id,))
-            except Exception:
-                pass
-        conn.commit()
-        conn.close()
+        trading_conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        trading_conn.execute('PRAGMA busy_timeout=30000')
+        auth_conn = sqlite3.connect(ext.AUTH_DB_PATH, timeout=10)
+        auth_conn.execute('PRAGMA busy_timeout=10000')
+        # Auth DB: user_auth + refresh_tokens
+        auth_conn.execute("DELETE FROM user_auth WHERE user_id=?", (user_id,))
+        try:
+            auth_conn.execute("DELETE FROM refresh_tokens WHERE user_id=?", (user_id,))
+        except Exception:
+            pass
+        auth_conn.commit()
+        auth_conn.close()
+        # Main DB: user_preferences + other trading tables
+        try:
+            trading_conn.execute("DELETE FROM user_preferences WHERE user_id=?", (user_id,))
+        except Exception:
+            pass
+        trading_conn.commit()
+        trading_conn.close()
         ext.log_audit_event(ext.DB_PATH, action="account_deleted", user_id=user_id,
                             ip_address=request.client.host if request.client else None,
                             user_agent=request.headers.get("user-agent"),
@@ -1524,16 +1552,17 @@ async def update_user_profile(
     last_name  = data.last_name.strip()[:100]
     phone      = data.phone.strip()[:30]
     try:
-        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        auth_conn = sqlite3.connect(ext.AUTH_DB_PATH, timeout=10)
+        auth_conn.execute('PRAGMA busy_timeout=10000')
         for col in ("first_name","last_name","phone"):
             try:
-                conn.execute(f"ALTER TABLE user_auth ADD COLUMN {col} TEXT DEFAULT ''")
+                auth_conn.execute(f"ALTER TABLE user_auth ADD COLUMN {col} TEXT DEFAULT ''")
             except Exception:
                 pass
-        conn.execute("UPDATE user_auth SET first_name=?, last_name=?, phone=? WHERE user_id=?",
+        auth_conn.execute("UPDATE user_auth SET first_name=?, last_name=?, phone=? WHERE user_id=?",
                      (first_name, last_name, phone, user_id))
-        conn.commit()
-        conn.close()
+        auth_conn.commit()
+        auth_conn.close()
     except Exception as e:
         raise HTTPException(500, detail=str(e))
     return {"ok": True, "first_name": first_name, "last_name": last_name, "phone": phone}
@@ -1871,27 +1900,31 @@ async def admin_set_tier(data: SetTierRequest, request: Request):
 
     uid = data.user_id
     try:
-        conn = sqlite3.connect(ext.DB_PATH, timeout=10)
-        # Resolve email → user_id if no user_id supplied
+        trading_conn = sqlite3.connect(ext.DB_PATH, timeout=10)
+        trading_conn.execute('PRAGMA busy_timeout=30000')
+        # Resolve email → user_id via auth DB
         if not uid and data.email:
-            row = conn.execute(
+            auth_conn = sqlite3.connect(ext.AUTH_DB_PATH, timeout=5)
+            auth_conn.execute('PRAGMA busy_timeout=10000')
+            row = auth_conn.execute(
                 "SELECT user_id FROM user_auth WHERE email = ? COLLATE NOCASE",
                 (data.email,),
             ).fetchone()
+            auth_conn.close()
             if not row:
-                conn.close()
+                trading_conn.close()
                 raise HTTPException(404, detail=f"No user found with email {data.email}")
             uid = row[0]
         if not uid:
             raise HTTPException(400, detail="Provide user_id or email")
 
-        conn.execute(
+        trading_conn.execute(
             """INSERT INTO user_preferences (user_id, tier) VALUES (?, ?)
                ON CONFLICT(user_id) DO UPDATE SET tier = excluded.tier""",
             (uid, tier),
         )
-        conn.commit()
-        conn.close()
+        trading_conn.commit()
+        trading_conn.close()
     except HTTPException:
         raise
     except Exception as e:
