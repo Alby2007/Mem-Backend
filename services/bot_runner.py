@@ -1025,6 +1025,18 @@ class BotRunner:
                     t1_p    = round(entry_p - risk * 2, 6)
                     t2_p    = round(entry_p - risk * 3, 6)
 
+                # T3 extension: mitigation 15m T3/T1=0.767 — 76.7% run to 4R.
+                # For quality mitigation 15m patterns, extend T2 from 3R → 4R.
+                # Data: n=369,311 samples. Criteria: q>=0.70 + mit + 15m.
+                _cand_q = float(c.get('quality_score') or 0)
+                if ((c.get('pattern_type') or '') == 'mitigation'
+                        and _cand_tf_entry == '15m'
+                        and _cand_q >= 0.70):
+                    if direction == 'bullish':
+                        t2_p = round(entry_p + risk * 4, 6)
+                    else:
+                        t2_p = round(entry_p - risk * 4, 6)
+
                 if risk <= 0:
                     skips += 1
                     continue
