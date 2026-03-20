@@ -1086,8 +1086,11 @@ class BotRunner:
                 # Small/micro-cap liquidity gate for short timeframes:
                 # HIK.L -4.76R because price gapped 4.76× through stop (slippage).
                 # Small/micro caps on 15m/5m have wide spreads and gap through stops.
-                # avg_volume_30d < 500k = insufficient liquidity for tight stops.
-                if timeframe in ('5m', '15m', '1h'):
+                # avg_volume_30d < 150k = insufficient liquidity for tight stops.
+                # Exempt: futures (=F) and FX (=X) — volume semantics differ.
+                _ticker_upper = ticker.upper()
+                _is_futures_fx = _ticker_upper.endswith('=F') or _ticker_upper.endswith('=X')
+                if timeframe in ('5m', '15m', '1h') and not _is_futures_fx:
                     try:
                         _mc = conn.execute(
                             "SELECT object FROM facts WHERE UPPER(subject)=UPPER(?) "
