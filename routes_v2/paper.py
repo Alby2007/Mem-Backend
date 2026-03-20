@@ -604,10 +604,8 @@ async def notifications_pending(
                       ROUND(pp.pnl_r, 2) as pnl_r, pp.status
                FROM paper_agent_log pal
                LEFT JOIN paper_positions pp ON pp.bot_id = pal.bot_id
-                 AND LOWER(pp.status) = LOWER(pal.event_type)
-                 AND LOWER(ps2.ticker) = LOWER(pal.ticker)
+                 AND LOWER(pp.ticker) = LOWER(pal.ticker)
                LEFT JOIN pattern_signals ps ON ps.id = pp.pattern_id
-               LEFT JOIN pattern_signals ps2 ON ps2.id = pp.pattern_id
                WHERE pal.user_id = ?
                  AND pal.event_type IN ('entry','t1_hit','t2_hit','stopped_out','t1_hit_partial')
                  AND pal.created_at > ?

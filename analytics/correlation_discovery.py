@@ -126,8 +126,8 @@ class CorrelationDiscovery:
         conn.execute(
             """INSERT INTO facts (subject, predicate, object, confidence, source, timestamp)
                VALUES (?, ?, ?, ?, 'correlation_discovery', ?)
-               ON CONFLICT(subject, predicate, source)
-               DO UPDATE SET object=excluded.object, confidence=excluded.confidence,
+               ON CONFLICT(subject, predicate, object)
+               DO UPDATE SET confidence=excluded.confidence, source=excluded.source,
                              timestamp=excluded.timestamp""",
             (subject.lower(), predicate, str(obj), confidence, now),
         )
