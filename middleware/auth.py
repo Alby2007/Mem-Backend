@@ -171,7 +171,20 @@ def rotate_refresh_token(db_path: str, refresh_token: str) -> dict:
     refresh token pair (rotation).  Raises ValueError if invalid/expired/revoked.
     Returns { access_token, refresh_token, token_type, expires_in, user_id }.
     """
-    conn = sqlite3.connect(db_path, timeout=10)
+    # Retry up to 3 times on DB lock — 27 bot threads can momentarily lock the DB
+    _last_exc = None
+    for _attempt in range(3):
+        try:
+            conn = sqlite3.connect(db_path, timeout=30)
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA busy_timeout=30000')
+            break
+        except Exception as _e:
+            _last_exc = _e
+            import time as _time; _time.sleep(0.5 * (_attempt + 1))
+    else:
+        raise _last_exc
+
     try:
         ensure_user_auth_table(conn)
         row = conn.execute(
