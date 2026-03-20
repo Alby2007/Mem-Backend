@@ -432,74 +432,13 @@ class PolygonPriceAdapter(BaseIngestAdapter):
     # ── Pass 4: News ──────────────────────────────────────────────────────────
 
     def _news(self, session, key: str) -> None:
-        """Fetch ticker-tagged news and insert into extraction_queue for LLM processing."""
-        if not self._db_path:
-            _logger.debug('[polygon_price] news: no db_path configured — skipping')
-            return
+        """Fetch ticker-tagged news and insert into extraction_queue for LLM processing.
 
-        try:
-            conn = sqlite3.connect(self._db_path, timeout=15)
-            conn.execute('PRAGMA journal_mode=WAL')
-            # Ensure extraction_queue exists (same DDL as rss_adapter)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS extraction_queue (
-                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                    text             TEXT NOT NULL,
-                    url              TEXT,
-                    source           TEXT,
-                    fetched_at       TEXT,
-                    processed        INTEGER DEFAULT 0,
-                    processed_at     TEXT,
-                    atoms_extracted  INTEGER DEFAULT 0,
-                    failed_attempts  INTEGER DEFAULT 0
-                )
-            """)
-            conn.commit()
-        except Exception as exc:
-            _logger.warning('[polygon_price] news: db init failed: %s', exc)
-            return
-
-        now_iso = datetime.now(timezone.utc).isoformat()
-        inserted_total = 0
-        seen_urls: Set[str] = set()
-
-        for sym in sorted(self._tickers):
-            url = f'{_POLYGON_BASE}/v2/reference/news'
-            data = _get(session, url, {
-                'ticker': sym,
-                'limit': 10,
-                'order': 'desc',
-                'apiKey': key,
-            })
-            if data:
-                results = data.get('results') or []
-                rows = []
-                for item in results:
-                    article_url = item.get('article_url') or ''
-                    if article_url in seen_urls:
-                        continue
-                    seen_urls.add(article_url)
-                    title = item.get('title') or ''
-                    desc = item.get('description') or ''
-                    text = f'{title}. {desc}'.strip('. ')
-                    if not text:
-                        continue
-                    rows.append((text, article_url, f'polygon_news_{sym.lower()}', now_iso))
-                if rows:
-                    try:
-                        conn.executemany(
-                            "INSERT INTO extraction_queue (text, url, source, fetched_at) VALUES (?,?,?,?)",
-                            rows,
-                        )
-                        conn.commit()
-                        inserted_total += len(rows)
-                    except Exception as exc:
-                        _logger.debug('[polygon_price] news: queue insert failed for %s: %s', sym, exc)
-
-            time.sleep(_RATE_SLEEP)
-
-        conn.close()
-        _logger.info('[polygon_price] news: inserted %d items into extraction_queue', inserted_total)
+        DISABLED — extraction_queue was append-only dead storage never consumed
+        by LLM extraction adapter. Removing writes eliminates ~16k rows/hour of
+        SQLite WAL contention.
+        """
+        return
 
     # ── Pass 5: Dividends & Splits ────────────────────────────────────────────
 

@@ -413,18 +413,9 @@ class RSSAdapter(BaseIngestAdapter):
                 except Exception as e:
                     self._logger.warning('Failed to fetch RSS feed %s: %s', name, e)
 
-        if queue_rows and self._db_path:
-            try:
-                conn = db_connect(self._db_path)
-                _ensure_extraction_queue(conn)
-                conn.executemany(
-                    "INSERT INTO extraction_queue (text, url, source, fetched_at) VALUES (?,?,?,?)",
-                    queue_rows,
-                )
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                self._logger.warning('Failed to write extraction_queue: %s', e)
+        # extraction_queue writes disabled — table was append-only dead storage
+        # (LLM extraction adapter never reads from it). Removing ~16k writes/hour
+        # from SQLite to eliminate WAL contention.
 
         return atoms
 

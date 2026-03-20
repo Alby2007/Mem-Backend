@@ -182,19 +182,7 @@ class EDGARAdapter(BaseIngestAdapter):
                 except Exception as e:
                     self._logger.warning('Failed to process %s: %s', sym, e)
 
-        if all_queue and self._db_path:
-            try:
-                from ingest.rss_adapter import _ensure_extraction_queue
-                conn = sqlite3.connect(self._db_path)
-                _ensure_extraction_queue(conn)
-                conn.executemany(
-                    "INSERT INTO extraction_queue (text, url, source, fetched_at) VALUES (?,?,?,?)",
-                    all_queue,
-                )
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                self._logger.warning('Failed to write extraction_queue: %s', e)
+        # extraction_queue writes disabled — dead storage, never consumed by LLM adapter
 
         return all_atoms
 

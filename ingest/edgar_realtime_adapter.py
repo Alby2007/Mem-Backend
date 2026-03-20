@@ -51,7 +51,7 @@ from typing import Optional, Set
 import requests
 
 from ingest.base import BaseIngestAdapter, RawAtom, db_connect
-from ingest.rss_adapter import _ensure_extraction_queue
+# extraction_queue disabled — dead storage, never consumed by LLM adapter
 
 _logger = logging.getLogger(__name__)
 
@@ -243,7 +243,7 @@ class EDGARRealtimeAdapter(BaseIngestAdapter):
         conn = db_connect(db_path)
         try:
             self._seen_ids: Set[str] = _load_seen_ids(conn)
-            _ensure_extraction_queue(conn)
+            pass  # extraction_queue table init removed
         finally:
             conn.close()
 
@@ -318,17 +318,7 @@ class EDGARRealtimeAdapter(BaseIngestAdapter):
                     upsert    = False,  # Each 8-K is a distinct event
                 ))
 
-                # ── Queue for LLM extraction ──────────────────────────────────
-                text = f"{ticker} 8-K filed: {title}"[:800]
-                try:
-                    conn.execute(
-                        """INSERT OR IGNORE INTO extraction_queue
-                           (text, url, source, fetched_at)
-                           VALUES (?, ?, ?, ?)""",
-                        (text, link, _SOURCE, now_iso),
-                    )
-                except sqlite3.Error as e:
-                    _logger.debug('edgar_realtime: queue insert error: %s', e)
+                # extraction_queue writes disabled — dead storage
 
                 new_count += 1
 
