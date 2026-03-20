@@ -151,7 +151,9 @@ def issue_refresh_token(db_path: str, user_id: str) -> dict:
     token_id   = _secrets.token_urlsafe(48)
     now        = datetime.now(timezone.utc)
     expires_at = now + timedelta(days=_REFRESH_EXPIRY_DAYS)
-    conn = sqlite3.connect(db_path, timeout=10)
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     try:
         ensure_user_auth_table(conn)
         conn.execute(
@@ -339,7 +341,9 @@ def register_user(
     now = datetime.now(timezone.utc).isoformat()
     password_hash = _hash_password(password)
 
-    conn = sqlite3.connect(db_path, timeout=10)
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     try:
         ensure_user_auth_table(conn)
         try:
@@ -385,7 +389,9 @@ def authenticate_user(
     Verify credentials.  Returns JWT token dict on success.
     Raises ValueError on bad credentials or locked account.
     """
-    conn = sqlite3.connect(db_path, timeout=10)
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     try:
         ensure_user_auth_table(conn)
         row = conn.execute(
