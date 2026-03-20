@@ -1323,8 +1323,7 @@ def _ai_run_inner(user_id: str) -> dict:
         _pg_log(conn, user_id, 'scan_start', None,
             f'Scanning open patterns for {user_id} ({len(open_tickers)}/{_PAPER_MAX_OPEN_POSITIONS} slots used, {len(cooled_tickers)} on 24h cooldown)', now_iso)
 
-        candidate_rows = conn.execute(
-            """SELECT p.id, p.ticker, p.pattern_type, p.direction, p.zone_high, p.zone_low,
+        _cand_sql = """SELECT p.id, p.ticker, p.pattern_type, p.direction, p.zone_high, p.zone_low,
                       p.quality_score, p.kb_conviction, p.kb_regime, p.kb_signal_dir
                FROM pattern_signals p
                INNER JOIN (
@@ -1344,7 +1343,18 @@ def _ai_run_inner(user_id: str) -> dict:
                  )
                ORDER BY RANDOM()
                LIMIT 100"""
-        ).fetchall()
+        from db import HAS_POSTGRES, get_pg
+        candidate_rows = []
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as _pgc:
+                    _cur = _pgc.cursor()
+                    _cur.execute(_cand_sql)
+                    candidate_rows = _cur.fetchall()
+            except Exception:
+                candidate_rows = []
+        if not candidate_rows:
+            candidate_rows = conn.execute(_cand_sql).fetchall()
 
         all_cands = [dict(r) for r in candidate_rows]
 
@@ -1677,7 +1687,9 @@ _run_locks_lock = threading.Lock()
 def _set_agent_running_db(user_id: str, running: bool) -> None:
     """Persist agent running state to DB so it survives server restarts."""
     try:
-        conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+        conn = sqlite3.connect(ext.DB_PATH, timeout=30)
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=30000')
         ensure_paper_tables(conn)
         # Upsert: works whether or not the paper_account row exists yet
         conn.execute(
@@ -1744,7 +1756,8 @@ def scanner_running(user_id: str) -> bool:
         return not ev.is_set()
     # No in-memory thread — check persisted DB flag
     try:
-        conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+        conn = sqlite3.connect(ext.DB_PATH, timeout=15)
+        conn.execute('PRAGMA busy_timeout=15000')
         row = conn.execute(
             'SELECT agent_running FROM paper_account WHERE user_id=?', (user_id,)
         ).fetchone()
@@ -1760,7 +1773,9 @@ def restore_scanners() -> None:
     (set a balance but may never have clicked Start Agent).
     """
     try:
-        conn = sqlite3.connect(ext.DB_PATH, timeout=5)
+        conn = sqlite3.connect(ext.DB_PATH, timeout=30)
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=30000')
         ensure_paper_tables(conn)
         rows = conn.execute(
             'SELECT user_id FROM paper_account WHERE agent_running=1 OR account_size_set=1'
