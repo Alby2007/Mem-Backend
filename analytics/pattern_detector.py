@@ -260,6 +260,21 @@ def _quality(
         )
     boost = _PATTERN_BOOSTS.get(pattern_type, {}).get(timeframe, 0.0)
 
+    # Zone age modifier — pattern age at detection relative to candle window.
+    # IFVG: fresh zones (day 0) WR=52.6% vs day 3-7 WR=79.2% → penalise new IFVG entries.
+    # Breaker: zones decay after day 5 (WR=15.4% at 3-7d) → penalise stale breakers.
+    # Order_block: old zones perform best (>7d WR=77.8%) → reward aged OBs.
+    # Data: live trade analysis, 182 trades across pattern×age buckets.
+    _age_boost = 0.0
+    if total_candles > 0:
+        _age_frac = candle_idx / total_candles   # 0 = fresh, 1 = near-expiry
+        if pattern_type == 'ifvg' and _age_frac < 0.10:
+            _age_boost = -0.15   # same-day IFVG: WR=52.6%, penalise
+        elif pattern_type == 'breaker' and _age_frac > 0.60:
+            _age_boost = -0.15   # stale breaker (>60% of window): decays badly
+        elif pattern_type == 'order_block' and _age_frac > 0.50:
+            _age_boost = +0.10   # aged OB confirms level validity
+
     # Regime conditioning: penalise bullish setups in risk_on regimes.
     # In a correction/expansion, 'near_52w_low + bullish' is a falling knife.
     # These score highly from the formula but fail live (q=0.8 WR=23% observed).
@@ -289,7 +304,7 @@ def _quality(
         except Exception:
             pass
 
-    return round(min(max(score + boost + _regime_penalty, 0.0), 1.0), 4)
+    return round(min(max(score + boost + _regime_penalty + _age_boost, 0.0), 1.0), 4)
 
 
 # ── Individual detectors ───────────────────────────────────────────────────────
