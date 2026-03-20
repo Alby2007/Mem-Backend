@@ -1039,6 +1039,34 @@ class BotRunner:
                     except (ValueError, TypeError, Exception):
                         pass
 
+                # IFVG mid-beta gate:
+                # Live data: IFVG + beta 1.0-1.5 = 33.3% WR, avg -0.09R on n=9
+                # IAG.L, ANTO.L, DPLM.L, SGRO.L all stopped out (beta 1.03-1.30).
+                # Defensive (<0.5): WR=87.5%. High (>1.5): WR=75%. Mid is the dead zone.
+                # The market beta correlation disrupts IFVG zone mechanics for mid-beta stocks.
+                if pattern_type == 'ifvg':
+                    try:
+                        _beta_row = conn.execute(
+                            "SELECT CAST(object AS REAL) FROM facts "
+                            "WHERE UPPER(subject)=UPPER(?) AND predicate='beta' "
+                            "ORDER BY timestamp DESC LIMIT 1",
+                            (ticker,),
+                        ).fetchone()
+                        if _beta_row and 1.0 <= float(_beta_row[0]) <= 1.5:
+                            skips += 1
+                            conn.execute(
+                                "INSERT INTO paper_agent_log "
+                                "(user_id, event_type, ticker, detail, bot_id, created_at) "
+                                "VALUES (?,?,?,?,?,?)",
+                                (user_id, 'skip', ticker,
+                                 f'IFVG mid-beta blocked: beta={float(_beta_row[0]):.2f} '
+                                 f'(1.0-1.5 range) — 33% WR in live data vs 87% for defensive',
+                                 bot_id, now_iso),
+                            )
+                            continue
+                    except (ValueError, TypeError, Exception):
+                        pass
+
                 # RSI extreme gates (all pattern types):
                 # 1. Extreme oversold (<30) + bullish = momentum continuation down
                 #    DB1.DE RSI 29.8, BABA RSI 26.6 — these trend down further
