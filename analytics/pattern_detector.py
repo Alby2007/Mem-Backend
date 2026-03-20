@@ -234,10 +234,21 @@ def _quality(
     _sec = (sector or '').lower().strip()
     if _sec in _TECHNICAL_ONLY_SECTORS:
         # Technical-only formula: pure zone quality + recency, no KB components.
-        # 52w regime position (near_52w_high = bearish) is equity-centric and
-        # doesn't translate to FX/commodities — dropping it prevents systematic
-        # penalisation of FX zones that happen to be near yearly highs/lows.
         score = gap * 0.65 + rec * 0.35
+    elif pattern_type == 'mitigation' and timeframe in ('1d', '4h'):
+        # Mitigation 1d/4h formula: zone-quality-dominant.
+        # The best mitigation 1d edges are on stocks with LOW KB conviction —
+        # beaten-down tickers near 52w lows. Standard formula inverts the edge.
+        # Data: n=341,990 NULL-regime samples, gap=+33.9%, best edge in the DB.
+        # Redistribution: conv down from 0.25→0.10, gap up 0.25→0.40, rec up 0.15→0.25
+        conv, regime_s, sig = _kb_scores(kb_conviction, kb_regime, kb_signal_dir, direction, timeframe)
+        score = (
+            conv     * 0.10 +
+            regime_s * 0.15 +
+            sig      * 0.10 +
+            gap      * 0.40 +
+            rec      * 0.25
+        )
     else:
         conv, regime_s, sig = _kb_scores(kb_conviction, kb_regime, kb_signal_dir, direction, timeframe)
         score = (
@@ -255,7 +266,17 @@ def _quality(
     # Exempt: technical-only sectors (FX/ETF/commodities) — their formula is already
     # regime-agnostic and these instruments structurally ignore equity regime labels.
     _regime_penalty = 0.0
-    if direction == 'bullish' and _sec not in _TECHNICAL_ONLY_SECTORS and db_path:
+    # Regime penalty for TREND-FOLLOWING bullish entries in risk_on environments.
+    # Exempt: mitigation and liquidity_void — these are MEAN REVERSION patterns.
+    # Price returning to a support zone is structurally positive in corrections.
+    # The regime gate in bot_runner already blocks risk_on_expansion/recovery.
+    # Only penalise directional patterns that require ongoing momentum: ifvg, breaker,
+    # order_block, fvg, bos, choch.
+    _TREND_FOLLOWING_PATTERNS = {'ifvg', 'breaker', 'order_block', 'fvg', 'bos', 'choch'}
+    if (direction == 'bullish'
+            and pattern_type in _TREND_FOLLOWING_PATTERNS
+            and _sec not in _TECHNICAL_ONLY_SECTORS
+            and db_path):
         try:
             _rc = sqlite3.connect(db_path, timeout=3)
             _rrow = _rc.execute(
