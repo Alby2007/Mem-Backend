@@ -211,7 +211,7 @@ def _pattern_exists(conn: sqlite3.Connection, sig: PatternSignal) -> bool:
         """SELECT 1 FROM pattern_signals
            WHERE ticker = ? AND pattern_type = ? AND direction = ?
              AND ROUND(zone_high, 2) = ? AND ROUND(zone_low, 2) = ?
-             AND status NOT IN ('filled', 'broken')
+             AND status NOT IN ('filled', 'broken', 'expired', 'partially_filled')
            LIMIT 1""",
         (sig.ticker, sig.pattern_type, sig.direction, zh, zl),
     ).fetchone()
