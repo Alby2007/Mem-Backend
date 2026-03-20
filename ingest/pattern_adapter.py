@@ -77,6 +77,10 @@ def _read_kb_context(conn: sqlite3.Connection, ticker: str) -> Dict[str, str]:
     for this ticker. Returns a dict with keys: conviction, regime, signal_dir.
     """
     ctx: Dict[str, str] = {'conviction': '', 'regime': '', 'signal_dir': '', 'sector': ''}
+    # Commodity futures have no analyst coverage — default to 'medium' (neutral/technical)
+    # 'low' from KB means no coverage, not fundamental weakness
+    if ticker.upper().endswith('=F'):
+        ctx['conviction'] = 'medium'
     try:
         rows = conn.execute(
             """SELECT predicate, object FROM facts
