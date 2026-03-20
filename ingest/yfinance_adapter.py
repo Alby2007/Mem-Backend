@@ -806,7 +806,7 @@ class YFinanceAdapter(BaseIngestAdapter):
                 metadata={'market_cap_raw': market_cap},
             ))
 
-        # ── Volatility regime (beta) ──────────────────────────────────────
+        # ── Volatility regime + raw beta ──────────────────────────────────
         beta = info.get('beta')
         if beta is not None:
             regime = _volatility_regime(float(beta))
@@ -816,6 +816,12 @@ class YFinanceAdapter(BaseIngestAdapter):
                     confidence=0.80, source=src, metadata={'beta': beta},
                     upsert=True,
                 ))
+            # Store raw beta — enables systematic-risk-aware quality gates
+            atoms.append(RawAtom(
+                subject=symbol, predicate='beta',
+                object=str(round(float(beta), 3)),
+                confidence=0.85, source=src, upsert=True,
+            ))
 
         # ── Price regime from 52-week position (equities) ─────────────────
         # ETFs get price_regime in _etf_atoms(); equities need it here.
