@@ -230,3 +230,8 @@ class EdgeReportAdapter:
         except Exception as e:
             _log.error('EdgeReportAdapter: failed: %s', e)
         return []  # IngestScheduler expects list[RawAtom] or []
+
+    def run_and_push(self, kg) -> dict:
+        """Scheduler entry-point. Edge report writes facts directly, so just delegate to fetch()."""
+        self.fetch()
+        return {'ingested': 0, 'skipped': 0}
