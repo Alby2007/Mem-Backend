@@ -21,6 +21,28 @@ import extensions as ext
 
 _logger = logging.getLogger('paper_agent')
 
+
+def _pg_log(conn, user_id, event_type, ticker, detail, now_iso, bot_id=None):
+    """Write paper_agent_log row — PG when available, else SQLite conn."""
+    from db import HAS_POSTGRES, get_pg
+    if HAS_POSTGRES:
+        try:
+            with get_pg() as pg:
+                pg.cursor().execute(
+                    "INSERT INTO paper_agent_log "
+                    "(user_id, event_type, ticker, detail, bot_id, created_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s)",
+                    (user_id, event_type, ticker, detail, bot_id, now_iso),
+                )
+        except Exception as _e:
+            _logger.debug('PG paper_agent_log write failed: %s', _e)
+        return
+    conn.execute(
+        'INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)',
+        (user_id, event_type, ticker, detail, now_iso),
+    )
+
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _YF_MAP = {
@@ -334,23 +356,41 @@ def fetch_live_prices(tickers: list[str]) -> dict[str, float]:
     # Pass 2: ohlcv_cache latest close
     if missing:
         still_missing: list[str] = []
-        try:
-            import sqlite3 as _sq2
-            _oc_conn = _sq2.connect(ext.DB_PATH, timeout=5)
-            for tk in missing:
-                yf_sym = _YF_MAP.get(tk.lower(), tk)
-                row = _oc_conn.execute(
-                    "SELECT close FROM ohlcv_cache WHERE ticker=? AND interval='1d' "
-                    "ORDER BY ts DESC LIMIT 1",
-                    (yf_sym,)
-                ).fetchone()
-                if row and row[0] and float(row[0]) > 0:
-                    prices[tk] = float(row[0])
-                else:
-                    still_missing.append(tk)
-            _oc_conn.close()
-        except Exception:
-            still_missing = missing
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as _pg:
+                    _pgc = _pg.cursor()
+                    for tk in missing:
+                        yf_sym = _YF_MAP.get(tk.lower(), tk)
+                        _pgc.execute(
+                            "SELECT close FROM ohlcv_cache WHERE ticker=%s AND interval='1d' "
+                            "ORDER BY ts DESC LIMIT 1", (yf_sym,))
+                        row = _pgc.fetchone()
+                        if row and row['close'] and float(row['close']) > 0:
+                            prices[tk] = float(row['close'])
+                        else:
+                            still_missing.append(tk)
+            except Exception:
+                still_missing = missing
+        else:
+            try:
+                import sqlite3 as _sq2
+                _oc_conn = _sq2.connect(ext.DB_PATH, timeout=5)
+                for tk in missing:
+                    yf_sym = _YF_MAP.get(tk.lower(), tk)
+                    row = _oc_conn.execute(
+                        "SELECT close FROM ohlcv_cache WHERE ticker=? AND interval='1d' "
+                        "ORDER BY ts DESC LIMIT 1",
+                        (yf_sym,)
+                    ).fetchone()
+                    if row and row[0] and float(row[0]) > 0:
+                        prices[tk] = float(row[0])
+                    else:
+                        still_missing.append(tk)
+                _oc_conn.close()
+            except Exception:
+                still_missing = missing
         missing = still_missing
 
     # Pass 3: per-ticker fast_info (last resort, not batch — avoids rate limit)
@@ -708,12 +748,9 @@ def monitor_positions(user_id: str) -> dict:
                     'UPDATE paper_account SET virtual_balance = virtual_balance + ? WHERE user_id=?',
                     (partial_value, user_id)
                 )
-                conn.execute(
-                    'INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)',
-                    (user_id, 't1_hit', ticker,
-                     f't1_hit at {price:.4f} | partial close {half_qty} units £{partial_value:,.2f} | pnl_r={t1_pnl_r} on closed half',
-                     now_iso)
-                )
+                _pg_log(conn, user_id, 't1_hit', ticker,
+                    f't1_hit at {price:.4f} | partial close {half_qty} units £{partial_value:,.2f} | pnl_r={t1_pnl_r} on closed half',
+                    now_iso)
                 updates.append({'id': pos['id'], 'ticker': ticker, 'event': 't1_hit', 'price': price, 'pnl_r': t1_pnl_r})
                 # Calibration feedback for T1 partial close
                 if pos['pattern_id']:
@@ -756,12 +793,9 @@ def monitor_positions(user_id: str) -> dict:
                     'UPDATE paper_account SET virtual_balance = virtual_balance + ? WHERE user_id=?',
                     (partial_value, user_id)
                 )
-                conn.execute(
-                    'INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)',
-                    (user_id, 't1_hit', ticker,
-                     f't1_hit at {price:.4f} | partial close {half_qty} units £{partial_value:,.2f} | pnl_r={t1_pnl_r} on closed half',
-                     now_iso)
-                )
+                _pg_log(conn, user_id, 't1_hit', ticker,
+                    f't1_hit at {price:.4f} | partial close {half_qty} units £{partial_value:,.2f} | pnl_r={t1_pnl_r} on closed half',
+                    now_iso)
                 updates.append({'id': pos['id'], 'ticker': ticker, 'event': 't1_hit', 'price': price, 'pnl_r': t1_pnl_r})
         if new_status and exit_p is not None:
             pnl_r = compute_pnl_r(direction, entry, exit_p, stop)
@@ -1254,11 +1288,8 @@ def _ai_run_inner(user_id: str) -> dict:
         cooled_tickers = {r['ticker'] for r in _stopped_rows} | {r['ticker'] for r in _recent_rows}
 
         if len(open_tickers) >= _PAPER_MAX_OPEN_POSITIONS:
-            conn.execute(
-                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-                (user_id, 'scan_start', None,
-                 f'Scan skipped — already at max {_PAPER_MAX_OPEN_POSITIONS} open positions', now_iso)
-            )
+            _pg_log(conn, user_id, 'scan_start', None,
+                f'Scan skipped — already at max {_PAPER_MAX_OPEN_POSITIONS} open positions', now_iso)
             conn.commit()
             conn.close()
             return {'entries': 0, 'skips': 0, 'monitor_updates': []}
@@ -1289,11 +1320,8 @@ def _ai_run_inner(user_id: str) -> dict:
         entries = 0
         skips = 0
 
-        conn.execute(
-            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-            (user_id, 'scan_start', None,
-             f'Scanning open patterns for {user_id} ({len(open_tickers)}/{_PAPER_MAX_OPEN_POSITIONS} slots used, {len(cooled_tickers)} on 24h cooldown)', now_iso)
-        )
+        _pg_log(conn, user_id, 'scan_start', None,
+            f'Scanning open patterns for {user_id} ({len(open_tickers)}/{_PAPER_MAX_OPEN_POSITIONS} slots used, {len(cooled_tickers)} on 24h cooldown)', now_iso)
 
         candidate_rows = conn.execute(
             """SELECT p.id, p.ticker, p.pattern_type, p.direction, p.zone_high, p.zone_low,
@@ -1365,10 +1393,7 @@ def _ai_run_inner(user_id: str) -> dict:
             # Market hours guard — no entries when exchange is closed (stale prices)
             if not _is_market_open(ticker):
                 skips += 1
-                conn.execute(
-                    "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-                    (user_id, 'skip', ticker, f'{ticker} skipped — market closed', now_iso)
-                )
+                _pg_log(conn, user_id, 'skip', ticker, f'{ticker} skipped — market closed', now_iso)
                 continue
 
             # Regime alignment filter — hard skip misaligned entries
@@ -1378,11 +1403,8 @@ def _ai_run_inner(user_id: str) -> dict:
                 or (direction == 'bearish' and any(x in _regime_lower for x in ('risk_on', 'bullish', 'bull')))
             )
             if _regime_misaligned and _regime_lower:
-                conn.execute(
-                    "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-                    (user_id, 'regime_skip', ticker,
-                     f'{ticker} skipped — {direction} in {regime}', now_iso)
-                )
+                _pg_log(conn, user_id, 'regime_skip', ticker,
+                    f'{ticker} skipped — {direction} in {regime}', now_iso)
                 skips += 1
                 continue
 
@@ -1418,11 +1440,8 @@ def _ai_run_inner(user_id: str) -> dict:
                 if direction == 'bullish':
                     if _live_price <= stop_p:
                         skips += 1
-                        conn.execute(
-                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-                            (user_id, 'skip', ticker,
-                             f'Price ${_live_price:.2f} already below stop ${stop_p:.2f} — would instant stop', now_iso)
-                        )
+                        _pg_log(conn, user_id, 'skip', ticker,
+                            f'Price ${_live_price:.2f} already below stop ${stop_p:.2f} — would instant stop', now_iso)
                         continue
                     # Widen staleness threshold for volatile asset classes
                     _ticker_upper = ticker.upper()
@@ -1433,20 +1452,14 @@ def _ai_run_inner(user_id: str) -> dict:
                     ) else 0.05
                     if abs(_live_price - entry_p) / entry_p > _stale_pct:
                         skips += 1
-                        conn.execute(
-                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-                            (user_id, 'skip', ticker,
-                             f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern', now_iso)
-                        )
+                        _pg_log(conn, user_id, 'skip', ticker,
+                            f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern', now_iso)
                         continue
                 else:  # bearish
                     if _live_price >= stop_p:
                         skips += 1
-                        conn.execute(
-                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-                            (user_id, 'skip', ticker,
-                             f'Price ${_live_price:.2f} already above stop ${stop_p:.2f} — would instant stop', now_iso)
-                        )
+                        _pg_log(conn, user_id, 'skip', ticker,
+                            f'Price ${_live_price:.2f} already above stop ${stop_p:.2f} — would instant stop', now_iso)
                         continue
                     # Widen staleness threshold for volatile asset classes
                     _ticker_upper = ticker.upper()
@@ -1457,11 +1470,8 @@ def _ai_run_inner(user_id: str) -> dict:
                     ) else 0.05
                     if abs(_live_price - entry_p) / entry_p > _stale_pct:
                         skips += 1
-                        conn.execute(
-                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-                            (user_id, 'skip', ticker,
-                             f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern', now_iso)
-                        )
+                        _pg_log(conn, user_id, 'skip', ticker,
+                            f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern', now_iso)
                         continue
                 # Fix 3: Use live price as entry for realistic fills
                 if zone_low <= _live_price <= zone_high:
@@ -1570,11 +1580,8 @@ def _ai_run_inner(user_id: str) -> dict:
                 if position_value > remaining_cash:
                     if remaining_cash < risk_per_trade * 2:
                         skips += 1
-                        conn.execute(
-                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-                            (user_id, 'skip', ticker,
-                             f'Insufficient cash: need £{position_value:,.2f}, have £{remaining_cash:,.2f} (below min viable)', now_iso)
-                        )
+                        _pg_log(conn, user_id, 'skip', ticker,
+                            f'Insufficient cash: need £{position_value:,.2f}, have £{remaining_cash:,.2f} (below min viable)', now_iso)
                         continue
                     qty = round(remaining_cash / entry_p, 4)
                     position_value = round(entry_p * qty, 2)
@@ -1592,11 +1599,8 @@ def _ai_run_inner(user_id: str) -> dict:
                      entry_p, stop_p, t1_p, t2_p, qty,
                      now_iso, f'AI agent: {pattern_type}', reasoning)
                 )
-                conn.execute(
-                    "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-                    (user_id, 'entry', ticker,
-                     f'{direction} entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} qty={qty:.4f} | {reasoning}', now_iso)
-                )
+                _pg_log(conn, user_id, 'entry', ticker,
+                    f'{direction} entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} qty={qty:.4f} | {reasoning}', now_iso)
                 open_tickers.add(ticker)
                 entries += 1
                 try:
@@ -1625,11 +1629,8 @@ def _ai_run_inner(user_id: str) -> dict:
                 skips += 1
 
         if skips > 0 or entries > 0:
-            conn.execute(
-                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, created_at) VALUES (?,?,?,?,?)",
-                (user_id, 'skip', None,
-                 f'Scanned {scanned} patterns — {entries} entr{"y" if entries==1 else "ies"}, {skips} skipped', now_iso)
-            )
+            _pg_log(conn, user_id, 'skip', None,
+                f'Scanned {scanned} patterns — {entries} entr{"y" if entries==1 else "ies"}, {skips} skipped', now_iso)
         # Write equity snapshot after all entries/exits are committed
         try:
             acct_now = conn.execute(

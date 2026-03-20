@@ -87,29 +87,42 @@ class RSIAdapter(BaseIngestAdapter):
         cutoff  = (now_utc - timedelta(days=_OHLCV_AGE_DAYS)).isoformat()
         atoms: List[RawAtom] = []
 
-        try:
-            conn = sqlite3.connect(self._db_path, timeout=15)
-            conn.execute('PRAGMA journal_mode=WAL')
-        except Exception as e:
-            _logger.error('rsi_adapter: DB connect failed: %s', e)
-            return []
-
-        try:
-            rows = conn.execute(
-                """SELECT ticker, close, ts
-                   FROM ohlcv_cache
-                   WHERE interval = '1d'
-                     AND ts >= ?
-                     AND close IS NOT NULL
-                   ORDER BY ticker, ts ASC""",
-                (cutoff,),
-            ).fetchall()
-        except Exception as e:
-            _logger.error('rsi_adapter: DB query failed: %s', e)
+        from db import HAS_POSTGRES, get_pg
+        rows = []
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute(
+                        "SELECT ticker, close, ts FROM ohlcv_cache "
+                        "WHERE interval='1d' AND ts >= %s AND close IS NOT NULL "
+                        "ORDER BY ticker, ts ASC", (cutoff,))
+                    rows = [(r['ticker'], r['close'], r['ts']) for r in cur.fetchall()]
+            except Exception as e:
+                _logger.error('rsi_adapter: PG query failed: %s', e)
+                rows = []
+        if not rows:
+            try:
+                conn = sqlite3.connect(self._db_path, timeout=15)
+                conn.execute('PRAGMA journal_mode=WAL')
+            except Exception as e:
+                _logger.error('rsi_adapter: DB connect failed: %s', e)
+                return []
+            try:
+                rows = conn.execute(
+                    """SELECT ticker, close, ts
+                       FROM ohlcv_cache
+                       WHERE interval = '1d'
+                         AND ts >= ?
+                         AND close IS NOT NULL
+                       ORDER BY ticker, ts ASC""",
+                    (cutoff,),
+                ).fetchall()
+            except Exception as e:
+                _logger.error('rsi_adapter: DB query failed: %s', e)
+                conn.close()
+                return []
             conn.close()
-            return []
-
-        conn.close()
 
         # Group closes by ticker
         ticker_closes: dict[str, list[float]] = {}

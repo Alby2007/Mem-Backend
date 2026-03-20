@@ -561,25 +561,41 @@ class HistoricalCalibrator:
         # ── Fetch OHLCV: prefer ohlcv_cache (no rate-limit risk on OCI IPs) ───
         def _df_from_cache(sym: str) -> Optional['pd.DataFrame']:
             """Read from ohlcv_cache table; return DataFrame or None."""
-            try:
-                import sqlite3 as _sq
-                conn = _sq.connect(self._db_path, timeout=10)
+            from db import HAS_POSTGRES, get_pg
+            rows = None
+            if HAS_POSTGRES:
                 try:
-                    rows = conn.execute(
-                        """SELECT ts, open, high, low, close, volume
-                           FROM ohlcv_cache
-                           WHERE ticker=? AND interval='1d'
-                           ORDER BY ts ASC""",
-                        (sym,),
-                    ).fetchall()
-                finally:
-                    conn.close()
-                if not rows:
+                    with get_pg() as pg:
+                        cur = pg.cursor()
+                        cur.execute(
+                            "SELECT ts, open, high, low, close, volume FROM ohlcv_cache "
+                            "WHERE ticker=%s AND interval='1d' ORDER BY ts ASC", (sym,))
+                        rows = [(r['ts'], r['open'], r['high'], r['low'], r['close'], r['volume'])
+                                for r in cur.fetchall()]
+                except Exception:
+                    rows = None
+            if not rows:
+                try:
+                    import sqlite3 as _sq
+                    conn = _sq.connect(self._db_path, timeout=10)
+                    try:
+                        rows = conn.execute(
+                            """SELECT ts, open, high, low, close, volume
+                               FROM ohlcv_cache
+                               WHERE ticker=? AND interval='1d'
+                               ORDER BY ts ASC""",
+                            (sym,),
+                        ).fetchall()
+                    finally:
+                        conn.close()
+                except Exception:
                     return None
+            if not rows:
+                return None
+            try:
                 df = pd.DataFrame(rows, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
                 df['Date'] = pd.to_datetime(df['Date'], utc=True)
                 df = df.set_index('Date').sort_index()
-                # Filter to lookback window
                 cutoff = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=lookback_years * 365)
                 df = df[df.index >= cutoff]
                 return df if not df.empty else None
@@ -704,20 +720,38 @@ class HistoricalCalibrator:
     @staticmethod
     def _df_from_cache_intraday(db_path: str, ticker: str, interval: str) -> Optional['pd.DataFrame']:
         """Read intraday candles from ohlcv_cache for the given ticker and interval."""
-        try:
-            conn = sqlite3.connect(db_path, timeout=10)
+        from db import HAS_POSTGRES, get_pg
+        rows = None
+        if HAS_POSTGRES:
             try:
-                rows = conn.execute(
-                    """SELECT ts, open, high, low, close, volume
-                       FROM ohlcv_cache
-                       WHERE ticker=? AND interval=?
-                       ORDER BY ts ASC""",
-                    (ticker, interval),
-                ).fetchall()
-            finally:
-                conn.close()
-            if not rows:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute(
+                        "SELECT ts, open, high, low, close, volume FROM ohlcv_cache "
+                        "WHERE ticker=%s AND interval=%s ORDER BY ts ASC",
+                        (ticker, interval))
+                    rows = [(r['ts'], r['open'], r['high'], r['low'], r['close'], r['volume'])
+                            for r in cur.fetchall()]
+            except Exception:
+                rows = None
+        if not rows:
+            try:
+                conn = sqlite3.connect(db_path, timeout=10)
+                try:
+                    rows = conn.execute(
+                        """SELECT ts, open, high, low, close, volume
+                           FROM ohlcv_cache
+                           WHERE ticker=? AND interval=?
+                           ORDER BY ts ASC""",
+                        (ticker, interval),
+                    ).fetchall()
+                finally:
+                    conn.close()
+            except Exception:
                 return None
+        if not rows:
+            return None
+        try:
             df = pd.DataFrame(rows, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
             df['Date'] = pd.to_datetime(df['Date'], utc=True)
             return df.set_index('Date').sort_index()

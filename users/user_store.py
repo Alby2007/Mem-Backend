@@ -833,7 +833,35 @@ def upsert_pattern_signal(db_path: str, signal: dict) -> int:
       timeframe, formed_at, status, quality_score, kb_conviction,
       kb_regime, kb_signal_dir, expires_at (optional).
     """
+    from db import HAS_POSTGRES, get_pg
     now_iso = datetime.now(timezone.utc).isoformat()
+    params = (
+        signal['ticker'], signal['pattern_type'], signal['direction'],
+        signal['zone_high'], signal['zone_low'], signal['zone_size_pct'],
+        signal['timeframe'], signal['formed_at'],
+        signal.get('status', 'open'), signal.get('quality_score'),
+        signal.get('kb_conviction', ''), signal.get('kb_regime', ''),
+        signal.get('kb_signal_dir', ''), '[]', now_iso,
+        signal.get('expires_at'),
+        signal.get('volume_at_formation'),
+        signal.get('volume_vs_avg'),
+    )
+    if HAS_POSTGRES:
+        with get_pg() as pg_conn:
+            cur = pg_conn.cursor()
+            cur.execute(
+                """INSERT INTO pattern_signals
+                   (ticker, pattern_type, direction, zone_high, zone_low,
+                    zone_size_pct, timeframe, formed_at, status,
+                    quality_score, kb_conviction, kb_regime, kb_signal_dir,
+                    alerted_users, detected_at, expires_at,
+                    volume_at_formation, volume_vs_avg)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   RETURNING id""",
+                params,
+            )
+            row = cur.fetchone()
+            return row['id'] if row else 0
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         ensure_user_tables(conn)
@@ -849,18 +877,8 @@ def upsert_pattern_signal(db_path: str, signal: dict) -> int:
                 quality_score, kb_conviction, kb_regime, kb_signal_dir,
                 alerted_users, detected_at, expires_at,
                 volume_at_formation, volume_vs_avg)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?,?,?)""",
-            (
-                signal['ticker'], signal['pattern_type'], signal['direction'],
-                signal['zone_high'], signal['zone_low'], signal['zone_size_pct'],
-                signal['timeframe'], signal['formed_at'],
-                signal.get('status', 'open'), signal.get('quality_score'),
-                signal.get('kb_conviction', ''), signal.get('kb_regime', ''),
-                signal.get('kb_signal_dir', ''), now_iso,
-                signal.get('expires_at'),
-                signal.get('volume_at_formation'),
-                signal.get('volume_vs_avg'),
-            ),
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            params,
         )
         conn.commit()
         return cur.lastrowid
@@ -878,6 +896,60 @@ def get_open_patterns(
     limit: int = 100,
 ) -> List[dict]:
     """Return open (non-filled, non-broken) pattern_signals rows, best quality first."""
+    from db import HAS_POSTGRES, get_pg
+    if HAS_POSTGRES:
+        with get_pg() as pg_conn:
+            cur = pg_conn.cursor()
+            clauses = ["status IN ('open','partially_filled')", "quality_score >= %s"]
+            params: list = [min_quality]
+            if ticker:
+                clauses.append("ticker ILIKE %s")
+                params.append(f'%{ticker}%')
+            if pattern_type:
+                clauses.append("pattern_type = %s")
+                params.append(pattern_type)
+            if direction:
+                clauses.append("direction = %s")
+                params.append(direction)
+            if timeframe:
+                clauses.append("timeframe = %s")
+                params.append(timeframe)
+            where = ' AND '.join(clauses)
+            params.append(limit)
+            if ticker:
+                sql = f"""SELECT id, ticker, pattern_type, direction, zone_high, zone_low,
+                                 zone_size_pct, timeframe, formed_at, status, filled_at,
+                                 quality_score, kb_conviction, kb_regime, kb_signal_dir,
+                                 alerted_users, detected_at
+                          FROM pattern_signals
+                          WHERE {where}
+                          ORDER BY quality_score DESC, detected_at DESC LIMIT %s"""
+            else:
+                sql = f"""SELECT id, ticker, pattern_type, direction, zone_high, zone_low,
+                                 zone_size_pct, timeframe, formed_at, status, filled_at,
+                                 quality_score, kb_conviction, kb_regime, kb_signal_dir,
+                                 alerted_users, detected_at
+                          FROM (
+                              SELECT *,
+                                     ROW_NUMBER() OVER (
+                                         PARTITION BY ticker
+                                         ORDER BY quality_score DESC, detected_at DESC
+                                     ) AS rn
+                              FROM pattern_signals
+                              WHERE {where}
+                          ) sub
+                          WHERE rn <= 3
+                          ORDER BY quality_score DESC, detected_at DESC LIMIT %s"""
+            cur.execute(sql, params)
+            result = []
+            for row in cur.fetchall():
+                d = dict(row)
+                try:
+                    d['alerted_users'] = json.loads(d['alerted_users'] or '[]')
+                except (json.JSONDecodeError, TypeError):
+                    d['alerted_users'] = []
+                result.append(d)
+            return result
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         ensure_user_tables(conn)
@@ -944,6 +1016,25 @@ def get_open_patterns(
 
 def mark_pattern_alerted(db_path: str, pattern_id: int, user_id: str) -> None:
     """Add user_id to alerted_users JSON array for a pattern_signals row."""
+    from db import HAS_POSTGRES, get_pg
+    if HAS_POSTGRES:
+        with get_pg() as pg_conn:
+            cur = pg_conn.cursor()
+            cur.execute("SELECT alerted_users FROM pattern_signals WHERE id = %s", (pattern_id,))
+            row = cur.fetchone()
+            if row is None:
+                return
+            try:
+                alerted = json.loads(row['alerted_users'] or '[]')
+            except (json.JSONDecodeError, TypeError):
+                alerted = []
+            if user_id not in alerted:
+                alerted.append(user_id)
+                cur.execute(
+                    "UPDATE pattern_signals SET alerted_users = %s WHERE id = %s",
+                    (json.dumps(alerted), pattern_id),
+                )
+        return
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         ensure_user_tables(conn)
@@ -974,6 +1065,21 @@ def update_pattern_status(
     filled_at: Optional[str] = None,
 ) -> None:
     """Update the status (and optionally filled_at) of a pattern_signals row."""
+    from db import HAS_POSTGRES, get_pg
+    if HAS_POSTGRES:
+        with get_pg() as pg_conn:
+            cur = pg_conn.cursor()
+            if filled_at:
+                cur.execute(
+                    "UPDATE pattern_signals SET status = %s, filled_at = %s WHERE id = %s",
+                    (status, filled_at, pattern_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE pattern_signals SET status = %s WHERE id = %s",
+                    (status, pattern_id),
+                )
+        return
     conn = sqlite3.connect(db_path, timeout=10)
     try:
         ensure_user_tables(conn)

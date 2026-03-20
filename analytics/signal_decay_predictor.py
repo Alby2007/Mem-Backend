@@ -96,6 +96,21 @@ class SignalDecayPredictor:
         old ON CONFLICT approach, causing unbounded row accumulation across restarts.
         """
         now = datetime.now(timezone.utc).isoformat()
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute(
+                        "DELETE FROM facts WHERE LOWER(subject)=%s AND predicate=%s AND source='signal_decay_predictor'",
+                        (subject.lower(), predicate))
+                    cur.execute(
+                        """INSERT INTO facts (subject, predicate, object, confidence, source, timestamp)
+                           VALUES (%s,%s,%s,%s,'signal_decay_predictor',%s)""",
+                        (subject.lower(), predicate, str(obj), confidence, now))
+                return
+            except Exception:
+                pass
         conn.execute(
             "DELETE FROM facts WHERE LOWER(subject)=? AND predicate=? AND source='signal_decay_predictor'",
             (subject.lower(), predicate),

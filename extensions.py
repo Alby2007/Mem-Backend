@@ -60,6 +60,18 @@ try:
 except Exception as _e:
     _logger.warning('Failed to initialise auth DB: %s', _e)
 
+# ── PostgreSQL (hot tables) ────────────────────────────────────────────────────
+PG_DSN = os.environ.get("PG_DSN", "")
+HAS_POSTGRES = bool(PG_DSN)
+if HAS_POSTGRES:
+    try:
+        from db import _init_pool
+        _init_pool()
+        _logger.info("PostgreSQL pool initialised")
+    except Exception as _pg_e:
+        _logger.warning("PostgreSQL pool failed: %s — falling back to SQLite", _pg_e)
+        HAS_POSTGRES = False
+
 kg = KnowledgeGraph(db_path=DB_PATH)
 decay_worker = get_decay_worker(DB_PATH)
 

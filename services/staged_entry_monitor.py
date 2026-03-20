@@ -20,9 +20,31 @@ _log = logging.getLogger(__name__)
 def _get_latest_price(db_path: str, ticker: str) -> Optional[float]:
     """Read latest close from ohlcv_cache (15m bars, updated every 300s).
     Falls back to last_price KB atom if no cache entry exists."""
+    from db import HAS_POSTGRES, get_pg
+    if HAS_POSTGRES:
+        try:
+            with get_pg() as pg:
+                cur = pg.cursor()
+                cur.execute(
+                    "SELECT close FROM ohlcv_cache WHERE ticker=%s AND interval='15m' ORDER BY ts DESC LIMIT 1",
+                    (ticker,))
+                row = cur.fetchone()
+                if not row:
+                    cur.execute(
+                        "SELECT close FROM ohlcv_cache WHERE UPPER(ticker)=UPPER(%s) AND interval='15m' ORDER BY ts DESC LIMIT 1",
+                        (ticker,))
+                    row = cur.fetchone()
+                if not row:
+                    cur.execute(
+                        "SELECT object AS close FROM facts WHERE LOWER(subject)=%s AND predicate='last_price' ORDER BY id DESC LIMIT 1",
+                        (ticker.lower(),))
+                    row = cur.fetchone()
+                if row:
+                    return float(row['close'])
+        except Exception:
+            pass  # fall through to SQLite
     try:
         conn = sqlite3.connect(db_path, timeout=5)
-        # Primary: 15m ohlcv_cache — covers all 534 tickers, max 15min stale
         row = conn.execute(
             """SELECT close FROM ohlcv_cache
                WHERE ticker = ? AND interval = '15m'
@@ -30,7 +52,6 @@ def _get_latest_price(db_path: str, ticker: str) -> Optional[float]:
             (ticker,),
         ).fetchone()
         if not row:
-            # Fallback: try uppercase ticker (some tickers stored differently)
             row = conn.execute(
                 """SELECT close FROM ohlcv_cache
                    WHERE UPPER(ticker) = UPPER(?) AND interval = '15m'
@@ -38,7 +59,6 @@ def _get_latest_price(db_path: str, ticker: str) -> Optional[float]:
                 (ticker,),
             ).fetchone()
         if not row:
-            # Last resort: KB last_price atom (may be up to 1800s stale for non-US)
             row = conn.execute(
                 """SELECT object FROM facts
                    WHERE LOWER(subject) = ? AND predicate = 'last_price'

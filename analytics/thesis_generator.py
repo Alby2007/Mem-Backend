@@ -207,6 +207,18 @@ class ThesisGenerator:
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
         subj = subject.lower()
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute("DELETE FROM facts WHERE subject=%s AND predicate=%s AND source=%s",
+                                (subj, predicate, source))
+                    cur.execute("INSERT INTO facts (subject, predicate, object, confidence, source, timestamp) VALUES (%s,%s,%s,%s,%s,%s)",
+                                (subj, predicate, obj, confidence, source, now))
+                return
+            except Exception:
+                pass
         conn.execute(
             "DELETE FROM facts WHERE subject=? AND predicate=? AND source=?",
             (subj, predicate, source),

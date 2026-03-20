@@ -261,6 +261,162 @@ class BotRunner:
         from services.paper_trading import ensure_paper_tables
         ensure_paper_tables(conn)
 
+    # ── PG helpers (hot-table routing) ──────────────────────────────────────
+    # These route writes to Postgres when available, SQLite fallback.
+
+    @staticmethod
+    def _pg_log_event(conn, user_id, event_type, ticker, detail, bot_id, now_iso):
+        """Write paper_agent_log row — PG when available, else SQLite conn."""
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    pg.cursor().execute(
+                        "INSERT INTO paper_agent_log "
+                        "(user_id, event_type, ticker, detail, bot_id, created_at) "
+                        "VALUES (%s,%s,%s,%s,%s,%s)",
+                        (user_id, event_type, ticker, detail, bot_id, now_iso),
+                    )
+            except Exception as _e:
+                _logger.debug('PG paper_agent_log write failed: %s', _e)
+            return
+        conn.execute(
+            "INSERT INTO paper_agent_log "
+            "(user_id, event_type, ticker, detail, bot_id, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (user_id, event_type, ticker, detail, bot_id, now_iso),
+        )
+
+    @staticmethod
+    def _pg_write_equity(conn, bot_id, equity, balance, open_count, now_iso):
+        """Write paper_bot_equity row — PG when available, else SQLite conn."""
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    pg.cursor().execute(
+                        "INSERT INTO paper_bot_equity "
+                        "(bot_id, equity_value, cash_balance, open_positions, logged_at) "
+                        "VALUES (%s,%s,%s,%s,%s)",
+                        (bot_id, equity, balance, open_count, now_iso),
+                    )
+            except Exception as _e:
+                _logger.debug('PG paper_bot_equity write failed: %s', _e)
+            return
+        conn.execute(
+            "INSERT INTO paper_bot_equity "
+            "(bot_id, equity_value, cash_balance, open_positions, logged_at) "
+            "VALUES (?,?,?,?,?)",
+            (bot_id, equity, balance, open_count, now_iso),
+        )
+
+    @staticmethod
+    def _pg_read_fact(conn, subject, predicate):
+        """Read a single fact row — PG when available, else SQLite conn."""
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute(
+                        "SELECT object FROM facts WHERE LOWER(subject)=LOWER(%s) "
+                        "AND predicate=%s ORDER BY timestamp DESC LIMIT 1",
+                        (subject, predicate),
+                    )
+                    row = cur.fetchone()
+                    return row['object'] if row else None
+            except Exception:
+                return None
+        try:
+            row = conn.execute(
+                "SELECT object FROM facts WHERE LOWER(subject)=? "
+                "AND predicate=? ORDER BY timestamp DESC LIMIT 1",
+                (subject.lower(), predicate),
+            ).fetchone()
+            return row[0] if row else None
+        except Exception:
+            return None
+
+    def _pg_query_patterns(self, config, conn, quality_floor):
+        """Query pattern_signals candidates — PG when available, else SQLite."""
+        from db import HAS_POSTGRES, get_pg
+        filter_sql, filter_params = self._build_filtered_query(config)
+        base_where = (
+            "p.status NOT IN ('filled','broken','expired') "
+            f"AND p.quality_score >= {quality_floor}"
+        )
+        full_where = f"{base_where} AND {filter_sql}" if filter_sql else base_where
+
+        if HAS_POSTGRES:
+            # Convert ? placeholders to %s for Postgres
+            pg_where = full_where.replace('?', '%s')
+            with get_pg() as pg:
+                cur = pg.cursor()
+                cur.execute(
+                    f"""SELECT p.id, p.ticker, p.pattern_type, p.direction,
+                               p.zone_high, p.zone_low, p.quality_score,
+                               p.kb_conviction, p.kb_regime, p.kb_signal_dir
+                        FROM pattern_signals p
+                        WHERE {pg_where}
+                        ORDER BY p.quality_score DESC
+                        LIMIT 100""",
+                    filter_params,
+                )
+                return [dict(r) for r in cur.fetchall()]
+        rows = conn.execute(
+            f"""SELECT p.id, p.ticker, p.pattern_type, p.direction,
+                       p.zone_high, p.zone_low, p.quality_score,
+                       p.kb_conviction, p.kb_regime, p.kb_signal_dir
+                FROM pattern_signals p
+                WHERE {full_where}
+                ORDER BY p.quality_score DESC
+                LIMIT 100""",
+            filter_params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def _pg_update_pattern_status(conn, pattern_id, status):
+        """Update pattern_signals status — PG when available, else SQLite."""
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    pg.cursor().execute(
+                        "UPDATE pattern_signals SET status=%s WHERE id=%s",
+                        (status, pattern_id),
+                    )
+            except Exception as _e:
+                _logger.debug('PG pattern status update failed: %s', _e)
+            return
+        conn.execute(
+            "UPDATE pattern_signals SET status=? WHERE id=?",
+            (status, pattern_id),
+        )
+
+    @staticmethod
+    def _pg_read_pattern(conn, pattern_id):
+        """Read a single pattern_signals row — PG when available, else SQLite."""
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute(
+                        "SELECT pattern_type, timeframe, kb_regime FROM pattern_signals WHERE id=%s",
+                        (pattern_id,),
+                    )
+                    return cur.fetchone()
+            except Exception:
+                return None
+        try:
+            return conn.execute(
+                "SELECT pattern_type, timeframe, kb_regime FROM pattern_signals WHERE id=?",
+                (pattern_id,),
+            ).fetchone()
+        except Exception:
+            return None
+
     # ── Fleet management ──────────────────────────────────────────────────────
 
     def count_bots(self, user_id: str) -> int:
@@ -408,12 +564,9 @@ class BotRunner:
                 (now_iso, now_iso, bot_id)
             )
             if user_id:
-                conn.execute(
-                    "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                    (user_id, 'evolution_kill', None,
-                     f'Bot {bot_id[:8]} killed: {reason} ({len(open_pos)} positions closed)',
-                     bot_id, now_iso)
-                )
+                self._pg_log_event(conn, user_id, 'evolution_kill', None,
+                    f'Bot {bot_id[:8]} killed: {reason} ({len(open_pos)} positions closed)',
+                    bot_id, now_iso)
             conn.commit()
             conn.close()
         except Exception as e:
@@ -694,12 +847,9 @@ class BotRunner:
             # The bot is not killed here — evolution handles that — but entry is blocked.
             if balance <= 0:
                 self._write_bot_equity(bot_id, conn, balance, len(open_tickers), now_iso)
-                conn.execute(
-                    "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                    (user_id, 'skip', 'ALL',
-                     f'Scan blocked: negative balance £{balance:,.2f} — no new entries until recovered',
-                     bot_id, now_iso)
-                )
+                self._pg_log_event(conn, user_id, 'skip', 'ALL',
+                    f'Scan blocked: negative balance £{balance:,.2f} — no new entries until recovered',
+                    bot_id, now_iso)
                 conn.commit()
                 conn.close()
                 return {'skipped': True, 'reason': f'negative_balance: £{balance:,.2f}',
@@ -720,27 +870,9 @@ class BotRunner:
             ).fetchall()}
 
 
-            # Build filtered candidate query
-            filter_sql, filter_params = self._build_filtered_query(config)
+            # Build filtered candidate query (routes to PG when available)
             quality_floor = min_qual  # use configured floor directly, no grace margin
-            base_where = (
-                "p.status NOT IN ('filled','broken','expired') "
-                f"AND p.quality_score >= {quality_floor}"
-            )
-            full_where = f"{base_where} AND {filter_sql}" if filter_sql else base_where
-
-            rows = conn.execute(
-                f"""SELECT p.id, p.ticker, p.pattern_type, p.direction,
-                           p.zone_high, p.zone_low, p.quality_score,
-                           p.kb_conviction, p.kb_regime, p.kb_signal_dir
-                    FROM pattern_signals p
-                    WHERE {full_where}
-                    ORDER BY p.quality_score DESC
-                    LIMIT 100""",
-                filter_params
-            ).fetchall()
-
-            candidates = [dict(r) for r in rows]
+            candidates = self._pg_query_patterns(config, conn, quality_floor)
 
             # Enrich with calibration
             for c in candidates:
@@ -795,22 +927,28 @@ class BotRunner:
             # Fix 3: Fetch current market regime for bot-level alignment check
             _market_regime = ''
             try:
-                _regime_row = conn.execute(
-                    "SELECT object FROM facts WHERE predicate='market_regime' "
-                    "ORDER BY timestamp DESC LIMIT 1"
-                ).fetchone()
-                if _regime_row:
-                    _market_regime = (_regime_row[0] or '').lower()
+                _mr = self._pg_read_fact(conn, 'market_regime_global', 'market_regime')
+                if not _mr:
+                    # Fallback: predicate-only search for legacy rows
+                    from db import HAS_POSTGRES, get_pg
+                    if HAS_POSTGRES:
+                        with get_pg() as _pgc:
+                            _cur = _pgc.cursor()
+                            _cur.execute("SELECT object FROM facts WHERE predicate='market_regime' ORDER BY timestamp DESC LIMIT 1")
+                            _row = _cur.fetchone()
+                            _mr = _row['object'] if _row else None
+                    else:
+                        _row = conn.execute("SELECT object FROM facts WHERE predicate='market_regime' ORDER BY timestamp DESC LIMIT 1").fetchone()
+                        _mr = _row[0] if _row else None
+                if _mr:
+                    _market_regime = (_mr or '').lower()
             except Exception:
                 pass
             direction_bias = (config.get('direction_bias') or '').lower()
 
-            conn.execute(
-                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                (user_id, 'scan_start', None,
-                 f'Bot {config["strategy_name"]}: {len(candidates)} candidates, {len(open_tickers)}/{max_pos} slots',
-                 bot_id, now_iso)
-            )
+            self._pg_log_event(conn, user_id, 'scan_start', None,
+                f'Bot {config["strategy_name"]}: {len(candidates)} candidates, {len(open_tickers)}/{max_pos} slots',
+                bot_id, now_iso)
 
             for c in candidates:
                 ticker    = c['ticker']
@@ -832,12 +970,9 @@ class BotRunner:
                 # race conditions between concurrent bot threads.
                 if _fleet_ticker_count.get(ticker, 0) >= _FLEET_MAX_PER_TICKER:
                     skips += 1
-                    conn.execute(
-                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                        (user_id, 'skip', ticker,
-                         f'Fleet cap ({_FLEET_MAX_PER_TICKER}): {_fleet_ticker_count.get(ticker,0)} bots already hold {ticker}',
-                         bot_id, now_iso)
-                    )
+                    self._pg_log_event(conn, user_id, 'skip', ticker,
+                        f'Fleet cap ({_FLEET_MAX_PER_TICKER}): {_fleet_ticker_count.get(ticker,0)} bots already hold {ticker}',
+                        bot_id, now_iso)
                     continue
 
                 # Pattern-level dedup: skip if this exact zone is already open anywhere
@@ -846,12 +981,9 @@ class BotRunner:
                 _cand_pattern_id = c.get('id')
                 if _cand_pattern_id and _cand_pattern_id in _open_pattern_ids:
                     skips += 1
-                    conn.execute(
-                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                        (user_id, 'skip', ticker,
-                         f'Pattern already open fleet-wide (id={_cand_pattern_id}) — dedup guard',
-                         bot_id, now_iso)
-                    )
+                    self._pg_log_event(conn, user_id, 'skip', ticker,
+                        f'Pattern already open fleet-wide (id={_cand_pattern_id}) — dedup guard',
+                        bot_id, now_iso)
                     continue
                 if not _is_market_open(ticker):
                     skips += 1
@@ -859,7 +991,7 @@ class BotRunner:
 
                 # Post-query volatility filter
                 if vol_list:
-                    ticker_vol = self._get_ticker_atom(ticker, 'volatility_regime', conn)
+                    ticker_vol = self._pg_read_fact(conn, ticker, 'volatility_regime')
                     if ticker_vol and ticker_vol.lower() not in vol_list:
                         skips += 1
                         continue
@@ -869,15 +1001,12 @@ class BotRunner:
                 # vs 65.2% overall — negative edge for bullish entries into exhaustion.
                 # Bearish setups at near_52w_high are fine (fade/reversal logic).
                 if direction == 'bullish':
-                    _pr = self._get_ticker_atom(ticker, 'price_regime', conn)
+                    _pr = self._pg_read_fact(conn, ticker, 'price_regime')
                     if _pr and _pr.lower() in ('near_52w_high', 'near_high'):
                         skips += 1
-                        conn.execute(
-                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                            (user_id, 'skip', ticker,
-                             f'near_52w_high skip: bullish entry into exhaustion (hit rate 41.7% vs 65.2% avg)',
-                             bot_id, now_iso)
-                        )
+                        self._pg_log_event(conn, user_id, 'skip', ticker,
+                            f'near_52w_high skip: bullish entry into exhaustion (hit rate 41.7% vs 65.2% avg)',
+                            bot_id, now_iso)
                         continue
 
                 # Post-query regime filter
@@ -909,12 +1038,9 @@ class BotRunner:
                 _is_short_tf = _cand_tf in _SHORT_TF
                 if (c.get('kb_conviction') or '').lower() == 'avoid' and not _is_short_tf:
                     skips += 1
-                    conn.execute(
-                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                        (user_id, 'skip', ticker,
-                         f'kb_conviction=avoid on {_cand_tf}: fundamentals-based block (daily+ only)',
-                         bot_id, now_iso)
-                    )
+                    self._pg_log_event(conn, user_id, 'skip', ticker,
+                        f'kb_conviction=avoid on {_cand_tf}: fundamentals-based block (daily+ only)',
+                        bot_id, now_iso)
                     continue
 
                 # Calibration regime gate for ETF/index liq_void 1d patterns.
@@ -923,12 +1049,8 @@ class BotRunner:
                 # Skip these patterns when global regime is expansion or recovery.
                 _pat_sector = ''
                 try:
-                    _sect_row = conn.execute(
-                        "SELECT object FROM facts WHERE LOWER(subject)=LOWER(?) "
-                        "AND predicate='sector' ORDER BY timestamp DESC LIMIT 1",
-                        (ticker,)
-                    ).fetchone()
-                    _pat_sector = (_sect_row[0] or '').lower() if _sect_row else ''
+                    _sect_val = self._pg_read_fact(conn, ticker, 'sector')
+                    _pat_sector = (_sect_val or '').lower()
                 except Exception:
                     pass
 
@@ -938,14 +1060,9 @@ class BotRunner:
                     _bad_etf_regimes = ('risk_on_expansion', 'recovery')
                     if any(r in (regime or '') for r in _bad_etf_regimes):
                         skips += 1
-                        conn.execute(
-                            "INSERT INTO paper_agent_log "
-                            "(user_id, event_type, ticker, detail, bot_id, created_at) "
-                            "VALUES (?,?,?,?,?,?)",
-                            (user_id, 'skip', ticker,
-                             f'ETF liq_void 1d blocked: regime={regime} (edge only in corrections)',
-                             bot_id, now_iso)
-                        )
+                        self._pg_log_event(conn, user_id, 'skip', ticker,
+                            f'ETF liq_void 1d blocked: regime={regime} (edge only in corrections)',
+                            bot_id, now_iso)
                         continue
 
                 # Open-hour kill zone: block BULLISH 4h/1d entries during LSE/NYSE open spike.
@@ -960,12 +1077,9 @@ class BotRunner:
                         and direction == 'bullish'
                         and _cand_tf_entry in ('4h', '1d')):
                     skips += 1
-                    conn.execute(
-                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                        (user_id, 'skip', ticker,
-                         f'Open-hour kill zone: bullish {_cand_tf_entry} blocked at {_now_utc.hour:02d}:xx UTC (07-09 LSE open, WR=20-36%)',
-                         bot_id, now_iso)
-                    )
+                    self._pg_log_event(conn, user_id, 'skip', ticker,
+                        f'Open-hour kill zone: bullish {_cand_tf_entry} blocked at {_now_utc.hour:02d}:xx UTC (07-09 LSE open, WR=20-36%)',
+                        bot_id, now_iso)
                     continue
 
                 # Mitigation 1d regime gate.
@@ -979,34 +1093,21 @@ class BotRunner:
                     _bad_mit_regimes = ('risk_on_expansion', 'recovery')
                     if any(r in (_market_regime or '') for r in _bad_mit_regimes):
                         skips += 1
-                        conn.execute(
-                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                            (user_id, 'skip', ticker,
-                             f'Mitigation 1d blocked: regime={_market_regime} (edge only in risk_off/correction)',
-                             bot_id, now_iso)
-                        )
+                        self._pg_log_event(conn, user_id, 'skip', ticker,
+                            f'Mitigation 1d blocked: regime={_market_regime} (edge only in risk_off/correction)',
+                            bot_id, now_iso)
                         continue
 
                 # Earnings proximity gate: skip entries within 3 days of earnings.
                 # Earnings = binary event risk — WR collapses regardless of pattern quality.
                 # 3-day window covers pre-earnings IV crush + post-earnings gap risk.
                 try:
-                    _ep_row = conn.execute(
-                        "SELECT object FROM facts WHERE UPPER(subject)=UPPER(?) "
-                        "AND predicate='earnings_proximity_days' "
-                        "ORDER BY timestamp DESC LIMIT 1",
-                        (ticker,),
-                    ).fetchone()
-                    if _ep_row and int(_ep_row[0]) <= 3:
+                    _ep_val = self._pg_read_fact(conn, ticker, 'earnings_proximity_days')
+                    if _ep_val and int(_ep_val) <= 3:
                         skips += 1
-                        conn.execute(
-                            "INSERT INTO paper_agent_log "
-                            "(user_id, event_type, ticker, detail, bot_id, created_at) "
-                            "VALUES (?,?,?,?,?,?)",
-                            (user_id, 'skip', ticker,
-                             f'earnings in {_ep_row[0]}d — skip to avoid event risk',
-                             bot_id, now_iso),
-                        )
+                        self._pg_log_event(conn, user_id, 'skip', ticker,
+                            f'earnings in {_ep_val}d — skip to avoid event risk',
+                            bot_id, now_iso)
                         continue
                 except (ValueError, TypeError, Exception):
                     pass
@@ -1018,23 +1119,13 @@ class BotRunner:
                 # The calibration HR (85-95%) was built historically without this filter.
                 if pattern_type == 'mitigation' and direction == 'bullish':
                     try:
-                        _rsi_row = conn.execute(
-                            "SELECT object FROM facts WHERE UPPER(subject)=UPPER(?) "
-                            "AND predicate='rsi_14' "
-                            "ORDER BY timestamp DESC LIMIT 1",
-                            (ticker,),
-                        ).fetchone()
-                        if _rsi_row and float(_rsi_row[0]) < 35:
+                        _rsi_val = self._pg_read_fact(conn, ticker, 'rsi_14')
+                        if _rsi_val and float(_rsi_val) < 35:
                             skips += 1
-                            conn.execute(
-                                "INSERT INTO paper_agent_log "
-                                "(user_id, event_type, ticker, detail, bot_id, created_at) "
-                                "VALUES (?,?,?,?,?,?)",
-                                (user_id, 'skip', ticker,
-                                 f'RSI falling-knife: rsi={float(_rsi_row[0]):.1f} < 35 '
-                                 f'on bullish mitigation — 0% WR in live data',
-                                 bot_id, now_iso),
-                            )
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'RSI falling-knife: rsi={float(_rsi_val):.1f} < 35 '
+                                f'on bullish mitigation — 0% WR in live data',
+                                bot_id, now_iso)
                             continue
                     except (ValueError, TypeError, Exception):
                         pass
@@ -1046,23 +1137,13 @@ class BotRunner:
                 # The market beta correlation disrupts IFVG zone mechanics for mid-beta stocks.
                 if pattern_type == 'ifvg':
                     try:
-                        _beta_row = conn.execute(
-                            "SELECT CAST(object AS REAL) FROM facts "
-                            "WHERE UPPER(subject)=UPPER(?) AND predicate='beta' "
-                            "ORDER BY timestamp DESC LIMIT 1",
-                            (ticker,),
-                        ).fetchone()
-                        if _beta_row and 1.0 <= float(_beta_row[0]) <= 1.5:
+                        _beta_val = self._pg_read_fact(conn, ticker, 'beta')
+                        if _beta_val and 1.0 <= float(_beta_val) <= 1.5:
                             skips += 1
-                            conn.execute(
-                                "INSERT INTO paper_agent_log "
-                                "(user_id, event_type, ticker, detail, bot_id, created_at) "
-                                "VALUES (?,?,?,?,?,?)",
-                                (user_id, 'skip', ticker,
-                                 f'IFVG mid-beta blocked: beta={float(_beta_row[0]):.2f} '
-                                 f'(1.0-1.5 range) — 33% WR in live data vs 87% for defensive',
-                                 bot_id, now_iso),
-                            )
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'IFVG mid-beta blocked: beta={float(_beta_val):.2f} '
+                                f'(1.0-1.5 range) — 33% WR in live data vs 87% for defensive',
+                                bot_id, now_iso)
                             continue
                     except (ValueError, TypeError, Exception):
                         pass
@@ -1076,23 +1157,13 @@ class BotRunner:
                 # Broader 1h/1d liq_void for mid-beta is fine — this is 15m specific.
                 if pattern_type == 'liquidity_void' and timeframe == '15m':
                     try:
-                        _lv_beta = conn.execute(
-                            "SELECT CAST(object AS REAL) FROM facts "
-                            "WHERE UPPER(subject)=UPPER(?) AND predicate='beta' "
-                            "ORDER BY timestamp DESC LIMIT 1",
-                            (ticker,),
-                        ).fetchone()
-                        if _lv_beta and 0.5 <= float(_lv_beta[0]) <= 1.0:
+                        _lv_beta_val = self._pg_read_fact(conn, ticker, 'beta')
+                        if _lv_beta_val and 0.5 <= float(_lv_beta_val) <= 1.0:
                             skips += 1
-                            conn.execute(
-                                "INSERT INTO paper_agent_log "
-                                "(user_id, event_type, ticker, detail, bot_id, created_at) "
-                                "VALUES (?,?,?,?,?,?)",
-                                (user_id, 'skip', ticker,
-                                 f'liq_void 15m mid-beta blocked: beta={float(_lv_beta[0]):.2f} '
-                                 f'(0.5-1.0 range) — 11.1% WR in live data',
-                                 bot_id, now_iso),
-                            )
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'liq_void 15m mid-beta blocked: beta={float(_lv_beta_val):.2f} '
+                                f'(0.5-1.0 range) — 11.1% WR in live data',
+                                bot_id, now_iso)
                             continue
                     except (ValueError, TypeError, Exception):
                         pass
@@ -1106,37 +1177,22 @@ class BotRunner:
                 # Extend to ALL patterns at extremes: <30 and >70 are danger zones
                 if direction == 'bullish':
                     try:
-                        _rsi_ext = conn.execute(
-                            "SELECT CAST(object AS REAL) FROM facts "
-                            "WHERE UPPER(subject)=UPPER(?) AND predicate='rsi_14' "
-                            "ORDER BY timestamp DESC LIMIT 1",
-                            (ticker,),
-                        ).fetchone()
-                        if _rsi_ext:
-                            _rsi_val = _rsi_ext[0]
+                        _rsi_ext_val = self._pg_read_fact(conn, ticker, 'rsi_14')
+                        if _rsi_ext_val:
+                            _rsi_val = float(_rsi_ext_val)
                             if _rsi_val < 30:
                                 skips += 1
-                                conn.execute(
-                                    "INSERT INTO paper_agent_log "
-                                    "(user_id, event_type, ticker, detail, bot_id, created_at) "
-                                    "VALUES (?,?,?,?,?,?)",
-                                    (user_id, 'skip', ticker,
-                                     f'RSI extreme oversold: rsi={_rsi_val:.1f} < 30 — '
-                                     f'momentum continuation, not a bounce',
-                                     bot_id, now_iso),
-                                )
+                                self._pg_log_event(conn, user_id, 'skip', ticker,
+                                    f'RSI extreme oversold: rsi={_rsi_val:.1f} < 30 — '
+                                    f'momentum continuation, not a bounce',
+                                    bot_id, now_iso)
                                 continue
                             if _rsi_val > 70:
                                 skips += 1
-                                conn.execute(
-                                    "INSERT INTO paper_agent_log "
-                                    "(user_id, event_type, ticker, detail, bot_id, created_at) "
-                                    "VALUES (?,?,?,?,?,?)",
-                                    (user_id, 'skip', ticker,
-                                     f'RSI overbought: rsi={_rsi_val:.1f} > 70 — '
-                                     f'entering bullish at exhaustion top',
-                                     bot_id, now_iso),
-                                )
+                                self._pg_log_event(conn, user_id, 'skip', ticker,
+                                    f'RSI overbought: rsi={_rsi_val:.1f} > 70 — '
+                                    f'entering bullish at exhaustion top',
+                                    bot_id, now_iso)
                                 continue
                     except (ValueError, TypeError, Exception):
                         pass
@@ -1150,40 +1206,20 @@ class BotRunner:
                 _is_futures_fx = _ticker_upper.endswith('=F') or _ticker_upper.endswith('=X')
                 if timeframe in ('5m', '15m', '1h') and not _is_futures_fx:
                     try:
-                        _mc = conn.execute(
-                            "SELECT object FROM facts WHERE UPPER(subject)=UPPER(?) "
-                            "AND predicate='market_cap_tier' "
-                            "ORDER BY timestamp DESC LIMIT 1",
-                            (ticker,),
-                        ).fetchone()
-                        if _mc and _mc[0] in ('micro_cap', 'nano_cap'):
+                        _mc_val = self._pg_read_fact(conn, ticker, 'market_cap_tier')
+                        if _mc_val and _mc_val in ('micro_cap', 'nano_cap'):
                             skips += 1
-                            conn.execute(
-                                "INSERT INTO paper_agent_log "
-                                "(user_id, event_type, ticker, detail, bot_id, created_at) "
-                                "VALUES (?,?,?,?,?,?)",
-                                (user_id, 'skip', ticker,
-                                 f'micro/nano cap blocked on {timeframe}: gap risk too high',
-                                 bot_id, now_iso),
-                            )
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'micro/nano cap blocked on {timeframe}: gap risk too high',
+                                bot_id, now_iso)
                             continue
-                        _avol = conn.execute(
-                            "SELECT CAST(object AS REAL) FROM facts "
-                            "WHERE UPPER(subject)=UPPER(?) AND predicate='avg_volume_30d' "
-                            "ORDER BY timestamp DESC LIMIT 1",
-                            (ticker,),
-                        ).fetchone()
-                        if _avol and _avol[0] < 150000:
+                        _avol_val = self._pg_read_fact(conn, ticker, 'avg_volume_30d')
+                        if _avol_val and float(_avol_val) < 150000:
                             skips += 1
-                            conn.execute(
-                                "INSERT INTO paper_agent_log "
-                                "(user_id, event_type, ticker, detail, bot_id, created_at) "
-                                "VALUES (?,?,?,?,?,?)",
-                                (user_id, 'skip', ticker,
-                                 f'low liquidity: avg_vol={int(_avol[0]):,} < 150k — '
-                                 f'gap-through-stop risk on {timeframe}',
-                                 bot_id, now_iso),
-                            )
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'low liquidity: avg_vol={int(float(_avol_val)):,} < 150k — '
+                                f'gap-through-stop risk on {timeframe}',
+                                bot_id, now_iso)
                             continue
                     except (ValueError, TypeError, Exception):
                         pass
@@ -1252,21 +1288,15 @@ class BotRunner:
                     # Hard block: price already at or past T2 — the move is done
                     if direction == 'bullish' and _live_price >= t2_p:
                         skips += 1
-                        conn.execute(
-                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                            (user_id, 'skip', ticker,
-                             f'Price {_live_price:.4f} already at/past T2 {t2_p:.4f} — move complete, skipping',
-                             bot_id, now_iso)
-                        )
+                        self._pg_log_event(conn, user_id, 'skip', ticker,
+                            f'Price {_live_price:.4f} already at/past T2 {t2_p:.4f} — move complete, skipping',
+                            bot_id, now_iso)
                         continue
                     if direction == 'bearish' and _live_price <= t2_p:
                         skips += 1
-                        conn.execute(
-                            "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                            (user_id, 'skip', ticker,
-                             f'Price {_live_price:.4f} already at/past T2 {t2_p:.4f} — move complete, skipping',
-                             bot_id, now_iso)
-                        )
+                        self._pg_log_event(conn, user_id, 'skip', ticker,
+                            f'Price {_live_price:.4f} already at/past T2 {t2_p:.4f} — move complete, skipping',
+                            bot_id, now_iso)
                         continue
                     _ticker_upper = ticker.upper()
                     _stale_pct = 0.08 if (
@@ -1285,40 +1315,28 @@ class BotRunner:
                     if direction == 'bullish':
                         if _live_price <= stop_p:
                             skips += 1
-                            conn.execute(
-                                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                                (user_id, 'skip', ticker,
-                                 f'Price ${_live_price:.2f} already below stop ${stop_p:.2f} — would instant stop',
-                                 bot_id, now_iso)
-                            )
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'Price ${_live_price:.2f} already below stop ${stop_p:.2f} — would instant stop',
+                                bot_id, now_iso)
                             continue
                         if _price_ratio > _stale_pct:
                             skips += 1
-                            conn.execute(
-                                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                                (user_id, 'skip', ticker,
-                                 f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern',
-                                 bot_id, now_iso)
-                            )
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern',
+                                bot_id, now_iso)
                             continue
                     else:  # bearish
                         if _live_price >= stop_p:
                             skips += 1
-                            conn.execute(
-                                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                                (user_id, 'skip', ticker,
-                                 f'Price ${_live_price:.2f} already above stop ${stop_p:.2f} — would instant stop',
-                                 bot_id, now_iso)
-                            )
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'Price ${_live_price:.2f} already above stop ${stop_p:.2f} — would instant stop',
+                                bot_id, now_iso)
                             continue
                         if _price_ratio > _stale_pct:
                             skips += 1
-                            conn.execute(
-                                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                                (user_id, 'skip', ticker,
-                                 f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern',
-                                 bot_id, now_iso)
-                            )
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern',
+                                bot_id, now_iso)
                             continue
                     # Fix 3: Use live price as entry for realistic fills
                     if zone_low <= _live_price <= zone_high:
@@ -1343,10 +1361,7 @@ class BotRunner:
                 should_enter, reason, size_mult = _should_enter(c, remaining_cash, risk_per_trade)
                 if not should_enter:
                     skips += 1
-                    conn.execute(
-                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                        (user_id, 'skip', ticker, reason, bot_id, now_iso)
-                    )
+                    self._pg_log_event(conn, user_id, 'skip', ticker, reason, bot_id, now_iso)
                     continue
 
                 # Fix 3: apply regime size multiplier on top of calibration multiplier
@@ -1395,12 +1410,9 @@ class BotRunner:
                 ).fetchone()[0]
                 if _live_fleet_count >= _FLEET_MAX_PER_TICKER:
                     skips += 1
-                    conn.execute(
-                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                        (user_id, 'skip', ticker,
-                         f'Race guard: {_live_fleet_count} open positions for {ticker} at commit time',
-                         bot_id, now_iso)
-                    )
+                    self._pg_log_event(conn, user_id, 'skip', ticker,
+                        f'Race guard: {_live_fleet_count} open positions for {ticker} at commit time',
+                        bot_id, now_iso)
                     continue
 
                 # Deduct from bot balance
@@ -1424,22 +1436,16 @@ class BotRunner:
                 # Mark pattern as filled so no other bot picks it up in subsequent scans.
                 # This is the core fix for duplicate concentration — without this, the same
                 # pattern appears in every scan cycle for every bot indefinitely.
-                conn.execute(
-                    "UPDATE pattern_signals SET status='filled' WHERE id=?",
-                    (c['id'],)
-                )
+                self._pg_update_pattern_status(conn, c['id'], 'filled')
                 open_tickers.add(ticker)
                 open_slots_used += 1
                 _fleet_ticker_count[ticker] = _fleet_ticker_count.get(ticker, 0) + 1
                 if _cand_pattern_id:
                     _open_pattern_ids.add(_cand_pattern_id)  # dedup subsequent bots this cycle
                 entries += 1
-                conn.execute(
-                    "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                    (user_id, 'entry', ticker,
-                     f'{c.get("pattern_type","?")} {direction} entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} value=£{pos_value:,.2f} | {reason}',
-                     bot_id, now_iso)
-                )
+                self._pg_log_event(conn, user_id, 'entry', ticker,
+                    f'{c.get("pattern_type","?")} {direction} entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} value=£{pos_value:,.2f} | {reason}',
+                    bot_id, now_iso)
                 try:
                     if hasattr(ext, 'prediction_ledger') and ext.prediction_ledger is not None:
                         _pt  = c.get('pattern_type', 'unknown')
@@ -1574,12 +1580,9 @@ class BotRunner:
                         "UPDATE paper_bot_configs SET virtual_balance = virtual_balance + ? WHERE bot_id=?",
                         (partial_val, bot_id)
                     )
-                    conn.execute(
-                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                        (user_id, 't1_hit', ticker,
-                         f't1_hit at {price:.4f} partial close {half_qty} units £{partial_val:,.2f} pnl_r={pnl_r_partial:+.2f}',
-                         bot_id, now_iso)
-                    )
+                    self._pg_log_event(conn, user_id, 't1_hit', ticker,
+                        f't1_hit at {price:.4f} partial close {half_qty} units £{partial_val:,.2f} pnl_r={pnl_r_partial:+.2f}',
+                        bot_id, now_iso)
             else:
                 if price >= stop_:
                     new_status = 'stopped_out'; exit_p = price
@@ -1601,12 +1604,9 @@ class BotRunner:
                         "UPDATE paper_bot_configs SET virtual_balance = virtual_balance + ? WHERE bot_id=?",
                         (partial_val, bot_id)
                     )
-                    conn.execute(
-                        "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                        (user_id, 't1_hit', ticker,
-                         f't1_hit at {price:.4f} partial close {half_qty} units £{partial_val:,.2f} pnl_r={pnl_r_partial:+.2f}',
-                         bot_id, now_iso)
-                    )
+                    self._pg_log_event(conn, user_id, 't1_hit', ticker,
+                        f't1_hit at {price:.4f} partial close {half_qty} units £{partial_val:,.2f} pnl_r={pnl_r_partial:+.2f}',
+                        bot_id, now_iso)
 
             # Max hold time: expire positions open > 10 days with no resolution.
             # Prevents zombie positions in instruments with stale/missing price data.
@@ -1624,12 +1624,9 @@ class BotRunner:
                                 'Bot %s: expiring %s after %d days (no price resolution)',
                                 bot_id, ticker, age_days
                             )
-                            conn.execute(
-                                "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                                (user_id, 'skip', ticker,
-                                 f'Position expired after {age_days}d — no price resolution, neutral exit',
-                                 bot_id, now_iso)
-                            )
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'Position expired after {age_days}d — no price resolution, neutral exit',
+                                bot_id, now_iso)
                     except Exception:
                         pass
 
@@ -1645,28 +1642,25 @@ class BotRunner:
                     "UPDATE paper_bot_configs SET virtual_balance = virtual_balance + ? WHERE bot_id=?",
                     (cash_return, bot_id)
                 )
-                conn.execute(
-                    "INSERT INTO paper_agent_log (user_id, event_type, ticker, detail, bot_id, created_at) VALUES (?,?,?,?,?,?)",
-                    (user_id, new_status, ticker,
-                     f'exit={exit_p:.4f} pnl_r={pnl_r:+.2f}',
-                     bot_id, now_iso)
-                )
+                self._pg_log_event(conn, user_id, new_status, ticker,
+                    f'exit={exit_p:.4f} pnl_r={pnl_r:+.2f}',
+                    bot_id, now_iso)
                 # Calibration feedback
                 if pos['pattern_id']:
                     try:
-                        pat = conn.execute(
-                            "SELECT pattern_type, timeframe, kb_regime FROM pattern_signals WHERE id=?",
-                            (pos['pattern_id'],)
-                        ).fetchone()
+                        pat = self._pg_read_pattern(conn, pos['pattern_id'])
                         if pat:
                             _outcome_map = {'t1_hit': 'hit_t1', 't2_hit': 'hit_t2', 'stopped_out': 'stopped_out'}
                             outcome = _outcome_map.get(new_status, 'stopped_out')
                             _pos_dir = pos.get('direction') or None
+                            _pat_type = pat['pattern_type'] if isinstance(pat, dict) else (pat[0] or 'unknown')
+                            _pat_tf = pat['timeframe'] if isinstance(pat, dict) else (pat[1] or '4h')
+                            _pat_regime = pat['kb_regime'] if isinstance(pat, dict) else pat[2]
                             update_calibration(
                                 ticker=ticker,
-                                pattern_type=(pat[0] or 'unknown'),
-                                timeframe=(pat[1] or '4h'),
-                                market_regime=pat[2],
+                                pattern_type=_pat_type,
+                                timeframe=_pat_tf,
+                                market_regime=_pat_regime,
                                 outcome=outcome,
                                 db_path=self.db_path,
                                 source='paper_bot',
@@ -1693,23 +1687,13 @@ class BotRunner:
                     price = live.get(ticker) or entry_price  # fallback to entry if fetch fails
                     open_value += float(price) * float(qty)
             equity = round(balance + open_value, 2)
-            conn.execute(
-                "INSERT INTO paper_bot_equity (bot_id, equity_value, cash_balance, open_positions, logged_at) VALUES (?,?,?,?,?)",
-                (bot_id, equity, balance, open_count, now_iso)
-            )
+            self._pg_write_equity(conn, bot_id, equity, balance, open_count, now_iso)
         except Exception as e:
             _logger.debug('_write_bot_equity failed for %s: %s', bot_id, e)
 
     def _get_ticker_atom(self, ticker: str, predicate: str, conn) -> Optional[str]:
-        """Read a single KB atom for a ticker."""
-        try:
-            row = conn.execute(
-                "SELECT object FROM facts WHERE LOWER(subject)=? AND predicate=? ORDER BY timestamp DESC LIMIT 1",
-                (ticker.lower(), predicate)
-            ).fetchone()
-            return row[0] if row else None
-        except Exception:
-            return None
+        """Read a single KB atom for a ticker. Delegates to _pg_read_fact."""
+        return self._pg_read_fact(conn, ticker, predicate)
 
     # ── Performance metrics ───────────────────────────────────────────────────
 

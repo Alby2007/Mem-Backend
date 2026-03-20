@@ -422,6 +422,15 @@ class YFinanceAdapter(BaseIngestAdapter):
             self._logger.debug('chart API fetch failed for %s: %s', sym, e)
             return []
 
+    _PG_OHLCV_UPSERT = (
+        "INSERT INTO ohlcv_cache "
+        "(ticker, interval, ts, open, high, low, close, volume, cached_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+        "ON CONFLICT (ticker, interval, ts) DO UPDATE SET "
+        "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
+        "close=EXCLUDED.close, volume=EXCLUDED.volume, cached_at=EXCLUDED.cached_at"
+    )
+
     def _cache_ohlcv_candles(self) -> None:
         """Fetch 180d of daily candles for each ticker via Yahoo chart API
         (direct HTTP, not yfinance bulk download — not rate-limited on OCI IPs)
@@ -429,14 +438,20 @@ class YFinanceAdapter(BaseIngestAdapter):
         import sqlite3 as _sq
         import time as _time
         import requests as _req
+        from db import HAS_POSTGRES, get_pg
 
-        try:
-            conn = _sq.connect(self._db_path, timeout=15)
-            conn.execute(self._OHLCV_DDL)
-            conn.commit()
-        except Exception as e:
-            self._logger.warning('ohlcv_cache table init failed: %s', e)
-            return
+        _use_pg = HAS_POSTGRES
+
+        # SQLite fallback: ensure table exists
+        sq_conn = None
+        if not _use_pg:
+            try:
+                sq_conn = _sq.connect(self._db_path, timeout=15)
+                sq_conn.execute(self._OHLCV_DDL)
+                sq_conn.commit()
+            except Exception as e:
+                self._logger.warning('ohlcv_cache table init failed: %s', e)
+                return
 
         now_iso = datetime.now(timezone.utc).isoformat()
         cached = 0
@@ -459,13 +474,18 @@ class YFinanceAdapter(BaseIngestAdapter):
             db_rows = [(sym, '1d', ts, o, h, l, c, v, now_iso)
                        for ts, o, h, l, c, v in rows]
             try:
-                conn.executemany(
-                    """INSERT OR REPLACE INTO ohlcv_cache
-                       (ticker, interval, ts, open, high, low, close, volume, cached_at)
-                       VALUES (?,?,?,?,?,?,?,?,?)""",
-                    db_rows,
-                )
-                conn.commit()
+                if _use_pg:
+                    with get_pg() as pg_conn:
+                        cur = pg_conn.cursor()
+                        cur.executemany(self._PG_OHLCV_UPSERT, db_rows)
+                else:
+                    sq_conn.executemany(
+                        """INSERT OR REPLACE INTO ohlcv_cache
+                           (ticker, interval, ts, open, high, low, close, volume, cached_at)
+                           VALUES (?,?,?,?,?,?,?,?,?)""",
+                        db_rows,
+                    )
+                    sq_conn.commit()
                 cached += 1
             except Exception as e:
                 self._logger.debug('ohlcv_cache write failed for %s: %s', sym, e)
@@ -483,17 +503,23 @@ class YFinanceAdapter(BaseIngestAdapter):
                             (sym, intraday_interval, ts, o, h, l, c, v, now_iso)
                             for ts, o, h, l, c, v in intra_rows
                         ]
-                        conn.executemany(
-                            """INSERT OR REPLACE INTO ohlcv_cache
-                               (ticker, interval, ts, open, high, low, close, volume, cached_at)
-                               VALUES (?,?,?,?,?,?,?,?,?)""",
-                            intra_db_rows,
-                        )
-                        conn.commit()
+                        if _use_pg:
+                            with get_pg() as pg_conn:
+                                cur = pg_conn.cursor()
+                                cur.executemany(self._PG_OHLCV_UPSERT, intra_db_rows)
+                        else:
+                            sq_conn.executemany(
+                                """INSERT OR REPLACE INTO ohlcv_cache
+                                   (ticker, interval, ts, open, high, low, close, volume, cached_at)
+                                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                                intra_db_rows,
+                            )
+                            sq_conn.commit()
                 except Exception as _ie:
                     self._logger.debug('ohlcv_cache intraday write failed %s/%s: %s', sym, intraday_interval, _ie)
 
-        conn.close()
+        if sq_conn:
+            sq_conn.close()
         self._logger.info('ohlcv_cache: cached daily candles for %d/%d tickers', cached, len(active_tickers))
 
     # ── Fast bulk price path ───────────────────────────────────────────────

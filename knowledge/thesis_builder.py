@@ -536,6 +536,24 @@ class ThesisBuilder:
             (thesis_id, 'contradicting_evidence',
              '; '.join(contradicting[:5]) if contradicting else 'none', 0.80),
         ]
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    for subj, pred, obj, conf in atoms:
+                        if not obj:
+                            continue
+                        cur.execute(
+                            """INSERT INTO facts (subject, predicate, object, source, confidence, timestamp)
+                               VALUES (%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT(subject, predicate, object)
+                               DO UPDATE SET confidence=EXCLUDED.confidence, source=EXCLUDED.source,
+                                             timestamp=EXCLUDED.timestamp""",
+                            (subj, pred, obj, source, conf, now_iso))
+                return
+            except Exception:
+                pass  # fall through to SQLite
         conn = self._connect()
         try:
             for subj, pred, obj, conf in atoms:

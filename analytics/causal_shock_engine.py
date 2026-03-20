@@ -369,11 +369,26 @@ class CausalShockEngine:
         """Write a causal_signal atom directly to the facts table."""
         import json
         now_iso = datetime.now(timezone.utc).isoformat()
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute(
+                        "DELETE FROM facts WHERE subject=%s AND predicate=%s AND source=%s",
+                        (subject.lower(), predicate, _CAUSAL_SOURCE))
+                    cur.execute(
+                        """INSERT INTO facts
+                           (subject, predicate, object, confidence, source, timestamp, metadata)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                        (subject.lower(), predicate, object_val,
+                         confidence, _CAUSAL_SOURCE, now_iso, json.dumps(metadata)))
+                return
+            except Exception as exc:
+                _log.warning('CausalShockEngine: PG write failed for %s: %s', subject, exc)
         try:
             conn = sqlite3.connect(self._db, timeout=10)
             try:
-                # Delete any existing causal_signal atom for this ticker
-                # (latest shock always wins — decay handled by kb_cleanup)
                 conn.execute(
                     "DELETE FROM facts WHERE subject=? AND predicate=? AND source=?",
                     (subject.lower(), predicate, _CAUSAL_SOURCE),

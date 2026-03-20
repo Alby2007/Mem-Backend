@@ -286,6 +286,22 @@ def _emit_cohort_atoms(signal: CohortSignal, db_path: str, conn: sqlite3.Connect
             f'{signal.stop_cluster}_{tightness}', 0.65,
         ))
 
+    from db import HAS_POSTGRES, get_pg
+    if HAS_POSTGRES:
+        try:
+            with get_pg() as pg:
+                cur = pg.cursor()
+                for subj, pred, obj, conf in atoms:
+                    cur.execute(
+                        """INSERT INTO facts (subject, predicate, object, source, confidence, timestamp)
+                           VALUES (%s,%s,%s,%s,%s,%s)
+                           ON CONFLICT(subject, predicate, object)
+                           DO UPDATE SET confidence=EXCLUDED.confidence, source=EXCLUDED.source,
+                                         timestamp=EXCLUDED.timestamp""",
+                        (subj, pred, obj, source, conf, now))
+            return
+        except Exception:
+            pass  # fall through to SQLite
     for subj, pred, obj, conf in atoms:
         try:
             conn.execute(
@@ -297,7 +313,6 @@ def _emit_cohort_atoms(signal: CohortSignal, db_path: str, conn: sqlite3.Connect
                 (subj, pred, obj, source, conf, now),
             )
         except Exception:
-            # facts table may not have ON CONFLICT — fall back to delete+insert
             try:
                 conn.execute(
                     "DELETE FROM facts WHERE subject=? AND predicate=? AND source=?",
@@ -557,6 +572,22 @@ class NetworkEffectEngine:
         now_iso:        str,
     ) -> None:
         """Write organic_convergence atom to facts table."""
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    pg.cursor().execute(
+                        """INSERT INTO facts (subject, predicate, object, source, confidence, timestamp)
+                           VALUES (%s,%s,%s,%s,%s,%s)
+                           ON CONFLICT(subject, predicate, object)
+                           DO UPDATE SET confidence=EXCLUDED.confidence, source=EXCLUDED.source,
+                                         timestamp=EXCLUDED.timestamp""",
+                        (ticker.lower(), 'organic_convergence',
+                         f'{n_users} independent users ({lookback_hours}h)',
+                         'network_effect_engine', 0.60, now_iso))
+                return
+            except Exception:
+                pass  # fall through to SQLite
         try:
             conn = sqlite3.connect(self._db, timeout=10)
             try:

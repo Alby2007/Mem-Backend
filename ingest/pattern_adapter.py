@@ -113,18 +113,33 @@ def _read_ohlcv_cache(db_path: str, ticker: str) -> List[OHLCV]:
     Returns candles sorted oldest-first.
     """
     try:
-        conn = db_connect(db_path)
-        rows = conn.execute(
-            """SELECT ts, open, high, low, close, volume
-               FROM ohlcv_cache
-               WHERE UPPER(ticker)=UPPER(?) AND interval='1d'
-               ORDER BY ts ASC""",
-            (ticker,),
-        ).fetchall()
-        conn.close()
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            with get_pg() as pg_conn:
+                cur = pg_conn.cursor()
+                cur.execute(
+                    "SELECT ts, open, high, low, close, volume FROM ohlcv_cache "
+                    "WHERE UPPER(ticker)=UPPER(%s) AND interval='1d' ORDER BY ts ASC",
+                    (ticker,),
+                )
+                rows = cur.fetchall()
+        else:
+            conn = db_connect(db_path)
+            rows = conn.execute(
+                """SELECT ts, open, high, low, close, volume
+                   FROM ohlcv_cache
+                   WHERE UPPER(ticker)=UPPER(?) AND interval='1d'
+                   ORDER BY ts ASC""",
+                (ticker,),
+            ).fetchall()
+            conn.close()
         candles: List[OHLCV] = []
-        for ts, o, h, l, c, v in rows:
+        for row in rows:
             try:
+                if isinstance(row, dict):
+                    ts, o, h, l, c, v = row['ts'], row['open'], row['high'], row['low'], row['close'], row['volume']
+                else:
+                    ts, o, h, l, c, v = row
                 candles.append(OHLCV(
                     timestamp=ts,
                     open=float(o or 0), high=float(h or 0),

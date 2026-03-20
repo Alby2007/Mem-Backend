@@ -76,55 +76,66 @@ class RelativeVolumeAdapter(BaseIngestAdapter):
         cutoff   = (now_utc - timedelta(hours=_MAX_OHLCV_AGE_HOURS)).isoformat()
         atoms: List[RawAtom] = []
 
-        try:
-            conn = sqlite3.connect(self._db_path, timeout=15)
-            conn.execute('PRAGMA journal_mode=WAL')
-        except Exception as e:
-            _logger.error('relative_volume: DB connect failed: %s', e)
-            return []
+        from db import HAS_POSTGRES, get_pg
+        avg_vol_map: dict[str, float] = {}
+        today_vol_map: dict[str, float] = {}
 
-        try:
-            # ── Fetch avg_volume_30d for all tickers from facts ────────────────
-            avg_rows = conn.execute(
-                """SELECT subject, object FROM facts
-                   WHERE predicate = 'avg_volume_30d'
-                   ORDER BY subject, timestamp DESC"""
-            ).fetchall()
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute("SELECT subject, object FROM facts WHERE predicate='avg_volume_30d' ORDER BY subject, timestamp DESC")
+                    for r in cur.fetchall():
+                        t = r['subject'].upper()
+                        if t not in avg_vol_map:
+                            try:
+                                v = float(r['object'])
+                                if v > 0: avg_vol_map[t] = v
+                            except (ValueError, TypeError): pass
+                    cur.execute("SELECT ticker, volume, ts FROM ohlcv_cache WHERE interval='1d' AND ts >= %s ORDER BY ticker, ts DESC", (cutoff,))
+                    for r in cur.fetchall():
+                        t = r['ticker'].upper()
+                        if t not in today_vol_map and r['volume'] is not None:
+                            today_vol_map[t] = float(r['volume'])
+            except Exception as e:
+                _logger.error('relative_volume: PG query failed: %s — falling back to SQLite', e)
+                avg_vol_map.clear(); today_vol_map.clear()
 
-            # Keep only most recent per ticker
-            avg_vol_map: dict[str, float] = {}
-            for subj, obj in avg_rows:
-                ticker = subj.upper()
-                if ticker not in avg_vol_map:
-                    try:
-                        v = float(obj)
-                        if v > 0:
-                            avg_vol_map[ticker] = v
-                    except (ValueError, TypeError):
-                        pass
-
-            # ── Fetch latest 1d candle volume from ohlcv_cache ────────────────
-            ohlcv_rows = conn.execute(
-                """SELECT ticker, volume, ts FROM ohlcv_cache
-                   WHERE interval = '1d'
-                     AND ts >= ?
-                   ORDER BY ticker, ts DESC""",
-                (cutoff,),
-            ).fetchall()
-
-            # Keep most recent candle per ticker
-            today_vol_map: dict[str, float] = {}
-            for ticker, volume, ts in ohlcv_rows:
-                t = ticker.upper()
-                if t not in today_vol_map and volume is not None:
-                    today_vol_map[t] = float(volume)
-
-        except Exception as e:
-            _logger.error('relative_volume: DB query failed: %s', e)
+        if not avg_vol_map:
+            try:
+                conn = sqlite3.connect(self._db_path, timeout=15)
+                conn.execute('PRAGMA journal_mode=WAL')
+            except Exception as e:
+                _logger.error('relative_volume: DB connect failed: %s', e)
+                return []
+            try:
+                avg_rows = conn.execute(
+                    """SELECT subject, object FROM facts
+                       WHERE predicate = 'avg_volume_30d'
+                       ORDER BY subject, timestamp DESC"""
+                ).fetchall()
+                for subj, obj in avg_rows:
+                    ticker = subj.upper()
+                    if ticker not in avg_vol_map:
+                        try:
+                            v = float(obj)
+                            if v > 0: avg_vol_map[ticker] = v
+                        except (ValueError, TypeError): pass
+                ohlcv_rows = conn.execute(
+                    """SELECT ticker, volume, ts FROM ohlcv_cache
+                       WHERE interval = '1d' AND ts >= ?
+                       ORDER BY ticker, ts DESC""",
+                    (cutoff,),
+                ).fetchall()
+                for ticker, volume, ts in ohlcv_rows:
+                    t = ticker.upper()
+                    if t not in today_vol_map and volume is not None:
+                        today_vol_map[t] = float(volume)
+            except Exception as e:
+                _logger.error('relative_volume: DB query failed: %s', e)
+                conn.close()
+                return []
             conn.close()
-            return []
-
-        conn.close()
 
         # ── Compute relative volume per ticker ────────────────────────────────
         processed = 0

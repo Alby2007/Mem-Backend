@@ -495,23 +495,41 @@ def _auto_resolve_calibration(pos: dict, db_path: str) -> None:
 
         # ── Pull OHLCV from cache ───────────────────────────────────────────
         candles = []
-        try:
-            conn = sqlite3.connect(db_path, timeout=5)
-            rows = conn.execute(
-                """SELECT timestamp, open, high, low, close, volume
-                   FROM ohlcv_cache
-                   WHERE ticker = ? AND timestamp >= ? AND timestamp <= ?
-                   ORDER BY timestamp ASC""",
-                (ticker.upper(), created_at[:10], expires_at[:10]),
-            ).fetchall()
-            conn.close()
-            from analytics.historical_calibration import OHLCV as _OHLCV  # type: ignore
-            candles = [
-                _OHLCV(timestamp=r[0], open=r[1], high=r[2], low=r[3], close=r[4], volume=r[5] or 0)
-                for r in rows
-            ]
-        except Exception:
-            pass
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute(
+                        "SELECT ts, open, high, low, close, volume FROM ohlcv_cache "
+                        "WHERE ticker=%s AND ts >= %s AND ts <= %s ORDER BY ts ASC",
+                        (ticker.upper(), created_at[:10], expires_at[:10]))
+                    from analytics.historical_calibration import OHLCV as _OHLCV
+                    candles = [
+                        _OHLCV(timestamp=r['ts'], open=r['open'], high=r['high'],
+                               low=r['low'], close=r['close'], volume=r['volume'] or 0)
+                        for r in cur.fetchall()
+                    ]
+            except Exception:
+                candles = []
+        if not candles:
+            try:
+                conn = sqlite3.connect(db_path, timeout=5)
+                rows = conn.execute(
+                    """SELECT timestamp, open, high, low, close, volume
+                       FROM ohlcv_cache
+                       WHERE ticker = ? AND timestamp >= ? AND timestamp <= ?
+                       ORDER BY timestamp ASC""",
+                    (ticker.upper(), created_at[:10], expires_at[:10]),
+                ).fetchall()
+                conn.close()
+                from analytics.historical_calibration import OHLCV as _OHLCV  # type: ignore
+                candles = [
+                    _OHLCV(timestamp=r[0], open=r[1], high=r[2], low=r[3], close=r[4], volume=r[5] or 0)
+                    for r in rows
+                ]
+            except Exception:
+                pass
 
         # ── Fallback: yfinance (timeout-guarded — blocks on network) ──────
         if not candles:

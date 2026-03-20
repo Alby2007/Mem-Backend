@@ -238,10 +238,34 @@ def compute_forward_outcomes(
     Returns (return_1w, return_1m) as fractions (e.g. 0.034 = +3.4%).
     Returns (None, None) if OHLCV data is unavailable for the period.
     """
+    from db import HAS_POSTGRES, get_pg
+    if HAS_POSTGRES:
+        try:
+            with get_pg() as pg:
+                cur = pg.cursor()
+                cur.execute(
+                    "SELECT close FROM ohlcv_cache WHERE ticker=%s AND interval='1d' AND ts <= %s ORDER BY ts DESC LIMIT 1",
+                    (subject, snapshot_at))
+                snap_row = cur.fetchone()
+                if not snap_row: return None, None
+                snap_price = snap_row['close']
+                if not snap_price or snap_price <= 0: return None, None
+                cur.execute(
+                    "SELECT close FROM ohlcv_cache WHERE ticker=%s AND interval='1d' AND ts > %s ORDER BY ts ASC LIMIT 1 OFFSET 4",
+                    (subject, snapshot_at))
+                row_1w = cur.fetchone()
+                return_1w = (row_1w['close'] - snap_price) / snap_price if row_1w and row_1w['close'] else None
+                cur.execute(
+                    "SELECT close FROM ohlcv_cache WHERE ticker=%s AND interval='1d' AND ts > %s ORDER BY ts ASC LIMIT 1 OFFSET 20",
+                    (subject, snapshot_at))
+                row_1m = cur.fetchone()
+                return_1m = (row_1m['close'] - snap_price) / snap_price if row_1m and row_1m['close'] else None
+                return return_1w, return_1m
+        except Exception:
+            pass  # fall through to SQLite
     try:
         conn = sqlite3.connect(db_path, timeout=5)
         try:
-            # Price at (or just before) snapshot_at
             snap_row = conn.execute(
                 """SELECT close FROM ohlcv_cache
                    WHERE ticker=? AND interval='1d' AND ts <= ?
@@ -253,11 +277,8 @@ def compute_forward_outcomes(
             snap_price = snap_row[0]
             if not snap_price or snap_price <= 0:
                 return None, None
-
             return_1w = None
             return_1m = None
-
-            # ~1 week = 5 trading days after snapshot
             row_1w = conn.execute(
                 """SELECT close FROM ohlcv_cache
                    WHERE ticker=? AND interval='1d' AND ts > ?
@@ -266,8 +287,6 @@ def compute_forward_outcomes(
             ).fetchone()
             if row_1w and row_1w[0]:
                 return_1w = (row_1w[0] - snap_price) / snap_price
-
-            # ~1 month = 21 trading days after snapshot
             row_1m = conn.execute(
                 """SELECT close FROM ohlcv_cache
                    WHERE ticker=? AND interval='1d' AND ts > ?
@@ -276,7 +295,6 @@ def compute_forward_outcomes(
             ).fetchone()
             if row_1m and row_1m[0]:
                 return_1m = (row_1m[0] - snap_price) / snap_price
-
             return return_1w, return_1m
         finally:
             conn.close()

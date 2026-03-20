@@ -123,6 +123,20 @@ class CorrelationDiscovery:
         confidence: float = 0.80,
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    pg.cursor().execute(
+                        """INSERT INTO facts (subject, predicate, object, confidence, source, timestamp)
+                           VALUES (%s, %s, %s, %s, 'correlation_discovery', %s)
+                           ON CONFLICT(subject, predicate, object)
+                           DO UPDATE SET confidence=EXCLUDED.confidence, source=EXCLUDED.source,
+                                         timestamp=EXCLUDED.timestamp""",
+                        (subject.lower(), predicate, str(obj), confidence, now))
+                return
+            except Exception:
+                pass
         conn.execute(
             """INSERT INTO facts (subject, predicate, object, confidence, source, timestamp)
                VALUES (?, ?, ?, ?, 'correlation_discovery', ?)
