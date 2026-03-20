@@ -42,12 +42,10 @@ CREATE TABLE IF NOT EXISTS pattern_performance (
 _DDL_PP_IDX1 = "CREATE INDEX IF NOT EXISTS idx_pp_pattern ON pattern_performance(pattern_type, direction)"
 _DDL_PP_IDX2 = "CREATE INDEX IF NOT EXISTS idx_pp_sector  ON pattern_performance(sector, pattern_type)"
 
-
 def _ensure_pp_table(conn: sqlite3.Connection) -> None:
     conn.execute(_DDL_PATTERN_PERFORMANCE)
     conn.execute(_DDL_PP_IDX1)
     conn.execute(_DDL_PP_IDX2)
-
 
 def compute_z_score(
     pattern_type: str,
@@ -96,7 +94,6 @@ def compute_z_score(
     z    = round((wr - prior) / se, 3) if se > 0 else 0.0
 
     return {'n': n, 'win_rate': wr, 'z_score': z, 'avg_r': avg_r}
-
 
 # ── GET /users/{user_id}/performance/patterns ──────────────────────────────────
 
@@ -220,7 +217,6 @@ async def get_pattern_performance(
         ],
     }
 
-
 # ── GET /mcp/tools/edge_miner/scan ────────────────────────────────────────────
 
 @router.get("/mcp/tools/edge_miner/scan")
@@ -265,7 +261,6 @@ async def mcp_edge_miner_scan(
         ],
     }
 
-
 # ── GET /mcp/tools/edge_miner/exchange_scan ───────────────────────────────────
 
 @router.get("/mcp/tools/edge_miner/exchange_scan")
@@ -308,7 +303,6 @@ async def mcp_exchange_scan(
             for c in candidates
         ],
     }
-
 
 # ── GET /mcp/tools/performance/edge_report ────────────────────────────────────
 
@@ -370,7 +364,6 @@ async def mcp_edge_report(_: str = Depends(get_current_user)):
         'total_slices':       len(edges),
     }
 
-
 @router.get("/mcp/tools/edge_miner/regime_split_scan")
 async def regime_split_scan(
     min_null_hr: float = 0.65,
@@ -408,7 +401,6 @@ async def regime_split_scan(
             for c in candidates
         ],
     }
-
 
 # ── GET /mcp/tools/performance/direction_split ────────────────────────────────
 
@@ -530,7 +522,6 @@ async def mcp_direction_split(
         'confirmed_edges': [g for g in groups if g['edge_confirmed']],
     }
 
-
 # ── POST /mcp/tools/calibration/backfill_direction ───────────────────────────
 
 @router.post("/mcp/tools/calibration/backfill_direction")
@@ -559,7 +550,6 @@ async def mcp_backfill_direction(
         raise HTTPException(500, detail=str(e))
 
     return {'status': 'ok', 'rows_inserted_or_updated': inserted}
-
 
 def _backfill_direction_cells(conn: sqlite3.Connection, min_n: int = 5) -> int:
     """
@@ -627,7 +617,6 @@ def _backfill_direction_cells(conn: sqlite3.Connection, min_n: int = 5) -> int:
 
     return inserted
 
-
 # ── GET /mcp/tools/edge_miner/full_scan ───────────────────────────────────────
 
 @router.get("/mcp/tools/edge_miner/full_scan")
@@ -656,4 +645,4 @@ async def mcp_full_scan(
         raise HTTPException(500, detail=str(e))
 
     return result
->>>>>>> 138b027 (feat: edge cultivation v3 — kill zone, mit gate, regime quality penalty, regime-split EdgeMiner, T2 multiplier, direction_split endpoint, 5m OHLCV, backfill, full_scan)
+
