@@ -1039,6 +1039,94 @@ class BotRunner:
                     except (ValueError, TypeError, Exception):
                         pass
 
+                # RSI extreme gates (all pattern types):
+                # 1. Extreme oversold (<30) + bullish = momentum continuation down
+                #    DB1.DE RSI 29.8, BABA RSI 26.6 — these trend down further
+                # 2. Overbought (>70) + bullish = entering at exhaustion top
+                #    EURGBP=X RSI 72.8 bullish breaker is wrong side of the trade
+                # Data: live trades RSI<35 mitigation = 0% WR already gated above
+                # Extend to ALL patterns at extremes: <30 and >70 are danger zones
+                if direction == 'bullish':
+                    try:
+                        _rsi_ext = conn.execute(
+                            "SELECT CAST(object AS REAL) FROM facts "
+                            "WHERE UPPER(subject)=UPPER(?) AND predicate='rsi_14' "
+                            "ORDER BY timestamp DESC LIMIT 1",
+                            (ticker,),
+                        ).fetchone()
+                        if _rsi_ext:
+                            _rsi_val = _rsi_ext[0]
+                            if _rsi_val < 30:
+                                skips += 1
+                                conn.execute(
+                                    "INSERT INTO paper_agent_log "
+                                    "(user_id, event_type, ticker, detail, bot_id, created_at) "
+                                    "VALUES (?,?,?,?,?,?)",
+                                    (user_id, 'skip', ticker,
+                                     f'RSI extreme oversold: rsi={_rsi_val:.1f} < 30 — '
+                                     f'momentum continuation, not a bounce',
+                                     bot_id, now_iso),
+                                )
+                                continue
+                            if _rsi_val > 70:
+                                skips += 1
+                                conn.execute(
+                                    "INSERT INTO paper_agent_log "
+                                    "(user_id, event_type, ticker, detail, bot_id, created_at) "
+                                    "VALUES (?,?,?,?,?,?)",
+                                    (user_id, 'skip', ticker,
+                                     f'RSI overbought: rsi={_rsi_val:.1f} > 70 — '
+                                     f'entering bullish at exhaustion top',
+                                     bot_id, now_iso),
+                                )
+                                continue
+                    except (ValueError, TypeError, Exception):
+                        pass
+
+                # Small/micro-cap liquidity gate for short timeframes:
+                # HIK.L -4.76R because price gapped 4.76× through stop (slippage).
+                # Small/micro caps on 15m/5m have wide spreads and gap through stops.
+                # avg_volume_30d < 500k = insufficient liquidity for tight stops.
+                if timeframe in ('5m', '15m', '1h'):
+                    try:
+                        _mc = conn.execute(
+                            "SELECT object FROM facts WHERE UPPER(subject)=UPPER(?) "
+                            "AND predicate='market_cap_tier' "
+                            "ORDER BY timestamp DESC LIMIT 1",
+                            (ticker,),
+                        ).fetchone()
+                        if _mc and _mc[0] in ('micro_cap', 'nano_cap'):
+                            skips += 1
+                            conn.execute(
+                                "INSERT INTO paper_agent_log "
+                                "(user_id, event_type, ticker, detail, bot_id, created_at) "
+                                "VALUES (?,?,?,?,?,?)",
+                                (user_id, 'skip', ticker,
+                                 f'micro/nano cap blocked on {timeframe}: gap risk too high',
+                                 bot_id, now_iso),
+                            )
+                            continue
+                        _avol = conn.execute(
+                            "SELECT CAST(object AS REAL) FROM facts "
+                            "WHERE UPPER(subject)=UPPER(?) AND predicate='avg_volume_30d' "
+                            "ORDER BY timestamp DESC LIMIT 1",
+                            (ticker,),
+                        ).fetchone()
+                        if _avol and _avol[0] < 150000:
+                            skips += 1
+                            conn.execute(
+                                "INSERT INTO paper_agent_log "
+                                "(user_id, event_type, ticker, detail, bot_id, created_at) "
+                                "VALUES (?,?,?,?,?,?)",
+                                (user_id, 'skip', ticker,
+                                 f'low liquidity: avg_vol={int(_avol[0]):,} < 150k — '
+                                 f'gap-through-stop risk on {timeframe}',
+                                 bot_id, now_iso),
+                            )
+                            continue
+                    except (ValueError, TypeError, Exception):
+                        pass
+
                 # Fix 3: Regime alignment — pattern-level misalignment (hard skip)
                 if regime and (
                     (direction == 'bullish' and any(x in regime for x in ('risk_off', 'bearish')))
