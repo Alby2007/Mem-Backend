@@ -40,16 +40,16 @@ def main():
         conn.execute("""
             INSERT INTO facts (subject, predicate, object, confidence, source, timestamp)
             VALUES (?, 'earnings_date', ?, 0.85, 'backfill_earnings_date', ?)
-            ON CONFLICT(subject, predicate, source) DO UPDATE SET
-              object=excluded.object, timestamp=excluded.timestamp
+            ON CONFLICT(subject, predicate, object) DO UPDATE SET
+              source=excluded.source, timestamp=excluded.timestamp
         """, (subject, date_str, now))
 
         if 0 <= days_to <= 90:
             conn.execute("""
                 INSERT INTO facts (subject, predicate, object, confidence, source, timestamp)
                 VALUES (?, 'earnings_proximity_days', ?, 0.90, 'backfill_earnings_proximity', ?)
-                ON CONFLICT(subject, predicate, source) DO UPDATE SET
-                  object=excluded.object, timestamp=excluded.timestamp
+                ON CONFLICT(subject, predicate, object) DO UPDATE SET
+                  source=excluded.source, timestamp=excluded.timestamp
             """, (subject, str(days_to), now))
 
         inserted += 1
