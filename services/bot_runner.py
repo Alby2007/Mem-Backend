@@ -1011,6 +1011,34 @@ class BotRunner:
                 except (ValueError, TypeError, Exception):
                     pass
 
+                # RSI falling-knife gate: skip bullish mitigation when RSI < 35.
+                # Live data: mitigation bullish + RSI<35 = 0/6 WR, avg -3.68R.
+                # SAP.DE -5.4R, 9988.HK (Alibaba) -10.15R both had RSI 22-31.
+                # RSI<35 in risk_on_correction = ongoing downtrend momentum, not bounce.
+                # The calibration HR (85-95%) was built historically without this filter.
+                if pattern_type == 'mitigation' and direction == 'bullish':
+                    try:
+                        _rsi_row = conn.execute(
+                            "SELECT object FROM facts WHERE UPPER(subject)=UPPER(?) "
+                            "AND predicate='rsi_14' "
+                            "ORDER BY timestamp DESC LIMIT 1",
+                            (ticker,),
+                        ).fetchone()
+                        if _rsi_row and float(_rsi_row[0]) < 35:
+                            skips += 1
+                            conn.execute(
+                                "INSERT INTO paper_agent_log "
+                                "(user_id, event_type, ticker, detail, bot_id, created_at) "
+                                "VALUES (?,?,?,?,?,?)",
+                                (user_id, 'skip', ticker,
+                                 f'RSI falling-knife: rsi={float(_rsi_row[0]):.1f} < 35 '
+                                 f'on bullish mitigation — 0% WR in live data',
+                                 bot_id, now_iso),
+                            )
+                            continue
+                    except (ValueError, TypeError, Exception):
+                        pass
+
                 # Fix 3: Regime alignment — pattern-level misalignment (hard skip)
                 if regime and (
                     (direction == 'bullish' and any(x in regime for x in ('risk_off', 'bearish')))
