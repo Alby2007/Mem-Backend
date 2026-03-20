@@ -18,7 +18,7 @@ router = APIRouter()
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "db": ext.DB_PATH}
+    return {"status": "ok"}
 
 
 @router.get("/seed/status")
@@ -46,7 +46,6 @@ async def seed_status():
         "last_tag":    last_tag,
         "total_facts": total_facts,
         "next_pushes": next_pushes,
-        "db_path":     ext.DB_PATH,
         "server_time": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
@@ -54,7 +53,7 @@ async def seed_status():
 
 @router.get("/health/detailed")
 async def health_detailed():
-    result: dict = {"status": "ok", "db": ext.DB_PATH}
+    result: dict = {"status": "ok", "db": "ok"}
 
     try:
         conn = sqlite3.connect(ext.DB_PATH, timeout=5)

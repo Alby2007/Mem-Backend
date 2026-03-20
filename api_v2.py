@@ -565,12 +565,9 @@ _ALLOWED_ORIGINS = frozenset([
     "http://localhost:8080",
 ])
 
-_ALLOWED_ORIGIN_SUFFIXES = (
-    ".trycloudflare.com",
-    ".ngrok-free.app",
-    ".ngrok.io",
-    ".pages.dev",
-)
+# Security: wildcard origin suffixes removed — only explicit whitelist allowed.
+# Previously allowed *.trycloudflare.com, *.ngrok-free.app, *.ngrok.io, *.pages.dev
+# which are free wildcard domains exploitable for credential-bearing CORS attacks.
 
 _CSRF_SAFE_METHODS = frozenset(["GET", "HEAD", "OPTIONS"])
 
@@ -582,7 +579,7 @@ def create_fastapi_app() -> FastAPI:
     async def csrf_origin_check(request: Request, call_next):
         if request.method not in _CSRF_SAFE_METHODS:
             origin = request.headers.get("origin", "")
-            if origin and origin not in _ALLOWED_ORIGINS and not any(origin.endswith(s) for s in _ALLOWED_ORIGIN_SUFFIXES):
+            if origin and origin not in _ALLOWED_ORIGINS:
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "forbidden: origin not allowed"},
@@ -601,13 +598,12 @@ def create_fastapi_app() -> FastAPI:
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
-    # Dynamic CORS: reflect exact origin for allowed origins so credentials work
-    _cors_allow_origins = list(_ALLOWED_ORIGINS)
-    _cors_allow_origins_regex = r"https://[a-z0-9\-]+\.trycloudflare\.com|https://[a-z0-9\-]+\.ngrok-free\.app|https://[a-z0-9\-]+\.ngrok\.io|https://[a-z0-9\-]+\.pages\.dev"
+    # CORS: explicit whitelist only — no regex patterns.
+    # Credentials are enabled so the browser will only attach cookies for
+    # origins in this list.  Never add wildcard domains here.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=_cors_allow_origins,
-        allow_origin_regex=_cors_allow_origins_regex,
+        allow_origins=list(_ALLOWED_ORIGINS),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

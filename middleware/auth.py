@@ -32,7 +32,7 @@ from flask import g, jsonify, request
 _log = logging.getLogger(__name__)
 
 _SECRET_KEY           = os.environ.get('JWT_SECRET_KEY', 'dev-insecure-key-change-in-production')
-_EXPIRY_HOURS         = int(os.environ.get('JWT_EXPIRY_HOURS', '24'))
+_EXPIRY_MINUTES       = int(os.environ.get('JWT_EXPIRY_MINUTES', '15'))
 _REFRESH_EXPIRY_DAYS  = int(os.environ.get('JWT_REFRESH_EXPIRY_DAYS', '30'))
 
 _LOCKOUT_MINUTES  = 15
@@ -122,7 +122,7 @@ def _make_access_token(user_id: str, email: str, token_version: int = 0) -> str:
         'email':   email,
         'type':    'access',
         'tv':      token_version,
-        'exp':     datetime.now(timezone.utc) + timedelta(hours=_EXPIRY_HOURS),
+        'exp':     datetime.now(timezone.utc) + timedelta(minutes=_EXPIRY_MINUTES),
         'iat':     datetime.now(timezone.utc),
     }
     return _jwt.encode(payload, _SECRET_KEY, algorithm='HS256')
@@ -245,7 +245,7 @@ def rotate_refresh_token(db_path: str, refresh_token: str) -> dict:
         'access_token':  access_token,
         'refresh_token': refresh_data['refresh_token'],
         'token_type':    'Bearer',
-        'expires_in':    _EXPIRY_HOURS * 3600,
+        'expires_in':    _EXPIRY_MINUTES * 60,
         'user_id':       user_id,
     }
 
@@ -459,7 +459,7 @@ def authenticate_user(
         return {
             'access_token': token,
             'token_type':   'Bearer',
-            'expires_in':   _EXPIRY_HOURS * 3600,
+            'expires_in':   _EXPIRY_MINUTES * 60,
             'user_id':      user_id,
         }
     finally:

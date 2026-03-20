@@ -26,28 +26,34 @@ RATE_LIMITS: dict[str, str] = {
 }
 
 _EXEMPT_IPS = {"127.0.0.1", "::1"}
-_JWT_SECRET  = os.environ.get("JWT_SECRET_KEY", "")
-
-
 def _rate_limit_key(request: Request) -> str:
     """
     Rate-limit key priority:
       1. EVAL_MODE=1 → unique key per request (unlimited — test harness)
       2. Localhost IP → unique key per request (unlimited — dev)
       3. Valid JWT → user:{user_id}  (per-user bucket, works behind Cloudflare)
-      4. Fallback → remote IP
+      4. Fallback → real client IP (CF-Connecting-IP > X-Forwarded-For > client.host)
     """
     if os.environ.get("EVAL_MODE") == "1":
         return f"eval-{uuid.uuid4().hex}"
 
-    ip = get_remote_address(request)
+    # Resolve the real client IP early — behind Cloudflare, request.client.host
+    # is Cloudflare's egress IP which would bucket all users together.
+    ip = (
+        request.headers.get("CF-Connecting-IP", "").strip()
+        or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        or get_remote_address(request)
+        or "unknown"
+    )
     if ip in _EXEMPT_IPS:
         return f"exempt-{uuid.uuid4().hex}"
 
     # Try to extract user_id from JWT without a full DB round-trip.
     # verify_exp=False because we only need identity here — auth dep
     # already validates expiry on authenticated routes.
-    if _JWT_SECRET:
+    # Read JWT_SECRET lazily so it picks up .env loaded during lifespan.
+    jwt_secret = os.environ.get("JWT_SECRET_KEY", "")
+    if jwt_secret:
         try:
             import jwt as _jwt
             token = (
@@ -56,7 +62,7 @@ def _rate_limit_key(request: Request) -> str:
             )
             if token:
                 payload = _jwt.decode(
-                    token, _JWT_SECRET, algorithms=["HS256"],
+                    token, jwt_secret, algorithms=["HS256"],
                     options={"verify_exp": False},
                 )
                 uid = payload.get("user_id")
@@ -65,7 +71,7 @@ def _rate_limit_key(request: Request) -> str:
         except Exception:
             pass
 
-    return ip or "unknown"
+    return ip
 
 
 limiter = Limiter(

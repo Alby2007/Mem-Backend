@@ -28,7 +28,7 @@ _TG_LOGIN_CODES: dict = {}
 def _set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
     response.set_cookie(
         "tg_access", access_token,
-        httponly=True, secure=True, samesite="none", path="/", max_age=86400,
+        httponly=True, secure=True, samesite="none", path="/", max_age=900,
     )
     if refresh_token:
         response.set_cookie(

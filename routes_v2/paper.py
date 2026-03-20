@@ -311,7 +311,9 @@ async def update_bot(user_id: str, bot_id: str, data: UpdateBotRequest, _: str =
         if not row:
             conn.close()
             raise HTTPException(404, detail='bot not found')
-        updates = {k: v for k, v in data.model_dump().items() if v is not None}
+        _BOT_UPDATE_COLS = {'risk_pct', 'max_positions', 'min_quality'}
+        updates = {k: v for k, v in data.model_dump().items()
+                   if v is not None and k in _BOT_UPDATE_COLS}
         if not updates:
             conn.close()
             return {'status': 'no changes'}
