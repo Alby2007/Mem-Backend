@@ -441,6 +441,21 @@ class PatternAdapter:
             sector        = kb_ctx['sector'],
         )
 
+        # Lookup avg_volume_30d once per ticker for volume_vs_avg computation
+        _avg_vol: Optional[float] = None
+        try:
+            _avg_row = conn.execute(
+                "SELECT object FROM facts WHERE UPPER(subject)=UPPER(?) "
+                "AND predicate='avg_volume_30d' ORDER BY timestamp DESC LIMIT 1",
+                (ticker,),
+            ).fetchone()
+            if _avg_row:
+                _v = float(_avg_row[0])
+                if _v > 0:
+                    _avg_vol = _v
+        except Exception:
+            pass
+
         inserted = 0
         for sig in signals:
             if _pattern_exists(conn, sig):
@@ -450,21 +465,46 @@ class PatternAdapter:
                 expires_at = (
                     datetime.utcnow() + timedelta(days=ttl_days)
                 ).isoformat()
+
+                # Find the candle volume at zone formation (+-24h timestamp match)
+                _vol_at_formation: Optional[float] = None
+                _vol_vs_avg: Optional[float] = None
+                if sig.formed_at and candles:
+                    try:
+                        _formed_ts = datetime.fromisoformat(
+                            sig.formed_at.replace('Z', '+00:00')
+                        ).timestamp()
+                        for _c in candles:
+                            if not _c.timestamp:
+                                continue
+                            _c_ts = datetime.fromisoformat(
+                                _c.timestamp.replace('Z', '+00:00')
+                            ).timestamp()
+                            if abs(_c_ts - _formed_ts) < 86400:
+                                _vol_at_formation = _c.volume if _c.volume else None
+                                if _vol_at_formation and _avg_vol:
+                                    _vol_vs_avg = round(_vol_at_formation / _avg_vol, 3)
+                                break
+                    except Exception:
+                        pass
+
                 upsert_pattern_signal(self.db_path, {
-                    'ticker':        sig.ticker,
-                    'pattern_type':  sig.pattern_type,
-                    'direction':     sig.direction,
-                    'zone_high':     sig.zone_high,
-                    'zone_low':      sig.zone_low,
-                    'zone_size_pct': sig.zone_size_pct,
-                    'timeframe':     sig.timeframe,
-                    'formed_at':     sig.formed_at,
-                    'status':        sig.status,
-                    'quality_score': sig.quality_score,
-                    'kb_conviction': sig.kb_conviction,
-                    'kb_regime':     sig.kb_regime,
-                    'kb_signal_dir': sig.kb_signal_dir,
-                    'expires_at':    expires_at,
+                    'ticker':              sig.ticker,
+                    'pattern_type':        sig.pattern_type,
+                    'direction':           sig.direction,
+                    'zone_high':           sig.zone_high,
+                    'zone_low':            sig.zone_low,
+                    'zone_size_pct':       sig.zone_size_pct,
+                    'timeframe':           sig.timeframe,
+                    'formed_at':           sig.formed_at,
+                    'status':              sig.status,
+                    'quality_score':       sig.quality_score,
+                    'kb_conviction':       sig.kb_conviction,
+                    'kb_regime':           sig.kb_regime,
+                    'kb_signal_dir':       sig.kb_signal_dir,
+                    'expires_at':          expires_at,
+                    'volume_at_formation': _vol_at_formation,
+                    'volume_vs_avg':       _vol_vs_avg,
                 })
                 inserted += 1
             except Exception as exc:

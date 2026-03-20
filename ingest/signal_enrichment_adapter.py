@@ -151,7 +151,8 @@ def _read_kb_atoms(
                 'last_price', 'price_target', 'signal_direction',
                 'conviction_tier',
                 'volatility_regime', 'market_cap_tier', 'sector',
-                'earnings_quality', 'low_52w', 'volatility_30d',
+                'earnings_quality', 'earnings_date', 'earnings_proximity_days',
+                'low_52w', 'volatility_30d',
                 'signal_quality', 'thesis_risk_level', 'macro_confirmation',
                 'next_earnings',
                 'price_regime',
@@ -1469,6 +1470,36 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
 
             if last_price is not None and price_target is not None and last_price > 0:
                 upside_pct_val = round((price_target - last_price) / last_price * 100, 2)
+
+            # ── Derive signal_direction for tickers that lack one ──────────
+            # US equities often have price_target from yfinance/Polygon but
+            # no analyst-derived signal_direction. Without it, they fall
+            # through to the cold-start branch and need quality >= 0.85 to
+            # enter — blocking most valid US setups.
+            # Fix: derive direction from consensus target upside and write it
+            # so downstream enrichment + pattern gate can use it.
+            if not signal_dir and upside_pct_val is not None:
+                if upside_pct_val >= 10:
+                    signal_dir = 'bullish'
+                elif upside_pct_val <= -5:
+                    signal_dir = 'bearish'
+                else:
+                    signal_dir = 'neutral'
+                atoms.append(RawAtom(
+                    subject    = ticker.upper(),
+                    predicate  = 'signal_direction',
+                    object     = signal_dir,
+                    confidence = 0.65,
+                    source     = f'derived_signal_direction_{ticker}',
+                    metadata   = {
+                        'derived_from':  'price_target_upside',
+                        'upside_pct':    upside_pct_val,
+                        'last_price':    last_price,
+                        'price_target':  price_target,
+                        'as_of':         now_iso,
+                    },
+                    upsert     = True,
+                ))
 
             # ── Compute derived atoms ──────────────────────────────────────
             price_regime = _classify_price_regime(last_price, price_target, signal_dir)

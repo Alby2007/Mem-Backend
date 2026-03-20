@@ -865,6 +865,34 @@ class YFinanceAdapter(BaseIngestAdapter):
                         metadata={'earnings_date': earnings_date},
                         upsert=True,
                     ))
+                    # Also write clean earnings_date for EarningsCalendarAdapter + bot gate
+                    _ed_str = str(earnings_date)[:10]
+                    atoms.append(RawAtom(
+                        subject=symbol,
+                        predicate='earnings_date',
+                        object=_ed_str,
+                        confidence=0.85,
+                        source=f'earnings_{symbol.lower()}_date',
+                        metadata={'earnings_date': _ed_str},
+                        upsert=True,
+                    ))
+                    # Days until earnings — immediately usable as a gate in bot_runner
+                    try:
+                        from datetime import date as _date
+                        _ed = __import__('datetime').datetime.strptime(_ed_str, '%Y-%m-%d').date()
+                        _days_to = (_ed - _date.today()).days
+                        if 0 <= _days_to <= 90:
+                            atoms.append(RawAtom(
+                                subject=symbol,
+                                predicate='earnings_proximity_days',
+                                object=str(_days_to),
+                                confidence=0.90,
+                                source=f'earnings_{symbol.lower()}_proximity',
+                                metadata={'earnings_date': _ed_str, 'days_to': _days_to},
+                                upsert=True,
+                            ))
+                    except Exception:
+                        pass
         except Exception:
             pass
 

@@ -132,6 +132,12 @@ _PREFERENCES_MIGRATIONS = [
     "ALTER TABLE user_preferences ADD COLUMN broker_webhook_secret TEXT DEFAULT NULL",
 ]
 
+# New columns added to pattern_signals after initial schema creation
+_PATTERN_SIGNALS_MIGRATIONS = [
+    "ALTER TABLE pattern_signals ADD COLUMN volume_at_formation REAL",
+    "ALTER TABLE pattern_signals ADD COLUMN volume_vs_avg REAL",
+]
+
 _DDL_DELIVERY_LOG = """
 CREATE TABLE IF NOT EXISTS snapshot_delivery_log (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -187,6 +193,12 @@ def ensure_user_tables(conn: sqlite3.Connection) -> None:
     conn.execute(_DDL_MCP_WRITE_QUEUE)
     # Migrate existing user_preferences rows to include new columns
     for sql in _PREFERENCES_MIGRATIONS:
+        try:
+            conn.execute(sql)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    # Migrate pattern_signals to include volume columns
+    for sql in _PATTERN_SIGNALS_MIGRATIONS:
         try:
             conn.execute(sql)
         except sqlite3.OperationalError:
@@ -835,8 +847,9 @@ def upsert_pattern_signal(db_path: str, signal: dict) -> int:
                (ticker, pattern_type, direction, zone_high, zone_low,
                 zone_size_pct, timeframe, formed_at, status,
                 quality_score, kb_conviction, kb_regime, kb_signal_dir,
-                alerted_users, detected_at, expires_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?)""",
+                alerted_users, detected_at, expires_at,
+                volume_at_formation, volume_vs_avg)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?,?,?)""",
             (
                 signal['ticker'], signal['pattern_type'], signal['direction'],
                 signal['zone_high'], signal['zone_low'], signal['zone_size_pct'],
@@ -845,6 +858,8 @@ def upsert_pattern_signal(db_path: str, signal: dict) -> int:
                 signal.get('kb_conviction', ''), signal.get('kb_regime', ''),
                 signal.get('kb_signal_dir', ''), now_iso,
                 signal.get('expires_at'),
+                signal.get('volume_at_formation'),
+                signal.get('volume_vs_avg'),
             ),
         )
         conn.commit()

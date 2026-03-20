@@ -217,6 +217,8 @@ def _quality(
     sector:        str = '',
     timeframe:     str = '',
     db_path:       str = '',
+    ticker:        str = '',
+    volume_vs_avg: float = 0.0,
 ) -> float:
     """Compute composite quality score 0.0–1.0.
 
@@ -315,7 +317,61 @@ def _quality(
         except Exception:
             pass
 
-    return round(min(max(score + boost + _regime_penalty + _age_boost, 0.0), 1.0), 4)
+    # Relative volume boost: high-volume zone = institutional conviction.
+    # Spike volume (2×+ avg) adds +0.05; low liquidity (≤0.3×) deducts −0.05.
+    # Only applies when db_path provided; silent fail if atom missing.
+    _rvol_adj = 0.0
+    if db_path and ticker:
+        try:
+            _rv_conn = sqlite3.connect(db_path, timeout=2)
+            _rv_row = _rv_conn.execute(
+                "SELECT object FROM facts WHERE UPPER(subject)=UPPER(?) "
+                "AND predicate='relative_volume' ORDER BY timestamp DESC LIMIT 1",
+                (ticker,),
+            ).fetchone()
+            _rv_conn.close()
+            if _rv_row:
+                _rv = float(_rv_row[0])
+                if _rv >= 2.0:
+                    _rvol_adj = 0.05
+                elif _rv <= 0.3:
+                    _rvol_adj = -0.05
+        except Exception:
+            pass
+
+    # Volume at formation boost: 2×+ volume at zone = institutional conviction in the level.
+    # High volume zones have stronger S/R — price is more likely to react at them.
+    _vol_adj = 0.0
+    if volume_vs_avg >= 2.0:
+        _vol_adj = 0.08
+    elif volume_vs_avg >= 1.5:
+        _vol_adj = 0.04
+
+    # RSI gate: penalise entries that fight momentum extremes.
+    # Bullish entry when RSI >= 75 = chasing overbought price → high stop rate.
+    # Bearish entry when RSI <= 25 = shorting oversold price → high bounce rate.
+    # −0.12 is deliberately large — these setups have WR < 30% in live data.
+    # Only applies when db_path + ticker provided; skipped silently if atom absent.
+    _rsi_adj = 0.0
+    if db_path and ticker and direction in ('bullish', 'bearish'):
+        try:
+            _rsi_conn = sqlite3.connect(db_path, timeout=2)
+            _rsi_row = _rsi_conn.execute(
+                "SELECT object FROM facts WHERE UPPER(subject)=UPPER(?) "
+                "AND predicate='rsi_14' ORDER BY timestamp DESC LIMIT 1",
+                (ticker,),
+            ).fetchone()
+            _rsi_conn.close()
+            if _rsi_row:
+                _rsi_val = float(_rsi_row[0])
+                if direction == 'bullish' and _rsi_val >= 75:
+                    _rsi_adj = -0.12
+                elif direction == 'bearish' and _rsi_val <= 25:
+                    _rsi_adj = -0.12
+        except Exception:
+            pass
+
+    return round(min(max(score + boost + _regime_penalty + _age_boost + _vol_adj + _rvol_adj + _rsi_adj, 0.0), 1.0), 4)
 
 
 # ── Individual detectors ───────────────────────────────────────────────────────
@@ -349,7 +405,7 @@ def _detect_fvg(
             if zh > 0 and zl > 0 and zh > zl:
                 q = _quality('fvg', 'bullish', zh, zl, i, n, atr_val,
                              kb_conviction, kb_regime, kb_signal_dir,
-                             sector=sector, timeframe=timeframe, db_path=db_path)
+                             sector=sector, timeframe=timeframe, db_path=db_path, ticker=ticker)
                 signals.append(PatternSignal(
                     pattern_type  = 'fvg',
                     ticker        = ticker,
@@ -375,7 +431,7 @@ def _detect_fvg(
             if zh > 0 and zl > 0 and zh > zl:
                 q = _quality('fvg', 'bearish', zh, zl, i, n, atr_val,
                              kb_conviction, kb_regime, kb_signal_dir,
-                             sector=sector, timeframe=timeframe, db_path=db_path)
+                             sector=sector, timeframe=timeframe, db_path=db_path, ticker=ticker)
                 signals.append(PatternSignal(
                     pattern_type  = 'fvg',
                     ticker        = ticker,
@@ -536,7 +592,7 @@ def _detect_order_blocks(
             if zh > zl:
                 q = _quality('order_block', 'bullish', zh, zl, i, n, atr_val,
                              kb_conviction, kb_regime, kb_signal_dir,
-                             sector=sector, timeframe=timeframe, db_path=db_path)
+                             sector=sector, timeframe=timeframe, db_path=db_path, ticker=ticker)
                 signals.append(PatternSignal(
                     pattern_type  = 'order_block',
                     ticker        = ticker,
@@ -561,7 +617,7 @@ def _detect_order_blocks(
             if zh > zl:
                 q = _quality('order_block', 'bearish', zh, zl, i, n, atr_val,
                              kb_conviction, kb_regime, kb_signal_dir,
-                             sector=sector, timeframe=timeframe, db_path=db_path)
+                             sector=sector, timeframe=timeframe, db_path=db_path, ticker=ticker)
                 signals.append(PatternSignal(
                     pattern_type  = 'order_block',
                     ticker        = ticker,
@@ -672,7 +728,7 @@ def _detect_liquidity_voids(
                 continue
             q = _quality('liquidity_void', direction, zh, zl, i, n, atr_val,
                          kb_conviction, kb_regime, kb_signal_dir,
-                         sector=sector, timeframe=timeframe, db_path=db_path)
+                         sector=sector, timeframe=timeframe, db_path=db_path, ticker=ticker)
             signals.append(PatternSignal(
                 pattern_type  = 'liquidity_void',
                 ticker        = ticker,
@@ -755,7 +811,7 @@ def _detect_mitigation_blocks(
                     if zl <= later.close <= zh:
                         q = _quality('mitigation', 'bullish', zh, zl, i, n, atr_val,
                                      kb_conviction, kb_regime, kb_signal_dir,
-                                     sector=sector, timeframe=timeframe, db_path=db_path)
+                                     sector=sector, timeframe=timeframe, db_path=db_path, ticker=ticker)
                         signals.append(PatternSignal(
                             pattern_type  = 'mitigation',
                             ticker        = ticker,
@@ -792,7 +848,7 @@ def _detect_mitigation_blocks(
                     if zl <= later.close <= zh:
                         q = _quality('mitigation', 'bearish', zh, zl, i, n, atr_val,
                                      kb_conviction, kb_regime, kb_signal_dir,
-                                     sector=sector, timeframe=timeframe, db_path=db_path)
+                                     sector=sector, timeframe=timeframe, db_path=db_path, ticker=ticker)
                         signals.append(PatternSignal(
                             pattern_type  = 'mitigation',
                             ticker        = ticker,

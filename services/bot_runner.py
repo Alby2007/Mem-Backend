@@ -987,6 +987,30 @@ class BotRunner:
                         )
                         continue
 
+                # Earnings proximity gate: skip entries within 3 days of earnings.
+                # Earnings = binary event risk — WR collapses regardless of pattern quality.
+                # 3-day window covers pre-earnings IV crush + post-earnings gap risk.
+                try:
+                    _ep_row = conn.execute(
+                        "SELECT object FROM facts WHERE UPPER(subject)=UPPER(?) "
+                        "AND predicate='earnings_proximity_days' "
+                        "ORDER BY timestamp DESC LIMIT 1",
+                        (ticker,),
+                    ).fetchone()
+                    if _ep_row and int(_ep_row[0]) <= 3:
+                        skips += 1
+                        conn.execute(
+                            "INSERT INTO paper_agent_log "
+                            "(user_id, event_type, ticker, detail, bot_id, created_at) "
+                            "VALUES (?,?,?,?,?,?)",
+                            (user_id, 'skip', ticker,
+                             f'earnings in {_ep_row[0]}d — skip to avoid event risk',
+                             bot_id, now_iso),
+                        )
+                        continue
+                except (ValueError, TypeError, Exception):
+                    pass
+
                 # Fix 3: Regime alignment — pattern-level misalignment (hard skip)
                 if regime and (
                     (direction == 'bullish' and any(x in regime for x in ('risk_off', 'bearish')))

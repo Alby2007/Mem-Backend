@@ -131,6 +131,14 @@ async def _lifespan(app: FastAPI):
         scheduler.register(SectorRotationAdapter(db_path=db_path), interval_sec=3600)
         scheduler.register(SignalEnrichmentAdapter(db_path=db_path), interval_sec=900)
 
+        # Relative volume — today's volume vs 30d avg; feeds _quality() boost
+        from ingest.relative_volume_adapter import RelativeVolumeAdapter
+        scheduler.register(RelativeVolumeAdapter(db_path=db_path), interval_sec=3600)
+
+        # RSI-14 — computed from ohlcv_cache daily closes; feeds _quality() gate
+        from ingest.rsi_adapter import RSIAdapter
+        scheduler.register(RSIAdapter(db_path=db_path), interval_sec=3600)
+
         # SEC real-time filings — 8-K atom feed (every 30 min)
         scheduler.register(EDGARRealtimeAdapter(db_path=db_path), interval_sec=1800)
 
