@@ -1712,6 +1712,8 @@ def continuous_scan(user_id: str, stop_event: threading.Event, interval_sec: int
     if startup_delay and stop_event.wait(startup_delay):
         _logger.info('Continuous scanner cancelled during startup delay for %s', user_id)
         return
+    # Persist agent_running AFTER startup delay so it doesn't hit SQLite during ingest burst
+    _set_agent_running_db(user_id, True)
     while not stop_event.is_set():
         try:
             ai_run(user_id)
@@ -1730,7 +1732,9 @@ def start_scanner(user_id: str, startup_delay: int = 0) -> tuple[str, str]:
         _scanner_threads[user_id] = stop_ev
     t = threading.Thread(target=continuous_scan, args=(user_id, stop_ev, 1800, startup_delay), daemon=True)
     t.start()
-    _set_agent_running_db(user_id, True)
+    # For user-initiated starts (no delay), persist immediately; for restores, deferred into thread
+    if startup_delay == 0:
+        _set_agent_running_db(user_id, True)
     return 'started', 'Continuous scanner started — scans every 30 min'
 
 
