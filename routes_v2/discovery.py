@@ -1,4 +1,4 @@
-"""routes_v2/discovery.py — Internal discovery fleet API routes.
+﻿"""routes_v2/discovery.py â€” Internal discovery fleet API routes.
 
 These routes are NOT user-facing. They are called by the companion MCP server
 using a shared secret header (X-Internal-Secret).
@@ -124,7 +124,7 @@ async def discovery_reset(x_internal_secret: str = Header(None)):
         raise HTTPException(500, detail=str(e))
 
 
-# ── MOT routes (user-authenticated, open to all registered users) ─────────────
+# â”€â”€ MOT routes (user-authenticated, open to all registered users) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _dev_gate(user_id: str) -> None:
     """Previously restricted to is_dev users. Now open to all authenticated users."""
@@ -323,14 +323,14 @@ async def pf_calibration_obs(
         conn.close()
 
 
-# ── Ops Terminal Briefing ─────────────────────────────────────────────────────
+# â”€â”€ Ops Terminal Briefing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get('/ops/briefing')
 async def ops_briefing(user_id: str = Depends(get_current_user)):
     """Aggregated briefing for the Meridian Operations Terminal."""
     _dev_gate(user_id)
 
-    # 30s in-process cache — briefing is called every 60s by Dispatch
+    # 30s in-process cache â€” briefing is called every 60s by Dispatch
     # and costs 6-8s per call due to pattern join queries
     import time as _t
     _now = _t.time()
@@ -343,7 +343,7 @@ async def ops_briefing(user_id: str = Depends(get_current_user)):
         import json as _json
         from datetime import datetime, timezone, timedelta
 
-        # ── Regime: KB facts for market, SPY, HYG, TLT ──────────────────
+        # â”€â”€ Regime: KB facts for market, SPY, HYG, TLT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         regime_rows = conn.execute(
             """SELECT subject, predicate, object FROM facts
                WHERE LOWER(subject) IN ('market','spy','hyg','tlt')
@@ -374,7 +374,7 @@ async def ops_briefing(user_id: str = Depends(get_current_user)):
                 'price_regime': proxy_data[pn].get('price_regime', ''),
             }
 
-        # ── Overnight closes (last 12h) ─────────────────────────────────
+        # â”€â”€ Overnight closes (last 12h) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         cutoff_12h = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
         ov = conn.execute(
             """SELECT COUNT(*) as n,
@@ -395,7 +395,7 @@ async def ops_briefing(user_id: str = Depends(get_current_user)):
             'since_hours': 12,
         }
 
-        # ── Fleet summary ────────────────────────────────────────────────
+        # â”€â”€ Fleet summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         fleet_status = get_discovery_status(conn)
         open_positions = fleet_status.get('open_positions', [])
         _conv = {}
@@ -415,7 +415,7 @@ async def ops_briefing(user_id: str = Depends(get_current_user)):
             'top_convergence': top_convergence,
         }
 
-        # ── Observatory ──────────────────────────────────────────────────
+        # â”€â”€ Observatory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         obs_row = conn.execute(
             "SELECT run_at, findings_json FROM observatory_runs ORDER BY run_at DESC LIMIT 1"
         ).fetchone()
@@ -431,7 +431,7 @@ async def ops_briefing(user_id: str = Depends(get_current_user)):
             except Exception:
                 pass
 
-        # ── Pattern pool stats ───────────────────────────────────────────
+        # â”€â”€ Pattern pool stats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         pat = conn.execute(
             """SELECT COUNT(*) as total_open,
                       SUM(CASE WHEN quality_score >= 0.50 THEN 1 ELSE 0 END) as quality_medium,
@@ -454,7 +454,7 @@ async def ops_briefing(user_id: str = Depends(get_current_user)):
             'actionable': actionable or 0,
         }
 
-        # ── Top opportunities ─────────────────────────────────────────
+        # â”€â”€ Top opportunities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # CTE approach: fetch top patterns via index first, then join small result set
         # (was 5800ms due to full table scan + LOWER() join blocking indexes)
         opp_rows = conn.execute("""
@@ -508,14 +508,14 @@ async def ops_briefing(user_id: str = Depends(get_current_user)):
         conn.close()
 
 
-# ── CORPUS — Market Objects ───────────────────────────────────────────────────
+# â”€â”€ CORPUS â€” Market Objects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 import time as _time
 
 _corpus_cache: dict = {'data': None, 'ts': 0}
 _CORPUS_TTL = 300  # 5 minutes
 
-# Briefing cache: 30s TTL — called every 60s by Dispatch, costs 6-8s per call without cache
+# Briefing cache: 30s TTL â€” called every 60s by Dispatch, costs 6-8s per call without cache
 _briefing_cache: dict = {'data': None, 'ts': 0.0}
 _BRIEFING_TTL = 30  # seconds
 
@@ -538,7 +538,7 @@ def _resolve_market_object(ticker: str, facts: dict, pats: list, pos: list) -> d
 
     obj_confidence = round(min(1.0, avg_quality * conv_weight + 0.1 * min(len(pats), 5)), 2)
 
-    # Primary direction — majority of open pattern directions
+    # Primary direction â€” majority of open pattern directions
     dir_counts: dict[str, int] = {}
     for p in pats:
         d = (p.get('direction') or '').lower()
@@ -582,7 +582,7 @@ def _resolve_market_object(ticker: str, facts: dict, pats: list, pos: list) -> d
         'regime': facts.get('market_regime', ''),
         'object_confidence': obj_confidence,
         'last_verified': facts.get('_latest_ts', ''),
-        # ── Enrichment fields (ATLAS + FORGE) ──
+        # â”€â”€ Enrichment fields (ATLAS + FORGE) â”€â”€
         'upside_pct': _float('upside_pct'),
         'auto_thesis': facts.get('auto_thesis', ''),
         'auto_thesis_score': _float('auto_thesis_score'),
@@ -687,7 +687,7 @@ def _bulk_resolve(conn) -> list[dict]:
 
 @router.get('/ops/corpus/{ticker}')
 async def get_corpus_ticker(ticker: str, current_user: str = Depends(get_current_user)):
-    """Single Market Object for a ticker — resolved from KB atoms, patterns, positions."""
+    """Single Market Object for a ticker â€” resolved from KB atoms, patterns, positions."""
     _dev_gate(current_user)
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
@@ -768,7 +768,7 @@ async def get_corpus_bulk(current_user: str = Depends(get_current_user)):
 
 @router.get('/ops/sentinel/positions')
 async def sentinel_positions(current_user: str = Depends(get_current_user)):
-    """All open paper positions across all bots — for SENTINEL convergence view."""
+    """All open paper positions across all bots â€” for SENTINEL convergence view."""
     _dev_gate(current_user)
     conn = sqlite3.connect(ext.DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
@@ -845,7 +845,7 @@ async def network_matrix(current_user: str = Depends(get_current_user)):
         conn.close()
 
 
-# ── FORGE Pipeline ────────────────────────────────────────────────────────────
+# â”€â”€ FORGE Pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 import json as _json
 from datetime import datetime as _dt, timezone as _tz
@@ -894,27 +894,27 @@ def _score_pattern_for_user(pat: dict, facts: dict, user_prefs: dict, pipeline_t
     score = 0.0
     reasons: list[str] = []
 
-    # ── Base quality (0–30) ──────────────────────────────────────
+    # â”€â”€ Base quality (0â€“30) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     q = float(pat.get('quality_score') or 0)
     score += q * 30
 
-    # ── Timeframe match (0–20) ───────────────────────────────────
+    # â”€â”€ Timeframe match (0â€“20) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     user_tfs = user_prefs.get('timeframes', [])
     pat_tf = pat.get('timeframe', '')
     if pat_tf in user_tfs:
         score += 20
-        reasons.append(f'⏱ {pat_tf}')
+        reasons.append(f'â± {pat_tf}')
     elif any(tf in pat_tf for tf in user_tfs):
         score += 10
 
-    # ── Pattern type match (0–15) ────────────────────────────────
+    # â”€â”€ Pattern type match (0â€“15) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     user_patterns = user_prefs.get('pattern_types', [])
     pat_type = pat.get('pattern_type', '')
     if user_patterns and pat_type in user_patterns:
         score += 15
-        reasons.append(f'⬡ {pat_type.replace("_"," ")}')
+        reasons.append(f'â¬¡ {pat_type.replace("_"," ")}')
 
-    # ── Sector match (0–15) ──────────────────────────────────────
+    # â”€â”€ Sector match (0â€“15) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     user_sectors = [s.lower() for s in user_prefs.get('sectors', [])]
     ticker_sector = (facts.get('sector') or '').lower()
     if user_sectors and ticker_sector:
@@ -924,9 +924,9 @@ def _score_pattern_for_user(pat: dict, facts: dict, user_prefs: dict, pipeline_t
         )
         if sector_hit:
             score += 15
-            reasons.append(f'◈ {ticker_sector}')
+            reasons.append(f'â—ˆ {ticker_sector}')
 
-    # ── Region / home country (0–20) ─────────────────────────────
+    # â”€â”€ Region / home country (0â€“20) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     ticker_region = _ticker_region(ticker)
     user_regions = user_prefs.get('regions', [])
     country = (user_prefs.get('country') or '').upper()
@@ -934,37 +934,37 @@ def _score_pattern_for_user(pat: dict, facts: dict, user_prefs: dict, pipeline_t
 
     if home_region and ticker_region == home_region:
         score += 20
-        reasons.append('🏠 home market')
+        reasons.append('ðŸ  home market')
     elif user_regions and ticker_region in user_regions:
         score += 12
-        reasons.append('◎ preferred region')
+        reasons.append('â—Ž preferred region')
     elif not user_regions and not home_region:
         if ticker_region in ('US', 'UK'):
             score += 5
 
-    # ── Macro alignment (0–15) ───────────────────────────────────
+    # â”€â”€ Macro alignment (0â€“15) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     macro = facts.get('macro_confirmation', 'no_data')
     macro_pts = {'confirmed': 15, 'partial': 8, 'unconfirmed': 2, 'no_data': 0}.get(macro, 0)
     score += macro_pts
     if macro_pts >= 8:
-        reasons.append('✦ macro')
+        reasons.append('âœ¦ macro')
 
-    # ── Thesis alignment (0–15 / –10) ────────────────────────────
+    # â”€â”€ Thesis alignment (0â€“15 / â€“10) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     auto_thesis = (facts.get('auto_thesis') or '').lower()
     pat_dir = (pat.get('direction') or '').lower()
     if auto_thesis and auto_thesis == pat_dir:
         score += 15
-        reasons.append('▲ thesis')
+        reasons.append('â–² thesis')
     elif auto_thesis and auto_thesis != pat_dir:
         score -= 10
 
-    # ── Risk tolerance ───────────────────────────────────────────
+    # â”€â”€ Risk tolerance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     risk = user_prefs.get('risk_tolerance', 'moderate')
     conviction = (facts.get('conviction_tier') or '').lower()
     if risk == 'conservative':
         if conviction == 'high':
             score += 10
-            reasons.append('★ high conv')
+            reasons.append('â˜… high conv')
         elif conviction in ('low', 'avoid'):
             score -= 15
     elif risk == 'moderate':
@@ -974,7 +974,7 @@ def _score_pattern_for_user(pat: dict, facts: dict, user_prefs: dict, pipeline_t
             score -= 10
     # aggressive: no conviction penalty
 
-    # ── Style timeframe alignment (0–8 / –5) ────────────────────
+    # â”€â”€ Style timeframe alignment (0â€“8 / â€“5) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     style = user_prefs.get('style_timeframe', 'swing')
     _tf_map = {
         'scalp':    ['1m', '5m', '15m'],
@@ -988,23 +988,23 @@ def _score_pattern_for_user(pat: dict, facts: dict, user_prefs: dict, pipeline_t
     elif style_tfs and pat_tf not in style_tfs:
         score -= 5
 
-    # ── Freshness penalty (0 to –15) ─────────────────────────────
+    # â”€â”€ Freshness penalty (0 to â€“15) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try:
         decay = float(facts.get('pattern_decay_pct') or 0)
     except (TypeError, ValueError):
         decay = 0.0
     score -= decay * 15
 
-    # ── Catalyst bonus (0–10) ────────────────────────────────────
+    # â”€â”€ Catalyst bonus (0â€“10) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if facts.get('catalyst'):
         score += 10
-        reasons.append('⚡ catalyst')
+        reasons.append('âš¡ catalyst')
 
-    # ── KB avoid penalty ─────────────────────────────────────────
+    # â”€â”€ KB avoid penalty â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if conviction == 'avoid':
         score -= 20
 
-    # ── Calibration bonus (0–30) ──────────────────────────────────────────────
+    # â”€â”€ Calibration bonus (0â€“30) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _MIN_CAL_SAMPLES = 10
     _CAL_BONUS_MAX   = 30
     try:
@@ -1114,7 +1114,7 @@ def _get_pipeline_tickers(conn, user_id: str) -> set:
 
 def _detected_for_user(conn, user_id: str, limit: int = 15) -> list[dict]:
     """Score all open patterns for a user and return top N as Market Objects."""
-    # User prefs — read all profile fields
+    # User prefs â€” read all profile fields
     try:
         prow = conn.execute(
             """SELECT tip_timeframes, tip_pattern_types, selected_sectors,
@@ -1151,7 +1151,7 @@ def _detected_for_user(conn, user_id: str, limit: int = 15) -> list[dict]:
            WHERE status NOT IN ('filled','broken','expired')
              AND quality_score >= 0.35"""
     ).fetchall()
-    pat_rows = [r for r in pat_rows if r['kb_conviction'] or r['kb_signal_dir']]
+        pat_rows = [r for r in pat_rows if (r['kb_conviction'] or '') != 'avoid']
 
     # Group by ticker
     pats_by_ticker: dict[str, list] = {}
@@ -1189,7 +1189,7 @@ def _detected_for_user(conn, user_id: str, limit: int = 15) -> list[dict]:
             scored.append((s, reasons, ticker, pat, facts))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    # Deduplicate by ticker — keep best-scoring pattern per ticker
+    # Deduplicate by ticker â€” keep best-scoring pattern per ticker
     seen_tickers: set = set()
     top = []
     for item in scored:
@@ -1386,7 +1386,7 @@ async def pipeline_watch(data: PipelineWatchRequest, current_user: str = Depends
             entry = zl
             stop  = round(zl * 0.975, 4) if zl else None
 
-        # T1/T2: project 1.5× and 3× zone size beyond the zone
+        # T1/T2: project 1.5Ã— and 3Ã— zone size beyond the zone
         zone_size = abs(zh - zl) if (zh and zl) else 0
         if direction == 'bearish':
             t1 = round(zl - zone_size * 1.5, 4) if (zl and zone_size) else None
