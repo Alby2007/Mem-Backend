@@ -953,10 +953,12 @@ class BotRunner:
                 bot_id, now_iso)
 
             for c in candidates:
-                ticker    = c['ticker']
-                direction = c['direction']
-                quality   = c.get('quality_score') or 0
-                regime    = (c.get('kb_regime') or '').lower()
+                ticker       = c['ticker']
+                direction    = c['direction']
+                quality      = c.get('quality_score') or 0
+                regime       = (c.get('kb_regime') or '').lower()
+                pattern_type = (c.get('pattern_type') or '').lower()
+                timeframe    = (c.get('timeframe') or '').lower()
 
                 # Fix 6: 1 entry per scan cycle maximum
                 if entries >= 1:
