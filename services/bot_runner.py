@@ -453,8 +453,8 @@ class BotRunner:
                      pattern_types, sectors, exchanges, volatility, regimes, timeframes,
                      direction_bias, risk_pct, max_positions, min_quality,
                      virtual_balance, initial_balance, role, active,
-                     scan_interval_sec, min_trades_eval, created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1800,25,?)
+                     scan_interval_sec, min_trades_eval, required_facts, created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1800,25,?,?)
                 """, (
                     user_id, bot_id,
                     tmpl['genome_id'], tmpl['strategy_name'],
@@ -466,6 +466,7 @@ class BotRunner:
                     tmpl.get('min_quality', 0.65),
                     per_bot, per_bot,
                     tmpl.get('role', 'seed'),
+                    tmpl.get('required_facts'),
                     now_iso,
                 ))
                 bot_ids.append(bot_id)
@@ -732,6 +733,41 @@ class BotRunner:
                 placeholders = ','.join('?' for _ in tfs)
                 clauses.append(f'p.timeframe IN ({placeholders})')
                 params.extend(tfs)
+
+        # required_facts gate — KB-gated filter (AND logic by default, OR via "any"/"all")
+        rf_raw = config.get('required_facts')
+        if rf_raw:
+            rf = json.loads(rf_raw) if isinstance(rf_raw, str) else rf_raw
+            if isinstance(rf, dict) and ('any' in rf or 'all' in rf):
+                # Extended schema: {"any": [...], "all": [...]}
+                all_pairs = rf.get('all', [])
+                any_pairs = rf.get('any', [])
+                for pair in all_pairs:
+                    for predicate, value in pair.items():
+                        clauses.append(
+                            "EXISTS (SELECT 1 FROM facts WHERE LOWER(subject)=LOWER(p.ticker) "
+                            "AND predicate=? AND LOWER(object)=LOWER(?))"
+                        )
+                        params.extend([predicate, str(value)])
+                if any_pairs:
+                    or_parts = []
+                    for pair in any_pairs:
+                        for predicate, value in pair.items():
+                            or_parts.append(
+                                "EXISTS (SELECT 1 FROM facts WHERE LOWER(subject)=LOWER(p.ticker) "
+                                "AND predicate=? AND LOWER(object)=LOWER(?))"
+                            )
+                            params.extend([predicate, str(value)])
+                    if or_parts:
+                        clauses.append('(' + ' OR '.join(or_parts) + ')')
+            elif isinstance(rf, dict):
+                # Simple schema: {"predicate": "value", ...} — all AND
+                for predicate, value in rf.items():
+                    clauses.append(
+                        "EXISTS (SELECT 1 FROM facts WHERE LOWER(subject)=LOWER(p.ticker) "
+                        "AND predicate=? AND LOWER(object)=LOWER(?))"
+                    )
+                    params.extend([predicate, str(value)])
 
         # Expiry filter — skip patterns past their TTL
         clauses.append('(p.expires_at IS NULL OR p.expires_at > ?)')
@@ -1872,14 +1908,18 @@ class BotRunner:
         bot_id = 'bot_' + str(uuid.uuid4()).replace('-', '')[:12]
         conn = sqlite3.connect(self.db_path, timeout=10)
         self._ensure_tables(conn)
+        rf_val = genome.get('required_facts')
+        if rf_val and not isinstance(rf_val, str):
+            import json as _json
+            rf_val = _json.dumps(rf_val)
         conn.execute("""
             INSERT INTO paper_bot_configs
             (user_id, bot_id, genome_id, strategy_name, generation, parent_id,
              pattern_types, sectors, exchanges, volatility, regimes, timeframes,
              direction_bias, risk_pct, max_positions, min_quality,
              virtual_balance, initial_balance, role, active,
-             scan_interval_sec, min_trades_eval, created_at)
-            VALUES (?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1800,25,?)
+             scan_interval_sec, min_trades_eval, required_facts, created_at)
+            VALUES (?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1800,25,?,?)
         """, (
             user_id, bot_id,
             genome['genome_id'], genome['strategy_name'],
@@ -1890,6 +1930,7 @@ class BotRunner:
             float(genome.get('risk_pct', 1.0)), int(genome.get('max_positions', 4)),
             float(genome.get('min_quality', 0.65)),
             balance, balance,
+            rf_val,
             now_iso,
         ))
         conn.commit()

@@ -66,8 +66,8 @@ def _init_pool():
         import psycopg2.extras
         from psycopg2.pool import ThreadedConnectionPool
         _pg_pool = ThreadedConnectionPool(
-            minconn=2,
-            maxconn=20,
+            minconn=4,
+            maxconn=40,
             dsn=PG_DSN,
             cursor_factory=psycopg2.extras.RealDictCursor,
         )

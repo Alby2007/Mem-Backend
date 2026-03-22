@@ -275,6 +275,11 @@ def ensure_paper_tables(conn):
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_bot_configs_user ON paper_bot_configs(user_id, active)")
+    # Idempotent: add required_facts column for KB-gated bot filters
+    try:
+        conn.execute('ALTER TABLE paper_bot_configs ADD COLUMN required_facts TEXT')
+    except Exception:
+        pass
     # Per-bot equity log
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_bot_equity (

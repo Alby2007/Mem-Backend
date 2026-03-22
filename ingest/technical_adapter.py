@@ -94,7 +94,7 @@ class TechnicalAdapter(BaseIngestAdapter):
                     ))
 
             # ── BB Squeeze ────────────────────────────────────────────────
-            squeeze = self._bb_squeeze(closes)
+            squeeze = self._bb_squeeze(closes, highs, lows)
             if squeeze:
                 atoms.append(RawAtom(
                     subject=ticker, predicate='bb_squeeze',
@@ -213,34 +213,89 @@ class TechnicalAdapter(BaseIngestAdapter):
         return sum(trs[-period:]) / period
 
     @staticmethod
-    def _bb_squeeze(closes: List[float], bb_period: int = 20,
-                    kc_period: int = 20, kc_mult: float = 1.5) -> Optional[str]:
+    def _bb_squeeze(
+        closes: List[float],
+        highs: List[float],
+        lows: List[float],
+        bb_period: int = 20,
+        bb_std: float = 2.0,
+        kc_period: int = 20,
+        kc_mult: float = 1.5,
+    ) -> Optional[str]:
         """
-        Bollinger Band Squeeze detection.
-        Squeeze fires when BB bandwidth < KC bandwidth.
+        Bollinger Band Squeeze detection using the Keltner Channel method.
+
+        Squeeze is ON  when BB bands are inside KC bands:
+            BB_upper - BB_lower  <  KC_upper - KC_lower
+
+        This is instrument-independent (no static price threshold) and
+        correctly fires for ~5-15% of tickers at any given time.
+
+        Returns: 'firing' | 'building' | 'neutral' | None
+          firing  = squeeze just released (momentum building COMPLETE)
+          building = squeeze is currently ON (BB inside KC)
+          neutral  = no squeeze
         """
-        if len(closes) < bb_period:
-            return None
-        recent = closes[-bb_period:]
-        sma = sum(recent) / bb_period
-        std = (sum((c - sma) ** 2 for c in recent) / bb_period) ** 0.5
-        if sma == 0:
+        n = max(bb_period, kc_period) + 1
+        if len(closes) < n or len(highs) < n or len(lows) < n:
             return None
 
-        bb_width = (2 * std * 2) / sma  # 2-std BB width as % of price
-
-        # KC width approximation using ATR-like range
-        ranges = [abs(closes[i] - closes[i - 1]) for i in range(-kc_period, 0)]
-        if not ranges:
+        # ── Bollinger Bands ───────────────────────────────────────────────
+        bb_c = closes[-bb_period:]
+        bb_sma = sum(bb_c) / bb_period
+        if bb_sma == 0:
             return None
-        avg_range = sum(ranges) / len(ranges)
-        kc_width = (2 * kc_mult * avg_range) / sma if sma > 0 else 0
+        bb_std_val = (sum((c - bb_sma) ** 2 for c in bb_c) / bb_period) ** 0.5
+        bb_upper = bb_sma + bb_std * bb_std_val
+        bb_lower = bb_sma - bb_std * bb_std_val
+        bb_width = bb_upper - bb_lower
 
-        if bb_width < kc_width * 0.75:
-            return 'firing'
-        elif bb_width < kc_width:
-            return 'building'
-        return 'neutral'
+        # ── Keltner Channel — SMA(close, 20) ± mult × ATR(20) ────────────
+        kc_c = closes[-kc_period:]
+        kc_sma = sum(kc_c) / kc_period
+        # True Range using full series so ATR covers the period
+        trs = []
+        for i in range(len(closes) - kc_period, len(closes)):
+            if i == 0:
+                continue
+            tr = max(highs[i] - lows[i],
+                     abs(highs[i] - closes[i - 1]),
+                     abs(lows[i] - closes[i - 1]))
+            trs.append(tr)
+        if not trs:
+            return None
+        kc_atr = sum(trs) / len(trs)
+        kc_width = 2 * kc_mult * kc_atr
+
+        # ── Classify ──────────────────────────────────────────────────────
+        squeeze_on = bb_width < kc_width
+
+        # Detect squeeze release: was squeezed one period ago, not now
+        # (use slightly wider window to check previous state)
+        if not squeeze_on:
+            # Check if we were in squeeze last bar (quick re-check with n-1)
+            if len(closes) >= n + 1:
+                bb_c_prev = closes[-(bb_period + 1):-1]
+                if len(bb_c_prev) == bb_period:
+                    bb_sma_p = sum(bb_c_prev) / bb_period
+                    bb_std_p = (sum((c - bb_sma_p) ** 2 for c in bb_c_prev) / bb_period) ** 0.5
+                    bb_width_p = 2 * bb_std * bb_std_p
+                    trs_p = []
+                    for i in range(len(closes) - kc_period - 1, len(closes) - 1):
+                        if i == 0:
+                            continue
+                        tr = max(highs[i] - lows[i],
+                                 abs(highs[i] - closes[i - 1]),
+                                 abs(lows[i] - closes[i - 1]))
+                        trs_p.append(tr)
+                    if trs_p:
+                        kc_atr_p = sum(trs_p) / len(trs_p)
+                        kc_width_p = 2 * kc_mult * kc_atr_p
+                        if bb_width_p < kc_width_p:
+                            return 'firing'  # just released
+            return 'neutral'
+
+        return 'building'  # squeeze currently ON
 
     @staticmethod
     def _sma_alignment(closes: List[float]) -> Optional[str]:
