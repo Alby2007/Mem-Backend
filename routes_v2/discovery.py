@@ -1151,7 +1151,7 @@ def _detected_for_user(conn, user_id: str, limit: int = 15) -> list[dict]:
            WHERE status NOT IN ('filled','broken','expired')
              AND quality_score >= 0.35"""
     ).fetchall()
-        pat_rows = [r for r in pat_rows if (r['kb_conviction'] or '') != 'avoid']
+    pat_rows = [r for r in pat_rows if (r['kb_conviction'] or '') != 'avoid']
 
     # Group by ticker
     pats_by_ticker: dict[str, list] = {}
@@ -1520,3 +1520,51 @@ async def pipeline_remove(followup_id: int, current_user: str = Depends(get_curr
         return {'deleted': followup_id}
     finally:
         conn.close()
+
+
+@router.get('/ops/convergence')
+async def convergence_scores(
+    ticker: str = Query(None),
+    min_families: int = Query(2, ge=1, le=5),
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Return active strategy convergence records from PG.
+    Optional ?ticker=AAPL filter; ?min_families=3 for higher conviction only.
+    """
+    _dev_gate(current_user)
+    from db import HAS_POSTGRES, get_pg
+    if not HAS_POSTGRES:
+        return {'convergences': [], 'error': 'PG not available'}
+    try:
+        with get_pg() as pgconn:
+            cur = pgconn.cursor()
+            from datetime import datetime, timezone
+            now_iso = datetime.now(timezone.utc).isoformat()
+            if ticker:
+                cur.execute(
+                    """SELECT ticker, direction, families_active, family_count,
+                              lead_family, follow_family, hours_span,
+                              convergence_score, detected_at, expires_at
+                       FROM strategy_convergence
+                       WHERE UPPER(ticker) = UPPER(%s)
+                         AND family_count >= %s
+                         AND expires_at >= %s
+                       ORDER BY convergence_score DESC""",
+                    (ticker, min_families, now_iso),
+                )
+            else:
+                cur.execute(
+                    """SELECT ticker, direction, families_active, family_count,
+                              lead_family, follow_family, hours_span,
+                              convergence_score, detected_at, expires_at
+                       FROM strategy_convergence
+                       WHERE family_count >= %s AND expires_at >= %s
+                       ORDER BY convergence_score DESC
+                       LIMIT 100""",
+                    (min_families, now_iso),
+                )
+            rows = cur.fetchall()
+            return {'convergences': [dict(r) for r in rows]}
+    except Exception as e:
+        return {'convergences': [], 'error': str(e)}

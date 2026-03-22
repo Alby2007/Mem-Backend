@@ -2,7 +2,8 @@
 db.py — Unified database connection module.
 
 Hot tables (ohlcv_cache, pattern_signals, paper_agent_log, facts,
-paper_bot_equity) → PostgreSQL via PG_DSN env var.
+paper_bot_equity, signal_calibration, calibration_observations,
+strategy_convergence) → PostgreSQL via PG_DSN env var.
 
 Everything else → SQLite at DB_PATH / TRADING_KB_DB env var.
 
@@ -16,7 +17,7 @@ Usage:
 
     # SQLite (everything else)
     conn = get_sqlite()
-    conn.execute("SELECT * FROM signal_calibration WHERE ticker=?", ("AAPL",))
+    conn.execute("SELECT * FROM market_state_snapshots WHERE ...")
 """
 from __future__ import annotations
 
@@ -39,6 +40,9 @@ PG_TABLES = frozenset({
     "pattern_signals",
     "facts",
     "paper_bot_equity",
+    "signal_calibration",
+    "calibration_observations",
+    "strategy_convergence",
 })
 
 # ── Postgres connection pool ─────────────────────────────────────────────────

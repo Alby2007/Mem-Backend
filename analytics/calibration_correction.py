@@ -34,6 +34,77 @@ class CorrectionFactor:
     confidence: str          # 'high' (both ≥20) | 'low' (either <10)
 
 
+def _compute_factors_pg() -> Optional[List[CorrectionFactor]]:
+    """PG path for compute_correction_factors. Returns None on failure."""
+    from db import HAS_POSTGRES, get_pg
+    if not HAS_POSTGRES:
+        return None
+    try:
+        factors: List[CorrectionFactor] = []
+        with get_pg() as pgconn:
+            cur = pgconn.cursor()
+            cur.execute(
+                """SELECT ticker, pattern_type, timeframe, market_regime
+                   FROM signal_calibration
+                   WHERE COALESCE(bot_observations, 0) >= %s
+                     AND COALESCE(user_observations, 0) >= %s""",
+                (_MIN_OBS, _MIN_OBS),
+            )
+            cells = cur.fetchall()
+
+            for cell in cells:
+                ticker        = cell['ticker']
+                pattern_type  = cell['pattern_type']
+                timeframe     = cell['timeframe']
+                market_regime = cell['market_regime']
+
+                cur.execute(
+                    """SELECT outcome FROM calibration_observations
+                       WHERE source='paper_bot'
+                         AND ticker=%s AND pattern_type=%s AND timeframe=%s
+                         AND (market_regime=%s OR (market_regime IS NULL AND %s IS NULL))""",
+                    (ticker, pattern_type, timeframe, market_regime, market_regime),
+                )
+                bot_rows = cur.fetchall()
+
+                cur.execute(
+                    """SELECT outcome FROM calibration_observations
+                       WHERE source IN ('user', 'user_feedback')
+                         AND ticker=%s AND pattern_type=%s AND timeframe=%s
+                         AND (market_regime=%s OR (market_regime IS NULL AND %s IS NULL))""",
+                    (ticker, pattern_type, timeframe, market_regime, market_regime),
+                )
+                user_rows = cur.fetchall()
+
+                bot_n  = len(bot_rows)
+                user_n = len(user_rows)
+                if bot_n < _MIN_OBS or user_n < _MIN_OBS:
+                    continue
+
+                _t1_outcomes = ('hit_t1', 'hit_t2', 'hit_t3')
+                bot_hr  = sum(1 for r in bot_rows  if r['outcome'] in _t1_outcomes) / bot_n
+                user_hr = sum(1 for r in user_rows if r['outcome'] in _t1_outcomes) / user_n
+
+                correction = (user_hr / bot_hr) if bot_hr > 0 else 1.0
+                confidence = 'high' if (bot_n >= 20 and user_n >= 20) else 'low'
+                cell_key   = f"{ticker}|{pattern_type}|{timeframe}|{market_regime or 'any'}"
+
+                factors.append(CorrectionFactor(
+                    cell_key=cell_key,
+                    bot_hit_rate=round(bot_hr, 4),
+                    user_hit_rate=round(user_hr, 4),
+                    gap_pct=round(user_hr - bot_hr, 4),
+                    bot_n=bot_n,
+                    user_n=user_n,
+                    correction=round(correction, 4),
+                    confidence=confidence,
+                ))
+        return factors
+    except Exception as e:
+        _log.debug('compute_correction_factors PG failed: %s', e)
+        return None
+
+
 def compute_correction_factors(db_path: str) -> List[CorrectionFactor]:
     """
     For each calibration cell where both bot and user observations ≥ _MIN_OBS,
@@ -41,6 +112,10 @@ def compute_correction_factors(db_path: str) -> List[CorrectionFactor]:
 
     Returns an empty list if there is insufficient data (cold start).
     """
+    pg_result = _compute_factors_pg()
+    if pg_result is not None:
+        return pg_result
+
     factors: List[CorrectionFactor] = []
     try:
         conn = sqlite3.connect(db_path, timeout=10)

@@ -285,15 +285,20 @@ class _AggBucket:
 
 
 def _upsert_calibration(
-    conn:        sqlite3.Connection,
+    cur,
     ticker:      str,
     pattern_type: str,
     timeframe:   str,
     regime:      Optional[str],
     bucket:      _AggBucket,
     now:         str,
+    ph:          str = '?',
 ) -> None:
-    """Write or merge a calibration bucket into signal_calibration."""
+    """Write or merge a calibration bucket into signal_calibration.
+    
+    cur: sqlite3.Connection (SQLite) or psycopg2 cursor (PG)
+    ph:  placeholder — '?' for SQLite, '%s' for PG
+    """
     if bucket.n == 0:
         return
 
@@ -305,38 +310,38 @@ def _upsert_calibration(
     atth = round(sum(bucket.candles) / len(bucket.candles) * 24, 2) if bucket.candles else None
 
     # Merge with any existing row from a previous calibration run
-    existing = conn.execute(
-        """SELECT sample_size, hit_rate_t1, hit_rate_t2, hit_rate_t3,
+    cur.execute(
+        f"""SELECT sample_size, hit_rate_t1, hit_rate_t2, hit_rate_t3,
                   stopped_out_rate, avg_time_to_target_hours
            FROM signal_calibration
-           WHERE ticker=? AND pattern_type=? AND timeframe=?
-             AND (market_regime=? OR (market_regime IS NULL AND ? IS NULL))""",
+           WHERE ticker={ph} AND pattern_type={ph} AND timeframe={ph}
+             AND (market_regime={ph} OR (market_regime IS NULL AND {ph} IS NULL))""",
         (ticker, pattern_type, timeframe, regime, regime),
-    ).fetchone()
+    )
+    existing = cur.fetchone()
 
     if existing:
-        # Only replace if new sample is larger (re-run produces more data)
-        old_n = existing[0] or 0
+        old_n = (existing['sample_size'] if isinstance(existing, dict) else existing[0]) or 0
         if n <= old_n:
             return
-        # Override entirely with the fresh backtest result
     conf_score = _confidence_score(n)
-    conn.execute(
-        """INSERT INTO signal_calibration
+    # PG uses EXCLUDED (upper), SQLite uses excluded (lower) — both work in PG
+    cur.execute(
+        f"""INSERT INTO signal_calibration
            (ticker, pattern_type, timeframe, market_regime, sample_size,
             hit_rate_t1, hit_rate_t2, hit_rate_t3, stopped_out_rate,
             avg_time_to_target_hours, calibration_confidence, last_updated)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+           VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})
            ON CONFLICT(ticker, pattern_type, timeframe, market_regime)
            DO UPDATE SET
-             sample_size=excluded.sample_size,
-             hit_rate_t1=excluded.hit_rate_t1,
-             hit_rate_t2=excluded.hit_rate_t2,
-             hit_rate_t3=excluded.hit_rate_t3,
-             stopped_out_rate=excluded.stopped_out_rate,
-             avg_time_to_target_hours=excluded.avg_time_to_target_hours,
-             calibration_confidence=excluded.calibration_confidence,
-             last_updated=excluded.last_updated""",
+             sample_size=EXCLUDED.sample_size,
+             hit_rate_t1=EXCLUDED.hit_rate_t1,
+             hit_rate_t2=EXCLUDED.hit_rate_t2,
+             hit_rate_t3=EXCLUDED.hit_rate_t3,
+             stopped_out_rate=EXCLUDED.stopped_out_rate,
+             avg_time_to_target_hours=EXCLUDED.avg_time_to_target_hours,
+             calibration_confidence=EXCLUDED.calibration_confidence,
+             last_updated=EXCLUDED.last_updated""",
         (ticker, pattern_type, timeframe, regime, n,
          hr1, hr2, hr3, sor, atth,
          round(conf_score, 4), now),
@@ -494,18 +499,35 @@ class HistoricalCalibrator:
         # ── Write calibration rows ─────────────────────────────────────────────
         now  = datetime.now(timezone.utc).isoformat()
         rows_written = 0
-        conn = sqlite3.connect(self._db_path, timeout=20)
-        try:
-            _ensure_table(conn)
-            for key, bucket in buckets.items():
-                parts = key.split('|')
-                _ticker, p_type, tf, reg = parts[0], parts[1], parts[2], parts[3]
-                regime_val = None if reg == 'no_data' else reg
-                _upsert_calibration(conn, _ticker, p_type, tf, regime_val, bucket, now)
-                rows_written += 1
-            conn.commit()
-        finally:
-            conn.close()
+        _wrote_pg = False
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pgconn:
+                    cur = pgconn.cursor()
+                    for key, bucket in buckets.items():
+                        parts = key.split('|')
+                        _ticker, p_type, tf, reg = parts[0], parts[1], parts[2], parts[3]
+                        regime_val = None if reg == 'no_data' else reg
+                        _upsert_calibration(cur, _ticker, p_type, tf, regime_val, bucket, now, ph='%s')
+                        rows_written += 1
+                _wrote_pg = True
+            except Exception as e:
+                _logger.warning('calibrate_ticker: PG write failed, falling back to SQLite: %s', e)
+                rows_written = 0
+        if not _wrote_pg:
+            conn = sqlite3.connect(self._db_path, timeout=20)
+            try:
+                _ensure_table(conn)
+                for key, bucket in buckets.items():
+                    parts = key.split('|')
+                    _ticker, p_type, tf, reg = parts[0], parts[1], parts[2], parts[3]
+                    regime_val = None if reg == 'no_data' else reg
+                    _upsert_calibration(conn, _ticker, p_type, tf, regime_val, bucket, now)
+                    rows_written += 1
+                conn.commit()
+            finally:
+                conn.close()
 
         _logger.info(
             'calibration: %s — %d patterns detected, %d rows written (%d buckets)',
@@ -785,21 +807,42 @@ class HistoricalCalibrator:
         yf_interval, yf_period, window_size, forward_horizon, step_size = tf_map[timeframe]
 
         # 7-day recency guard — skip if already calibrated recently
-        try:
-            _gconn = sqlite3.connect(self._db_path, timeout=5)
-            _row = _gconn.execute(
-                """SELECT MAX(last_updated) FROM signal_calibration
-                   WHERE UPPER(ticker) = UPPER(?) AND timeframe = ?""",
-                (ticker, timeframe),
-            ).fetchone()
-            _gconn.close()
-            if _row and _row[0]:
-                _last = datetime.fromisoformat(_row[0].replace('Z', '+00:00'))
-                _hours = (datetime.now(timezone.utc) - _last).total_seconds() / 3600
-                if _hours < 168:
-                    return {'patterns_detected': 0, 'calibration_rows_written': 0, 'skipped': True}
-        except Exception:
-            pass
+        _recency_checked = False
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pgconn:
+                    cur = pgconn.cursor()
+                    cur.execute(
+                        """SELECT MAX(last_updated) AS lu FROM signal_calibration
+                           WHERE UPPER(ticker) = UPPER(%s) AND timeframe = %s""",
+                        (ticker, timeframe),
+                    )
+                    _row = cur.fetchone()
+                    if _row and _row['lu']:
+                        _last = datetime.fromisoformat(str(_row['lu']).replace('Z', '+00:00'))
+                        _hours = (datetime.now(timezone.utc) - _last).total_seconds() / 3600
+                        if _hours < 168:
+                            return {'patterns_detected': 0, 'calibration_rows_written': 0, 'skipped': True}
+                _recency_checked = True
+            except Exception:
+                pass
+        if not _recency_checked:
+            try:
+                _gconn = sqlite3.connect(self._db_path, timeout=5)
+                _row = _gconn.execute(
+                    """SELECT MAX(last_updated) FROM signal_calibration
+                       WHERE UPPER(ticker) = UPPER(?) AND timeframe = ?""",
+                    (ticker, timeframe),
+                ).fetchone()
+                _gconn.close()
+                if _row and _row[0]:
+                    _last = datetime.fromisoformat(_row[0].replace('Z', '+00:00'))
+                    _hours = (datetime.now(timezone.utc) - _last).total_seconds() / 3600
+                    if _hours < 168:
+                        return {'patterns_detected': 0, 'calibration_rows_written': 0, 'skipped': True}
+            except Exception:
+                pass
 
         # ── Prefer ohlcv_cache (populated by YFinanceAdapter chart API) ──────
         cache_interval = yf_interval  # '15m', '1h' — matches what YFinanceAdapter writes
@@ -880,18 +923,34 @@ class HistoricalCalibrator:
 
         now = datetime.now(timezone.utc).isoformat()
         rows_written = 0
-        conn = sqlite3.connect(self._db_path, timeout=20)
-        try:
-            _ensure_table(conn)
-            for key, bucket in buckets.items():
-                parts = key.split('|')
-                _t, pt, tf, reg = parts[0], parts[1], parts[2], parts[3]
-                regime_val = None if reg == 'no_data' else reg
-                _upsert_calibration(conn, _t, pt, tf, regime_val, bucket, now)
-                rows_written += 1
-            conn.commit()
-        finally:
-            conn.close()
+        _wrote_pg = False
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pgconn:
+                    cur = pgconn.cursor()
+                    for key, bucket in buckets.items():
+                        parts = key.split('|')
+                        _t, pt, tf, reg = parts[0], parts[1], parts[2], parts[3]
+                        regime_val = None if reg == 'no_data' else reg
+                        _upsert_calibration(cur, _t, pt, tf, regime_val, bucket, now, ph='%s')
+                        rows_written += 1
+                _wrote_pg = True
+            except Exception as e:
+                _logger.warning('calibrate_ticker_intraday: PG write failed: %s', e)
+                rows_written = 0
+        if not _wrote_pg:
+            conn = sqlite3.connect(self._db_path, timeout=20)
+            try:
+                _ensure_table(conn)
+                for key, bucket in buckets.items():
+                    parts = key.split('|')
+                    _t, pt, tf, reg = parts[0], parts[1], parts[2], parts[3]
+                    regime_val = None if reg == 'no_data' else reg
+                    _upsert_calibration(conn, _t, pt, tf, regime_val, bucket, now)
+                    rows_written += 1
+                conn.commit()
+            finally:
+                conn.close()
 
         return {
             'patterns_detected':        patterns_detected,

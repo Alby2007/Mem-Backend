@@ -1,4 +1,4 @@
--- Trading Galaxy — Postgres schema for the 5 hot tables
+-- Trading Galaxy — Postgres schema for the 8 hot tables
 -- Run: sudo -u postgres psql trading_galaxy < scripts/pg_schema.sql
 
 -- ohlcv_cache
@@ -92,3 +92,76 @@ CREATE TABLE IF NOT EXISTS paper_bot_equity (
     logged_at      TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_bot_equity_bot ON paper_bot_equity(bot_id, logged_at);
+
+-- signal_calibration (migrated from SQLite — high write + bot-scan read contention)
+CREATE TABLE IF NOT EXISTS signal_calibration (
+    id                       BIGSERIAL PRIMARY KEY,
+    ticker                   TEXT    NOT NULL,
+    pattern_type             TEXT    NOT NULL,
+    timeframe                TEXT    NOT NULL,
+    market_regime            TEXT,
+    direction                TEXT,
+    sample_size              INTEGER DEFAULT 0,
+    hit_rate_t1              REAL,
+    hit_rate_t2              REAL,
+    hit_rate_t3              REAL,
+    stopped_out_rate         REAL,
+    avg_time_to_target_hours REAL,
+    calibration_confidence   REAL    DEFAULT 0.0,
+    last_updated             TEXT    NOT NULL,
+    volatility_regime        TEXT,
+    sector                   TEXT,
+    central_bank_stance      TEXT,
+    gdelt_tension_level      TEXT,
+    outcome_r_multiple       REAL,
+    bot_observations         INTEGER DEFAULT 0,
+    user_observations        INTEGER DEFAULT 0,
+    UNIQUE(ticker, pattern_type, timeframe, market_regime)
+);
+CREATE INDEX IF NOT EXISTS idx_calibration_pattern_tf ON signal_calibration(pattern_type, timeframe);
+CREATE INDEX IF NOT EXISTS idx_sc_direction           ON signal_calibration(pattern_type, direction, timeframe);
+-- Partial unique index for directional cells (direction IS NOT NULL)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sc_directional
+    ON signal_calibration(ticker, pattern_type, timeframe, market_regime, direction)
+    WHERE direction IS NOT NULL;
+
+-- calibration_observations (companion to signal_calibration)
+CREATE TABLE IF NOT EXISTS calibration_observations (
+    id            BIGSERIAL PRIMARY KEY,
+    ticker        TEXT    NOT NULL,
+    pattern_type  TEXT    NOT NULL,
+    timeframe     TEXT    NOT NULL,
+    market_regime TEXT,
+    direction     TEXT,
+    outcome       TEXT    NOT NULL,
+    source        TEXT    NOT NULL DEFAULT 'user',
+    bot_id        TEXT,
+    pnl_r         REAL,
+    entry_price   REAL,
+    exit_price    REAL,
+    holding_hours REAL,
+    observed_at   TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cal_obs_source ON calibration_observations(source);
+CREATE INDEX IF NOT EXISTS idx_cal_obs_cell   ON calibration_observations(ticker, pattern_type, timeframe);
+
+-- strategy_convergence (new — multi-family signal overlap scoring)
+CREATE TABLE IF NOT EXISTS strategy_convergence (
+    id                BIGSERIAL PRIMARY KEY,
+    ticker            TEXT    NOT NULL,
+    direction         TEXT    NOT NULL,
+    families_active   TEXT    NOT NULL,
+    family_count      INTEGER NOT NULL,
+    lead_family       TEXT,
+    follow_family     TEXT,
+    hours_span        REAL,
+    convergence_score REAL,
+    detected_at       TEXT    NOT NULL,
+    expires_at        TEXT,
+    outcome_r         REAL,
+    outcome_status    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sc_ticker    ON strategy_convergence(ticker);
+CREATE INDEX IF NOT EXISTS idx_sc_score     ON strategy_convergence(convergence_score DESC);
+CREATE INDEX IF NOT EXISTS idx_sc_expires   ON strategy_convergence(expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sc_ticker_dir ON strategy_convergence(ticker, direction);

@@ -267,6 +267,18 @@ async def _lifespan(app: FastAPI):
         except Exception as _er_e:
             _logger.warning('EdgeReportAdapter registration failed: %s', _er_e)
 
+        # Technical indicators — BB squeeze, ATR, SMA alignment, MACD, Volume POC
+        from ingest.technical_adapter import TechnicalAdapter
+        scheduler.register(TechnicalAdapter(db_path=db_path), interval_sec=600)
+
+        # Market breadth — A/D ratio, % above SMA20, breadth thrust
+        from ingest.market_breadth_adapter import MarketBreadthAdapter
+        scheduler.register(MarketBreadthAdapter(db_path=db_path), interval_sec=900)
+
+        # Strategy convergence — multi-family signal overlap scoring (writes to PG)
+        from ingest.convergence_adapter import ConvergenceAdapter
+        scheduler.register(ConvergenceAdapter(db_path=db_path), interval_sec=600)
+
         app.state.scheduler = scheduler
         # Stagger startup: each adapter gets a unique delay so they don't all
         # hammer SQLite simultaneously. Heavy writers are spread 20s apart.

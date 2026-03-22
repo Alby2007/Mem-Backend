@@ -371,7 +371,32 @@ def _quality(
         except Exception:
             pass
 
-    return round(min(max(score + boost + _regime_penalty + _age_boost + _vol_adj + _rvol_adj + _rsi_adj, 0.0), 1.0), 4)
+    # Convergence bonus: boost quality when multiple signal families align on
+    # the same ticker+direction.  Reads from PG strategy_convergence table.
+    # +0.06 for 3+ families, +0.10 for 4+ families.  Capped at 0.10.
+    _conv_adj = 0.0
+    if ticker and direction in ('bullish', 'bearish'):
+        try:
+            from db import HAS_POSTGRES, get_pg
+            if HAS_POSTGRES:
+                with get_pg() as _pg:
+                    _cc = _pg.cursor()
+                    from datetime import datetime as _dt, timezone as _tz
+                    _cc.execute(
+                        "SELECT convergence_score, family_count FROM strategy_convergence "
+                        "WHERE ticker=%s AND direction=%s AND expires_at >= %s LIMIT 1",
+                        (ticker.upper(), direction,
+                         _dt.now(_tz.utc).isoformat()),
+                    )
+                    _cr = _cc.fetchone()
+                    if _cr and _cr['family_count'] >= 4:
+                        _conv_adj = 0.10
+                    elif _cr and _cr['family_count'] >= 3:
+                        _conv_adj = 0.06
+        except Exception:
+            pass
+
+    return round(min(max(score + boost + _regime_penalty + _age_boost + _vol_adj + _rvol_adj + _rsi_adj + _conv_adj, 0.0), 1.0), 4)
 
 
 # ── Individual detectors ───────────────────────────────────────────────────────

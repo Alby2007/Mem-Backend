@@ -43,25 +43,45 @@ class HistoricalCalibrationAdapter(BaseIngestAdapter):
             _logger.warning("HistoricalCalibrationAdapter: calibrator not available: %s", e)
             return {"skipped": True, "reason": str(e)}
 
-        try:
-            import sqlite3 as _sq3
-            conn = _sq3.connect(self._db_path, timeout=5)
-            row = conn.execute(
-                "SELECT MAX(last_updated) FROM signal_calibration"
-            ).fetchone()
-            conn.close()
-            if row and row[0]:
-                from datetime import timedelta
-                last_run = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
-                hours_since = (datetime.now(timezone.utc) - last_run).total_seconds() / 3600
-                if hours_since < 20:
-                    _logger.info(
-                        "HistoricalCalibrationAdapter: skipping — last run %.1fh ago",
-                        hours_since,
-                    )
-                    return {"skipped": True, "reason": f"last_run_{hours_since:.1f}h_ago"}
-        except Exception:
-            pass
+        _recency_done = False
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pgconn:
+                    cur = pgconn.cursor()
+                    cur.execute("SELECT MAX(last_updated) AS lu FROM signal_calibration")
+                    row = cur.fetchone()
+                    if row and row['lu']:
+                        last_run = datetime.fromisoformat(str(row['lu']).replace("Z", "+00:00"))
+                        hours_since = (datetime.now(timezone.utc) - last_run).total_seconds() / 3600
+                        if hours_since < 20:
+                            _logger.info(
+                                "HistoricalCalibrationAdapter: skipping — last run %.1fh ago",
+                                hours_since,
+                            )
+                            return {"skipped": True, "reason": f"last_run_{hours_since:.1f}h_ago"}
+                _recency_done = True
+            except Exception:
+                pass
+        if not _recency_done:
+            try:
+                import sqlite3 as _sq3
+                conn = _sq3.connect(self._db_path, timeout=5)
+                row = conn.execute(
+                    "SELECT MAX(last_updated) FROM signal_calibration"
+                ).fetchone()
+                conn.close()
+                if row and row[0]:
+                    last_run = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+                    hours_since = (datetime.now(timezone.utc) - last_run).total_seconds() / 3600
+                    if hours_since < 20:
+                        _logger.info(
+                            "HistoricalCalibrationAdapter: skipping — last run %.1fh ago",
+                            hours_since,
+                        )
+                        return {"skipped": True, "reason": f"last_run_{hours_since:.1f}h_ago"}
+            except Exception:
+                pass
 
         _logger.info("HistoricalCalibrationAdapter: starting calibrate_watchlist (lookback=%dy)",
                      self._lookback_years)
