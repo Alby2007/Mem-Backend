@@ -122,24 +122,49 @@ SEED_EDGES: List[Tuple[str, str, str, float]] = [
 # When a causal chain terminates at one of these nodes, the listed tickers
 # are flagged as potentially affected in get_affected_tickers().
 _NODE_TO_TICKERS: Dict[str, List[str]] = {
-    "equity_multiples_compress":    ["QQQ", "MSFT", "GOOGL", "AMZN", "NVDA", "META"],
-    "equity_multiples_expand":      ["QQQ", "MSFT", "GOOGL", "AMZN", "NVDA", "META"],
+    "equity_multiples_compress":    ["QQQ", "MSFT", "GOOGL", "AMZN", "NVDA", "META",
+                                     "LSEG.L", "REL.L"],
+    "equity_multiples_expand":      ["QQQ", "MSFT", "GOOGL", "AMZN", "NVDA", "META",
+                                     "LSEG.L", "REL.L"],
     "growth_stocks_underperform":   ["QQQ", "MSFT", "GOOGL", "AMZN", "NVDA", "META"],
     "growth_stocks_outperform":     ["QQQ", "MSFT", "GOOGL", "AMZN", "NVDA", "META"],
-    "financials_net_interest_margin_expands": ["JPM", "BAC", "GS", "MS", "WFC", "C"],
-    "bank_nii_compresses":          ["JPM", "BAC", "GS", "MS", "WFC", "C"],
-    "bank_loan_loss_reserves_rise": ["JPM", "BAC", "WFC", "C"],
-    "defensives_outperform":        ["JNJ", "PG", "KO", "WMT", "PFE"],
-    "cyclicals_outperform":         ["CAT", "HON", "DE", "F", "GM"],
-    "energy_sector_outperforms":    ["XOM", "CVX", "SLB", "OXY"],
-    "consumer_discretionary_demand_falls": ["AMZN", "HD", "NKE", "SBUX", "MCD"],
-    "consumer_discretionary_demand_rises": ["AMZN", "HD", "NKE", "SBUX", "MCD"],
+    # UK banks dominate NIM sensitivity — added alongside US names
+    "financials_net_interest_margin_expands": [
+        "JPM", "BAC", "GS", "MS", "WFC", "C",
+        "HSBA.L", "BARC.L", "LLOY.L", "NWG.L", "LSEG.L",
+    ],
+    "bank_nii_compresses":          [
+        "JPM", "BAC", "GS", "MS", "WFC", "C",
+        "HSBA.L", "BARC.L", "LLOY.L", "NWG.L",
+    ],
+    "bank_loan_loss_reserves_rise": ["JPM", "BAC", "WFC", "C",
+                                     "HSBA.L", "BARC.L", "LLOY.L", "NWG.L"],
+    # UK defensives: pharma, utilities, staples
+    "defensives_outperform":        ["JNJ", "PG", "KO", "WMT", "PFE",
+                                     "GSK.L", "AZN.L", "NG.L", "ULVR.L", "BATS.L"],
+    "cyclicals_outperform":         ["CAT", "HON", "DE", "F", "GM",
+                                     "RR.L", "BA.L"],
+    # UK energy majors alongside US
+    "energy_sector_outperforms":    ["XOM", "CVX", "SLB", "OXY",
+                                     "SHEL.L", "BP.L"],
+    "consumer_discretionary_demand_falls": ["AMZN", "HD", "NKE", "SBUX", "MCD",
+                                             "TSCO.L", "MKS.L"],
+    "consumer_discretionary_demand_rises": ["AMZN", "HD", "NKE", "SBUX", "MCD",
+                                             "TSCO.L", "MKS.L"],
     "em_equity_outflows":           ["EEM", "VWO"],
     "em_equity_inflows":            ["EEM", "VWO"],
-    "commodities_rise":             ["XOM", "CVX", "GLD", "SLB"],
-    "commodities_decline":          ["XOM", "CVX", "GLD", "SLB"],
-    "risk_off_rotation":            ["TLT", "GLD", "JNJ", "PG"],
-    "risk_on_rotation":             ["SPY", "QQQ", "HYG", "IWM"],
+    "commodities_rise":             ["XOM", "CVX", "GLD", "SLB",
+                                     "SHEL.L", "BP.L", "RIO.L"],
+    "commodities_decline":          ["XOM", "CVX", "GLD", "SLB",
+                                     "SHEL.L", "BP.L", "RIO.L"],
+    # UK FX and FTSE index react to risk rotation
+    "risk_off_rotation":            ["TLT", "GLD", "JNJ", "PG",
+                                     "^FTSE", "GBPUSD=X", "GSK.L", "AZN.L"],
+    "risk_on_rotation":             ["SPY", "QQQ", "HYG", "IWM",
+                                     "^FTSE", "^FTMC"],
+    # Yield curve steepening benefits bank NIM and FX via rate differential
+    "yield_curve_steepens":         ["HSBA.L", "BARC.L", "LLOY.L", "NWG.L", "LSEG.L"],
+    "yield_curve_flattens":         ["HSBA.L", "BARC.L", "LLOY.L", "NWG.L"],
 }
 
 

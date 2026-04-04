@@ -2,7 +2,7 @@
 
 ## Overview
 
-The ingest pipeline pulls live market data from four free external sources and converts it into typed knowledge atoms stored in the KB. All adapters run automatically on background threads managed by `IngestScheduler`.
+The ingest pipeline pulls live market data from multiple external sources and converts it into typed knowledge atoms stored in the KB. All adapters run automatically on background threads managed by `IngestScheduler`.
 
 ```
 External source
@@ -60,10 +60,11 @@ The base class handles:
 
 ```python
 scheduler = IngestScheduler(kg)
-scheduler.register(YFinanceAdapter(), interval_sec=300)
-scheduler.register(RSSAdapter(),      interval_sec=900)
-scheduler.register(EDGARAdapter(),    interval_sec=21600)
-scheduler.register(FREDAdapter(),     interval_sec=86400)
+scheduler.register(LLMExtractionAdapter(db_path=db_path), interval_sec=300)  # tunable via INGEST_INTERVAL_SECONDS
+scheduler.register(RSSAdapter(db_path=db_path),           interval_sec=900)
+scheduler.register(YFinanceAdapter(db_path=db_path),      interval_sec=1800)
+scheduler.register(EDGARRealtimeAdapter(db_path=db_path), interval_sec=1800)
+scheduler.register(FREDAdapter(),                         interval_sec=86400)
 scheduler.start()   # non-blocking, all adapters fire immediately then re-arm
 ```
 
@@ -74,10 +75,34 @@ scheduler.start()   # non-blocking, all adapters fire immediately then re-arm
 
 ---
 
+### `ingest/historical_adapter.py` (one-shot)
+
+Downloads **5 years** of daily OHLCV for all watchlist tickers in a single bulk call and emits interpretable summary atoms. Not on a schedule — triggered via `POST /ingest/historical` or `POST /ingest/run-all`.
+
+**Atoms produced:**
+
+| Predicate | Description | Confidence |
+|---|---|---|
+| `return_1w/1m/3m/6m/1y` | % return over rolling windows | 0.90 |
+| `return_3y` | % return over 3 years (756 trading days) | 0.85 |
+| `return_5y` | % return over 5 years (1260 trading days) | 0.85 |
+| `volatility_30d/90d` | Annualised realised volatility | 0.85 |
+| `volatility_5y` | Annualised realised vol over full 5yr window | 0.80 |
+| `max_drawdown_5y` | Peak-to-trough max drawdown over 5 years | 0.85 |
+| `drawdown_from_high` | % below 52-week high | 0.90 |
+| `avg_volume_30d` | Average daily volume, 30 days | 0.90 |
+| `price_52w_high/low` | 52-week range reference prices | 0.95 |
+| `price_3y_ago` | Reference anchor price 3 years ago | 0.85 |
+| `return_vs_spy_1m/3m` | Alpha vs SPY over 1/3 months | 0.80 |
+
+All atoms are `upsert=True` — safe to re-run.
+
+---
+
 ## Adapter: YFinanceAdapter
 
 **Source:** Yahoo Finance via `yfinance` library  
-**Interval:** 5 minutes  
+**Interval:** 30 minutes  
 **Requires:** None (free, no API key)
 
 ### Watchlist (~50 tickers)
@@ -203,8 +228,10 @@ All FRED atoms use `source='macro_data_fred'` (authority 0.80, half-life ~60 day
 
 ## Adapter: EDGARAdapter
 
+> **Note:** `EDGARAdapter` (all form types, 6h) is not registered in the live scheduler in `api_v2.py`. Only `EDGARRealtimeAdapter` (8-K only, 30min) runs in production. The 6h full-form adapter can be run manually via `POST /ingest/run-all`.
+
 **Source:** SEC EDGAR full-text search API (public, no key required)  
-**Interval:** 6 hours  
+**Interval:** 6 hours (manual / legacy)  
 **Requires:** `EDGAR_USER_AGENT` env var (defaults to `trading-galaxy-kb research@example.com`)
 
 ### Filing Types → Atom Mapping
@@ -261,14 +288,445 @@ Ticker mentions are extracted from headline text using the same uppercase-sequen
 
 ---
 
+## Adapter: FCAShortInterestAdapter
+
+**Source:** FCA short position disclosure XLSX (public)
+**URL:** `https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx`
+**Interval:** 24 hours  
+**Requires:** None
+
+Parses the daily FCA short-selling disclosure file to extract significant short positions (≥ 0.5% of issued share capital) for UK-listed companies.
+
+**Atoms produced:**
+```
+{TICKER} | fca_short_interest | "3.45% (Bridgewater Associates)"
+```
+
+Uses ISIN-to-ticker and name-to-ticker fallback maps to resolve disclosures to yfinance ticker symbols.
+
+---
+
+## Adapter: FINRAShortInterestAdapter
+
+**Source:** FINRA consolidated short interest CDN (public, no API key)
+**URL pattern:** `https://cdn.finra.org/equity/regsho/biweekly/FNSQ{date}.txt` (NASDAQ) / `FNYX{date}.txt` (NYSE)
+**Interval:** 24 hours  
+**Requires:** None
+
+Downloads the FINRA biweekly short interest file (tab-delimited) covering all FINRA-member broker-dealer reported positions for US equities. Updated ~3 business days after each settlement date (~1st and ~15th of month). Tracks `_last_date` to avoid redundant downloads on daily cycles.
+
+**Atoms produced:**
+
+| Predicate | Example value | Notes |
+|---|---|---|
+| `short_interest` | `52340000` | Shares sold short |
+| `days_to_cover` | `3.20` | Short interest / avg daily volume (squeeze timer) |
+| `short_squeeze_risk` | `high` / `moderate` / `low` / `minimal` | DTC ≥ 5 = high, ≥ 2.5 = moderate, ≥ 1 = low |
+| `short_vs_signal` | `tension` / `aligned` / `neutral` | Cross-ref with KB `signal_direction` |
+
+Source prefix: `finra_short_interest` (authority 0.65, lagging ~3 business days)
+
+---
+
+## Adapter: PolygonOptionsAdapter
+
+**Source:** Polygon.io options snapshot API  
+**Interval:** 30 minutes  
+**Requires:** `POLYGON_API_KEY` environment variable
+
+Fetches real options Greeks and implied volatility from Polygon's `/v3/snapshot/options/{ticker}` endpoint. Selects the nearest-expiry ATM contracts by strike proximity (±5% of current price) with fallback to delta proximity (|delta − 0.5| minimisation) when underlying price is unavailable.
+
+**Atoms produced:**
+
+| Predicate | Example value | Notes |
+|---|---|---|
+| `delta_atm` | `0.52` | ATM call/put delta — probability proxy |
+| `gamma_atm` | `0.08` | Rate of delta change — high near expiry |
+| `theta_atm` | `-0.14` | Daily time decay in price terms (negative) |
+| `vega_atm` | `0.32` | Sensitivity to 1-point IV move |
+| `iv_true` | `28.4` | True implied volatility % |
+| `put_call_oi_ratio` | `1.15` | Total put OI / call OI — sentiment gauge |
+| `gamma_exposure` | `-2340000` | Aggregate dealer GEX — negative = dealers short gamma = amplified moves |
+
+Source prefix: `polygon_options_*` (authority 0.85)
+
+---
+
+## Adapter: YieldCurveAdapter
+
+**Source:** Polygon.io `/v2/aggs` for bond ETFs TLT, IEF, SHY  
+**Interval:** 24 hours  
+**Requires:** `POLYGON_API_KEY` environment variable
+
+Derives yield curve KB atoms from bond ETF prices — TLT (20+ yr), IEF (7-10 yr), SHY (1-3 yr) — as proxies for the US yield curve shape. Fetches last two closing prices for each ETF. Rate-limited to Polygon Starter plan (5 req/min): sleeps 13s between ETF fetches; retries once on 429 with 15s backoff.
+
+**Atoms produced (subject = `macro`):**
+
+| Predicate | Example value | Notes |
+|---|---|---|
+| `tlt_close` | `90.82` | Latest TLT closing price |
+| `ief_close` | `97.99` | Latest IEF closing price |
+| `shy_close` | `83.18` | Latest SHY closing price |
+| `tlt_1d_change_pct` | `0.609` | 1-day % change in TLT (negative = yields rising) |
+| `ief_1d_change_pct` | `0.40` | 1-day % change in IEF |
+| `shy_1d_change_pct` | `0.132` | 1-day % change in SHY |
+| `yield_curve_slope` | `steepening` / `flattening` / `neutral` | Direction of TLT/SHY ratio delta |
+| `yield_curve_regime` | `bull_flatten` | One of 4 rate regimes (see below) |
+| `yield_curve_tlt_shy` | `1.0918` | TLT/SHY price ratio — 20Y/2Y curve slope proxy |
+| `long_end_stress` | `false` | `true` when TLT fell >0.5% in a day |
+| `long_end_stress_level` | `none` | `severe` (TLT <-1%) / `elevated` (TLT <-0.5%) / `none` |
+
+**Yield curve regimes:**
+
+| Regime | Meaning |
+|---|---|
+| `bull_steepen` | Long end rallying, risk-on — rate cut expectations |
+| `bear_steepen` | Long-end yields rising faster than short-end — inflation premium building (dangerous for growth equities) |
+| `bull_flatten` | Short-end outperforming — rate cut cycle signal |
+| `bear_flatten` | Both ends selling off, short-end faster — Fed hike cycle peak signal |
+
+Source prefix: `yield_curve` (authority 0.78, daily)
+
+---
+
+## Adapter: InsiderAdapter
+
+**Source:** SEC EDGAR Form 4 filings (public, no key)
+**Interval:** 60 minutes  
+**Requires:** `EDGAR_USER_AGENT` env var
+
+Polls for recent Form 4 insider transaction filings and extracts buy/sell signals for the KB watchlist.
+
+**Atoms produced:**
+```
+{TICKER} | insider_transaction | "buy 50000 shares @ $142.30 (2026-03-01)"
+{TICKER} | risk_factor         | "insider_sell (2026-03-01): form 4"
+```
+
+Source prefix: `regulatory_filing_sec_insider` (authority 0.90)
+
+---
+
+## Adapter: SectorRotationAdapter
+
+**Source:** KB atoms (reads sector ETF prices + relative performance from existing KB)
+**Interval:** 60 minutes  
+**Requires:** None (reads from KB)
+
+Analyses relative performance of US sector ETFs (XLF, XLE, XLK, XLV, XLI, XLC, XLY, XLP, XLU, XLRE, XLB) to classify the current sector rotation regime.
+
+**Atoms produced (subject = `us_macro`):**
+```
+us_macro | sector_rotation        | "tech_leadership" / "defensive_rotation" / "cyclical_leadership"
+us_macro | sector_rotation_detail | "XLK +2.1%, XLV -0.3% — growth outperforming defensives"
+```
+
+Source prefix: `model_signal_sector_rotation` (authority 0.70)
+
+---
+
+## Adapter: EconomicCalendarAdapter
+
+**Source:** Multiple free economic calendar APIs  
+**Interval:** 24 hours  
+**Requires:** None
+
+Fetches upcoming high-impact macro events (FOMC, CPI, NFP, GDP) and writes risk-flag atoms.
+
+**Atoms produced:**
+```
+us_macro | macro_event_risk       | "FOMC decision 2026-03-19 (2 days)"
+us_macro | macro_event_date       | "2026-03-19"
+us_macro | pre_event_flag         | "within_48h" / "within_7d" / "clear"
+```
+
+Source prefix: `economic_calendar` (authority 0.80, half-life 7d)
+
+---
+
+## Adapter: EIAAdapter
+
+**Source:** US Energy Information Administration (EIA) API (free, no key required)
+**Interval:** 24 hours  
+**Requires:** None
+
+Fetches US crude oil inventory and production data from EIA and derives energy market regime atoms.
+
+**Atoms produced (subject = `us_energy`):**
+```
+us_energy | crude_inventory_change | "-3.2M barrels (draw)"
+us_energy | crude_production       | "13.1M bbl/day"
+us_energy | energy_regime          | "supply_constrained" / "supply_surplus" / "balanced"
+```
+
+Source prefix: `macro_data_eia` (authority 0.80, half-life 7d)
+
+---
+
+## Adapter: ACLEDAdapter
+
+**Source:** GDELT artlist proxy for ACLED-style event data (public, no key)
+**Interval:** 24 hours  
+**Requires:** None
+
+Fetches protest, unrest, and political instability event counts from the GDELT artlist feed as a proxy for ACLED conflict/protest data.
+
+**Atoms produced:**
+```
+{COUNTRY} | protest_intensity   | "elevated" / "moderate" / "low"
+{COUNTRY} | political_risk      | "high" / "moderate" / "low"
+```
+
+Source prefix: `geo_acled_proxy` (authority 0.60)
+
+---
+
+## Adapter: USGSAdapter
+
+**Source:** USGS Earthquake Hazards Program GeoJSON API (public, no key)
+**Interval:** 60 minutes  
+**Requires:** None
+
+Fetches significant earthquakes (M4.5+) from the USGS API and writes geo-risk atoms when major events occur near economically significant regions.
+
+**Atoms produced:**
+```
+{REGION} | earthquake_event | "M6.2 earthquake — 45km NW of City (2026-03-01)"
+{REGION} | geo_risk_factor  | "seismic event: M6.2 near oil infrastructure"
+```
+
+Source prefix: `geo_usgs` (authority 0.75)
+
+---
+
+## Discovery Pipeline
+
+`ingest/discovery_pipeline.py` — Universal Discovery Pipeline
+
+Runs on schedule or via `POST /discover/run`. Discovers new tickers from multiple signals and promotes them into the active watchlist when coverage exceeds threshold.
+
+**Discovery stages:**
+1. FCA short interest XLSX — surfaces heavily shorted UK names
+2. RSS headline ticker extraction — tickers mentioned ≥ 3× in recent news
+3. Coverage scoring — counts how many discovery sources surface the same ticker
+
+**Promotion logic:**
+- `coverage_count ≥ 3` → promoted to `added_to_ingest=1` (enters yfinance watchlist)
+- Network effect: each new user who adds a ticker increments `coverage_count`
+
+**DB tables:** `discovery_log` · `dynamic_watchlist`
+
+---
+
+## Seed Sync Client
+
+`ingest/seed_sync.py` — runs hourly as a background thread independent of the ingest scheduler.
+
+Polls `Alby2007/Mem-Backend` GitHub Releases. If the latest `seed-YYYYMMDD-HHMM` tag is newer than the locally stored `kb_meta.seed_tag`, downloads `kb_seed.sql` and applies shared tables only.
+
+**Hard-coded allowlist** (`_ALLOWED_TABLES`): `facts`, `fact_conflicts`, `causal_edges`, `pattern_signals`, `signal_calibration`, and governance tables. **Never touches any `user_*` table.**
+
+---
+
+## Adapter: BoEAdapter
+
+**Source:** Bank of England Statistical Interactive Dataset (public, no key)
+**Interval:** 24 hours
+**Requires:** None
+
+Pulls UK macro indicators from the BoE API and derives regime atoms for the UK market context.
+
+**Atoms produced:**
+
+| Subject | Predicate | Example value |
+|---|---|---|
+| `uk_macro` | `boe_base_rate` | `5.25%` |
+| `uk_macro` | `central_bank_stance` | `restrictive` / `neutral` / `accommodative` |
+| `uk_macro` | `uk_cpi_yoy` | `CPI YoY: 4.0%` |
+| `uk_macro` | `inflation_environment` | `high_inflation` / `normalising` / `low_inflation` |
+| `uk_macro` | `uk_gdp_growth` | `GDP growth: 0.1%` |
+| `uk_macro` | `growth_environment` | `contraction` / `stagnation` / `moderate` / `strong` |
+| `uk_macro` | `uk_unemployment` | `4.2%` |
+| `uk_macro` | `regime_label` | `restrictive_stagflation` |
+| `uk_yields` | `uk_gilt_10y` | `4.35%` |
+| `uk_yields` | `yield_environment` | `elevated` |
+
+Source prefix: `macro_data_boe` (authority 0.80, half-life 60d)
+
+---
+
+## Adapter: OptionsAdapter
+
+**Source:** Yahoo Finance options chains via `yfinance`
+**Interval:** 15 minutes
+**Requires:** None
+
+Fetches options chains for liquid FTSE names and computes options-regime atoms. Low-liquidity FTSE names have confidence caps enforced via `_LOW_OPTIONS_LIQUIDITY` frozenset.
+
+**Atoms produced:**
+
+| Predicate | Description | Confidence |
+|---|---|---|
+| `iv_rank` | 30-day IV percentile of the 52-week range (0–100) | 0.80 (0.40 for thin names) |
+| `put_call_ratio` | Sum put OI / sum call OI, front two expirations | 0.80 |
+| `options_regime` | `compressed` / `normal` / `elevated_vol` | 0.80 |
+| `smart_money_signal` | `call_sweep` / `put_sweep` / `none` | 0.75 (0.35 for thin names) |
+| `iv_skew_ratio` | OTM put IV / ATM IV | 0.75 |
+| `iv_skew_25d` | OTM put IV − OTM call IV (5% wings) | 0.75 |
+| `skew_regime` | `normal` / `elevated` / `spike` | 0.75 |
+| `spy_skew_ratio` | Market-level SPY skew (tail risk proxy) | 0.80 |
+| `tail_risk` | `normal` / `moderate` / `elevated` / `extreme` | 0.80 |
+
+---
+
+## Adapter: SignalEnrichmentAdapter
+
+**Source:** KB atoms (cross-referencing historical, price, and options data already in the KB)
+**Interval:** 60 minutes
+**Requires:** None (reads from KB, no external API)
+
+Derives higher-level signal atoms by combining raw data atoms into actionable signals.
+
+**Atoms produced:**
+
+| Predicate | Description |
+|---|---|
+| `price_regime` | `uptrend` / `downtrend` / `range_bound` (from price + MA atoms) |
+| `volume_trend` | `accumulation` / `distribution` / `neutral` |
+| `momentum_signal` | `strong_bull` / `bull` / `neutral` / `bear` / `strong_bear` |
+| `risk_reward_ratio` | Computed from price target, entry, and stop-loss atoms |
+| `thesis_risk_level` | `low` / `moderate` / `high` / `extreme` |
+| `conviction_tier` | `tier_1` / `tier_2` / `tier_3` (multi-factor conviction score) |
+| `position_size_pct` | Suggested position size % of portfolio |
+| `upside_pct` | % upside to price target |
+
+---
+
+## Adapter: LLMExtractionAdapter
+
+**Source:** `extraction_queue` table (fed by `RSSAdapter`)
+**Interval:** 5 minutes (tunable via `INGEST_INTERVAL_SECONDS` env var, default 300s)
+**Requires:** Groq (`GROQ_API_KEY`) preferred; falls back to Ollama (`OLLAMA_EXTRACTION_MODEL`, default `phi3`). Skips gracefully if neither is available.
+
+Runs LLM extraction over queued RSS headlines to produce structured signal atoms. Falls back gracefully if Ollama is unavailable.
+
+**Atoms produced:** Structured entities and signals extracted from news text — predicate and object depend on the headline content. Examples: `catalyst`, `risk_factor`, `key_finding`, `signal_direction`.
+
+**Source prefix:** `llm_extracted_news_*` (authority 0.65, half-life 12h)
+
+---
+
+## Adapter: EDGARRealtimeAdapter
+
+**Source:** SEC EDGAR full-text search API (public, no key)
+**Interval:** 30 minutes (registered in live scheduler)
+**Requires:** `EDGAR_USER_AGENT` env var
+
+Polls for 8-K filings specifically (material events) with a 30-minute cadence. Deduplicates via `edgar_realtime_seen` table — each filing accession number is stored so re-runs never produce duplicate atoms.
+
+**Atoms produced:** Same format as `EDGARAdapter` — `catalyst | "sec 8-k (date): title"` at confidence 0.85.
+
+**Difference from EDGARAdapter:** EDGARRealtime polls only 8-K (immediate material events) every 30 min and is the only EDGAR variant running in production. The base EDGAR adapter (all form types) is not in the live scheduler.
+
+---
+
+## Adapter: LSEFlowAdapter
+
+**Source:** Yahoo Finance intraday OHLCV (`.L` suffix tickers)
+**Interval:** 2 hours
+**Requires:** None
+
+Derives institutional order-flow signals for LSE-listed equities using three microstructure proxies: block-trade volume ratio (BTVR), volume-weighted price trend (VWPT), and price-volume divergence (PVD, the Wyckoff accumulation signature).
+
+**Atoms produced:**
+
+| Predicate | Example value | Confidence |
+|---|---|---|
+| `institutional_flow` | `accumulating` / `distributing` / `neutral` | 0.55 |
+| `block_volume_ratio` | `2.4` (today's vol / 20d avg) | 0.55 |
+| `flow_conviction` | `high` / `moderate` / `low` | 0.55 |
+| `volume_trend_5d` | `rising` / `falling` / `flat` | 0.55 |
+| `price_range_compression` | `compressed` / `normal` / `expanded` | 0.55 |
+
+Source prefix: `alt_data_lse_flow` (authority 0.55, half-life 3d)
+
+---
+
+## Adapter: EarningsCalendarAdapter
+
+**Source:** KB atoms (reads `next_earnings_date` atoms written by `YFinanceAdapter`) + yfinance options chains for implied move
+**Interval:** 60 minutes
+**Requires:** None
+
+Reads earnings dates already in the KB and enriches them with proximity risk flags and implied move estimates.
+
+**Atoms produced:**
+
+| Predicate | Example value | Notes |
+|---|---|---|
+| `earnings_date` | `2026-04-30` | YYYY-MM-DD |
+| `days_to_earnings` | `3` | Integer days |
+| `earnings_risk` | `elevated` / `moderate` / `low` | Based on proximity |
+| `earnings_implied_move` | `±4.2%` | From ATM straddle; falls back to `volatility_30d × sqrt(1/252)` for thin markets |
+| `pre_earnings_flag` | `within_48h` / `within_7d` / `clear` | Used by tip formatter to warn on position sizing |
+
+Source prefix: `earnings_calendar_{ticker}` (authority 0.85, half-life 7d)
+
+---
+
+## Adapter: PatternAdapter
+
+**Source:** KB atoms (reads OHLCV-derived atoms and signal atoms)
+**Interval:** 60 minutes
+**Requires:** None (reads from KB)
+
+Detects multi-factor chart and signal patterns over rolling windows. Writes `PatternSignal` rows to the `pattern_signals` table (not the `facts` table).
+
+**Pattern types detected:** conviction patterns, momentum patterns, composite multi-timeframe patterns.
+
+**Endpoint:** Results surfaced via `GET /patterns/live` and `GET /patterns/<id>`.
+
+---
+
+## Full Adapter Stack
+
+| Adapter | Interval | Data source | Key atoms |
+|---|---|---|---|
+| `LLMExtractionAdapter` | 5 min (tunable) | extraction_queue | Structured LLM-extracted signals |
+| `RSSAdapter` | 15 min | 5 financial RSS feeds | `key_finding` (headlines) |
+| `YFinanceAdapter` | 30 min | Yahoo Finance | `last_price`, `signal_direction`, `price_target`, `sector` |
+| `EDGARRealtimeAdapter` | 30 min | SEC EDGAR 8-K | `catalyst` (real-time filings) |
+| `SectorRotationAdapter` | 60 min | KB sector ETF atoms | `sector_rotation`, `sector_rotation_detail` |
+| `SignalEnrichmentAdapter` | 60 min | KB cross-reference | `conviction_tier`, `momentum_signal`, `position_size_pct` |
+| `InsiderAdapter` | 60 min | SEC EDGAR Form 4 | `insider_transaction`, `risk_factor` |
+| `GDELTAdapter` | 60 min | GDELT 2.0 GKG Doc API | `gdelt_tension` (country pair tone scores) |
+| `USGSAdapter` | 60 min | USGS Earthquake API | `earthquake_event`, `geo_risk_factor` |
+| `EarningsCalendarAdapter` | 60 min | KB + yfinance options | `earnings_implied_move`, `pre_earnings_flag` |
+| `PatternAdapter` | 60 min | KB atoms (daemon thread) | `pattern_signals` table |
+| `LSEFlowAdapter` | 2 hours | yfinance intraday | `institutional_flow`, `block_volume_ratio` |
+| `BoEAdapter` | 24 hours | BoE Statistical API | `boe_base_rate`, UK `regime_label` |
+| `ACLEDAdapter` | 24 hours | GDELT artlist proxy | `protest_intensity`, `political_risk` |
+| `EIAAdapter` | 24 hours | EIA API (free) | `crude_inventory_change`, `energy_regime` |
+| `FINRAShortInterestAdapter` | 24 hours | FINRA CDN (free) | `short_interest`, `days_to_cover`, `short_squeeze_risk` |
+| `YieldCurveAdapter` | 24 hours | Polygon ETFs (TLT/IEF/SHY) | `yield_curve_regime`, `long_end_stress_level` |
+| `FREDAdapter` | 24 hours | St. Louis Fed FRED | US `regime_label`, `central_bank_stance` |
+| `EconomicCalendarAdapter` | 24 hours | Economic calendar APIs | `macro_event_risk`, `pre_event_flag` |
+| `HistoricalBackfillAdapter` | On-demand | yfinance 5yr daily | `return_3y/5y`, `max_drawdown_5y`, `volatility_5y` |
+
+> **Not in live scheduler (files exist):** `OptionsAdapter`, `PolygonOptionsAdapter`, `FCAShortInterestAdapter`, `EDGARAdapter` (full forms), `UCDPAdapter`.
+
+`SeedSyncClient` runs hourly (outside the scheduler) to sync the shared KB seed from GitHub Releases.
+
+---
+
 ## Adding a New Adapter
 
 1. Create `ingest/my_adapter.py` subclassing `BaseIngestAdapter`
 2. Implement `fetch() → List[RawAtom]` using the correct source prefix and confidence values from `ingest/base.py`
 3. Add a graceful import to `ingest/__init__.py`
-4. Register it in `api.py`:
+4. Register it in `api_v2.py` lifespan:
    ```python
-   _ingest_scheduler.register(MyAdapter(), interval_sec=3600)
+   scheduler.register(MyAdapter(db_path=db_path), interval_sec=3600)
    ```
 
 **Source prefix reference:** See `ingest/base.py` — `SOURCE NAMING CONVENTION` section.  

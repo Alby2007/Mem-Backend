@@ -27,14 +27,14 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
-from ingest.base import BaseIngestAdapter, RawAtom
+from ingest.base import BaseIngestAdapter, RawAtom, db_connect
 from ingest.rss_adapter import _ensure_extraction_queue
 
 _logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-BATCH_SIZE   = int(os.environ.get('LLM_EXTRACTION_BATCH', '20'))
+BATCH_SIZE   = int(os.environ.get('LLM_EXTRACTION_BATCH', os.environ.get('INGEST_BATCH_SIZE', '5')))
 MAX_FAILURES = 3
 
 _VALID_PREDICATES = {
@@ -47,6 +47,19 @@ _VALID_DIRECTIONS = {'long', 'short', 'neutral'}
 
 # Exact lowercase macro entity names the parser accepts as valid subjects
 _VALID_MACRO_ENTITIES = {'fed', 'ecb', 'treasury', 'us_macro', 'us_labor', 'us_yields', 'us_credit'}
+
+# Common-word subjects the LLM hallucinates as tickers — hard block regardless of ticker regex
+_SUBJECT_BLOCKLIST: frozenset[str] = frozenset({
+    'ai', 'eps', 'us', 'uk', 'eu', 'gdp', 'cpi', 'ipo',
+    'esg', 'etf', 'ceo', 'cfo', 'coo', 'cto', 'llm', 'api',
+    'roe', 'roe', 'roi', 'ebt', 'net', 'tax', 'rev', 'yoy',
+    'qoq', 'mom', 'fy', 'q1', 'q2', 'q3', 'q4', 'h1', 'h2',
+    'gaap', 'fifo', 'lifo', 'cash', 'debt', 'bond', 'loan',
+    'bank', 'fund', 'tech', 'news', 'data', 'corp', 'inc',
+    'ltd', 'plc', 'llc', 'co', 'sa',
+    'financial_news', 'market', 'macro', 'sector', 'index',
+    'equity', 'stock', 'share', 'price', 'rate', 'yield',
+})
 
 # Watchlist for ticker context hint in the prompt
 _WATCHLIST_HINT = (
@@ -178,6 +191,9 @@ def _parse_llm_atoms(
         is_valid_macro  = subj_lower in _VALID_MACRO_ENTITIES
         if not (is_valid_ticker or is_valid_macro):
             continue
+        # Hard-block common words the LLM hallucinates as tickers
+        if subj_lower in _SUBJECT_BLOCKLIST:
+            continue
         subject = subj_lower  # normalise to lowercase for KB consistency
 
         # Validate predicate is in our known vocab
@@ -223,21 +239,51 @@ class LLMExtractionAdapter(BaseIngestAdapter):
         super().__init__(name='llm_extraction')
         self._db_path = db_path or os.environ.get('TRADING_KB_DB', 'trading_knowledge.db')
 
-    def fetch(self) -> List[RawAtom]:
+    def _llm_call(self, messages: List[dict]) -> Optional[str]:
+        """Try Groq first (fast, low-latency API), fall back to Ollama if Groq unavailable."""
+        try:
+            from llm.groq_client import chat as groq_chat, is_available as groq_available
+            if groq_available():
+                result = groq_chat(messages)
+                if result is not None:
+                    return result
+        except Exception as e:
+            self._logger.warning('Groq call failed: %s', e)
+
         try:
             from llm.ollama_client import chat as ollama_chat, is_available, EXTRACTION_MODEL
-        except ImportError:
-            self._logger.warning('llm.ollama_client not available — skipping extraction')
-            return []
+            if is_available(model=EXTRACTION_MODEL):
+                result = ollama_chat(messages, model=EXTRACTION_MODEL, timeout=60)
+                if result is not None:
+                    return result
+        except Exception as e:
+            self._logger.debug('Ollama failed: %s', e)
 
-        if not is_available():
-            self._logger.info('Ollama not reachable — skipping extraction run')
-            return []
+        return None
+
+    def _any_llm_available(self) -> bool:
+        """Quick check — no network call needed."""
+        try:
+            from llm.ollama_client import is_available
+            if is_available():
+                return True
+        except Exception:
+            pass
+        try:
+            from llm.groq_client import is_available as groq_available
+            if groq_available():
+                return True
+        except Exception:
+            pass
+        return False
+
+    def fetch(self) -> List[RawAtom]:
 
         now_iso = datetime.now(timezone.utc).isoformat()
 
+        self._logger.info('LLM extraction: using db_path=%s', self._db_path)
         try:
-            conn = sqlite3.connect(self._db_path)
+            conn = db_connect(self._db_path)
             _ensure_extraction_queue(conn)
         except Exception as e:
             self._logger.error('Cannot open extraction_queue: %s', e)
@@ -251,7 +297,7 @@ class LLMExtractionAdapter(BaseIngestAdapter):
                 FROM extraction_queue
                 WHERE processed = 0
                   AND failed_attempts < ?
-                ORDER BY id ASC
+                ORDER BY id DESC
                 LIMIT ?
                 """,
                 (MAX_FAILURES, BATCH_SIZE),
@@ -275,21 +321,21 @@ class LLMExtractionAdapter(BaseIngestAdapter):
             fallback_conf = _confidence_from_language(text or '')
 
             try:
-                messages  = _build_prompt(text or '')
-                response  = ollama_chat(
-                    messages,
-                    model=EXTRACTION_MODEL,
-                    stream=False,
-                    timeout=60,
-                )
+                messages = _build_prompt(text or '')
+                response = self._llm_call(messages)
             except Exception as e:
-                self._logger.warning('Ollama call failed for row %d: %s', row_id, e)
+                self._logger.warning('LLM call failed for row %d: %s', row_id, e)
                 conn.execute(
                     'UPDATE extraction_queue SET failed_attempts = failed_attempts + 1 WHERE id = ?',
                     (row_id,),
                 )
                 conn.commit()
                 continue
+
+            if response is None:
+                self._logger.warning('Row %d: no LLM response (both backends failed)', row_id)
+            else:
+                self._logger.info('Row %d: LLM response preview: %.120s', row_id, response)
 
             atoms, success = _parse_llm_atoms(response or '', source_prefix, fallback_conf, now_iso)
 

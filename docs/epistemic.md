@@ -13,7 +13,7 @@ The epistemic system governs how the KB reasons about the **quality, freshness, 
 | `knowledge/contradiction.py` | Conflict detection between mutually exclusive facts |
 | `knowledge/epistemic_stress.py` | Composite stress signal at retrieval time |
 | `knowledge/working_state.py` | Cross-session goal/topic memory |
-| `knowledge/epistemic_adaptation.py` | Adaptive retrieval under sustained stress (built, not yet wired) |
+| `knowledge/epistemic_adaptation.py` | Adaptive retrieval under sustained stress (Live — wired to `POST /retrieve`) |
 
 ---
 
@@ -210,31 +210,106 @@ The formatted prior context is included in `POST /retrieve` responses when `turn
 
 ---
 
-## Not-Yet-Wired Epistemic Modules
+## Epistemic Governance Stack
 
-### `epistemic_adaptation.py`
+All five modules below are **live and wired** as of the governance integration session. They were built and tested (160 tests passing) before being connected to the live request path. The `architecture.md` module status table reflects their current state.
 
-Adaptive retrieval engine designed to adjust retrieval strategy when stress is sustained above a threshold. Under elevated stress it can:
-- Widen the retrieval window
-- Prefer higher-authority sources exclusively
-- Inject a conflict warning into the snippet
+---
 
-**Status:** Built, not wired to `api.py`.
+### `epistemic_adaptation.py` — **Live**
 
-### `kb_validation.py`
+Adaptive retrieval engine that adjusts strategy when stress is sustained above threshold across multiple turns.
 
-Multi-layer atom validation pipeline that checks atoms against the domain schema (`kb_domain_schemas.py`) before ingestion. Catches predicate typos, subject format violations, confidence range errors.
+**Wiring:** `POST /retrieve` → `EpistemicAdaptationEngine` → produces `AdaptationNudges` applied to the next retrieval turn.
 
-**Status:** Built, not wired.
+**AdaptationNudges rules:**
 
-### `kb_insufficiency_classifier.py`
+| Rule | Condition | Effect |
+|---|---|---|
+| Scope broadening | `domain_entropy < 0.35` + streak ≥ 2 | Broadens DB fetch to all sources |
+| Authority filter | `authority_conflict > 0.55` + streak ≥ 2 | Drops atoms below authority cutoff |
+| Recency bias | `decay_pressure > 0.50` + streak ≥ 2 | Sorts atoms by timestamp DESC |
+| Consolidation mode | streak ≥ 3 | Lowers escalation threshold |
+| Domain refresh queue | `decay_pressure > 0.60` + streak ≥ 3 | Dispatches `run_now('yfinance')` |
+| KB insufficiency detection | consolidation fires ≥ 5× in 7 days | Triggers classifier + repair proposals |
 
-Detects KB gaps — when a query is well-formed but the retrieved atoms don't adequately cover it. Classifies the type of insufficiency (missing subject, missing predicate, stale data, etc.).
+**Session state:** `GET /adapt/status?session_id=X` · `POST /adapt/reset`
 
-**Status:** Built, not wired.
+---
 
-### `kb_repair_proposals.py` / `kb_repair_executor.py`
+### `kb_validation.py` — **Live**
 
-Generates and executes repair plans for KB gaps identified by the insufficiency classifier. Can trigger targeted ingest runs for specific tickers or topics.
+Three-layer governance validation pipeline. Runs as a hook inside `POST /repair/proposals`.
 
-**Status:** Built, not wired.
+| Layer | What it checks |
+|---|---|
+| Schema (L1) | Predicate in allowed vocabulary, confidence in [0,1], subject non-empty |
+| Semantic (L2) | Cross-predicate consistency (e.g. `signal_direction=long` + `price_target` below current price) |
+| Cross-topic (L3) | Atom doesn't introduce cross-topic drift (subject domain consistent with existing KB cluster) |
+
+Violations produce a `governance_verdict` with a confidence penalty applied to the repair proposal score.
+
+---
+
+### `kb_insufficiency_classifier.py` — **Live**
+
+9-rule classifier that fires on `POST /retrieve` (stress ≥ 0.35 or atoms < 8) and on `POST /repair/diagnose`.
+
+| Insufficiency type | Condition |
+|---|---|
+| `coverage_gap` | < 10 atoms AND narrow sourcing |
+| `representation_inconsistency` | High conflict + high supersession |
+| `authority_imbalance` | High authority conflict AND > 60% low-auth atoms |
+| `semantic_duplication` | Many atoms + high Jaccard similarity |
+| `granularity_too_fine` | Many atoms + low predicate diversity + short objects |
+| `missing_schema` | Required predicates absent for detected domain |
+| `domain_boundary_collapse` | High entropy + many source prefixes |
+| `semantic_incoherence` | Validation Layer 2 severity > 0.5 |
+| `cross_topic_drift` | Validation Layer 3 severity > 0.4 |
+
+Returns `InsufficiencyDiagnosis { types, signals, confidence }` appended to the `/retrieve` response as `kb_diagnosis`.
+
+---
+
+### `kb_repair_proposals.py` — **Live**
+
+Generates structured repair proposals from an `InsufficiencyDiagnosis`. Each proposal includes:
+- `strategy` — one of 9 repair strategies (see table below)
+- `preview` — what atoms would be added/removed
+- `simulation` — projected stress change if applied
+- `validation` — governance verdict from `kb_validation.py`
+
+**Endpoint:** `POST /repair/proposals { topic }`
+
+| Strategy | When proposed |
+|---|---|
+| `ingest_missing` | Coverage gap |
+| `resolve_conflicts` | Representation inconsistency |
+| `merge_atoms` | Semantic duplication |
+| `introduce_predicates` | Missing schema predicates |
+| `reweight_sources` | Authority imbalance |
+| `deduplicate` | Semantic duplication (alt) |
+| `split_domain` | Domain boundary collapse |
+| `restore_atoms` | Entropy collapse after prior repair |
+| `manual_review` | Unknown / no automated strategy |
+
+---
+
+### `kb_repair_executor.py` — **Live**
+
+Human-gated atomic execution with auto-rollback and divergence tracking.
+
+**Endpoints:**
+- `POST /repair/execute { proposal_id, dry_run=true }` — apply mutations atomically; auto-rollbacks if stress worsens by > 0.05
+- `POST /repair/rollback { execution_id }` — revert a prior execution
+- `GET /repair/impact { proposal_id }` — preview projected stress change
+
+**Execution flow:**
+```
+_snapshot_signals() before
+→ apply mutations atomically (BEGIN IMMEDIATE)
+→ _snapshot_signals() after
+→ if stress_after > stress_before + 0.05: auto-rollback
+→ write to repair_execution_log + repair_rollback_log
+→ return ExecutionResult { before, after, divergence, mutations_applied }
+```

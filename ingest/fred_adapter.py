@@ -31,23 +31,22 @@ from typing import List, Optional
 
 from ingest.base import BaseIngestAdapter, RawAtom
 
-try:
-    from fredapi import Fred
-    HAS_FREDAPI = True
-except ImportError:
-    HAS_FREDAPI = False
-    Fred = None  # type: ignore
+import json as _json
+import urllib.request as _urllib
 
 _logger = logging.getLogger(__name__)
 
 # FRED series IDs for key macro indicators
 _SERIES = {
-    'fed_funds':   'FEDFUNDS',      # Effective Federal Funds Rate
-    'cpi_yoy':     'CPIAUCSL',      # CPI All Urban Consumers (need to compute YoY)
-    'gdp_growth':  'A191RL1Q225SBEA',  # Real GDP growth (annualized quarterly)
-    'unemployment':'UNRATE',        # Unemployment Rate
-    'yield_10y':   'DGS10',         # 10-Year Treasury Yield
-    'yield_2y':    'DGS2',          # 2-Year Treasury Yield
+    'fed_funds':         'FEDFUNDS',        # Effective Federal Funds Rate
+    'cpi_yoy':           'CPIAUCSL',        # CPI All Urban Consumers (index)
+    'gdp_growth':        'A191RL1Q225SBEA', # Real GDP growth (annualized quarterly)
+    'unemployment':      'UNRATE',          # Unemployment Rate
+    'yield_10y':         'DGS10',           # 10-Year Treasury Yield
+    'yield_2y':          'DGS2',            # 2-Year Treasury Yield
+    'tips_10y':          'DFII10',          # 10-Year TIPS (real yield)
+    'breakeven_10y':     'T10YIE',          # 10-Year Breakeven Inflation Rate
+    'breakeven_5y':      'T5YIE',           # 5-Year Breakeven Inflation Rate
 }
 
 
@@ -107,13 +106,39 @@ def _derive_regime(stance: str, inflation: str, growth: str) -> str:
     return ', '.join(parts) if parts else 'mixed signals'
 
 
-def _get_latest_value(fred: 'Fred', series_id: str) -> Optional[float]:
-    """Fetch the most recent non-null value from a FRED series."""
+class _FredAuthError(Exception):
+    """Raised when FRED returns a 400 invalid-key response."""
+
+
+def _get_latest_value(api_key: str, series_id: str) -> Optional[float]:
+    """Fetch the most recent non-null observation from a FRED series via direct HTTP."""
+    url = (
+        f'https://api.stlouisfed.org/fred/series/observations'
+        f'?series_id={series_id}'
+        f'&api_key={api_key}'
+        f'&file_type=json'
+        f'&sort_order=desc'
+        f'&limit=10'
+        f'&observation_start=2020-01-01'
+    )
     try:
-        data = fred.get_series(series_id, observation_start='2020-01-01')
-        if data is not None and len(data) > 0:
-            latest = data.dropna().iloc[-1]
-            return float(latest)
+        req = _urllib.Request(url, headers={'User-Agent': 'TradingGalaxyKB/1.0'})
+        with _urllib.urlopen(req, timeout=15) as resp:
+            body = resp.read()
+        data = _json.loads(body)
+        if 'error_code' in data:
+            msg = data.get('error_message', str(data))
+            if data.get('error_code') in (400, 401, 403) or 'not registered' in msg:
+                raise _FredAuthError(msg)
+            _logger.warning('FRED API error for %s: %s', series_id, msg)
+            return None
+        observations = data.get('observations', [])
+        for obs in observations:
+            val = obs.get('value', '.')
+            if val != '.':
+                return float(val)
+    except _FredAuthError:
+        raise
     except Exception as e:
         _logger.warning('Failed to fetch FRED series %s: %s', series_id, e)
     return None
@@ -130,14 +155,9 @@ class FREDAdapter(BaseIngestAdapter):
     def __init__(self, api_key: Optional[str] = None):
         super().__init__(name='fred')
         self._api_key = api_key or os.environ.get('FRED_API_KEY')
+        self._api_key_invalid = False  # set True after first 400 to suppress repeat logs
 
     def fetch(self) -> List[RawAtom]:
-        if not HAS_FREDAPI:
-            self._logger.error(
-                'fredapi not installed — pip install fredapi'
-            )
-            return []
-
         if not self._api_key:
             self._logger.warning(
                 'FRED_API_KEY not set — skipping FRED adapter. '
@@ -145,13 +165,26 @@ class FREDAdapter(BaseIngestAdapter):
             )
             return []
 
-        fred = Fred(api_key=self._api_key)
+        if self._api_key_invalid:
+            return []
+
+        try:
+            return self._fetch_atoms()
+        except _FredAuthError as e:
+            self._api_key_invalid = True
+            self._logger.error(
+                'FRED API key rejected — disabling FRED adapter. '
+                'Re-register at https://fred.stlouisfed.org/docs/api/api_key.html. Error: %s', e
+            )
+            return []
+
+    def _fetch_atoms(self) -> List[RawAtom]:
         atoms: List[RawAtom] = []
         now_iso = datetime.now(timezone.utc).isoformat()
         source = 'macro_data_fred'
 
         # ── Fed Funds Rate ────────────────────────────────────────────────
-        fed_funds = _get_latest_value(fred, _SERIES['fed_funds'])
+        fed_funds = _get_latest_value(self._api_key, _SERIES['fed_funds'])
         stance = None
         if fed_funds is not None:
             atoms.append(RawAtom(
@@ -175,24 +208,26 @@ class FREDAdapter(BaseIngestAdapter):
 
         # ── CPI (inflation) ──────────────────────────────────────────────
         inflation_label = None
-        cpi = _get_latest_value(fred, _SERIES['cpi_yoy'])
+        cpi = _get_latest_value(self._api_key, _SERIES['cpi_yoy'])
         if cpi is not None:
-            # CPIAUCSL is an index — approximate YoY from the level isn't
-            # ideal, but for regime classification it's sufficient.
-            # We store the raw index and classify.
-            # For proper YoY we'd need 12-month-ago value — keep it simple.
+            # CPIAUCSL is an index level; we classify direction for KB matching.
+            # CPI index 327+ ≈ 2.5–3%+ YoY → above_target_inflation (headwind for equities).
+            # Threshold: >320 = above_target, >310 = target, else low.
+            inflation_label = _classify_inflation(
+                3.0 if cpi > 320 else (2.0 if cpi > 310 else 1.0)
+            )
             atoms.append(RawAtom(
                 subject='us_macro',
                 predicate='inflation_environment',
-                object=f'CPI index: {cpi:.1f}',
+                object=inflation_label,
                 confidence=0.85,
                 source=source,
-                metadata={'series': _SERIES['cpi_yoy'], 'as_of': now_iso},
+                metadata={'series': _SERIES['cpi_yoy'], 'cpi_index': cpi, 'as_of': now_iso},
             ))
 
         # ── GDP Growth ────────────────────────────────────────────────────
         growth_label = None
-        gdp = _get_latest_value(fred, _SERIES['gdp_growth'])
+        gdp = _get_latest_value(self._api_key, _SERIES['gdp_growth'])
         if gdp is not None:
             growth_label = _classify_growth(gdp)
             atoms.append(RawAtom(
@@ -205,7 +240,7 @@ class FREDAdapter(BaseIngestAdapter):
             ))
 
         # ── Unemployment ──────────────────────────────────────────────────
-        unemp = _get_latest_value(fred, _SERIES['unemployment'])
+        unemp = _get_latest_value(self._api_key, _SERIES['unemployment'])
         if unemp is not None:
             atoms.append(RawAtom(
                 subject='us_labor',
@@ -217,8 +252,8 @@ class FREDAdapter(BaseIngestAdapter):
             ))
 
         # ── Yield Curve (10Y - 2Y spread) ────────────────────────────────
-        y10 = _get_latest_value(fred, _SERIES['yield_10y'])
-        y2 = _get_latest_value(fred, _SERIES['yield_2y'])
+        y10 = _get_latest_value(self._api_key, _SERIES['yield_10y'])
+        y2 = _get_latest_value(self._api_key, _SERIES['yield_2y'])
         if y10 is not None and y2 is not None:
             spread_bps = round((y10 - y2) * 100)
             curve_state = 'inverted' if spread_bps < 0 else 'normal'
@@ -232,6 +267,71 @@ class FREDAdapter(BaseIngestAdapter):
                     'yield_10y': y10, 'yield_2y': y2,
                     'spread_bps': spread_bps, 'as_of': now_iso,
                 },
+            ))
+
+        # ── TIPS real yield + breakeven inflation ─────────────────────────
+        tips_10y = _get_latest_value(self._api_key, _SERIES['tips_10y'])
+        breakeven_10y = _get_latest_value(self._api_key, _SERIES['breakeven_10y'])
+        breakeven_5y  = _get_latest_value(self._api_key, _SERIES['breakeven_5y'])
+
+        if tips_10y is not None:
+            real_yield_regime = (
+                'positive_real_yield' if tips_10y > 0.5
+                else 'near_zero_real_yield' if tips_10y > -0.25
+                else 'negative_real_yield'
+            )
+            atoms.append(RawAtom(
+                subject='us_yields',
+                predicate='tips_real_yield',
+                object=f'{tips_10y:.2f}%  ({real_yield_regime})',
+                confidence=0.90,
+                source=source,
+                metadata={'series': _SERIES['tips_10y'], 'real_yield_regime': real_yield_regime, 'as_of': now_iso},
+                upsert=True,
+            ))
+
+        if breakeven_10y is not None:
+            inflation_expectations = (
+                'anchored' if breakeven_10y < 2.5
+                else 'elevated_expectations' if breakeven_10y < 3.2
+                else 'unanchored'
+            )
+            atoms.append(RawAtom(
+                subject='us_yields',
+                predicate='breakeven_inflation_10y',
+                object=f'{breakeven_10y:.2f}%  ({inflation_expectations})',
+                confidence=0.90,
+                source=source,
+                metadata={'series': _SERIES['breakeven_10y'], 'inflation_expectations': inflation_expectations, 'as_of': now_iso},
+                upsert=True,
+            ))
+
+        if breakeven_5y is not None:
+            atoms.append(RawAtom(
+                subject='us_yields',
+                predicate='breakeven_inflation_5y',
+                object=f'{breakeven_5y:.2f}%',
+                confidence=0.88,
+                source=source,
+                metadata={'series': _SERIES['breakeven_5y'], 'as_of': now_iso},
+                upsert=True,
+            ))
+
+        # Real yield vs breakeven spread (measures inflation risk premium)
+        if tips_10y is not None and breakeven_10y is not None and y10 is not None:
+            implied_nominal = tips_10y + breakeven_10y
+            risk_premium_bps = round((y10 - implied_nominal) * 100)
+            atoms.append(RawAtom(
+                subject='us_yields',
+                predicate='rate_environment',
+                object=(
+                    f'nominal_10y={y10:.2f}%  real_10y={tips_10y:.2f}%  '
+                    f'breakeven={breakeven_10y:.2f}%  risk_premium={risk_premium_bps:+d}bps'
+                ),
+                confidence=0.88,
+                source=source,
+                metadata={'as_of': now_iso},
+                upsert=True,
             ))
 
         # ── Composite regime label ────────────────────────────────────────

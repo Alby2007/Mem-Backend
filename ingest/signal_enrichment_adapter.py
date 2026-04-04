@@ -104,9 +104,9 @@ _RATES_PROXY   = 'tlt'   # long-duration treasuries — near_high = risk-off (ra
 _MARKET_PROXY  = 'spy'   # broad equity market
 
 # signal_direction values that indicate bullish positioning
-_BULLISH_SIGNALS = {'long', 'near_high', 'near_52w_high'}
+_BULLISH_SIGNALS = {'long', 'near_high', 'near_52w_high', 'bullish'}
 # signal_direction values that indicate bearish positioning
-_BEARISH_SIGNALS = {'short', 'near_low',  'near_52w_low'}
+_BEARISH_SIGNALS = {'short', 'near_low', 'near_52w_low', 'bearish'}
 
 # upside_pct thresholds (in percent)
 _UPSIDE_STRONG    = 15.0   # >= 15%: meaningful analyst conviction
@@ -149,12 +149,25 @@ def _read_kb_atoms(
             FROM facts
             WHERE predicate IN (
                 'last_price', 'price_target', 'signal_direction',
+                'conviction_tier',
                 'volatility_regime', 'market_cap_tier', 'sector',
-                'earnings_quality', 'low_52w', 'volatility_30d',
+                'earnings_quality', 'earnings_date', 'earnings_proximity_days',
+                'low_52w', 'volatility_30d',
                 'signal_quality', 'thesis_risk_level', 'macro_confirmation',
                 'next_earnings',
+                'price_regime',
+                'return_1w', 'return_1m',
+                'high_52w', 'low_52w',
                 'skew_regime', 'iv_skew_ratio',
-                'tail_risk', 'spy_skew_regime', 'spy_skew_ratio'
+                'tail_risk', 'spy_skew_regime', 'spy_skew_ratio',
+                'insider_conviction', 'short_squeeze_potential',
+                'macro_event_risk', 'sector_tailwind', 'risk_appetite',
+                'causal_signal', 'signal_conflicted',
+                'best_regime', 'worst_regime',
+                'return_in_risk_on_expansion', 'return_in_risk_off_contraction',
+                'return_in_stagflation', 'return_in_recovery',
+                'regime_hit_rate_risk_on_expansion', 'regime_hit_rate_risk_off_contraction',
+                'regime_hit_rate_stagflation', 'regime_hit_rate_recovery'
             )
             ORDER BY subject, predicate, confidence DESC
         """)
@@ -314,6 +327,13 @@ def _compute_position_sizing_atoms(
     vol_30d: Optional[float],
     src_base: str,
     meta: dict,
+    insider_conviction: str = '',
+    short_squeeze: str = '',
+    macro_event_risk: str = '',
+    sector_tailwind: str = '',
+    db_path: str = '',
+    dominant_pattern_type: str = '',
+    dominant_timeframe: str = '',
 ) -> List[RawAtom]:
     """
     Compute conviction_tier, volatility_scalar, position_size_pct.
@@ -355,6 +375,12 @@ def _compute_position_sizing_atoms(
     if not sq or not rl:
         return atoms
 
+    # Normalise new inputs
+    ic  = (insider_conviction or '').lower()   # high|moderate|low|none
+    ss  = (short_squeeze      or '').lower()   # high|moderate|low|minimal
+    mer = (macro_event_risk   or '').lower()   # high|medium|low
+    st  = (sector_tailwind    or '').lower()   # positive|negative|neutral
+
     # ── Classify conviction_tier ───────────────────────────────────────────────
     # CT-AVOID (highest priority)
     if sq == 'conflicted':
@@ -374,7 +400,13 @@ def _compute_position_sizing_atoms(
     elif sq == 'confirmed':
         tier = 'medium'
         ct_rule = 'CT-M1_confirmed'
-    # CT-LOW continued (tight but not strong, or macro unconfirmed)
+    # CT-LOW continued (tight but not strong, extended, or macro unconfirmed)
+    elif sq == 'extended':
+        # Extended signal (bullish but near_52w_high) — legitimate setup only at
+        # reduced size. 'medium' was giving these the same weight as confirmed signals;
+        # ledger data shows near_52w_high bullish hit rate of 41.7% vs 65% overall.
+        tier = 'low'
+        ct_rule = 'CT-L4_extended'
     elif rl == 'tight':
         tier = 'low'
         ct_rule = 'CT-L2_tight_risk'
@@ -390,10 +422,155 @@ def _compute_position_sizing_atoms(
         tier = 'medium'
         ct_rule = 'CT-M_residual'
 
+    # ── Conviction upgrade from new signals (applied after base tier) ──────────
+    # Upgrade rule U1: insider_conviction=high + short_squeeze=high
+    # (insider buy INTO a squeeze setup = very strong combo) → upgrade by one
+    _TIER_ORDER = ['avoid', 'low', 'medium', 'high']
+    if ic == 'high' and ss in ('high', 'moderate') and tier in ('low', 'medium'):
+        idx = _TIER_ORDER.index(tier)
+        tier = _TIER_ORDER[min(idx + 1, len(_TIER_ORDER) - 1)]
+        ct_rule += '+U1_insider_squeeze'
+    # Upgrade rule U2: sector_tailwind=positive + insider_conviction >= moderate
+    elif st == 'positive' and ic in ('high', 'moderate') and tier == 'low':
+        tier = 'medium'
+        ct_rule += '+U2_sector_tailwind_insider'
+
+    # ── Calibration-adjusted conviction (P2) ─────────────────────────────────
+    # Uses a continuous log-ratio score against a *dynamic* pattern-level
+    # baseline, with Bayesian prior smoothing to stabilise early samples.
+    #
+    # STEP 1 — Bayesian smoothing of the raw hit rate
+    # ------------------------------------------------
+    # adjusted_hr = (wins + prior_wins) / (n + prior_total)
+    #
+    # Prior encodes the global pattern baseline so early samples are pulled
+    # toward the population mean rather than 0 or 1:
+    #   prior_total = 10   (equivalent to 10 phantom observations)
+    #   prior_wins  = baseline * prior_total
+    #
+    # Effect: n=2, wins=2 (raw hr=1.0) → adjusted_hr ≈ baseline, not 1.0.
+    # Effect: n=200, wins=140 (raw hr=0.70) → adjusted_hr ≈ 0.698 (barely moved).
+    #
+    # STEP 2 — Dynamic baseline
+    # -------------------------
+    # baseline = get_global_baseline(pattern_type, timeframe)
+    #          = sample-weighted mean hit_rate_t1 across ALL tickers (≥30 samples each)
+    # Falls back to 0.50 when the calibration table is still sparse.
+    #
+    # STEP 3 — Log-ratio score
+    # ------------------------
+    # raw_score = log(adjusted_hr / baseline)   positive = outperforms baseline
+    # clamped to [-1.0, +1.0] to cap leverage
+    #
+    # STEP 4 — Sample-size confidence weight
+    # ---------------------------------------
+    # weight = 1 - exp(-n / 30)
+    # → n=10: 0.28 · n=30: 0.63 · n=100: 0.96
+    # Prevents a 10-sample run from claiming the same confidence as 200 samples.
+    #
+    # STEP 5 — Tier decision (threshold gate)
+    # ----------------------------------------
+    # weighted_score = raw_score × weight
+    #   ≥ +_CAL_THRESHOLD  → upgrade tier by 1   (max: high)
+    #   ≤ -_CAL_THRESHOLD  → downgrade tier by 1 (min: avoid)
+    #   |score| < threshold → label only, no shift (surfaced in ct_rule for LLM)
+    #
+    # Constants
+    # Prior-scaling: _CAL_PRIOR_TOTAL is proportional to how well-established
+    # the global baseline is. A baseline built from 250K samples deserves a
+    # stronger prior than one from 200 samples.
+    # Formula: min(20, baseline_n // 10_000) — caps at 20 phantom samples.
+    # At 18K samples (thinnest bucket): prior=1. At 250K: prior=20 (max).
+    # This replaced the hardcoded prior=10 per TODO(prior-scaling).
+    _CAL_PRIOR_TOTAL = 10     # default; overwritten below once baseline_n is known
+    _CAL_FALLBACK    = 0.50   # used when global baseline unavailable
+    _CAL_THRESHOLD   = 0.30   # |weighted_score| needed to shift a tier
+    _CAL_TIER_ORDER  = ['avoid', 'low', 'medium', 'high']
+
+    _cal_boost_label = ''
+    if tier not in ('avoid',) and db_path:
+        try:
+            from analytics.signal_calibration import (
+                get_calibration as _get_cal,
+                get_global_baseline as _get_baseline,
+                get_global_baseline_with_n as _get_baseline_n,
+            )
+            import math as _math
+            _pat_type = dominant_pattern_type or 'mitigation'
+            _tf       = dominant_timeframe    or '1d'
+            _cal = _get_cal(
+                ticker        = ticker,
+                pattern_type  = _pat_type,
+                timeframe     = _tf,
+                db_path       = db_path,
+                market_regime = None,
+            )
+            _baseline_val, _baseline_n = _get_baseline_n(_pat_type, _tf, db_path)
+            _baseline = _baseline_val or _CAL_FALLBACK
+            # Scale prior strength to baseline quality — more samples = stronger prior
+            # min(20, n // 10_000): 18K samples → prior=1, 100K → prior=10, 250K → prior=20
+            if _baseline_val is not None and _baseline_n > 0:
+                _CAL_PRIOR_TOTAL = min(20, max(1, _baseline_n // 10_000))
+        except Exception:
+            _cal      = None
+            _baseline = _CAL_FALLBACK
+
+        if _cal is not None and _cal.sample_size >= 10 and _cal.hit_rate_t1 is not None:
+            n        = _cal.sample_size
+            raw_hr   = _cal.hit_rate_t1
+
+            # ── Bayesian smoothing ────────────────────────────────────────────
+            # Reconstruct win count from incremental mean (best estimate),
+            # then apply prior centred on the global baseline.
+            prior_wins  = _baseline * _CAL_PRIOR_TOTAL
+            wins_est    = raw_hr * n                          # estimated win count
+            adj_hr      = (wins_est + prior_wins) / (n + _CAL_PRIOR_TOTAL)
+            adj_hr      = max(0.01, min(0.99, adj_hr))       # guard log(0)
+
+            # ── Log-ratio score ───────────────────────────────────────────────
+            raw_score = _math.log(adj_hr / _baseline)
+            raw_score = max(-1.0, min(1.0, raw_score))       # cap leverage
+
+            # ── Sample-size confidence weight ─────────────────────────────────
+            weight = 1.0 - _math.exp(-n / 30.0)
+
+            weighted_score = raw_score * weight
+
+            idx = _CAL_TIER_ORDER.index(tier) if tier in _CAL_TIER_ORDER else 1
+
+            if weighted_score >= _CAL_THRESHOLD:
+                if idx < 3:
+                    tier = _CAL_TIER_ORDER[idx + 1]
+                _cal_boost_label = (
+                    f'cal_boost_lr{weighted_score:+.2f}'
+                    f'_ahr{adj_hr:.2f}_base{_baseline:.2f}_n{n}'
+                )
+            elif weighted_score <= -_CAL_THRESHOLD:
+                if idx > 0:
+                    tier = _CAL_TIER_ORDER[idx - 1]
+                _cal_boost_label = (
+                    f'cal_penalise_lr{weighted_score:+.2f}'
+                    f'_ahr{adj_hr:.2f}_base{_baseline:.2f}_n{n}'
+                )
+            else:
+                _cal_boost_label = (
+                    f'cal_watch_lr{weighted_score:+.2f}'
+                    f'_ahr{adj_hr:.2f}_base{_baseline:.2f}_n{n}'
+                )
+
+    if _cal_boost_label:
+        ct_rule += f'+{_cal_boost_label}'
+
+    # ── Macro event risk position reduction ───────────────────────────────────
+    # If FOMC/CPI/NFP within 3 days, reduce position size by 30% (size adjusted below)
+    _macro_event_reduction = 0.70 if mer == 'high' else (0.85 if mer == 'medium' else 1.0)
+
     # ── Compute volatility_scalar ──────────────────────────────────────────────
     if vol_30d is None or vol_30d <= 0:
         # Can't compute scalar — emit conviction_tier only
-        ct_meta = {**meta, 'ct_rule': ct_rule, 'vol_30d': 'missing'}
+        ct_meta = {**meta, 'ct_rule': ct_rule, 'vol_30d': 'missing',
+                   'insider_conviction': ic, 'short_squeeze': ss,
+                   'macro_event_risk': mer, 'sector_tailwind': st}
         atoms.append(RawAtom(
             subject    = ticker,
             predicate  = 'conviction_tier',
@@ -411,11 +588,14 @@ def _compute_position_sizing_atoms(
     if tier == 'avoid':
         size = 0.0
     else:
-        size = round(_CT_BASE_ALLOC[tier] * scalar, 2)
+        size = round(_CT_BASE_ALLOC[tier] * scalar * _macro_event_reduction, 2)
 
     ps_meta = {**meta, 'ct_rule': ct_rule, 'vol_scalar': str(scalar),
                'base_alloc': str(_CT_BASE_ALLOC.get(tier, 0.0)),
-               'vol_30d_input': str(vol_30d)}
+               'vol_30d_input': str(vol_30d),
+               'insider_conviction': ic, 'short_squeeze': ss,
+               'macro_event_risk': mer, 'sector_tailwind': st,
+               'macro_event_reduction': str(_macro_event_reduction)}
 
     atoms.append(RawAtom(
         subject    = ticker,
@@ -740,6 +920,7 @@ _USD_PROXY   = 'uup'   # US dollar index — near_high = strong USD (risk-off)
 
 # Regime labels
 _REGIME_RISK_ON_EXPANSION   = 'risk_on_expansion'
+_REGIME_RISK_ON_CORRECTION  = 'risk_on_correction'   # near highs but negative short-term momentum
 _REGIME_RISK_OFF_CONTRACTION = 'risk_off_contraction'
 _REGIME_STAGFLATION         = 'stagflation'
 _REGIME_RECOVERY            = 'recovery'
@@ -795,14 +976,35 @@ def _classify_market_regime(
     str — one of: risk_on_expansion | risk_off_contraction |
                   stagflation | recovery | no_data
     """
-    # Build extended proxy signals (macro_signals has SPY/HYG/TLT; add GLD/USD)
-    spy_sig = macro_signals.get(_MARKET_PROXY, '')
-    hyg_sig = macro_signals.get(_CREDIT_PROXY, '')
-    tlt_sig = macro_signals.get(_RATES_PROXY, '')
-    gld_sig = ticker_atoms.get(_GOLD_PROXY, {}).get('signal_direction', '')
-    uup_sig = ticker_atoms.get(_USD_PROXY,  {}).get('signal_direction', '')
+    def _sig_from_atoms(proxy: str) -> str:
+        """Get signal direction from KB atoms.
+
+        Fallback uses price_regime (52w position) NOT conviction_tier.
+        conviction_tier is a trading entry signal, not a macro indicator —
+        conviction_tier=low means 'don't trade this ticker now', which is
+        completely different from 'this asset is in a downtrend'.
+        """
+        atoms = ticker_atoms.get(proxy, {})
+        sig = atoms.get('signal_direction', '')
+        if sig:
+            return sig
+        # Fallback: use price_regime (where price sits in 52w range)
+        pr = atoms.get('price_regime', '')
+        if pr in ('near_high', 'near_52w_high'):
+            return 'bullish'
+        if pr in ('near_low', 'near_52w_low'):
+            return 'bearish'
+        return ''  # mid_range or missing → no signal, skip this proxy
+
+    # Build proxy signals — signal_direction preferred, price_regime as fallback
+    spy_sig = macro_signals.get(_MARKET_PROXY) or _sig_from_atoms(_MARKET_PROXY)
+    hyg_sig = macro_signals.get(_CREDIT_PROXY) or _sig_from_atoms(_CREDIT_PROXY)
+    tlt_sig = macro_signals.get(_RATES_PROXY)  or _sig_from_atoms(_RATES_PROXY)
+    gld_sig = _sig_from_atoms(_GOLD_PROXY)
+    uup_sig = _sig_from_atoms(_USD_PROXY)
 
     if not spy_sig and not hyg_sig:
+        # Both primary proxies missing — genuine no_data
         return _REGIME_NO_DATA
 
     spy_bull = spy_sig in _BULLISH_SIGNALS
@@ -812,15 +1014,32 @@ def _classify_market_regime(
     tlt_bull = tlt_sig in _BULLISH_SIGNALS
     gld_bull = gld_sig in _BULLISH_SIGNALS
 
+    # Momentum helper: read SPY short-term return from KB atoms
+    def _spy_momentum() -> float:
+        try:
+            return float(ticker_atoms.get(_MARKET_PROXY, {}).get('return_1w', 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _risk_on_or_correction() -> str:
+        """When SPY+HYG look bullish, check if we're in a pullback within expansion."""
+        ret_1w = _spy_momentum()
+        return _REGIME_RISK_ON_CORRECTION if ret_1w < -1.5 else _REGIME_RISK_ON_EXPANSION
+
     # RECOVERY: equities up + credit tight + rates falling (Fed-pivot / early cycle)
     if spy_bull and hyg_bull and tlt_bull:
         return _REGIME_RECOVERY
 
-    # RISK_ON_EXPANSION: equities up + credit tight + rates NOT falling
+    # RISK_ON_EXPANSION or RISK_ON_CORRECTION:
+    # Equities up + credit tight + rates NOT falling
+    # If SPY is near highs but short-term momentum is negative (>1.5% weekly drop),
+    # call it a correction within expansion rather than full expansion.
     if spy_bull and hyg_bull and not tlt_bull:
-        return _REGIME_RISK_ON_EXPANSION
+        return _risk_on_or_correction()
 
-    # RISK_OFF_CONTRACTION: equities down + credit selling off
+    # RISK_OFF_CONTRACTION: equities down + credit selling off simultaneously
+    # Requires BOTH to be bearish — if credit (HYG) is still near highs, it's
+    # not a true contraction regardless of equity direction.
     if spy_bear and hyg_bear:
         return _REGIME_RISK_OFF_CONTRACTION
 
@@ -828,9 +1047,9 @@ def _classify_market_regime(
     if gld_bull and not spy_bull:
         return _REGIME_STAGFLATION
 
-    # Residual: equities up but mixed credit, or data too thin
+    # Residual: equities up but mixed/missing credit signal
     if spy_bull:
-        return _REGIME_RISK_ON_EXPANSION
+        return _risk_on_or_correction()
 
     return _REGIME_RECOVERY
 
@@ -943,6 +1162,169 @@ def _compute_news_sentiment(
     return 'neutral'
 
 
+# ── Geopolitical risk enrichment ─────────────────────────────────────────────
+
+def _read_geo_atoms(db_path: str) -> Dict[str, str]:
+    """Read gdelt_tension, ucdp_conflict, acled_unrest, and eia_energy atoms from KB."""
+    geo: Dict[str, str] = {}
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute("""
+            SELECT subject, predicate, object
+            FROM facts
+            WHERE subject IN ('gdelt_tension', 'ucdp_conflict', 'acled_unrest', 'oil_market', 'macro_regime')
+            ORDER BY subject, predicate, confidence DESC
+        """)
+        for row in c.fetchall():
+            key = f"{row['subject']}:{row['predicate']}"
+            if key not in geo:
+                geo[key] = row['object']
+        conn.close()
+    except Exception as exc:
+        _logger.warning('_read_geo_atoms failed: %s', exc)
+    return geo
+
+
+def _compute_geo_risk_atoms(db_path: str, now_iso: str) -> List[RawAtom]:
+    """
+    Derive geopolitical_risk_exposure per ticker and energy_shock_risk macro atom.
+
+    Logic:
+    - For each ticker in TICKER_GEO_EXPOSURE, check all mapped regions
+    - Elevated if any GDELT pair score >= 60 OR any UCDP active_war in region
+    - Moderate if any GDELT pair score >= 35
+    - Low otherwise
+    - energy_shock_risk: EIA wti_crude > 90 AND (Middle East GDELT score >= 55 OR supply_trend tight)
+    """
+    try:
+        from ingest.geo_exposure import (
+            TICKER_GEO_EXPOSURE, REGION_TO_GDELT_PAIRS,
+            GEO_RISK_ELEVATED_THRESHOLD, GEO_RISK_MODERATE_THRESHOLD,
+        )
+    except ImportError:
+        _logger.warning('geo_exposure.py not found — skipping geo-risk pass')
+        return []
+
+    geo = _read_geo_atoms(db_path)
+    atoms: List[RawAtom] = []
+    source = 'derived_signal_geo_risk'
+    meta_base = {'as_of': now_iso}
+
+    # Pre-compute region risk levels from GDELT and UCDP atoms
+    region_risk: Dict[str, str] = {}
+
+    for region, gdelt_pair_keys in REGION_TO_GDELT_PAIRS.items():
+        max_score = 0.0
+        has_active_war = False
+
+        for pair_key in gdelt_pair_keys:
+            val = geo.get(f'gdelt_tension:{pair_key}')
+            if val is not None:
+                try:
+                    max_score = max(max_score, float(val))
+                except ValueError:
+                    pass
+
+        # Check UCDP active wars mapped to this region
+        _REGION_COUNTRIES: Dict[str, List[str]] = {
+            'europe_east': ['ukr', 'rus'],
+            'middle_east': ['syr', 'yem', 'irq', 'pse'],
+            'africa':      ['sdn', 'ssd', 'eth', 'mli', 'ner', 'nga', 'moz', 'som', 'caf', 'cod'],
+            'asia_south':  ['afg', 'pak'],
+            'asia_east':   ['mmr'],
+            'latam':       ['mex', 'col', 'hti'],
+            'global_defence': [],  # no country filter — any war counts
+        }
+        war_countries = _REGION_COUNTRIES.get(region, [])
+        if region == 'global_defence':
+            # Elevated if any country has active_war globally
+            has_active_war = any(
+                v == 'active_war'
+                for k, v in geo.items()
+                if k.startswith('ucdp_conflict:')
+            )
+        else:
+            has_active_war = any(
+                geo.get(f'ucdp_conflict:{iso}') == 'active_war'
+                for iso in war_countries
+            )
+
+        if has_active_war or max_score >= GEO_RISK_ELEVATED_THRESHOLD:
+            region_risk[region] = 'elevated'
+        elif max_score >= GEO_RISK_MODERATE_THRESHOLD:
+            region_risk[region] = 'moderate'
+        else:
+            region_risk[region] = 'low'
+
+    # Emit geopolitical_risk_exposure per ticker
+    for ticker, regions in TICKER_GEO_EXPOSURE.items():
+        # Take the worst risk level across all mapped regions
+        levels = [region_risk.get(r, 'low') for r in regions]
+        if 'elevated' in levels:
+            exposure = 'elevated'
+        elif 'moderate' in levels:
+            exposure = 'moderate'
+        else:
+            exposure = 'low'
+
+        # Only emit non-low — avoids flooding KB with low-value atoms
+        if exposure in ('elevated', 'moderate'):
+            atoms.append(RawAtom(
+                subject    = ticker,
+                predicate  = 'geopolitical_risk_exposure',
+                object     = exposure,
+                confidence = 0.68,
+                source     = source,
+                metadata   = {
+                    **meta_base,
+                    'regions': regions,
+                    'region_risks': {r: region_risk.get(r, 'low') for r in regions},
+                },
+                upsert     = True,
+            ))
+
+    # ── Commodity-macro cross signal: energy_shock_risk ───────────────────────
+    # Elevated when: WTI > 90 AND (Middle East GDELT tension elevated OR supply tight)
+    wti_str     = geo.get('oil_market:wti_crude')
+    supply_str  = geo.get('oil_market:supply_trend')
+    me_risk     = region_risk.get('middle_east', 'low')
+
+    try:
+        wti = float(wti_str) if wti_str else None
+    except ValueError:
+        wti = None
+
+    if wti is not None:
+        if wti > 90 and (me_risk == 'elevated' or supply_str == 'falling'):
+            shock_level = 'elevated'
+        elif wti > 80 and me_risk in ('elevated', 'moderate'):
+            shock_level = 'moderate'
+        else:
+            shock_level = 'low'
+
+        if shock_level in ('elevated', 'moderate'):
+            atoms.append(RawAtom(
+                subject    = 'macro_regime',
+                predicate  = 'energy_shock_risk',
+                object     = shock_level,
+                confidence = 0.72,
+                source     = source,
+                metadata   = {
+                    **meta_base,
+                    'wti_crude': wti,
+                    'supply_trend': supply_str,
+                    'middle_east_tension': me_risk,
+                },
+                upsert     = True,
+            ))
+
+    _logger.info('[signal_enrichment] geo-risk pass: %d atoms (%d tickers checked)',
+                 len(atoms), len(TICKER_GEO_EXPOSURE))
+    return atoms
+
+
 class SignalEnrichmentAdapter(BaseIngestAdapter):
     """
     Second-order signal enrichment. Reads current KB atoms and emits
@@ -970,17 +1352,84 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
 
         ticker_atoms, macro_signals = _read_kb_atoms(self._db_path)
 
+        # ── Macro proxy signal_direction refresh ─────────────────────────────
+        # SPY/HYG/TLT/GLD/UUP are in the Polygon universe so yfinance skips them.
+        # Write signal_direction every enrichment cycle using KB 52w range data.
+        # This ensures the regime classifier always has fresh proxy signals.
+        _proxy_atoms: List[RawAtom] = []
+        _MACRO_PROXIES_ENRICH = {'spy': ('high_52w', 'low_52w', 'last_price'),
+                                  'hyg': ('high_52w', 'low_52w', 'last_price'),
+                                  'tlt': ('high_52w', 'low_52w', 'last_price'),
+                                  'gld': ('high_52w', 'low_52w', 'last_price'),
+                                  'uup': ('high_52w', 'low_52w', 'last_price')}
+        for _proxy in _MACRO_PROXIES_ENRICH:
+            _pa = ticker_atoms.get(_proxy, {})
+            try:
+                _p  = float(_pa.get('last_price', 0) or 0)
+                _h  = float(_pa.get('high_52w', 0) or 0)
+                _l  = float(_pa.get('low_52w', 0) or 0)
+                if _p > 0 and _h > _l:
+                    _ratio   = (_p - _l) / (_h - _l)
+                    _etf_dir = 'bullish' if _ratio >= 0.70 else ('bearish' if _ratio <= 0.30 else 'neutral')
+                    _proxy_atoms.append(RawAtom(
+                        subject=_proxy.upper(),
+                        predicate='signal_direction',
+                        object=_etf_dir,
+                        confidence=0.70,
+                        source=f'derived_52w_position_{_proxy}',
+                        metadata={
+                            'derived_from': '52w_range_position',
+                            'pct_of_range': round(_ratio * 100, 1),
+                            'as_of': now_iso,
+                        },
+                        upsert=True,
+                    ))
+                    # Refresh ticker_atoms so macro_signals picks up the new value
+                    if _proxy not in ticker_atoms:
+                        ticker_atoms[_proxy] = {}
+                    ticker_atoms[_proxy]['signal_direction'] = _etf_dir
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+        # Add proxy atoms to the main atoms list so they get pushed to the KB
+        atoms: List[RawAtom] = list(_proxy_atoms)
+        # Recompute macro_signals with refreshed proxy atoms
+        macro_signals = {
+            proxy: ticker_atoms.get(proxy, {}).get('signal_direction', '')
+            for proxy in (_CREDIT_PROXY, _RATES_PROXY, _MARKET_PROXY)
+        }
+
         # Extract market-level atoms (subject='market') for skew filter.
         # tail_risk and spy_skew_regime are written by OptionsAdapter — may be
         # absent on startup (1800s interval vs 300s here).  Empty dict is safe;
         # _compute_skew_filter_atoms handles missing keys gracefully.
         market_atoms: Dict[str, str] = ticker_atoms.get('market', {})
 
-        atoms: List[RawAtom] = []
         enriched = 0
         skipped  = 0
 
+        # Pre-fetch dominant pattern type per ticker (most common open pattern)
+        _dominant_patterns: dict = {}
+        try:
+            _pconn = sqlite3.connect(self._db_path, timeout=10)
+            _rows = _pconn.execute("""
+                SELECT ticker, pattern_type, timeframe, COUNT(*) as cnt
+                FROM pattern_signals
+                WHERE status NOT IN ('filled','broken','expired')
+                GROUP BY ticker, pattern_type, timeframe
+                ORDER BY ticker, cnt DESC
+            """).fetchall()
+            _pconn.close()
+            for _pticker, _ptype, _ptf, _ in _rows:
+                if _pticker.lower() not in _dominant_patterns:
+                    _dominant_patterns[_pticker.lower()] = (_ptype, _ptf)
+        except Exception:
+            pass
+
         for ticker, preds in ticker_atoms.items():
+            # Skip empty or invalid ticker subjects
+            if not ticker or not ticker.strip():
+                skipped += 1
+                continue
             # Skip subjects that have no signal_direction (not an equity/ETF)
             if 'signal_direction' not in preds and 'last_price' not in preds:
                 skipped += 1
@@ -1022,11 +1471,65 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
             if last_price is not None and price_target is not None and last_price > 0:
                 upside_pct_val = round((price_target - last_price) / last_price * 100, 2)
 
+            # ── Derive signal_direction for tickers that lack one ──────────
+            # US equities often have price_target from yfinance/Polygon but
+            # no analyst-derived signal_direction. Without it, they fall
+            # through to the cold-start branch and need quality >= 0.85 to
+            # enter — blocking most valid US setups.
+            # Fix: derive direction from consensus target upside and write it
+            # so downstream enrichment + pattern gate can use it.
+            if not signal_dir and upside_pct_val is not None:
+                if upside_pct_val >= 10:
+                    signal_dir = 'bullish'
+                elif upside_pct_val <= -5:
+                    signal_dir = 'bearish'
+                else:
+                    signal_dir = 'neutral'
+                atoms.append(RawAtom(
+                    subject    = ticker.upper(),
+                    predicate  = 'signal_direction',
+                    object     = signal_dir,
+                    confidence = 0.65,
+                    source     = f'derived_signal_direction_{ticker}',
+                    metadata   = {
+                        'derived_from':  'price_target_upside',
+                        'upside_pct':    upside_pct_val,
+                        'last_price':    last_price,
+                        'price_target':  price_target,
+                        'as_of':         now_iso,
+                    },
+                    upsert     = True,
+                ))
+
             # ── Compute derived atoms ──────────────────────────────────────
             price_regime = _classify_price_regime(last_price, price_target, signal_dir)
             sig_quality  = _classify_signal_quality(
                 signal_dir, vol_regime, price_regime, upside_pct_val
             )
+
+            # ── Cross-engine input 1: signal_conflicted → force 'conflicted' ──
+            # Written by contradiction.py when signal_direction conflicts are detected.
+            # Overrides any quality computed above — resolves on next enrichment cycle
+            # once the stale atom decays or new evidence breaks the tie.
+            if preds.get('signal_conflicted'):
+                sig_quality = 'conflicted'
+
+            # ── Cross-engine input 2: causal_signal → boost direction quality ─
+            # CausalShockEngine writes causal_signal atoms when a macro shock
+            # propagates through the causal graph to this ticker.
+            # If the causal direction matches the existing signal, upgrade quality.
+            causal_sig = preds.get('causal_signal', '')
+            if causal_sig and sig_quality not in ('conflicted',):
+                causal_lower = causal_sig.lower()
+                sig_is_bull = signal_dir in _BULLISH_SIGNALS
+                sig_is_bear = signal_dir in _BEARISH_SIGNALS
+                causal_bull = any(kw in causal_lower for kw in ('bullish', 'positive', 'expand', 'upside', 'boost'))
+                causal_bear = any(kw in causal_lower for kw in ('bearish', 'negative', 'contract', 'downside', 'drag'))
+                _TIER_Q = ['weak', 'confirmed', 'strong']
+                if (sig_is_bull and causal_bull) or (sig_is_bear and causal_bear):
+                    idx_q = _TIER_Q.index(sig_quality) if sig_quality in _TIER_Q else 1
+                    sig_quality = _TIER_Q[min(idx_q + 1, len(_TIER_Q) - 1)]
+
             macro_conf   = _classify_macro_confirmation(signal_dir, macro_signals)
 
             src_base = f'derived_signal_{ticker}'
@@ -1107,9 +1610,79 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
                 inv_atoms[2].object if len(inv_atoms) >= 3
                 else preds.get('thesis_risk_level', '')
             )
+            _dom = _dominant_patterns.get(ticker, ('', ''))
             pos_atoms = _compute_position_sizing_atoms(
-                ticker, sig_quality, thesis_rl, macro_conf, vol_30d, src_base, meta
+                ticker, sig_quality, thesis_rl, macro_conf, vol_30d, src_base, meta,
+                insider_conviction=preds.get('insider_conviction', ''),
+                short_squeeze=preds.get('short_squeeze_potential', ''),
+                macro_event_risk=market_atoms.get('macro_event_risk', ''),
+                sector_tailwind=preds.get('sector_tailwind', ''),
+                db_path=self._db_path,
+                dominant_pattern_type=_dom[0],
+                dominant_timeframe=_dom[1],
             )
+
+            # ── Cross-engine input 3: regime-conditional conviction modulation ─
+            # RegimeHistoryClassifier writes best_regime / worst_regime atoms.
+            # If current regime matches best_regime → upgrade tier by 1.
+            # If current regime matches worst_regime → downgrade tier by 1.
+            # Also reads regime_hit_rate_{current_regime} for position size scalar.
+            if pos_atoms:
+                current_regime = ticker_atoms.get('market', {}).get('market_regime', '')
+                best_r  = preds.get('best_regime', '')
+                worst_r = preds.get('worst_regime', '')
+                _TIER_O = ['avoid', 'low', 'medium', 'high']
+                _ct_atom = next((a for a in pos_atoms if a.predicate == 'conviction_tier'), None)
+                if _ct_atom and current_regime and current_regime not in ('no_data', ''):
+                    ct_val = _ct_atom.object
+                    if ct_val in _TIER_O:
+                        ct_idx = _TIER_O.index(ct_val)
+                        if best_r and current_regime == best_r and ct_idx < 3:
+                            _ct_atom.object = _TIER_O[ct_idx + 1]
+                            if _ct_atom.metadata:
+                                _ct_atom.metadata['ct_rule'] = _ct_atom.metadata.get('ct_rule', '') + '+RH_best_regime'
+                        elif worst_r and current_regime == worst_r and ct_idx > 0:
+                            _ct_atom.object = _TIER_O[ct_idx - 1]
+                            if _ct_atom.metadata:
+                                _ct_atom.metadata['ct_rule'] = _ct_atom.metadata.get('ct_rule', '') + '+RH_worst_regime'
+
+            # ── Cross-engine input 4: epistemic stress → conviction penalty ────
+            # High composite stress = conflicting sources, stale data, authority
+            # disagreement. Degrades conviction so the system self-corrects when
+            # its own data quality is poor.
+            # compute_stress() takes retrieved_atoms (list of fact dicts) and
+            # message_key_terms (list of str). Build both from the already-loaded preds.
+            if pos_atoms:
+                try:
+                    from knowledge.epistemic_stress import compute_stress as _compute_stress
+                    _ticker_fact_dicts = [
+                        {'confidence': 0.7, 'source': f'kb_{pred}', 'predicate': pred, 'object': obj}
+                        for pred, obj in preds.items()
+                    ]
+                    _stress = _compute_stress(
+                        retrieved_atoms   = _ticker_fact_dicts,
+                        message_key_terms = [ticker],
+                    )
+                    if _stress and getattr(_stress, 'composite_stress', 0.0) > 0.5:
+                        _stress_penalty = (_stress.composite_stress - 0.5) * 0.4
+                        _ct_atom2 = next((a for a in pos_atoms if a.predicate == 'conviction_tier'), None)
+                        _ps_atom  = next((a for a in pos_atoms if a.predicate == 'position_size_pct'), None)
+                        if _ct_atom2 and _ct_atom2.object in ('high', 'medium'):
+                            _TIER_ES = ['avoid', 'low', 'medium', 'high']
+                            _es_idx = _TIER_ES.index(_ct_atom2.object)
+                            if _stress_penalty > 0.15 and _es_idx > 0:
+                                _ct_atom2.object = _TIER_ES[_es_idx - 1]
+                                if _ct_atom2.metadata:
+                                    _ct_atom2.metadata['ct_rule'] = _ct_atom2.metadata.get('ct_rule', '') + f'+ES_stress{_stress.composite_stress:.2f}'
+                        if _ps_atom:
+                            try:
+                                _ps_val = float(_ps_atom.object)
+                                _ps_atom.object = str(round(_ps_val * (1.0 - _stress_penalty), 2))
+                            except (ValueError, TypeError):
+                                pass
+                except Exception:
+                    pass
+
             atoms.extend(pos_atoms)
 
             # ── Earnings proximity atom ────────────────────────────────────
@@ -1176,8 +1749,292 @@ class SignalEnrichmentAdapter(BaseIngestAdapter):
             upsert     = True,
         ))
 
+        # ── Commodity cross-correlation atom ─────────────────────────────
+        # Surfaces GLD/USO vs equity and rates vs real estate cross-signal.
+        # Emitted as subject='macro' so LLM can cite it in portfolio responses.
+        try:
+            gld_sig = ticker_atoms.get('gld', {}).get('signal_direction', '')
+            uso_sig = ticker_atoms.get('uso', {}).get('signal_direction', '')
+            tlt_sig_cc = macro_signals.get(_RATES_PROXY, '')
+            spy_sig_cc = macro_signals.get(_MARKET_PROXY, '')
+            xlre_sig   = ticker_atoms.get('xlre', {}).get('signal_direction', '')
+
+            _bull = _BULLISH_SIGNALS
+            _bear = _BEARISH_SIGNALS
+
+            parts = []
+            # Gold vs equity divergence
+            if gld_sig in _bull and spy_sig_cc in _bear:
+                parts.append('gold_equity_divergence:risk_off_hedge_active')
+            elif gld_sig in _bear and spy_sig_cc in _bull:
+                parts.append('gold_equity_convergence:risk_on_rotation')
+            elif gld_sig in _bull and spy_sig_cc in _bull:
+                parts.append('gold_equity_both_bid:inflation_hedge_with_growth')
+
+            # Rates vs real estate: TLT inverse to yields; falling TLT = rising rates = REIT headwind
+            if tlt_sig_cc in _bear and xlre_sig in _bear:
+                parts.append('rates_rising:real_estate_headwind_confirmed')
+            elif tlt_sig_cc in _bull and xlre_sig in _bull:
+                parts.append('rates_falling:real_estate_tailwind_confirmed')
+            elif tlt_sig_cc in _bear and xlre_sig in _bull:
+                parts.append('rates_rising:real_estate_resilient_divergence')
+
+            # Energy cross-signal
+            if uso_sig in _bull and gld_sig in _bull:
+                parts.append('commodities_broadly_bid:inflation_pressure')
+            elif uso_sig in _bull and spy_sig_cc in _bear:
+                parts.append('energy_bid_equity_weak:stagflation_signal')
+
+            if parts:
+                atoms.append(RawAtom(
+                    subject    = 'macro',
+                    predicate  = 'commodity_cross_correlation',
+                    object     = ' | '.join(parts),
+                    confidence = 0.65,
+                    source     = 'derived_signal_commodity_xasset',
+                    metadata   = {
+                        'as_of': now_iso,
+                        'gld': gld_sig, 'uso': uso_sig,
+                        'tlt': tlt_sig_cc, 'spy': spy_sig_cc, 'xlre': xlre_sig,
+                    },
+                    upsert     = True,
+                ))
+        except Exception as _cx:
+            _logger.debug('[signal_enrichment] commodity cross-correlation failed: %s', _cx)
+
+        # ── Geopolitical risk exposure pass ───────────────────────────────
+        # Reads gdelt_tension and ucdp_conflict atoms from KB and emits
+        # geopolitical_risk_exposure per ticker using geo_exposure.py config.
+        # Also emits energy_shock_risk macro cross signal (EIA + GDELT).
+        try:
+            geo_atoms = _compute_geo_risk_atoms(self._db_path, now_iso)
+            atoms.extend(geo_atoms)
+        except Exception as _ge:
+            _logger.warning('[signal_enrichment] geo-risk pass failed: %s', _ge)
+
         _logger.info(
             '[signal_enrichment] enriched %d tickers (%d atoms), skipped %d subjects',
             enriched, len(atoms), skipped,
         )
+
+        # ── Retroactive pattern enrichment ────────────────────────────────────
+        # Re-stamp kb_conviction/kb_regime/kb_signal_dir on ALL open patterns
+        # with the current KB values.  COALESCE(NULLIF) guard intentionally
+        # removed — we always overwrite so stale values (Issue 2) are corrected
+        # every enrichment cycle, not just when the field was previously null.
+        try:
+            _pconn = sqlite3.connect(self._db_path, timeout=30)
+            _pconn.execute('PRAGMA journal_mode=WAL')
+            _pconn.execute('PRAGMA busy_timeout=30000')
+            _pconn.row_factory = sqlite3.Row
+
+            _open_tickers = _pconn.execute("""
+                SELECT DISTINCT ticker FROM pattern_signals
+                WHERE status NOT IN ('filled','broken','expired')
+            """).fetchall()
+
+            # Read current market_regime once — same value for all tickers
+            _market_regime_row = _pconn.execute(
+                "SELECT object FROM facts WHERE LOWER(subject)='market' "
+                "AND predicate='market_regime' ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            _current_market_regime = _market_regime_row[0] if _market_regime_row else ''
+
+            _pat_updated = 0
+            for (_pticker,) in _open_tickers:
+                _patoms: dict = {}
+                for _prow in _pconn.execute(
+                    "SELECT predicate, object FROM facts WHERE LOWER(subject)=? "
+                    "AND predicate IN ('conviction_tier','signal_direction') "
+                    "ORDER BY timestamp DESC",
+                    (_pticker.lower(),)
+                ).fetchall():
+                    if _prow[0] not in _patoms:
+                        _patoms[_prow[0]] = _prow[1]
+
+                _conviction = _patoms.get('conviction_tier', '')
+                _signal_dir = _patoms.get('signal_direction', '')
+                # Use market_regime (macro environment) not price_regime (ticker 52w position).
+                # _kb_scores() in pattern_detector.py matches on 'risk_on', 'risk_off',
+                # 'contraction', 'expansion' etc — market_regime has these, price_regime doesn't.
+                _regime     = _current_market_regime
+
+                if _conviction or _signal_dir or _regime:
+                    # Update kb fields and partially recompute quality_score.
+                    # pattern_signals doesn't store atr_val/candle_idx/total_candles,
+                    # so we reconstruct the KB components only and preserve the
+                    # original gap+recency contribution via: q = kb_part + old_remainder.
+                    #
+                    # KB part weights: conv=0.25, regime=0.20, sig=0.15 → total 0.60
+                    # gap+rec part:    gap=0.25, rec=0.15 → total 0.40
+                    # We recompute KB part and preserve old gap+rec portion.
+                    try:
+                        from analytics.pattern_detector import _kb_scores as _kbs_fn
+                        _open_pats = _pconn.execute(
+                            """SELECT id, direction, quality_score
+                               FROM pattern_signals
+                               WHERE ticker=? AND status NOT IN ('filled','broken','expired')""",
+                            (_pticker,)
+                        ).fetchall()
+                        for _op in _open_pats:
+                            _pid, _pdir, _old_q = _op
+                            _old_q = float(_old_q or 0)
+                            # Compute new KB components with updated values
+                            _conv_s, _regime_s, _sig_s = _kbs_fn(
+                                _conviction, _regime, _signal_dir, _pdir or ''
+                            )
+                            _new_kb_part = _conv_s * 0.25 + _regime_s * 0.20 + _sig_s * 0.15
+                            # Estimate old KB part using stored kb_* values (pre-update)
+                            _old_conv  = 1.0 if _conviction in ('high','strong','confirmed') else (
+                                         0.0 if _conviction in ('low','weak','avoid') else 0.2)
+                            _old_kb_part = _old_conv * 0.25 + 0.2 * 0.20 + 0.2 * 0.15
+                            # old gap+rec = old_q - old_kb_part (clamp to [0, 0.40])
+                            _old_gap_rec = max(0.0, min(0.40, _old_q - _old_kb_part))
+                            _new_q = round(min(1.0, _new_kb_part + _old_gap_rec), 4)
+                            _pconn.execute(
+                                """UPDATE pattern_signals
+                                   SET kb_conviction = CASE WHEN ? != '' THEN ? ELSE kb_conviction END,
+                                       kb_signal_dir = CASE WHEN ? != '' THEN ? ELSE kb_signal_dir END,
+                                       kb_regime     = CASE WHEN ? != '' THEN ? ELSE kb_regime END,
+                                       quality_score = ?
+                                   WHERE id = ?""",
+                                (
+                                    _conviction, _conviction,
+                                    _signal_dir, _signal_dir,
+                                    _regime, _regime,
+                                    _new_q, _pid,
+                                )
+                            )
+                        _pat_updated += len(_open_pats)
+                    except Exception as _qe:
+                        _logger.warning('[signal_enrichment] quality recompute failed for %s: %s', _pticker, _qe)
+                        _n = _pconn.execute("""
+                            UPDATE pattern_signals
+                            SET kb_conviction = CASE WHEN ? != '' THEN ? ELSE kb_conviction END,
+                                kb_signal_dir = CASE WHEN ? != '' THEN ? ELSE kb_signal_dir END,
+                                kb_regime     = CASE WHEN ? != '' THEN ? ELSE kb_regime END
+                            WHERE ticker = ?
+                              AND status NOT IN ('filled','broken','expired')
+                        """, (
+                            _conviction, _conviction,
+                            _signal_dir, _signal_dir,
+                            _regime, _regime,
+                            _pticker,
+                        )).rowcount
+                        _pat_updated += _n
+
+            _pconn.commit()
+            _pconn.close()
+            if _pat_updated:
+                _logger.info(
+                    '[signal_enrichment] re-stamped %d patterns across %d open tickers',
+                    _pat_updated, len(_open_tickers),
+                )
+        except Exception as _pe:
+            _logger.warning('[signal_enrichment] retroactive pattern enrichment failed: %s', _pe)
+
         return atoms
+
+
+# ── Standalone stale-pattern re-enrichment ────────────────────────────────────
+
+def enrich_stale_patterns(db_path: str = 'trading_knowledge.db', dry_run: bool = False) -> int:
+    """
+    Re-stamp kb_conviction / kb_signal_dir / kb_regime on every open
+    pattern_signals row using current KB facts.
+
+    Fixes Issue 2: patterns with stale kb_conviction that the retroactive block
+    previously skipped because it used COALESCE(NULLIF) — skipping non-null rows.
+
+    Usage:
+        python -m ingest.signal_enrichment_adapter          # update
+        python -m ingest.signal_enrichment_adapter --dry-run
+    """
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=30000')
+    conn.row_factory = sqlite3.Row
+    try:
+        open_tickers = conn.execute(
+            "SELECT DISTINCT ticker FROM pattern_signals "
+            "WHERE status NOT IN ('filled','broken','expired')"
+        ).fetchall()
+
+        updated = 0
+        stale   = 0
+
+        for (ticker,) in open_tickers:
+            patoms: dict = {}
+            for row in conn.execute(
+                "SELECT predicate, object FROM facts WHERE LOWER(subject)=? "
+                "AND predicate IN ('conviction_tier','signal_direction','price_regime') "
+                "ORDER BY timestamp DESC",
+                (ticker.lower(),)
+            ).fetchall():
+                if row[0] not in patoms:
+                    patoms[row[0]] = row[1]
+
+            conviction = patoms.get('conviction_tier', '')
+            signal_dir = patoms.get('signal_direction', '')
+            regime     = patoms.get('price_regime', '')
+
+            if not (conviction or signal_dir or regime):
+                continue
+
+            stale_count = conn.execute("""
+                SELECT COUNT(*) FROM pattern_signals
+                WHERE ticker = ?
+                  AND status NOT IN ('filled','broken','expired')
+                  AND (
+                    (? != '' AND (kb_conviction IS NULL OR kb_conviction != ?)) OR
+                    (? != '' AND (kb_signal_dir IS NULL OR kb_signal_dir != ?)) OR
+                    (? != '' AND (kb_regime     IS NULL OR kb_regime     != ?))
+                  )
+            """, (
+                ticker,
+                conviction, conviction,
+                signal_dir, signal_dir,
+                regime,     regime,
+            )).fetchone()[0]
+            stale += stale_count
+
+            if dry_run:
+                continue
+
+            n = conn.execute("""
+                UPDATE pattern_signals
+                SET kb_conviction = CASE WHEN ? != '' THEN ? ELSE kb_conviction END,
+                    kb_signal_dir = CASE WHEN ? != '' THEN ? ELSE kb_signal_dir END,
+                    kb_regime     = CASE WHEN ? != '' THEN ? ELSE kb_regime     END
+                WHERE ticker = ?
+                  AND status NOT IN ('filled','broken','expired')
+            """, (
+                conviction, conviction,
+                signal_dir, signal_dir,
+                regime,     regime,
+                ticker,
+            )).rowcount
+            updated += n
+
+        if not dry_run:
+            conn.commit()
+
+        _logger.info(
+            '[enrich_stale_patterns] %s %d pattern rows across %d tickers (stale detected=%d)',
+            'dry_run:' if dry_run else 'updated',
+            stale if dry_run else updated,
+            len(open_tickers), stale,
+        )
+        return stale if dry_run else updated
+    finally:
+        conn.close()
+
+
+if __name__ == '__main__':
+    import sys as _sys
+    import os as _os
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    _db  = _os.environ.get('DB_PATH', 'trading_knowledge.db')
+    _dry = '--dry-run' in _sys.argv
+    _n   = enrich_stale_patterns(db_path=_db, dry_run=_dry)
+    print(f'{"[DRY RUN] Would update" if _dry else "Updated"} {_n} pattern rows.')

@@ -1,0 +1,12 @@
+tests/
+*.sql
+*.db
+__pycache__/
+.venv/
+.git/
+deploy/
+docs/
+scripts/
+middleware/
+api.py
+requirements.txt

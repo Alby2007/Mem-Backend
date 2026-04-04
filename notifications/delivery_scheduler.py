@@ -56,21 +56,24 @@ def _should_deliver(
     user_id: str,
     delivery_time: str,
     timezone_str: str,
+    tier: str = 'basic',
 ) -> bool:
     """
-    Return True if delivery should fire now for this user:
-      - current local HH:MM matches delivery_time
-      - no successful delivery recorded on today's local date
+    Return True if delivery should fire now for this user.
+    Delegates to notify_gate.should_notify — single source of truth.
     """
-    local_now  = _get_local_now(timezone_str)
-    local_time = local_now.strftime('%H:%M')
-    local_date = local_now.strftime('%Y-%m-%d')
-
-    if local_time != delivery_time:
-        return False
-
+    from notifications.notify_gate import should_notify
     from users.user_store import already_delivered_today
-    return not already_delivered_today(db_path, user_id, local_date)
+    fire, _ = should_notify(
+        db_path        = db_path,
+        user_id        = user_id,
+        tier           = tier,
+        delivery_time  = delivery_time,
+        timezone_str   = timezone_str,
+        dedup_fn       = already_delivered_today,
+        check_briefing_days = False,
+    )
+    return fire
 
 
 def _deliver_to_user(db_path: str, user_id: str, user_prefs: dict) -> None:
@@ -89,7 +92,8 @@ def _deliver_to_user(db_path: str, user_id: str, user_prefs: dict) -> None:
         return
 
     try:
-        snapshot = curate_snapshot(user_id, db_path)
+        tier     = user_prefs.get('tier', 'basic')
+        snapshot = curate_snapshot(user_id, db_path, tier=tier)
         message  = format_snapshot(snapshot)
 
         notifier = TelegramNotifier()
@@ -186,7 +190,8 @@ class DeliveryScheduler:
             conn = sqlite3.connect(self._db_path, timeout=10)
             ensure_user_tables(conn)
             rows = conn.execute(
-                """SELECT user_id, telegram_chat_id, delivery_time, timezone
+                """SELECT user_id, telegram_chat_id, delivery_time, timezone,
+                          COALESCE(tier, 'basic')
                    FROM user_preferences
                    WHERE onboarding_complete = 1
                      AND telegram_chat_id IS NOT NULL"""
@@ -196,14 +201,15 @@ class DeliveryScheduler:
             _log.error('DeliveryScheduler: failed to load users — %s', exc)
             return
 
-        for user_id, chat_id, delivery_time, tz_str in rows:
+        for user_id, chat_id, delivery_time, tz_str, _tier in rows:
             try:
-                if _should_deliver(self._db_path, user_id, delivery_time, tz_str or 'UTC'):
+                if _should_deliver(self._db_path, user_id, delivery_time, tz_str or 'UTC', tier=_tier):
                     prefs = {
                         'user_id':          user_id,
                         'telegram_chat_id': chat_id,
                         'delivery_time':    delivery_time,
                         'timezone':         tz_str or 'UTC',
+                        'tier':             _tier,
                     }
                     _deliver_to_user(self._db_path, user_id, prefs)
             except Exception as exc:

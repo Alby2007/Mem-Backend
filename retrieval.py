@@ -16,9 +16,12 @@ Zero-LLM, pure Python.
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 from typing import List, Tuple, Dict
+
+_logger = logging.getLogger(__name__)
 
 try:
     from knowledge.authority import effective_score as _effective_score
@@ -31,6 +34,12 @@ try:
     HAS_GRAPH_RETRIEVAL = True
 except ImportError:
     HAS_GRAPH_RETRIEVAL = False
+
+try:
+    from knowledge.decay import decay_confidence as _decay_confidence
+    HAS_DECAY = True
+except ImportError:
+    HAS_DECAY = False
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -86,12 +95,32 @@ _KEYWORD_PREDICATE_BOOST: dict = {
     'inflation':   ('inflation_environment', 'dominant_driver', 'regime_label'),
     'rate':        ('central_bank_stance', 'dominant_driver'),
     'yield':       ('risk_factor', 'dominant_driver'),
-    'sector':      ('sector',),
+    'sector':      ('sector', 'sector_momentum', 'sector_tailwind', 'sector_rotation_leader', 'sector_rotation_laggard', 'sector_bias'),
+    'rotation':    ('sector_rotation_leader', 'sector_rotation_laggard', 'sector_momentum', 'risk_appetite'),
+    'strongest':   ('sector_rotation_leader', 'sector_momentum', 'return_1m', 'signal_quality'),
+    'weakest':     ('sector_rotation_laggard', 'sector_momentum', 'return_1m'),
+    'energy':      ('sector_tailwind', 'supply_disruption_risk', 'geopolitical_risk_exposure', 'wti_crude', 'energy_regime'),
     'volatility':  ('volatility_regime', 'signal_quality'),
     'beta':        ('volatility_regime',),
     'momentum':    ('signal_direction', 'price_regime', 'signal_quality', 'return_1m', 'return_3m'),
     'extended':    ('signal_quality', 'price_regime'),
-    'conflict':    ('signal_quality', 'macro_confirmation'),
+    'conflict':    ('signal_quality', 'macro_confirmation', 'us_russia_score', 'russia_ukraine_score', 'us_china_score'),
+    'geopolit':   ('us_russia_score', 'russia_ukraine_score', 'us_china_score', 'china_taiwan_score', 'us_iran_score', 'europe_east_risk', 'asia_east_risk', 'middle_east_risk', 'geopolitical_risk_exposure', 'supply_disruption_risk'),
+    'tension':    ('us_russia_score', 'russia_ukraine_score', 'us_china_score', 'china_taiwan_score', 'us_iran_score', 'us_russia_trend', 'russia_ukraine_trend', 'geopolitical_risk_exposure'),
+    'geo':        ('geopolitical_risk_exposure', 'supply_disruption_risk', 'middle_east_risk', 'us_iran_score', 'latam_risk'),
+    'exposure':   ('geopolitical_risk_exposure', 'supply_disruption_risk', 'risk_factor', 'sector_tailwind'),
+    'supply':     ('supply_disruption_risk', 'wti_crude', 'brent_crude', 'inventory_level', 'supply_trend', 'energy_regime'),
+    'world':      ('us_russia_score', 'russia_ukraine_score', 'us_china_score', 'europe_east_risk', 'asia_east_risk', 'middle_east_risk', 'latam_risk'),
+    'monitor':    ('us_russia_score', 'russia_ukraine_score', 'us_china_score', 'europe_east_risk', 'asia_east_risk', 'middle_east_risk'),
+    'russia':     ('us_russia_score', 'us_russia_trend', 'russia_ukraine_score', 'russia_ukraine_trend', 'europe_east_risk'),
+    'ukraine':    ('russia_ukraine_score', 'russia_ukraine_trend', 'europe_east_risk'),
+    'china':      ('us_china_score', 'us_china_trend', 'china_taiwan_score', 'asia_east_risk'),
+    'taiwan':     ('china_taiwan_score', 'china_taiwan_trend', 'asia_east_risk'),
+    'iran':       ('us_iran_score', 'us_iran_trend', 'middle_east_risk'),
+    'middle east':('us_iran_score', 'middle_east_risk'),
+    'unrest':     ('protest_intensity', 'conflict_events', 'unrest_level', 'europe_east_risk', 'middle_east_risk'),
+    'seismic':    ('indonesia_mining_seismic_activity', 'philippines_nickel_seismic_activity'),
+    'earthquake': ('indonesia_mining_seismic_activity', 'philippines_nickel_seismic_activity'),
     'conviction':  ('conviction_tier', 'signal_quality', 'upside_pct', 'macro_confirmation', 'thesis_risk_level'),
     'size':        ('position_size_pct', 'conviction_tier', 'volatility_scalar'),
     'sizing':      ('position_size_pct', 'conviction_tier', 'volatility_scalar'),
@@ -118,7 +147,195 @@ _KEYWORD_PREDICATE_BOOST: dict = {
     'outperform':  ('return_vs_spy_1m', 'return_vs_spy_3m'),
     'vol':         ('volatility_30d', 'volatility_90d', 'volatility_regime'),
     'trend':       ('return_1m', 'return_3m', 'price_regime', 'signal_direction'),
+    'greek':       ('delta_atm', 'gamma_atm', 'theta_atm', 'vega_atm', 'iv_true', 'put_call_oi_ratio', 'gamma_exposure'),
+    'greeks':      ('delta_atm', 'gamma_atm', 'theta_atm', 'vega_atm', 'iv_true', 'put_call_oi_ratio', 'gamma_exposure'),
+    'delta':       ('delta_atm', 'gamma_atm', 'iv_true'),
+    'gamma':       ('gamma_atm', 'gamma_exposure', 'iv_true'),
+    'theta':       ('theta_atm', 'iv_true'),
+    'vega':        ('vega_atm', 'iv_true'),
+    'implied':     ('iv_true', 'put_call_oi_ratio'),
+    'iv':          ('iv_true', 'put_call_oi_ratio'),
+    'options':     ('delta_atm', 'gamma_atm', 'theta_atm', 'vega_atm', 'iv_true', 'put_call_oi_ratio', 'gamma_exposure', 'iv_rank'),
+    'put':         ('put_call_oi_ratio', 'iv_true', 'delta_atm'),
+    'call':        ('put_call_oi_ratio', 'iv_true', 'delta_atm'),
+    'gex':         ('gamma_exposure', 'gamma_atm', 'iv_true'),
+    'dealer':      ('gamma_exposure', 'gamma_atm'),
+    'pin':         ('gamma_exposure', 'gamma_atm'),
+    'skew':        ('put_call_oi_ratio', 'iv_true', 'iv_skew_ratio'),
+    'hedge':       ('gamma_exposure', 'delta_atm', 'put_call_oi_ratio'),
+    'yield':      ('yield_curve_regime', 'yield_curve_slope', 'yield_curve_tlt_shy', 'tlt_1d_change_pct', 'long_end_stress'),
+    'yields':     ('yield_curve_regime', 'yield_curve_slope', 'yield_curve_tlt_shy', 'tlt_1d_change_pct', 'long_end_stress'),
+    'treasury':   ('yield_curve_regime', 'yield_curve_slope', 'tlt_close', 'ief_close', 'shy_close', 'long_end_stress'),
+    'curve':      ('yield_curve_regime', 'yield_curve_slope', 'yield_curve_tlt_shy', 'long_end_stress'),
+    'inversion':  ('yield_curve_slope', 'yield_curve_regime', 'yield_curve_tlt_shy'),
+    'steepen':    ('yield_curve_slope', 'yield_curve_regime'),
+    'flatten':    ('yield_curve_slope', 'yield_curve_regime'),
+    'rates':      ('yield_curve_regime', 'yield_curve_slope', 'tlt_1d_change_pct', 'long_end_stress', 'central_bank_stance'),
+    'tlt':        ('tlt_close', 'tlt_1d_change_pct', 'yield_curve_regime', 'long_end_stress'),
+    'bonds':      ('tlt_close', 'ief_close', 'yield_curve_regime', 'yield_curve_slope', 'long_end_stress'),
+    'short':       ('short_interest', 'days_to_cover', 'short_squeeze_risk', 'short_vs_signal'),
+    'shorts':      ('short_interest', 'days_to_cover', 'short_squeeze_risk', 'short_vs_signal'),
+    'squeeze':     ('short_squeeze_risk', 'days_to_cover', 'short_interest'),
+    'borrow':      ('short_interest', 'days_to_cover', 'short_squeeze_risk'),
+    'finra':       ('short_interest', 'days_to_cover', 'short_squeeze_risk', 'short_vs_signal'),
+    # Historical state matching — pulls state-vector atoms when user asks about precedents
+    'precedent':   ('pattern_type', 'regime_label', 'volatility_regime'),
+    'historical':  ('pattern_type', 'regime_label', 'volatility_regime'),
+    'before':      ('pattern_type', 'regime_label'),
+    'similar':     ('pattern_type', 'regime_label', 'volatility_regime'),
+    'last time':   ('pattern_type', 'regime_label', 'volatility_regime'),
+    'happened':    ('pattern_type', 'regime_label', 'volatility_regime'),
 }
+
+# Common name / forex pair → canonical KB ticker alias map
+# Covers formal symbols, common names, broker platform names, and typo variants
+TICKER_ALIASES: dict = {
+    # ── Gold (GC=F = COMEX futures, USD/oz spot price ~$2,900) ─────────────
+    'XAUUSD':   'GC=F',
+    'XAUUSD=X': 'GC=F',
+    'XAU':      'GC=F',
+    'GOLD':     'GC=F',
+    'GOLDUSD':  'GC=F',
+    'USDXAU':   'GC=F',
+    'AXUUSD':   'GC=F',   # transposition typo
+    'XAUUDS':   'GC=F',   # transposition typo
+    'XUAUSD':   'GC=F',   # transposition typo
+    'AUUSD':    'GC=F',   # partial
+    'GOLDX':    'GC=F',
+    'XGOLD':    'GC=F',
+    'GLD':      'GC=F',   # GLD ETF queries → actual spot price
+    # ── Silver (SI=F = COMEX futures, USD/oz) ──────────────────────────────
+    'XAGUSD':   'SI=F',
+    'XAGUSD=X': 'SI=F',
+    'XAG':      'SI=F',
+    'SILVER':   'SI=F',
+    'SILVERUSD':'SI=F',
+    'AGUUSD':   'SI=F',   # common typo / broker variant
+    'AGSUSD':   'SI=F',
+    'SILV':     'SI=F',
+    'SLV':      'SI=F',   # SLV ETF queries → actual spot price
+    # ── Oil / Energy (CL=F = WTI futures USD/bbl, BZ=F = Brent) ──────────
+    'OIL':      'CL=F',
+    'CRUDE':    'CL=F',
+    'CRUDEOIL': 'CL=F',
+    'WTI':      'CL=F',
+    'WTIOIL':   'CL=F',
+    'USOIL':    'CL=F',
+    'BRENT':    'BZ=F',
+    'BRENTOIL': 'BZ=F',
+    'UKOIL':    'BZ=F',
+    # ── UK Energy companies ───────────────────────────────────────────────
+    'SHELL':    'SHEL.L',
+    'SHELLPLC': 'SHEL.L',
+    'BP':       'BP.L',
+    'BPPLC':    'BP.L',
+    'SHEL':     'SHEL.L',
+    'RDSB':     'SHEL.L',
+    'RDSA':     'SHEL.L',
+    'CL':       'CL=F',
+    'CLF':      'CL=F',
+    'CL=F':     'CL=F',
+    'BZ=F':     'BZ=F',
+    'USO':      'CL=F',   # USO ETF queries → actual spot price
+    # ── Natural Gas (NG=F = Henry Hub futures, USD/MMBtu) ─────────────────
+    'NATGAS':   'NG=F',
+    'GAS':      'NG=F',
+    'NATURALGAS':'NG=F',
+    'NG':       'NG=F',
+    'NG=F':     'NG=F',
+    'UNG':      'NG=F',   # UNG ETF queries → actual spot price
+    # ── UK Indices ────────────────────────────────────────────────────────
+    'UK100':    '^FTSE',
+    'FTSE100':  '^FTSE',
+    'FTSE':     '^FTSE',
+    'UK250':    '^FTMC',
+    'FTSE250':  '^FTMC',
+    'FTMC':     '^FTMC',
+    # ── US Indices ────────────────────────────────────────────────────────
+    'US500':    '^GSPC',
+    'SP500':    '^GSPC',
+    'SPX':      '^GSPC',
+    'S&P':      '^GSPC',
+    'S&P500':   '^GSPC',
+    'SPY500':   '^GSPC',
+    'DOW':      '^DJI',
+    'DJIA':     '^DJI',
+    'DOW30':    '^DJI',
+    'US30':     '^DJI',
+    'NDX':      '^IXIC',
+    'NAS100':   '^IXIC',
+    'NASDAQ':   '^IXIC',
+    'NASDAQ100':'^IXIC',
+    'US100':    '^IXIC',
+    'TECH100':  '^IXIC',
+    'VIX':      '^VIX',
+    'VOLINDEX': '^VIX',
+    'FEARINDEX': '^VIX',
+    # ── Crypto ────────────────────────────────────────────────────────────
+    'BTC':       'BTC-USD',
+    'BITCOIN':   'BTC-USD',
+    'BTCUSD':    'BTC-USD',
+    'XBT':       'BTC-USD',
+    'ETH':       'ETH-USD',
+    'ETHEREUM':  'ETH-USD',
+    'ETHUSD':    'ETH-USD',
+    'ETHER':     'ETH-USD',
+    # ── FX ────────────────────────────────────────────────────────────────
+    'GBP':       'GBP=X',
+    'GBPUSD':    'GBP=X',
+    'GBPUSD=X':  'GBP=X',
+    'CABLE':     'GBP=X',
+    'STERLING':  'GBP=X',
+    'POUND':     'GBP=X',
+    'EUR':       'EURUSD=X',
+    'EURUSD':    'EURUSD=X',
+    'EURO':      'EURUSD=X',
+    'USDJPY':    'JPY=X',
+    'JPY':       'JPY=X',
+    'YEN':       'JPY=X',
+    'DXY':       'UUP',
+    'DOLLAR':    'UUP',
+    'USINDEX':   'UUP',
+    # ── Bonds / Rates ─────────────────────────────────────────────────────
+    'US10Y':     'TLT',
+    'TNX':       'TLT',
+    'BONDS':     'TLT',
+    'TREASURIES':'TLT',
+    '10YEAR':    'TLT',
+    'GILT':      'TLT',
+    'UK10Y':     'TLT',
+    # ── Commodities ───────────────────────────────────────────────────────
+    'COPPER':    'CPER',
+    'HG=F':      'CPER',
+    'WHEAT':     'WEAT',
+    'CORN':      'CORN',
+    'SOY':       'SOYB',
+    'SOYBEANS':  'SOYB',
+}
+
+# Word-level fuzzy aliases — matched against lowercase message text
+# Catches informal names and typos not caught by uppercase token extraction
+_FUZZY_TEXT_ALIASES: list = [
+    # (search_string_lower, canonical_ticker)
+    ('silver',      'SLV'),
+    ('gold',        'GLD'),
+    ('crude oil',   'USO'),
+    ('natural gas', 'UNG'),
+    ('bitcoin',     'BTC-USD'),
+    ('ethereum',    'ETH-USD'),
+    ('sterling',    'GBP=X'),
+    ('cable',       'GBP=X'),
+    ('ftse 100',    '^FTSE'),
+    ('ftse100',     '^FTSE'),
+    ('ftse 250',    '^FTMC'),
+    ('s&p 500',     '^GSPC'),
+    ('s&p500',      '^GSPC'),
+    ('nasdaq',      '^IXIC'),
+    ('dow jones',   '^DJI'),
+    ('vix',         '^VIX'),
+    ('copper',      'CPER'),
+    ('wheat',       'WEAT'),
+]
 
 _STOPWORDS = {
     'the', 'is', 'at', 'which', 'on', 'a', 'an', 'and', 'or', 'for',
@@ -148,9 +365,40 @@ def _extract_key_terms(message: str) -> List[str]:
 
 
 def _extract_tickers(message: str) -> List[str]:
-    """Extract uppercase ticker symbols from a message."""
-    candidates = re.findall(r'\b[A-Z]{2,5}\b', message)
-    return [t for t in candidates if t not in _UPPERCASE_STOPWORDS]
+    """
+    Extract ticker symbols from a message, expanding known aliases.
+    Two passes:
+      1. Uppercase token pass — finds explicit tickers and expands via TICKER_ALIASES
+      2. Fuzzy text pass — scans lowercase message for commodity/instrument names
+         via _FUZZY_TEXT_ALIASES (catches typos, informal names, multi-word phrases)
+    """
+    expanded: list = []
+    seen_t: set = set()
+
+    def _add(tick: str) -> None:
+        if tick and tick not in seen_t:
+            seen_t.add(tick)
+            expanded.append(tick)
+
+    # Pass 1: uppercase token extraction + alias expansion
+    candidates = re.findall(r'\b[A-Z0-9^][A-Z0-9^=/-]{1,9}\b', message)
+    for t in candidates:
+        if t in _UPPERCASE_STOPWORDS:
+            continue
+        canonical = TICKER_ALIASES.get(t, t)
+        if canonical != t:
+            _add(t)           # keep original so alias note fires in snippet
+            _add(canonical)
+        else:
+            _add(t)
+
+    # Pass 2: word-level fuzzy matching against lowercase message
+    msg_lower = message.lower()
+    for phrase, canonical in _FUZZY_TEXT_ALIASES:
+        if phrase in msg_lower and canonical not in seen_t:
+            _add(canonical)
+
+    return expanded
 
 
 def retrieve(
@@ -173,30 +421,51 @@ def retrieve(
     """
     seen: set = set()
     results: List[dict] = []
+    # Dedicated geo bucket: atoms added here are guaranteed to survive
+    # the confidence sort+truncation even when high-conf ticker atoms fill results.
+    geo_results: List[dict] = []
+    _geo_seen: set = set()
 
     def _normalise(r) -> dict | None:
         try:
             if hasattr(r, 'keys'):
+                keys = r.keys()
+                ts_raw = str(r['timestamp'] or '') if 'timestamp' in keys else ''
+                # Truncate to date portion only (2026-03-01T23:10:54... → 2026-03-01)
+                ts = ts_raw[:10] if ts_raw else ''
                 return {
                     'subject':    str(r['subject'] or '').strip(),
                     'predicate':  str(r['predicate'] or '').strip(),
                     'object':     str(r['object'] or '')[:300].strip(),
-                    'source':     str(r['source'] if 'source' in r.keys() else '').strip(),
-                    'confidence': float(r['confidence']) if 'confidence' in r.keys() else 0.5,
+                    'source':     str(r['source'] if 'source' in keys else '').strip(),
+                    'confidence': float(r['confidence']) if 'confidence' in keys else 0.5,
+                    'timestamp':  ts,
                 }
+            ts_raw = str(r[6]).strip() if len(r) > 6 else ''
             return {
                 'subject': str(r[0]).strip(), 'predicate': str(r[1]).strip(),
                 'object': str(r[2])[:300].strip(),
                 'source': str(r[3]).strip() if len(r) > 3 else '',
                 'confidence': float(r[4]) if len(r) > 4 else 0.5,
+                'timestamp':  ts_raw[:10] if ts_raw else '',
             }
         except Exception:
             return None
+
+    _RETRIEVAL_FAKE_SUBJECTS = frozenset([
+        'notreal99', 'fakeco', 'madeupticker', 'randomticker123',
+        'xyz corp', 'xyzco', 'fakecorp', 'testco', 'badticker', 'blobcorp99',
+        # Malformed on-demand fetch atoms stored with 'kb' as subject instead
+        # of the real ticker — these cause hallucinations for unknown tickers.
+        'kb',
+    ])
 
     def _add(rows):
         for r in rows:
             atom = _normalise(r)
             if not atom:
+                continue
+            if atom['subject'].lower() in _RETRIEVAL_FAKE_SUBJECTS:
                 continue
             key = (atom['subject'][:60], atom['predicate'], atom['object'][:60])
             if key not in seen and atom['predicate'] not in _NOISE_PREDICATES \
@@ -204,10 +473,36 @@ def retrieve(
                 seen.add(key)
                 results.append(atom)
 
+    def _add_geo(rows):
+        """Like _add but also registers atoms in geo_results so they survive truncation."""
+        for r in rows:
+            atom = _normalise(r)
+            if not atom:
+                continue
+            if atom['subject'].lower() in _RETRIEVAL_FAKE_SUBJECTS:
+                continue
+            key = (atom['subject'][:60], atom['predicate'], atom['object'][:60])
+            if atom['predicate'] not in _NOISE_PREDICATES \
+                    and atom['subject'] and atom['object']:
+                if key not in seen:
+                    seen.add(key)
+                    results.append(atom)
+                if key not in _geo_seen:
+                    _geo_seen.add(key)
+                    geo_results.append(atom)
+
     c = conn.cursor()
     msg_lower = message.lower()
     terms = _extract_key_terms(message)
     tickers = _extract_tickers(message)
+
+    # Track which aliases were resolved so the snippet can note them for the LLM
+    _raw_candidates = [t for t in re.findall(r'\b[A-Z0-9^][A-Z0-9^=-]{1,9}\b', message)
+                       if t not in _UPPERCASE_STOPWORDS]
+    _alias_notes = [
+        f"{raw} → {TICKER_ALIASES[raw]} (KB tracks this as {TICKER_ALIASES[raw]})"
+        for raw in _raw_candidates if raw in TICKER_ALIASES
+    ]
 
     # Expand limit dynamically for multi-ticker queries so pinned atoms
     # (4 per ticker) don't crowd out the context atoms.
@@ -221,18 +516,239 @@ def retrieve(
             if kw in term or term in kw:
                 boosted_predicates.update(preds)
 
+    # ── -1. Geo / World Monitor direct subject fetch ──────────────────────────
+    # Fires when the query contains geopolitical or world-monitor keywords.
+    # Fetches ALL atoms from the geo special subjects (gdelt_tension, acled_unrest,
+    # geo_exposure, ucdp_conflict, usgs_risk, usgs_seismic) unconditionally.
+    # These subjects are never returned by ticker/FTS lookup since they have no
+    # conventional ticker symbol.
+    _GEO_KEYWORDS = (
+        'geopolit', 'tension', 'conflict', 'world monitor', 'world',
+        'russia', 'ukraine', 'china', 'taiwan', 'iran', 'middle east',
+        'unrest', 'war', 'military', 'sanction', 'seismic', 'earthquake',
+        'bilateral', 'monitor', 'gdelt', 'acled', 'ucdp',
+        'venezuela', 'latam', 'asia', 'europe east', 'signal',
+        'global', 'international', 'macro', 'regime', 'tariff', 'trade war',
+        'defence', 'defense', 'nato', 'opec', 'energy crisis',
+    )
+    _GEO_SUBJECTS = (
+        'gdelt_tension', 'acled_unrest', 'geo_exposure',
+        'ucdp_conflict', 'usgs_risk', 'usgs_seismic',
+        'financial_news', 'global_macro', 'macro_regime',
+        'us_macro', 'fed', 'ecb',
+    )
+    _is_geo_query = any(kw in msg_lower for kw in _GEO_KEYWORDS)
+    _asked_entities: list = []   # populated inside if _is_geo_query block below
+    if _is_geo_query:
+        # Detect which specific geo entity the user asked about so we can
+        # prioritise atoms for THAT entity rather than dumping all geo atoms.
+        # This prevents "tell me about Russia" returning Iran headlines.
+        # object LIKE patterns (searches atom text content)
+        _GEO_ENTITY_MAP = {
+            'russia':      ['%russia%', '%russian%', '%kremlin%', '%moscow%'],
+            'ukraine':     ['%ukraine%', '%ukrainian%', '%kyiv%', '%zelensky%'],
+            'iran':        ['%iran%', '%iranian%', '%tehran%', '%irgc%'],
+            'israel':      ['%israel%', '%israeli%', '%idf%', '%jerusalem%'],
+            'gaza':        ['%gaza%', '%hamas%', '%palestine%', '%palestinian%'],
+            'china':       ['%china%', '%chinese%', '%beijing%', '%pla%'],
+            'taiwan':      ['%taiwan%', '%taiwanese%', '%taipei%'],
+            'north korea': ['%north korea%', '%dprk%', '%kim jong%'],
+            'pakistan':    ['%pakistan%', '%pakistani%', '%islamabad%'],
+            'afghanistan': ['%afghanistan%', '%taliban%', '%kabul%'],
+            'syria':       ['%syria%', '%syrian%', '%damascus%'],
+            'venezuela':   ['%venezuela%', '%venezuelan%', '%caracas%'],
+        }
+        # UCDP uses ISO-3 country codes as the subject field.
+        # GDELT uses compound predicates like 'russia_ukraine_score', 'us_iran_trend'.
+        # These are NOT matched by object LIKE — need separate lookups.
+        _GEO_ISO_MAP = {
+            'russia':      ['rus'],
+            'ukraine':     ['ukr'],
+            'iran':        ['irn'],
+            'israel':      ['isr'],
+            'gaza':        ['pse'],
+            'china':       ['chn'],
+            'taiwan':      ['twn'],
+            'north korea': ['prk'],
+            'pakistan':    ['pak'],
+            'afghanistan': ['afg'],
+            'syria':       ['syr'],
+            'venezuela':   ['ven'],
+        }
+        # predicate LIKE patterns (for GDELT compound predicates)
+        _GEO_PRED_MAP = {
+            'russia':      ['%russia%'],
+            'ukraine':     ['%ukraine%'],
+            'iran':        ['%iran%'],
+            'israel':      ['%israel%'],
+            'gaza':        ['%gaza%', '%palestine%'],
+            'china':       ['%china%'],
+            'taiwan':      ['%taiwan%'],
+            'north korea': ['%korea%', '%dprk%'],
+            'pakistan':    ['%pakistan%'],
+            'afghanistan': ['%afghanistan%', '%afghan%'],
+            'syria':       ['%syria%'],
+            'venezuela':   ['%venezuela%'],
+        }
+        _asked_entities = [
+            entity for entity, _ in _GEO_ENTITY_MAP.items()
+            if entity in msg_lower
+        ]
+
+        # Step 1: if a specific entity was named, fetch entity-specific atoms first
+        # with a higher slot budget so they dominate the context block.
+        if _asked_entities:
+            for _entity in _asked_entities[:2]:  # cap at 2 entities
+                # 1a. Search object text for country name variants
+                _entity_patterns = _GEO_ENTITY_MAP[_entity]
+                for _pat in _entity_patterns[:3]:
+                    try:
+                        c.execute(
+                            "SELECT subject, predicate, object, source, confidence, metadata, timestamp "
+                            "FROM facts WHERE LOWER(object) LIKE ? "
+                            "AND predicate IN ('key_finding','headline','summary','event',"
+                            "'catalyst','risk_factor','conflict_status','parties_involved',"
+                            "'location','severity','escalation') "
+                            "ORDER BY timestamp DESC, confidence DESC LIMIT 30",
+                            (_pat,)
+                        )
+                        _add_geo(c.fetchall())
+                    except Exception:
+                        pass
+                # 1b. UCDP ISO code: stored as predicate on ucdp_conflict subject
+                # Schema: subject='ucdp_conflict', predicate='ukr', object='active_war'
+                for _iso in _GEO_ISO_MAP.get(_entity, []):
+                    try:
+                        c.execute(
+                            "SELECT subject, predicate, object, source, confidence, metadata, timestamp "
+                            "FROM facts WHERE subject='ucdp_conflict' AND LOWER(predicate) = ? "
+                            "ORDER BY confidence DESC LIMIT 10",
+                            (_iso,)
+                        )
+                        _add_geo(c.fetchall())
+                    except Exception:
+                        pass
+                # 1c. GDELT predicate names: 'russia_ukraine_score', 'us_iran_trend' etc.
+                for _ppat in _GEO_PRED_MAP.get(_entity, []):
+                    try:
+                        c.execute(
+                            "SELECT subject, predicate, object, source, confidence, metadata, timestamp "
+                            "FROM facts WHERE LOWER(predicate) LIKE ? "
+                            "ORDER BY confidence DESC LIMIT 10",
+                            (_ppat,)
+                        )
+                        _add_geo(c.fetchall())
+                    except Exception:
+                        pass
+                # 1d. Subject field name search (catches any subject named after the country)
+                # 1e. World-news sources filtered to entity — bbc_world, al_jazeera, defense_news
+                try:
+                    c.execute(
+                        "SELECT subject, predicate, object, source, confidence, metadata, timestamp "
+                        "FROM facts WHERE source IN ("
+                        "'news_wire_bbc_world','news_wire_al_jazeera','news_wire_defense_news',"
+                        "'news_wire_reuters','news_wire_ap','news_wire_ft_home') "
+                        "AND LOWER(object) LIKE ? "
+                        "ORDER BY timestamp DESC, confidence DESC LIMIT 30",
+                        (f'%{_entity}%',)
+                    )
+                    _add_geo(c.fetchall())
+                except Exception:
+                    pass
+
+        # Step 2: geo subject atoms (gdelt_tension, acled_unrest etc.)
+        # If a specific entity was named, filter to atoms mentioning that entity.
+        # Otherwise fetch all geo subject atoms as before.
+        try:
+            _geo_ph = ','.join('?' * len(_GEO_SUBJECTS))
+            if _asked_entities:
+                # Try entity-filtered fetch first
+                for _entity in _asked_entities[:2]:
+                    c.execute(
+                        f"SELECT subject, predicate, object, source, confidence, metadata, timestamp "
+                        f"FROM facts WHERE subject IN ({_geo_ph}) "
+                        f"AND LOWER(object) LIKE ? "
+                        f"ORDER BY timestamp DESC, confidence DESC LIMIT 40",
+                        (*_GEO_SUBJECTS, f'%{_entity}%')
+                    )
+                    _add_geo(c.fetchall())
+                # Also fetch unfiltered geo subject atoms to fill any gaps
+                c.execute(
+                    f"SELECT subject, predicate, object, source, confidence, metadata, timestamp "
+                    f"FROM facts WHERE subject IN ({_geo_ph}) "
+                    f"ORDER BY timestamp DESC, confidence DESC LIMIT 40",
+                    _GEO_SUBJECTS,
+                )
+                _add_geo(c.fetchall())
+            else:
+                c.execute(
+                    f"SELECT subject, predicate, object, source, confidence "
+                    f"FROM facts WHERE subject IN ({_geo_ph}) "
+                    f"ORDER BY confidence DESC LIMIT 40",
+                    _GEO_SUBJECTS,
+                )
+                _add(c.fetchall())
+        except Exception:
+            pass
+
+        # Step 3: recent news_wire headlines — filtered to asked entity if present
+        try:
+            if _asked_entities:
+                for _entity in _asked_entities[:2]:
+                    c.execute("""
+                        SELECT subject, predicate, object, source, confidence, metadata, timestamp
+                        FROM facts
+                        WHERE (
+                            source LIKE 'news_wire_%'
+                            OR source IN (
+                                'geopolitical_data_gdelt','geopolitical_data_acled',
+                                'geopolitical_data_ucdp'
+                            )
+                        )
+                        AND predicate IN ('key_finding','headline','summary','event','catalyst','risk_factor')
+                        AND LOWER(object) LIKE ?
+                        ORDER BY timestamp DESC, confidence DESC
+                        LIMIT 40
+                    """, (f'%{_entity}%',))
+                    _add_geo(c.fetchall())
+            # Always fetch recent headlines as a fallback (fills remaining slots)
+            c.execute("""
+                SELECT subject, predicate, object, source, confidence, metadata, timestamp
+                FROM facts
+                WHERE (
+                    source LIKE 'news_wire_%'
+                    OR source IN (
+                        'geopolitical_data_gdelt','geopolitical_data_acled',
+                        'geopolitical_data_ucdp'
+                    )
+                )
+                AND predicate IN ('key_finding','headline','summary','event','catalyst','risk_factor')
+                ORDER BY timestamp DESC, confidence DESC
+                LIMIT 20
+            """)
+            _add(c.fetchall())
+        except Exception:
+            pass
+
     # ── 0. Graph-relational context (PageRank + clustering + BFS paths) ───────
     # Fires on relational/explanatory queries and when no explicit tickers present.
     # Fetches a broad atom set for the topic then runs graph analysis over it.
+    # SUPPRESSED for specific geo entity queries: the graph fetches broad atoms
+    # by term and Iran-heavy atoms dominate PageRank, crowding out entity-specific
+    # geo atoms retrieved in step -1. Geo queries get their own dedicated snippet.
     graph_snippet: str = ''
     is_graph_query = any(kw in msg_lower for kw in _GRAPH_TRAVERSAL_KW)
-    if HAS_GRAPH_RETRIEVAL and (is_graph_query or (not tickers and terms)):
+    _suppress_graph = _is_geo_query and bool(_asked_entities)
+    if HAS_GRAPH_RETRIEVAL and (is_graph_query or (not tickers and terms)) and not _suppress_graph:
         try:
             # Broad fetch: all atoms for the first two key terms, up to 200
+            # Include confidence_effective + timestamp so graph node importance
+            # uses decay-adjusted scores (recency weight γ in importance formula).
             graph_atoms: list = []
             for term in terms[:2]:
                 c.execute("""
-                    SELECT subject, predicate, object, source, confidence
+                    SELECT subject, predicate, object, source, confidence,
+                           confidence_effective, timestamp
                     FROM facts
                     WHERE (LOWER(subject) LIKE ? OR LOWER(object) LIKE ?)
                     AND predicate NOT IN ('source_code','has_title','has_section','has_content')
@@ -240,11 +756,13 @@ def retrieve(
                 """, (f'%{term}%', f'%{term}%'))
                 for r in c.fetchall():
                     graph_atoms.append({
-                        'subject':    str(r[0]).strip(),
-                        'predicate':  str(r[1]).strip(),
-                        'object':     str(r[2])[:200].strip(),
-                        'source':     str(r[3]).strip() if r[3] else '',
-                        'confidence': float(r[4]) if r[4] else 0.5,
+                        'subject':              str(r[0]).strip(),
+                        'predicate':            str(r[1]).strip(),
+                        'object':               str(r[2])[:200].strip(),
+                        'source':               str(r[3]).strip() if r[3] else '',
+                        'confidence':           float(r[4]) if r[4] else 0.5,
+                        'confidence_effective': float(r[5]) if r[5] else None,
+                        'timestamp':            str(r[6])[:10] if r[6] else '',
                     })
             # Deduplicate
             seen_ga: set = set()
@@ -266,8 +784,8 @@ def retrieve(
     # Without this, multi-ticker queries (e.g. "rank AAPL MSFT GOOGL AMZN
     # NVDA META by upside") exhaust the 30-atom limit before all tickers
     # get their price/target atoms, leaving the LLM with gaps.
-    _PINNED_PREDICATES = (
-        'last_price', 'price_target', 'signal_direction', 'earnings_quality',
+    _PINNED_PREDICATES_BASE = (
+        'last_price', 'currency', 'price_target', 'signal_direction', 'earnings_quality',
         'signal_quality', 'macro_confirmation', 'price_regime', 'upside_pct',
         'return_1m', 'return_3m', 'return_6m', 'return_1y',
         'volatility_30d', 'volatility_90d', 'drawdown_from_52w_high',
@@ -275,16 +793,30 @@ def retrieve(
         'invalidation_price', 'invalidation_distance', 'thesis_risk_level',
         'conviction_tier', 'volatility_scalar', 'position_size_pct',
     )
-    _pin_ph = ','.join('?' * len(_PINNED_PREDICATES))
+    _PINNED_PREDICATES_GREEKS = (
+        'delta_atm', 'gamma_atm', 'theta_atm', 'vega_atm',
+        'iv_true', 'put_call_oi_ratio', 'gamma_exposure',
+    )
+    # Tickers covered by the Polygon options adapter (US single-name equities + SPY).
+    # Greeks predicates are only pinned for these — FTSE / smaller-cap tickers not
+    # in this set have no options atoms and would waste query slots on empty rows.
+    _OPTIONS_COVERED = frozenset({
+        'COIN', 'HOOD', 'MSTR', 'PLTR', 'NVDA',
+        'AMZN', 'META', 'GOOGL', 'AAPL', 'MSFT', 'MA', 'SPY',
+    })
     for ticker in tickers:
         try:
+            pinned = list(_PINNED_PREDICATES_BASE)
+            if ticker.upper() in _OPTIONS_COVERED:
+                pinned = pinned + list(_PINNED_PREDICATES_GREEKS)
+            _pin_ph = ','.join('?' * len(pinned))
             c.execute(f"""
                 SELECT subject, predicate, object, source, confidence
                 FROM facts
                 WHERE LOWER(subject) = ?
                 AND predicate IN ({_pin_ph})
                 ORDER BY confidence DESC
-            """, (ticker.lower(), *_PINNED_PREDICATES))
+            """, (ticker.lower(), *pinned))
             _add(c.fetchall())
         except Exception:
             pass
@@ -306,7 +838,10 @@ def retrieve(
     # Skip FTS when explicit tickers + intent keywords are both present —
     # the boost (step 3) gives more precise results and FTS would flood seen-set
     # with low-value sector/price atoms before price_target atoms get added.
-    use_fts = not (tickers and boosted_predicates)
+    # Skip FTS when explicit tickers are present — generic term matching
+    # floods seen-set with unrelated atoms (e.g. 'market' matches market_cap_tier
+    # for every equity, burying the pinned GLD/SLV atoms we just fetched).
+    use_fts = not tickers
     if use_fts and terms:
         fts_query = ' OR '.join(terms[:6])
         try:
@@ -476,8 +1011,50 @@ def retrieve(
         except Exception:
             pass
 
-    if not results:
+    if not results and not geo_results:
         return '', []
+
+    # ── Merge geo_results at the front before confidence sort ─────────────────
+    # geo_results is populated by the entity-specific geo steps and is kept
+    # separate from results so high-confidence ticker atoms (conf=0.95) can't
+    # displace lower-confidence geo atoms (conf=0.5-0.7) during sort+truncation.
+    if geo_results:
+        # geo_results atoms are already in results (added by _add_geo).
+        # Reorder results so geo atoms come first, before the confidence sort,
+        # so they can't be truncated away by high-confidence ticker atoms.
+        _geo_keys = {(a['subject'][:60], a['predicate'], a['object'][:60]) for a in geo_results}
+        _geo_first = [a for a in results if (a['subject'][:60], a['predicate'], a['object'][:60]) in _geo_keys]
+        _rest_only  = [a for a in results if (a['subject'][:60], a['predicate'], a['object'][:60]) not in _geo_keys]
+        results = _geo_first + _rest_only
+
+    # ── Pin geo entity atoms to front before confidence sort ──────────────────
+    # For geo queries, entity-specific atoms (UCDP, GDELT, news about Russia/Ukraine
+    # etc.) have confidence ~0.5-0.7 and get sorted out by high-confidence ticker
+    # atoms (invalidation_distance conf=0.95). Pin them first so they survive truncation.
+    if _is_geo_query and _asked_entities:
+        _GEO_SRC_PREFIXES = (
+            'gdelt_tension', 'acled_unrest', 'ucdp_conflict', 'geo_exposure',
+            'geopolitical_data_', 'news_wire_',
+        )
+        _GEO_SUBJ_SET = frozenset({
+            'gdelt_tension', 'acled_unrest', 'ucdp_conflict', 'usgs_risk',
+        })
+        def _is_entity_geo_atom(a: dict) -> bool:
+            s = a.get('source', '')
+            subj = a.get('subject', '')
+            pred = a.get('predicate', '')
+            obj = a.get('object', '').lower()
+            if any(s.startswith(p) for p in _GEO_SRC_PREFIXES):
+                return True
+            if subj in _GEO_SUBJ_SET:
+                return True
+            for _ent in _asked_entities:
+                if _ent in obj or _ent in subj:
+                    return True
+            return False
+        _pinned_geo = [a for a in results if _is_entity_geo_atom(a)]
+        _rest = [a for a in results if not _is_entity_geo_atom(a)]
+        results = _pinned_geo + _rest
 
     # ── Re-rank by epistemic strength ─────────────────────────────────────────
     # Interpretive derived predicates get a rank boost so they survive the
@@ -491,8 +1068,14 @@ def retrieve(
         'price_target', 'signal_confidence',
     })
 
+    # Keys of geo-pinned atoms — these get a large rank boost to survive truncation
+    _geo_rank_keys = {(a['subject'][:60], a['predicate'], a['object'][:60]) for a in geo_results}
+
     def _rank_key(atom: dict) -> float:
         base = _effective_score(atom) if HAS_AUTHORITY else atom.get('confidence', 0.5)
+        # Geo entity atoms must beat all ticker atoms (invalidation_distance tops at ~1.10)
+        if _geo_rank_keys and (atom['subject'][:60], atom['predicate'], atom['object'][:60]) in _geo_rank_keys:
+            return base + 2.0
         if atom.get('predicate') in _INTERPRETIVE_PREDICATES:
             return base + 0.15   # lift interpretive atoms above raw data
         return base
@@ -505,7 +1088,52 @@ def retrieve(
     else:
         results.sort(key=lambda a: a.get('confidence', 0.5), reverse=True)
 
-    results = results[:limit]
+    # Geo entity queries get a larger atom budget so geo atoms don't compete
+    # for the same 30 slots as ticker/macro atoms.
+    _effective_limit = 60 if (_is_geo_query and _asked_entities) else limit
+    results = results[:_effective_limit]
+
+    # ── Pin macro regime atoms for macro/regime/yield queries ─────────────────
+    # These predicates are always relevant to macro queries but have lower
+    # confidence than ticker atoms and get squeezed out of results[:limit].
+    # When the query contains macro keywords, fetch them explicitly and pin
+    # them at the front of results so the LLM always sees regime context.
+    _ALWAYS_PINNED = frozenset([
+        'market_regime',
+        'yield_curve_regime',
+        'yield_curve_slope',
+        'central_bank_stance',
+        'fed_funds_rate',
+    ])
+    _MACRO_KWS = (
+        'macro', 'regime', 'yield', 'rate', 'fed', 'fomc', 'bond',
+        'curve', 'steepen', 'flatten', 'market', 'economy', 'inflation',
+        'interest rate', 'monetary', 'what should', 'positioning',
+    )
+    _is_macro_query = any(kw in msg_lower for kw in _MACRO_KWS)
+    if _is_macro_query:
+        try:
+            pin_ph = ','.join('?' * len(_ALWAYS_PINNED))
+            c.execute(f"""
+                SELECT subject, predicate, object, source, confidence, metadata, timestamp
+                FROM facts
+                WHERE predicate IN ({pin_ph})
+                ORDER BY confidence DESC LIMIT 10
+            """, tuple(_ALWAYS_PINNED))
+            _pinned_macro = []
+            for r in c.fetchall():
+                atom = _normalise(r)
+                if not atom:
+                    continue
+                key = (atom['subject'][:60], atom['predicate'], atom['object'][:60])
+                if key not in seen:
+                    seen.add(key)
+                    _pinned_macro.append(atom)
+            if _pinned_macro:
+                results = _pinned_macro + results
+        except Exception:
+            pass
+
 
     # ── Apply adaptation nudges ────────────────────────────────────────────────
     if nudges is not None:
@@ -569,13 +1197,108 @@ def retrieve(
         except Exception:
             pass
 
+    # ── Inline decay multiplier — re-rank by effective confidence ─────────────
+    # Applies temporal decay at query time so stale atoms lose rank even when
+    # confidence_effective hasn't been recomputed by the background DecayWorker.
+    # Uses pre-computed confidence_effective if present; otherwise computes on-the-fly.
+    if HAS_DECAY:
+        _now = None  # lazily imported datetime.now inside _decay_confidence
+        def _eff_conf(atom: dict) -> float:
+            ce = atom.get('confidence_effective')
+            if ce is not None:
+                return float(ce)
+            return _decay_confidence(
+                base_confidence=atom.get('confidence', 0.5),
+                source=atom.get('source', ''),
+                timestamp=atom.get('timestamp'),
+            )
+        results.sort(key=_eff_conf, reverse=True)
+
+    # ── Prioritise named-ticker atoms, demote unrelated ones ──────────────────
+    # When explicit tickers are present, sort results so those atoms come first.
+    # Unrelated atoms (different subject) are kept only if space remains.
+    if tickers:
+        ticker_set_lower = {t.lower() for t in tickers}
+        _ALWAYS_KEEP_PREDICATES = frozenset([
+            'market_regime', 'yield_curve_regime', 'yield_curve_slope',
+            'central_bank_stance', 'fed_funds_rate',
+        ])
+        primary   = [r for r in results if r['subject'].lower() in ticker_set_lower]
+        # Macro regime atoms are always kept — never capped by ticker prioritisation
+        macro_pinned = [r for r in results
+                        if r['subject'].lower() not in ticker_set_lower
+                        and r['predicate'] in _ALWAYS_KEEP_PREDICATES]
+        secondary = [r for r in results
+                     if r['subject'].lower() not in ticker_set_lower
+                     and r['predicate'] not in _ALWAYS_KEEP_PREDICATES]
+        # Only include other secondary (unrelated) atoms if primary set is thin
+        secondary_cap = max(0, 8 - len(primary))
+        results = primary + macro_pinned + secondary[:secondary_cap]
+
     # ── Format output ──────────────────────────────────────────────────────────
     lines = ['=== TRADING KNOWLEDGE CONTEXT ===']
+    if _alias_notes:
+        for note in _alias_notes:
+            raw_sym = note.split('→')[0].strip()
+            kb_sym  = note.split('(KB tracks this as ')[1].rstrip(')')
+            lines.append(
+                f"INSTRUCTION: '{raw_sym}' is an alias. "
+                f"The KB data below (subject='{kb_sym.lower()}') IS the data for {raw_sym}. "
+                f"Use it directly. Do NOT say you have no data for {raw_sym}."
+            )
 
-    signals, invalidation, quality, theses, macro, research, other = [], [], [], [], [], [], []
+    _HIST_PREDICATES = frozenset({
+        'return_1w', 'return_1m', 'return_3m', 'return_6m', 'return_1y',
+        'volatility_30d', 'volatility_90d', 'drawdown_from_52w_high',
+        'return_vs_spy_1m', 'return_vs_spy_3m', 'avg_volume_30d',
+        'high_52w', 'low_52w', 'price_6m_ago',
+    })
+    _GEO_SOURCES = frozenset({
+        'gdelt_tension', 'acled_unrest', 'ucdp_conflict', 'geo_exposure',
+        'geopolitical_data_gdelt', 'geopolitical_data_acled', 'geopolitical_data_ucdp',
+    })
+    _GEO_SUBJECTS = frozenset({
+        'gdelt_tension', 'acled_unrest', 'ucdp_conflict', 'usgs_risk', 'usgs_seismic',
+    })
+    _GEO_PREDICATES = frozenset({
+        'headline', 'summary', 'event', 'conflict_status', 'event_type',
+        'parties_involved', 'location', 'severity', 'escalation', 'phase',
+        'historical_context', 'background', 'cause', 'fatality_estimate',
+        'territorial_control', 'diplomatic_status',
+    })
+    # GDELT stores tension scores as compound predicates e.g. russia_ukraine_score,
+    # us_iran_trend, china_taiwan_score. Route these to geo, not other.
+    _GDELT_SCORE_SUFFIXES = ('_score', '_trend', '_risk')
+    _OPTIONS_GREEKS_PREDICATES = frozenset({
+        'delta_atm', 'gamma_atm', 'theta_atm', 'vega_atm',
+        'iv_true', 'put_call_oi_ratio', 'gamma_exposure',
+        'iv_rank', 'iv_skew_ratio', 'iv_skew_25d',
+    })
+    _YIELD_CURVE_PREDICATES = frozenset({
+        'tlt_close', 'ief_close', 'shy_close',
+        'tlt_1d_change_pct', 'ief_1d_change_pct', 'shy_1d_change_pct',
+        'yield_curve_slope', 'yield_curve_regime', 'yield_curve_tlt_shy',
+        'long_end_stress', 'long_end_stress_level',
+    })
+    _SHORT_INTEREST_PREDICATES = frozenset({
+        'short_interest', 'days_to_cover',
+        'short_squeeze_risk', 'short_vs_signal',
+    })
+
+    signals, invalidation, quality, theses, macro, research, historical, geo, options_greeks, yield_curve, short_interest, other = [], [], [], [], [], [], [], [], [], [], [], []
     for r in results:
         pred = r['predicate']
         src = r['source']
+        subj = r['subject']
+        # Geo routing: check source, subject, predicate, and GDELT compound predicates
+        # BEFORE research bucket so key_finding/catalyst from geo sources go here.
+        _is_geo_src = (
+            any(src.startswith(gs) for gs in _GEO_SOURCES)
+            or src.startswith('news_wire_')
+            or subj in _GEO_SUBJECTS
+            or src.startswith('geopolitical_data_')
+        )
+        _is_gdelt_score = any(pred.endswith(sfx) for sfx in _GDELT_SCORE_SUFFIXES)
         if pred in ('invalidation_price', 'invalidation_distance', 'thesis_risk_level'):
             invalidation.append(r)
         elif pred in ('conviction_tier', 'volatility_scalar', 'position_size_pct'):
@@ -584,14 +1307,27 @@ def retrieve(
                       'upside_pct', 'signal_direction', 'signal_confidence'):
             quality.append(r)
         elif pred in ('price_target', 'entry_condition', 'exit_condition',
-                      'invalidation_condition', 'last_price'):
+                      'invalidation_condition', 'last_price', 'currency'):
             signals.append(r)
         elif pred in ('premise', 'supporting_evidence', 'contradicting_evidence',
                       'risk_reward_ratio', 'position_sizing_note'):
             theses.append(r)
-        elif src.startswith('macro_data') or pred in ('regime_label', 'dominant_driver',
-                                                       'central_bank_stance', 'risk_on_off'):
+        elif src.startswith('macro_data') or pred in (
+                'regime_label', 'dominant_driver', 'central_bank_stance', 'risk_on_off',
+                'market_regime', 'fed_funds_rate', 'yield_curve_regime', 'yield_curve_slope',
+            ):
             macro.append(r)
+        elif pred in _HIST_PREDICATES:
+            historical.append(r)
+        elif (_is_geo_src or pred in _GEO_PREDICATES or _is_gdelt_score
+              or (pred in ('key_finding', 'catalyst', 'risk_factor') and _is_geo_src)):
+            geo.append(r)
+        elif pred in _OPTIONS_GREEKS_PREDICATES:
+            options_greeks.append(r)
+        elif pred in _YIELD_CURVE_PREDICATES or src == 'yield_curve':
+            yield_curve.append(r)
+        elif pred in _SHORT_INTEREST_PREDICATES or src in ('finra_short_interest', 'alt_data_fca_shorts'):
+            short_interest.append(r)
         elif src.startswith('broker_research') or pred in ('rating', 'key_finding',
                                                             'compared_to_consensus'):
             research.append(r)
@@ -601,26 +1337,64 @@ def retrieve(
     def _fmt(r):
         return f"  {r['subject']} | {r['predicate']} | {r['object']}"
 
+    def _fmt_geo(r):
+        ts = r.get('timestamp', '')
+        date_tag = f" [{ts}]" if ts else ''
+        return f"  {r['subject']} | {r['predicate']} | {r['object']}{date_tag}"
+
     if invalidation:
-        lines.append('[Conviction, Sizing & Invalidation]')
+        lines.append('# conviction-sizing-invalidation')
         lines.extend(_fmt(r) for r in invalidation[:20])
     if quality:
-        lines.append('[Signal Quality & Regime]')
+        lines.append('# signal-quality-regime')
         lines.extend(_fmt(r) for r in quality[:15])
     if signals:
-        lines.append('[Signals & Positioning]')
+        lines.append('# signals-positioning')
         lines.extend(_fmt(r) for r in signals[:10])
     if theses:
-        lines.append('[Theses & Evidence]')
+        lines.append('# theses-evidence')
         lines.extend(_fmt(r) for r in theses[:8])
     if macro:
-        lines.append('[Macro / Regime]')
+        lines.append('# macro-regime')
         lines.extend(_fmt(r) for r in macro[:6])
     if research:
-        lines.append('[Research]')
+        lines.append('# research')
         lines.extend(_fmt(r) for r in research[:6])
+    if historical:
+        lines.append('# historical-performance')
+        lines.extend(_fmt(r) for r in historical[:12])
+    if geo:
+        lines.append('# geopolitical-news')
+        # For entity-specific geo queries, show entity-pinned atoms first,
+        # then remaining geo atoms. This prevents general financial news
+        # (social security, Netflix etc.) that happen to be news_wire_*
+        # from diluting the geo section with irrelevant content.
+        if _geo_rank_keys:
+            _geo_entity = [r for r in geo if (r['subject'][:60], r['predicate'], r['object'][:60]) in _geo_rank_keys]
+            _geo_other  = [r for r in geo if (r['subject'][:60], r['predicate'], r['object'][:60]) not in _geo_rank_keys]
+            lines.extend(_fmt_geo(r) for r in _geo_entity[:50])
+            if _geo_other:
+                lines.extend(_fmt_geo(r) for r in _geo_other[:10])
+        else:
+            lines.extend(_fmt_geo(r) for r in geo[:50])
+    if options_greeks:
+        lines.append('# options-greeks')
+        lines.extend(_fmt(r) for r in options_greeks[:15])
+    if yield_curve:
+        lines.append('# yield-curve')
+        lines.extend(_fmt(r) for r in yield_curve[:10])
+    if short_interest:
+        lines.append('# short-interest')
+        lines.extend(_fmt(r) for r in short_interest[:12])
     if other:
-        lines.append('[Other]')
+        # Log predicate distribution of other[] so we can detect important atom
+        # types that are falling through all bucket filters unexpectedly.
+        if _logger.isEnabledFor(__import__('logging').DEBUG):
+            _other_preds = {}
+            for _o in other:
+                _other_preds[_o['predicate']] = _other_preds.get(_o['predicate'], 0) + 1
+            _logger.debug('retrieval other[] predicates: %s', _other_preds)
+        lines.append('# context')
         lines.extend(_fmt(r) for r in other[:6])
 
     flat_snippet = '\n'.join(lines)
@@ -631,4 +1405,56 @@ def retrieve(
     else:
         full_snippet = flat_snippet
 
+    # ── Strategy 6: Historical State Match ───────────────────────────────────
+    # Scores signal_calibration rows against the current KB state vector.
+    # Appends a # historical-precedent section to the snippet so the LLM can
+    # reference it naturally. The HistoricalPrecedent object is stashed in
+    # _last_precedent for chat_pipeline to pick up without changing the
+    # (snippet, atoms) return contract.
+    # db_path is set explicitly by chat_pipeline.run() via set_db_path() below.
+    global _last_precedent
+    _last_precedent = None
+    if results and _retrieval_db_path:
+        try:
+            from analytics.state_matcher import match_historical_state as _hsm
+            _prec = _hsm(results, _retrieval_db_path)
+            if _prec and _prec.match_count >= 10:
+                _last_precedent = _prec
+                _ph = [
+                    '',
+                    '# historical-precedent',
+                    f'Similar conditions: {_prec.match_count} instances '
+                    f'(avg similarity {_prec.avg_similarity:.0%})',
+                    f'Weighted hit rate T1: {_prec.weighted_hit_t1:.0%}',
+                    f'Weighted stop rate: {_prec.weighted_stopped:.0%}',
+                ]
+                if _prec.weighted_avg_r is not None:
+                    _ph.append(f'Avg R-multiple: {_prec.weighted_avg_r:+.1f}R')
+                if _prec.best_regime:
+                    _ph.append(f'Best regime: {_prec.best_regime.replace("_", " ")}')
+                if _prec.worst_regime:
+                    _ph.append(f'Worst regime: {_prec.worst_regime.replace("_", " ")}')
+                full_snippet += '\n' + '\n'.join(_ph)
+        except Exception as _hsm_exc:
+            _logger.debug('retrieval: Strategy 6 (state match) failed: %s', _hsm_exc)
+
     return full_snippet, results
+
+
+# ── Strategy 6 state: module-level db_path + last precedent ──────────────────
+# chat_pipeline calls set_db_path() once at startup so retrieval.py knows where
+# to find signal_calibration without changing retrieve()'s signature.
+
+_retrieval_db_path: str = ''
+_last_precedent = None
+
+
+def set_db_path(db_path: str) -> None:
+    """Called by chat_pipeline (or api_v2 startup) to set the DB path for Strategy 6."""
+    global _retrieval_db_path
+    _retrieval_db_path = db_path
+
+
+def get_last_precedent():
+    """Return the HistoricalPrecedent from the most recent retrieve() call, or None."""
+    return _last_precedent

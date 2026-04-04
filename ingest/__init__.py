@@ -47,10 +47,95 @@ try:
 except ImportError:
     OptionsAdapter = None  # type: ignore
 
+try:
+    from .polygon_options_adapter import PolygonOptionsAdapter
+except ImportError:
+    PolygonOptionsAdapter = None  # type: ignore
+
+try:
+    from .polygon_price_adapter import PolygonPriceAdapter
+except ImportError:
+    PolygonPriceAdapter = None  # type: ignore
+
+try:
+    from .yield_curve_adapter import YieldCurveAdapter
+except ImportError:
+    YieldCurveAdapter = None  # type: ignore
+
+try:
+    from .finra_short_interest_adapter import FINRAShortInterestAdapter
+except ImportError:
+    FINRAShortInterestAdapter = None  # type: ignore
+
+try:
+    from .boe_adapter import BoEAdapter
+except ImportError:
+    BoEAdapter = None  # type: ignore
+
+try:
+    from .eia_adapter import EIAAdapter
+except ImportError:
+    EIAAdapter = None  # type: ignore
+
+try:
+    from .gdelt_adapter import GDELTAdapter
+except ImportError:
+    GDELTAdapter = None  # type: ignore
+
+try:
+    from .usgs_adapter import USGSAdapter
+except ImportError:
+    USGSAdapter = None  # type: ignore
+
+try:
+    from .ucdp_adapter import UCDPAdapter
+except ImportError:
+    UCDPAdapter = None  # type: ignore
+
+try:
+    from .acled_adapter import ACLEDAdapter
+except ImportError:
+    ACLEDAdapter = None  # type: ignore
+
+try:
+    from .insider_adapter import InsiderAdapter
+except ImportError:
+    InsiderAdapter = None  # type: ignore
+
+try:
+    from .lse_flow_adapter import LSEFlowAdapter
+except ImportError:
+    LSEFlowAdapter = None  # type: ignore
+
+try:
+    from .earnings_calendar_adapter import EarningsCalendarAdapter
+except ImportError:
+    EarningsCalendarAdapter = None  # type: ignore
+
+try:
+    from .economic_calendar_adapter import EconomicCalendarAdapter
+except ImportError:
+    EconomicCalendarAdapter = None  # type: ignore
+
+try:
+    from .sector_rotation_adapter import SectorRotationAdapter
+except ImportError:
+    SectorRotationAdapter = None  # type: ignore
+
+try:
+    from .seed_sync import SeedSyncClient
+except ImportError:
+    SeedSyncClient = None  # type: ignore
+
 
 __all__ = [
     'BaseIngestAdapter', 'RawAtom', 'IngestScheduler',
     'YFinanceAdapter', 'FREDAdapter', 'EDGARAdapter', 'RSSAdapter',
     'SignalEnrichmentAdapter', 'HistoricalBackfillAdapter',
     'LLMExtractionAdapter', 'EDGARRealtimeAdapter', 'OptionsAdapter',
+    'PolygonOptionsAdapter', 'PolygonPriceAdapter', 'YieldCurveAdapter', 'FINRAShortInterestAdapter',
+    'BoEAdapter', 'EIAAdapter', 'GDELTAdapter', 'USGSAdapter', 'UCDPAdapter',
+    'ACLEDAdapter', 'InsiderAdapter', 'LSEFlowAdapter',
+    'EarningsCalendarAdapter', 'EconomicCalendarAdapter', 'SectorRotationAdapter',
+    'SeedSyncClient',
 ]

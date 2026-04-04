@@ -96,6 +96,13 @@ from typing import List, Optional, Tuple
 from ingest.base import BaseIngestAdapter, RawAtom
 
 try:
+    from ingest.dynamic_watchlist import DynamicWatchlistManager
+    _HAS_DYNAMIC_WATCHLIST = True
+except ImportError:
+    _HAS_DYNAMIC_WATCHLIST = False
+    DynamicWatchlistManager = None  # type: ignore
+
+try:
     import yfinance as yf
     HAS_YFINANCE = True
 except ImportError:
@@ -105,29 +112,28 @@ except ImportError:
 _logger = logging.getLogger(__name__)
 
 # ── Equity-only options universe ──────────────────────────────────────────────
-# ~44 liquid single names; excludes all ETFs, macro proxies, sector ETFs.
+# Top FTSE names with meaningful listed options liquidity.
+# UK retail options market is significantly less developed than US —
+# confidence on options-derived atoms is capped for names outside this list.
 _OPTIONS_TICKERS = [
-    # Mega-cap tech
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'AVGO',
-    # Semiconductors
-    'AMD', 'INTC', 'QCOM', 'MU',
-    # Software / cloud
-    'CRM', 'ADBE', 'NOW', 'SNOW',
-    # Fintech / payments
-    'PYPL', 'COIN',
-    # Financials
-    'JPM', 'V', 'MA', 'BAC', 'GS', 'MS', 'AXP', 'BLK', 'SCHW',
-    # Healthcare
-    'UNH', 'LLY', 'ABBV', 'PFE', 'MRK',
-    # Energy
-    'XOM', 'CVX', 'COP',
-    # Consumer
-    'WMT', 'COST', 'MCD',
-    # Industrials
-    'CAT', 'HON',
-    # REIT / infra
-    'AMT',
+    # Top 20 FTSE — most liquid options
+    'SHEL.L', 'AZN.L', 'HSBA.L', 'ULVR.L', 'BP.L',
+    'GSK.L', 'RIO.L', 'LLOY.L', 'BARC.L', 'NWG.L',
+    'LSEG.L', 'BA.L', 'RR.L', 'VOD.L', 'BATS.L',
+    'NG.L', 'REL.L', 'TSCO.L', 'AAL.L',
+    # User portfolio holdings — US single names with active options markets
+    'COIN', 'HOOD', 'MSTR', 'PLTR', 'NVDA',
+    'XYZ',   # Block Inc. (formerly SQ)
+    # High-conviction US names with strong KB atom coverage
+    'AMZN', 'META', 'GOOGL', 'AAPL', 'MSFT', 'MA',
 ]
+
+# FTSE names with thin options liquidity — smart_money_signal and iv_rank
+# atoms are emitted at reduced authority (0.45 vs 0.75) for these tickers.
+_LOW_OPTIONS_LIQUIDITY: frozenset = frozenset({
+    'VOD.L', 'BATS.L', 'NG.L', 'REL.L', 'TSCO.L', 'AAL.L',
+    'QQ.L', 'MKS.L', 'PSON.L', 'PSN.L',
+})
 
 # Volume-to-OI ratio threshold for a "sweep" (new large position being opened)
 _SWEEP_VOLUME_RATIO = 3.0
@@ -422,9 +428,23 @@ class OptionsAdapter(BaseIngestAdapter):
         self,
         tickers: Optional[List[str]] = None,
         sleep_sec: float = _DEFAULT_SLEEP_SEC,
+        db_path: Optional[str] = None,
     ):
         super().__init__(name='options')
-        self._tickers  = [t.upper() for t in tickers] if tickers else _OPTIONS_TICKERS
+        if tickers:
+            self._tickers = [t.upper() for t in tickers]
+        elif _HAS_DYNAMIC_WATCHLIST and db_path:
+            # Filter active tickers to equity-only (exclude ETFs/macro proxies)
+            active = DynamicWatchlistManager.get_active_tickers(db_path)
+            _etf_prefixes = {'XL', 'SP', 'QQ', 'IW', 'DI', 'VT'}
+            _macro = {'GLD', 'SLV', 'TLT', 'HYG', 'LQD', 'UUP', 'SPY', 'QQQ',
+                      'IWM', 'DIA', 'VTI', 'USO'}
+            self._tickers = [
+                t.upper() for t in active
+                if t.upper() not in _macro and not t.upper().startswith('XL')
+            ]
+        else:
+            self._tickers = _OPTIONS_TICKERS
         self._sleep_sec = sleep_sec
 
     def fetch(self) -> List[RawAtom]:
@@ -470,6 +490,12 @@ class OptionsAdapter(BaseIngestAdapter):
         now_iso = datetime.now(timezone.utc).isoformat()
         src     = f'options_feed_{sym.lower()}'
         meta    = {'as_of': now_iso, 'ticker': sym}
+        # UK options market is thin for smaller names — cap signal confidence
+        _low_liq = sym.upper() in _LOW_OPTIONS_LIQUIDITY
+        _iv_conf     = 0.40 if _low_liq else 0.65
+        _sweep_conf  = 0.35 if _low_liq else 0.60
+        if _low_liq:
+            meta = {**meta, 'low_options_liquidity': True}
 
         (calls_iv, puts_iv,
          calls_oi, puts_oi,
@@ -510,7 +536,7 @@ class OptionsAdapter(BaseIngestAdapter):
                 subject    = sym.lower(),
                 predicate  = 'iv_rank',
                 object     = str(iv_rank),
-                confidence = 0.65,
+                confidence = _iv_conf,
                 source     = src,
                 metadata   = meta,
                 upsert     = True,
@@ -533,7 +559,7 @@ class OptionsAdapter(BaseIngestAdapter):
             subject    = sym.lower(),
             predicate  = 'smart_money_signal',
             object     = sweep,
-            confidence = 0.60,
+            confidence = _sweep_conf,
             source     = src,
             metadata   = meta,
             upsert     = True,

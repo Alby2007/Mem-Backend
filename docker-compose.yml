@@ -1,36 +1,88 @@
 services:
+
+  # ── API ────────────────────────────────────────────────────────────────────
   trading-galaxy:
     build: .
-    ports:
-      - "${PORT:-5050}:5050"
+    # Not exposed directly — Caddy reverse-proxies to this on 5050 internally.
+    # To run without Caddy (local dev): change to ports: ["5050:5050"]
+    expose:
+      - "5050"
     env_file:
       - .env
     environment:
       TRADING_KB_DB: /data/trading_knowledge.db
       OLLAMA_BASE_URL: http://ollama:11434
+      WORKERS: "2"
+      THREADS: "4"
     volumes:
       - kb-data:/data
     depends_on:
       ollama:
         condition: service_healthy
+        required: false   # allows --profile no-llm to skip ollama
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5050/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 25s
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
+  # ── Caddy (TLS termination + reverse proxy) ────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      trading-galaxy:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Ollama (LLM backend) ───────────────────────────────────────────────────
+  # Run without Ollama: docker compose --profile no-llm up -d
   ollama:
     image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
+    profiles: ["llm"]   # included by default; skip with --profile no-llm
+    expose:
+      - "11434"
     volumes:
       - ollama-models:/root/.ollama
     healthcheck:
       test: ["CMD", "ollama", "list"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
-      retries: 10
-      start_period: 30s
+      retries: 12
+      start_period: 60s
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
 
 volumes:
   kb-data:
     driver: local
   ollama-models:
+    driver: local
+  caddy-data:
+    driver: local
+  caddy-config:
     driver: local

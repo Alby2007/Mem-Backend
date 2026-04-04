@@ -22,6 +22,8 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
+from middleware.auth import _auth_conn
+
 _log = logging.getLogger(__name__)
 
 _DDL_AUDIT_LOG = """
@@ -39,14 +41,6 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 _VALID_OUTCOMES = frozenset({'success', 'failure', 'blocked'})
 
-_VALID_ACTIONS = frozenset({
-    'register', 'login_success', 'login_failure', 'login_locked',
-    'logout', 'token_refresh',
-    'portfolio_submit', 'snapshot_send', 'tip_send', 'feedback_submit',
-    'tip_config_update', 'onboarding_update', 'telegram_verify',
-    'pattern_query', 'alert_mark_seen',
-})
-
 
 def ensure_audit_table(conn: sqlite3.Connection) -> None:
     conn.execute(_DDL_AUDIT_LOG)
@@ -57,6 +51,7 @@ def log_audit_event(
     db_path: str,
     action: str,
     *,
+    conn: Optional[sqlite3.Connection] = None,
     user_id: Optional[str] = None,
     ip_address: Optional[str] = None,
     user_agent: Optional[str] = None,
@@ -66,11 +61,16 @@ def log_audit_event(
     """
     Write one row to audit_log.  Never raises — failures are logged but swallowed
     so an audit error never breaks a real request.
+
+    Pass an existing ``conn`` to avoid opening a new DB connection (caller retains
+    ownership and must not close it before this call returns).
     """
     try:
         now = datetime.now(timezone.utc).isoformat()
         detail_str = json.dumps(detail) if detail else None
-        conn = sqlite3.connect(db_path, timeout=5)
+        _owned = conn is None
+        if _owned:
+            conn = _auth_conn(timeout=5)
         try:
             ensure_audit_table(conn)
             conn.execute(
@@ -81,7 +81,8 @@ def log_audit_event(
             )
             conn.commit()
         finally:
-            conn.close()
+            if _owned:
+                conn.close()
     except Exception as exc:
         _log.warning('audit log write failed: %s', exc)
 
@@ -93,7 +94,7 @@ def get_audit_log(
     limit: int = 100,
 ) -> list:
     """Return audit_log rows, optionally filtered by user_id and/or action."""
-    conn = sqlite3.connect(db_path, timeout=10)
+    conn = _auth_conn(timeout=10)
     try:
         ensure_audit_table(conn)
         clauses = []

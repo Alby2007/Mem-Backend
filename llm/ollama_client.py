@@ -23,16 +23,21 @@ _logger = logging.getLogger(__name__)
 _BASE_URL          = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 DEFAULT_MODEL      = os.environ.get("OLLAMA_MODEL", "llama3.2")
 EXTRACTION_MODEL   = os.environ.get("OLLAMA_EXTRACTION_MODEL", "phi3")
+VISION_MODEL       = os.environ.get("OLLAMA_VISION_MODEL", "llava")
+DEFAULT_TIMEOUT    = int(os.environ.get("OLLAMA_CHAT_TIMEOUT", "180"))
 
 _CHAT_URL  = f"{_BASE_URL}/api/chat"
 _TAGS_URL  = f"{_BASE_URL}/api/tags"
+
+# Cache of models confirmed unavailable (404) so we don't retry per-item
+_unavailable_models: set = set()
 
 
 def chat(
     messages: List[dict],
     model: str = DEFAULT_MODEL,
     stream: bool = False,
-    timeout: int = 120,
+    timeout: int = DEFAULT_TIMEOUT,
 ) -> Optional[str]:
     """
     Send a list of chat messages to Ollama and return the assistant reply as a string.
@@ -75,6 +80,13 @@ def chat(
     except _requests.exceptions.Timeout:
         _logger.warning("Ollama request timed out after %ds", timeout)
         return None
+    except _requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            _logger.warning("Ollama model '%s' not available (404) — marking unavailable", model)
+            _unavailable_models.add(model)
+        else:
+            _logger.error("Ollama chat error: %s", e)
+        return None
     except Exception as e:
         _logger.error("Ollama chat error: %s", e)
         return None
@@ -95,8 +107,71 @@ def list_models() -> List[str]:
         return []
 
 
-def is_available() -> bool:
-    """Quick liveness check — True if Ollama is reachable."""
+def warmup(model: str = DEFAULT_MODEL, timeout: int = DEFAULT_TIMEOUT) -> bool:
+    """
+    Send a minimal prompt to Ollama to force the model to load into GPU/CPU memory.
+    Call once at startup so the first real user request does not time out on cold start.
+    Returns True if warmup succeeded, False if Ollama is unreachable or timed out.
+    """
+    _logger.info("[Ollama] warming up model '%s' ...", model)
+    result = chat(
+        messages=[{"role": "user", "content": "hi"}],
+        model=model,
+        timeout=timeout,
+    )
+    if result is not None:
+        _logger.info("[Ollama] warmup complete for model '%s'", model)
+        return True
+    _logger.warning("[Ollama] warmup failed for model '%s' — model may not be pulled yet", model)
+    return False
+
+
+def chat_vision(
+    image_b64: str,
+    prompt: str,
+    model: str = VISION_MODEL,
+    timeout: int = 120,
+) -> Optional[str]:
+    """
+    Send an image (base64-encoded) + text prompt to an Ollama vision model.
+
+    Uses the Ollama multimodal message format:
+        {"role": "user", "content": prompt, "images": [base64_string]}
+
+    Returns the assistant reply string, or None on any error.
+    Callers should check None and degrade gracefully.
+    """
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+                "images": [image_b64],
+            }
+        ],
+        "stream": False,
+    }
+    try:
+        r = _requests.post(_CHAT_URL, json=payload, timeout=timeout)
+        r.raise_for_status()
+        return r.json().get("message", {}).get("content", "")
+    except _requests.exceptions.ConnectionError:
+        _logger.warning("Ollama not reachable at %s (vision request)", _BASE_URL)
+        return None
+    except _requests.exceptions.Timeout:
+        _logger.warning("Ollama vision request timed out after %ds", timeout)
+        return None
+    except Exception as e:
+        _logger.error("Ollama chat_vision error: %s", e)
+        return None
+
+
+def is_available(model: Optional[str] = None) -> bool:
+    """True if Ollama is reachable AND the requested model is not known-unavailable."""
+    check_model = model or EXTRACTION_MODEL
+    if check_model in _unavailable_models:
+        return False
     try:
         r = _requests.get(f"{_BASE_URL}/api/tags", timeout=5)
         return r.status_code == 200

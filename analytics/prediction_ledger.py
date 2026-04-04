@@ -1,66 +1,63 @@
 """
-analytics/prediction_ledger.py — Prediction Ledger
+analytics/prediction_ledger.py — Prediction Ledger with Brier Scoring
 
-Records structured predictions at the moment a position is entered, alongside
-the KB state commitment (Merkle root) that proves what the KB contained when
-the decision was made.
+Records every tip issued as an explicit prediction with stated probabilities.
+Scores outcomes automatically when prices are updated intraday. Computes
+Brier scores and calibration curves for the public GET /ledger/performance
+endpoint.
 
-PREDICTION_LEDGER TABLE
-=======================
-    prediction_ledger (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticker          TEXT NOT NULL,
-        pattern_type    TEXT NOT NULL,
-        timeframe       TEXT,
-        entry_price     REAL,
-        target_1        REAL,
-        target_2        REAL,
-        stop_loss       REAL,
-        p_hit_t1        REAL,          -- predicted probability of hitting target 1
-        p_hit_t2        REAL,          -- predicted probability of hitting target 2
-        p_stopped_out   REAL,          -- predicted probability of stop-out
-        market_regime   TEXT,
-        conviction_tier TEXT,
-        issued_at       TEXT NOT NULL,  -- ISO-8601 UTC
-        expires_at      TEXT,
-        source          TEXT DEFAULT 'system',
-        outcome         TEXT,           -- hit_t1 | hit_t2 | stopped_out | expired | pending
-        resolved_at     TEXT,
-        kb_root         TEXT,           -- 64-char hex SHA-256 Merkle root
-        kb_fact_ids     TEXT            -- JSON array of fact IDs in snapshot
-    )
+DESIGN
+======
+System-level dedup: one row per (ticker, pattern_type, date(issued_at)).
+The same signal issued to multiple users on the same day creates one ledger
+entry. This makes the public performance record a clean count of distinct
+signals, not inflated by user count.
 
-USAGE
-=====
-    from analytics.prediction_ledger import PredictionLedger
+INTRADAY RESOLUTION
+===================
+on_price_written(ticker, price) is called by KnowledgeGraph.add_fact()
+every time a last_price atom is written (every ~5 minutes from YFinanceAdapter).
+This checks all open predictions for that ticker and resolves immediately
+if the price has crossed T1, T2, or stop. Predictions that never resolve
+are auto-expired after 20 trading days via expire_stale_predictions()
+(run daily by the ingest scheduler).
 
-    ledger = PredictionLedger(db_path)
-    ledger.record_prediction(
-        ticker='NVDA', pattern_type='fvg', entry_price=890.0,
-        target_1=920.0, stop_loss=875.0,
-        kb_root='ab12cd...', kb_fact_ids='[1,2,3]',
-    )
+BRIER SCORING
+=============
+Brier score = mean((p_stated - outcome_binary)²) over all resolved rows.
+  Perfect calibration = 0.0
+  Random guessing     = 0.25
+  Worse than random   = > 0.25
 
-    # Query:
-    rows = ledger.get_predictions(ticker='NVDA', pending_only=True)
+brier_t1 per row = (p_hit_t1 - hit_t1_binary)²
+
+CALIBRATION CURVE
+=================
+Groups resolved rows into 10 probability buckets (0–10%, 10–20%, …, 90–100%).
+For each bucket: stated = bucket midpoint, actual = empirical hit rate.
+A perfectly calibrated system has stated ≈ actual in every bucket.
+
+SCHEMA
+======
+prediction_ledger table — see _CREATE_TABLE below.
 """
 
 from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
-_logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
-# ── Schema ────────────────────────────────────────────────────────────────────
+# ── Schema ─────────────────────────────────────────────────────────────────────
 
-_CREATE_PREDICTION_LEDGER = """
+_CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS prediction_ledger (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker          TEXT NOT NULL,
-    pattern_type    TEXT NOT NULL,
+    ticker          TEXT    NOT NULL,
+    pattern_type    TEXT    NOT NULL,
     timeframe       TEXT,
     entry_price     REAL,
     target_1        REAL,
@@ -71,90 +68,107 @@ CREATE TABLE IF NOT EXISTS prediction_ledger (
     p_stopped_out   REAL,
     market_regime   TEXT,
     conviction_tier TEXT,
-    issued_at       TEXT NOT NULL,
+    issued_at       TEXT    NOT NULL,
     expires_at      TEXT,
-    source          TEXT DEFAULT 'system',
-    outcome         TEXT DEFAULT 'pending',
+    outcome         TEXT,
     resolved_at     TEXT,
-    kb_root         TEXT,
-    kb_fact_ids     TEXT
+    resolved_price  REAL,
+    brier_t1        REAL,
+    source          TEXT    DEFAULT 'system'
 )
 """
 
-_IDX_TICKER   = "CREATE INDEX IF NOT EXISTS idx_pl_ticker ON prediction_ledger(ticker)"
-_IDX_ISSUED   = "CREATE INDEX IF NOT EXISTS idx_pl_issued ON prediction_ledger(issued_at)"
-_IDX_OUTCOME  = "CREATE INDEX IF NOT EXISTS idx_pl_outcome ON prediction_ledger(outcome)"
+# SQLite does not allow expressions in inline UNIQUE constraints.
+# The system-level dedup (one row per ticker+pattern_type per calendar day)
+# is enforced by this partial unique index on the date() of issued_at.
+_CREATE_DEDUP_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_daily_dedup
+ON prediction_ledger(ticker, pattern_type, date(issued_at))
+"""
 
-# Columns that may be added via migration on older DBs
-_MIGRATION_COLS = [
-    ('kb_root',     'TEXT'),
-    ('kb_fact_ids', 'TEXT'),
-]
+# ── Trading day helpers ────────────────────────────────────────────────────────
 
-
-def _ensure_table(conn: sqlite3.Connection) -> None:
-    """Create the prediction_ledger table and indexes if absent.
-    Idempotent column additions for KB provenance on existing DBs."""
-    conn.execute(_CREATE_PREDICTION_LEDGER)
-    conn.execute(_IDX_TICKER)
-    conn.execute(_IDX_ISSUED)
-    conn.execute(_IDX_OUTCOME)
-
-    # Idempotent migration — add kb_root / kb_fact_ids if missing
-    existing = {
-        row[1] for row in conn.execute("PRAGMA table_info(prediction_ledger)").fetchall()
-    }
-    for col, defn in _MIGRATION_COLS:
-        if col not in existing:
-            conn.execute(f"ALTER TABLE prediction_ledger ADD COLUMN {col} {defn}")
-
-    conn.commit()
+_TRADING_DAYS_PER_WEEK = 5
+_CALENDAR_DAYS_PER_TRADING_DAY = 7.0 / 5.0   # ~1.4 calendar days per trading day
+_EXPIRY_TRADING_DAYS = 20
 
 
-# ── Ledger class ──────────────────────────────────────────────────────────────
+def _add_trading_days(dt: datetime, n: int) -> datetime:
+    """Approximate n trading days by adding 1.4× calendar days per trading day."""
+    delta = timedelta(days=int(n * _CALENDAR_DAYS_PER_TRADING_DAY + 0.5))
+    return dt + delta
+
+
+# ── PredictionLedger ───────────────────────────────────────────────────────────
 
 class PredictionLedger:
-    """Records and queries structured predictions with KB provenance."""
+    """
+    Records, resolves, and scores system-level signal predictions.
 
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        conn = sqlite3.connect(db_path, timeout=10)
+    Lifecycle
+    ---------
+    1. TipScheduler calls record_prediction() after a tip is sent.
+    2. KnowledgeGraph calls on_price_written() every ~5 min per ticker.
+    3. Ingest scheduler calls expire_stale_predictions() once daily.
+    4. GET /ledger/performance calls get_performance_report().
+    """
+
+    def __init__(self, db_path: str) -> None:
+        self._db = db_path
+        self._ensure_table()
+
+    # ── Schema init ──────────────────────────────────────────────────────────
+
+    def _ensure_table(self) -> None:
+        conn = self._connect()
         try:
-            _ensure_table(conn)
+            conn.execute(_CREATE_TABLE)
+            conn.execute(_CREATE_DEDUP_INDEX)
+            # Idempotent column additions for existing DBs
+            _cols = {r[1] for r in conn.execute('PRAGMA table_info(prediction_ledger)').fetchall()}
+            if 'source' not in _cols:
+                conn.execute("ALTER TABLE prediction_ledger ADD COLUMN source TEXT DEFAULT 'system'")
+            for _col, _defn in [('kb_root', 'TEXT'), ('kb_fact_ids', 'TEXT')]:
+                if _col not in _cols:
+                    conn.execute(f"ALTER TABLE prediction_ledger ADD COLUMN {_col} {_defn}")
+            conn.commit()
         finally:
             conn.close()
 
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db, timeout=10)
+
+    # ── Record ───────────────────────────────────────────────────────────────
+
     def record_prediction(
         self,
-        ticker:          str,
-        pattern_type:    str,
-        timeframe:       Optional[str] = None,
-        entry_price:     Optional[float] = None,
-        target_1:        Optional[float] = None,
-        target_2:        Optional[float] = None,
-        stop_loss:       Optional[float] = None,
-        p_hit_t1:        Optional[float] = None,
-        p_hit_t2:        Optional[float] = None,
-        p_stopped_out:   Optional[float] = None,
-        market_regime:   Optional[str] = None,
-        conviction_tier: Optional[str] = None,
-        issued_at:       Optional[str] = None,
-        expires_at:      Optional[str] = None,
-        source:          str = 'system',
-        kb_root:         Optional[str] = None,
-        kb_fact_ids:     Optional[str] = None,
-        conn:            Optional[sqlite3.Connection] = None,
+        ticker:         str,
+        pattern_type:   str,
+        timeframe:      str,
+        entry_price:    float,
+        target_1:       float,
+        target_2:       float,
+        stop_loss:      float,
+        p_hit_t1:       float,
+        p_hit_t2:       float,
+        p_stopped_out:  float,
+        market_regime:  Optional[str],
+        conviction_tier: Optional[str],
+        source:         str = 'system',
+        kb_root:        Optional[str] = None,
+        kb_fact_ids:    Optional[str] = None,
+        conn=None,
     ) -> bool:
         """
-        Insert a prediction row. Returns True on success, False on duplicate
-        or error.
+        Insert a new prediction row. Returns True if inserted, False if the
+        UNIQUE constraint fires (same ticker+pattern_type on same calendar day).
         """
-        if issued_at is None:
-            issued_at = datetime.now(timezone.utc).isoformat()
+        now       = datetime.now(timezone.utc)
+        issued_at = now.isoformat()
+        expires_at = _add_trading_days(now, _EXPIRY_TRADING_DAYS).isoformat()
 
-        _own = conn is None
-        _conn = sqlite3.connect(self.db_path, timeout=10) if _own else conn
-
+        _own_conn = conn is None
+        _conn = self._connect() if _own_conn else conn
         try:
             _conn.execute(
                 """INSERT OR IGNORE INTO prediction_ledger
@@ -165,83 +179,370 @@ class PredictionLedger:
                     issued_at, expires_at, source,
                     kb_root, kb_fact_ids)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    ticker.upper(), pattern_type, timeframe, entry_price,
-                    target_1, target_2, stop_loss,
-                    p_hit_t1, p_hit_t2, p_stopped_out,
-                    market_regime, conviction_tier,
-                    issued_at, expires_at, source,
-                    kb_root, kb_fact_ids,
-                ),
+                (ticker.upper(), pattern_type, timeframe, entry_price,
+                 target_1, target_2, stop_loss,
+                 round(p_hit_t1, 4), round(p_hit_t2, 4), round(p_stopped_out, 4),
+                 market_regime, conviction_tier,
+                 issued_at, expires_at, source,
+                 kb_root, kb_fact_ids),
             )
-            if _own:
+            inserted = _conn.total_changes > 0
+            if _own_conn:
                 _conn.commit()
-            return True
-        except Exception as e:
-            _logger.error('record_prediction failed: %s', e)
-            return False
+            if inserted:
+                _log.info(
+                    'PredictionLedger: recorded %s %s %s p_t1=%.2f p_t2=%.2f',
+                    ticker.upper(), pattern_type, timeframe, p_hit_t1, p_hit_t2,
+                )
+            return inserted
         finally:
-            if _own:
+            if _own_conn:
                 _conn.close()
 
-    def resolve_prediction(
+    # ── Intraday resolution hook ─────────────────────────────────────────────
+
+    def on_price_written(
+        self, ticker: str, current_price: float, conn=None
+    ) -> None:
+        """
+        Called by KnowledgeGraph.add_fact() when a last_price atom is written.
+        Resolves any open predictions for this ticker if price has crossed
+        T1, T2, or stop.
+
+        This is the primary resolution path — predictions can resolve within
+        5 minutes of the target being hit.
+
+        Pass an existing ``conn`` to avoid opening a new connection per call
+        (important when called in a tight loop over many tickers from graph.py).
+        """
+        if current_price <= 0:
+            return
+
+        ticker_up = ticker.upper()
+        _own_conn = conn is None
+        _conn = self._connect() if _own_conn else conn
+        try:
+            rows = _conn.execute(
+                """SELECT id, ticker, entry_price, target_1, target_2,
+                          stop_loss, p_hit_t1
+                   FROM prediction_ledger
+                   WHERE ticker=? AND outcome IS NULL""",
+                (ticker_up,),
+            ).fetchall()
+        finally:
+            if _own_conn:
+                _conn.close()
+
+        for row in rows:
+            pred_id, _ticker, entry, t1, t2, stop, p_t1 = row
+            outcome = self._classify_outcome(
+                current_price, entry, t1, t2, stop
+            )
+            if outcome:
+                self._resolve(pred_id, outcome, current_price, p_t1, conn=conn)
+
+    def _classify_outcome(
         self,
-        prediction_id: int,
-        outcome: str,
-        conn: Optional[sqlite3.Connection] = None,
-    ) -> bool:
-        """Mark a prediction as resolved with an outcome."""
-        _VALID = {'hit_t1', 'hit_t2', 'stopped_out', 'expired', 'pending'}
-        if outcome not in _VALID:
-            _logger.warning('invalid outcome %s, must be one of %s', outcome, _VALID)
-            return False
+        price:  float,
+        entry:  float,
+        t1:     Optional[float],
+        t2:     Optional[float],
+        stop:   Optional[float],
+    ) -> Optional[str]:
+        """
+        Returns outcome string if price has crossed a target, else None.
+        Checks T2 first (implies T1 was also hit), then T1, then stop.
+        Direction inferred from entry vs t1 (bullish if t1 > entry).
+        """
+        if t1 is None:
+            return None
 
-        resolved_at = datetime.now(timezone.utc).isoformat()
-        _own = conn is None
-        _conn = sqlite3.connect(self.db_path, timeout=10) if _own else conn
+        bullish = t1 > entry if entry and t1 else True
 
+        if t2 is not None:
+            if bullish and price >= t2:
+                return 'hit_t2'
+            if not bullish and price <= t2:
+                return 'hit_t2'
+
+        if bullish and price >= t1:
+            return 'hit_t1'
+        if not bullish and price <= t1:
+            return 'hit_t1'
+
+        if stop is not None:
+            if bullish and price <= stop:
+                return 'stopped_out'
+            if not bullish and price >= stop:
+                return 'stopped_out'
+
+        return None
+
+    def _resolve(
+        self,
+        pred_id:       int,
+        outcome:       str,
+        resolved_price: float,
+        p_hit_t1:      float,
+        conn=None,
+    ) -> None:
+        """Write outcome + Brier contribution to the ledger row."""
+        now = datetime.now(timezone.utc).isoformat()
+        hit_t1_binary = 1.0 if outcome in ('hit_t1', 'hit_t2', 'hit_t3') else 0.0
+        brier_t1 = round((p_hit_t1 - hit_t1_binary) ** 2, 6)
+
+        _own_conn = conn is None
+        _conn = self._connect() if _own_conn else conn
         try:
             _conn.execute(
-                "UPDATE prediction_ledger SET outcome = ?, resolved_at = ? WHERE id = ?",
-                (outcome, resolved_at, prediction_id),
+                """UPDATE prediction_ledger
+                   SET outcome=?, resolved_at=?, resolved_price=?, brier_t1=?
+                   WHERE id=?""",
+                (outcome, now, resolved_price, brier_t1, pred_id),
             )
-            if _own:
+            if _own_conn:
                 _conn.commit()
-            return True
-        except Exception as e:
-            _logger.error('resolve_prediction failed: %s', e)
-            return False
+            _log.info(
+                'PredictionLedger: resolved id=%d outcome=%s price=%.4f brier=%.4f',
+                pred_id, outcome, resolved_price, brier_t1,
+            )
         finally:
-            if _own:
+            if _own_conn:
                 _conn.close()
 
-    def get_predictions(
-        self,
-        ticker: Optional[str] = None,
-        pending_only: bool = False,
-        limit: int = 100,
-    ) -> List[Dict]:
-        """Query prediction rows, optionally filtered by ticker and/or pending status."""
-        conn = sqlite3.connect(self.db_path, timeout=10)
+    # ── Daily expiry job ─────────────────────────────────────────────────────
+
+    def expire_stale_predictions(self) -> int:
+        """
+        Mark open predictions past their expires_at as 'expired'.
+        Called once daily by the ingest scheduler.
+        Returns count of rows expired.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._connect()
         try:
-            clauses = []
-            params: list = []
-            if ticker:
-                clauses.append("ticker = ?")
-                params.append(ticker.upper())
-            if pending_only:
-                clauses.append("outcome = 'pending'")
+            conn.execute(
+                """UPDATE prediction_ledger
+                   SET outcome='expired', resolved_at=?
+                   WHERE outcome IS NULL AND expires_at < ?""",
+                (now, now),
+            )
+            expired = conn.total_changes
+            conn.commit()
+            if expired:
+                _log.info('PredictionLedger: expired %d stale predictions', expired)
+            return expired
+        finally:
+            conn.close()
 
-            where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-            rows = conn.execute(
-                f"SELECT * FROM prediction_ledger {where} ORDER BY issued_at DESC LIMIT ?",
-                params + [limit],
+    # ── Performance report ────────────────────────────────────────────────────
+
+    def get_performance_report(self) -> Dict[str, Any]:
+        """
+        Build the full performance report for GET /ledger/performance.
+        Returns a dict suitable for direct jsonify().
+        """
+        conn = self._connect()
+        try:
+            total    = conn.execute(
+                "SELECT COUNT(*) FROM prediction_ledger"
+            ).fetchone()[0]
+
+            resolved = conn.execute(
+                "SELECT COUNT(*) FROM prediction_ledger WHERE outcome IS NOT NULL"
+            ).fetchone()[0]
+
+            open_    = total - resolved
+
+            # Brier score over all resolved rows with brier_t1 computed
+            brier_rows = conn.execute(
+                "SELECT brier_t1 FROM prediction_ledger WHERE brier_t1 IS NOT NULL"
             ).fetchall()
+            brier_score = None
+            if brier_rows:
+                brier_score = round(sum(r[0] for r in brier_rows) / len(brier_rows), 4)
 
-            cols = [d[0] for d in conn.execute(
-                "SELECT * FROM prediction_ledger LIMIT 0"
-            ).description]
+            regime_breakdown = self._regime_breakdown(conn)
+            calibration_curve = self._calibration_curve(conn)
 
+            # ── by_pattern breakdown ──────────────────────────────────────
+            pat_rows = conn.execute("""
+                SELECT pattern_type,
+                       COUNT(*) as predictions,
+                       AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit') THEN 1.0 ELSE 0.0 END) as hit_rate,
+                       AVG(p_hit_t1) as avg_stated,
+                       AVG(brier_t1) as avg_brier,
+                       SUM(CASE WHEN outcome = 'stopped_out' THEN 1 ELSE 0 END) as stops
+                FROM prediction_ledger
+                WHERE outcome IS NOT NULL AND outcome != 'expired'
+                GROUP BY pattern_type
+                ORDER BY predictions DESC
+            """).fetchall()
+            by_pattern = [
+                {
+                    'pattern_type':          r[0],
+                    'predictions':           r[1],
+                    'hit_rate':              round(r[2], 3) if r[2] is not None else None,
+                    'avg_stated_confidence': round(r[3], 3) if r[3] is not None else None,
+                    'overconfidence_gap':    round((r[3] or 0) - (r[2] or 0), 3) if r[2] is not None and r[3] is not None else None,
+                    'avg_brier':             round(r[4], 3) if r[4] is not None else None,
+                    'stops':                 r[5],
+                }
+                for r in pat_rows
+            ]
+
+            # ── by_conviction breakdown ───────────────────────────────────
+            conv_rows = conn.execute("""
+                SELECT conviction_tier,
+                       COUNT(*) as predictions,
+                       AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit') THEN 1.0 ELSE 0.0 END) as hit_rate,
+                       AVG(brier_t1) as avg_brier
+                FROM prediction_ledger
+                WHERE outcome IS NOT NULL AND outcome != 'expired'
+                  AND conviction_tier IS NOT NULL
+                GROUP BY conviction_tier
+                ORDER BY predictions DESC
+            """).fetchall()
+            by_conviction = [
+                {
+                    'conviction_tier': r[0],
+                    'predictions':     r[1],
+                    'hit_rate':        round(r[2], 3) if r[2] is not None else None,
+                    'avg_brier':       round(r[3], 3) if r[3] is not None else None,
+                }
+                for r in conv_rows
+            ]
+
+            # ── by_regime breakdown ───────────────────────────────────────
+            reg_rows = conn.execute("""
+                SELECT market_regime,
+                       COUNT(*) as predictions,
+                       AVG(CASE WHEN outcome IN ('hit_t1','hit_t2','t1_hit') THEN 1.0 ELSE 0.0 END) as hit_rate
+                FROM prediction_ledger
+                WHERE outcome IS NOT NULL AND outcome != 'expired'
+                  AND market_regime IS NOT NULL
+                GROUP BY market_regime
+                ORDER BY predictions DESC
+            """).fetchall()
+            by_regime = [
+                {
+                    'market_regime': r[0],
+                    'predictions':   r[1],
+                    'hit_rate':      round(r[2], 3) if r[2] is not None else None,
+                    'verdict':       'avoid' if (r[2] or 0) < 0.4 else ('strong' if (r[2] or 0) >= 0.65 else 'normal'),
+                }
+                for r in reg_rows
+            ]
+
+            # ── snapshot / forward backtest readiness ────────────────────
+            try:
+                from analytics.backtest import list_snapshots as _list_snaps
+                snap_dates = _list_snaps(self._db_path)
+                snapshot_count = len(snap_dates)
+            except Exception:
+                snapshot_count = 0
+            forward_backtest_ready = snapshot_count >= 2
+
+            return {
+                'total_predictions':      total,
+                'resolved':               resolved,
+                'open':                   open_,
+                'open_count':             open_,
+                'brier_score':            brier_score,
+                'vs_benchmark':           round((brier_score - 0.25), 4) if brier_score is not None else None,
+                'note':                   (
+                    'vs_benchmark < 0 means better than random guessing (0.25). '
+                    'Perfect calibration = 0.0.'
+                ),
+                'regime_breakdown':       regime_breakdown,
+                'calibration_curve':      calibration_curve,
+                'by_pattern':             by_pattern,
+                'by_conviction':          by_conviction,
+                'by_regime':              by_regime,
+                'snapshot_count':         snapshot_count,
+                'forward_backtest_ready': forward_backtest_ready,
+            }
+        finally:
+            conn.close()
+
+    def _regime_breakdown(self, conn: sqlite3.Connection) -> Dict[str, Any]:
+        """Brier score per market regime."""
+        rows = conn.execute(
+            """SELECT market_regime, COUNT(*), AVG(brier_t1)
+               FROM prediction_ledger
+               WHERE brier_t1 IS NOT NULL
+               GROUP BY market_regime""",
+        ).fetchall()
+        result: Dict[str, Any] = {}
+        for regime, n, avg_brier in rows:
+            key = regime if regime else 'unknown'
+            result[key] = {
+                'brier': round(avg_brier, 4) if avg_brier is not None else None,
+                'n':     n,
+            }
+        return result
+
+    def _calibration_curve(self, conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+        """
+        Groups resolved predictions into 10 probability buckets.
+        For each bucket: stated probability midpoint vs actual empirical hit rate.
+        """
+        rows = conn.execute(
+            """SELECT p_hit_t1, outcome
+               FROM prediction_ledger
+               WHERE outcome IS NOT NULL AND p_hit_t1 IS NOT NULL""",
+        ).fetchall()
+
+        # Buckets: 0–0.1, 0.1–0.2, …, 0.9–1.0
+        buckets: Dict[int, Dict[str, Any]] = {
+            i: {'stated_mid': round(i * 0.1 + 0.05, 2), 'hits': 0, 'n': 0}
+            for i in range(10)
+        }
+
+        for p_t1, outcome in rows:
+            if p_t1 is None:
+                continue
+            bucket_idx = min(int(p_t1 * 10), 9)
+            buckets[bucket_idx]['n'] += 1
+            if outcome in ('hit_t1', 'hit_t2', 'hit_t3'):
+                buckets[bucket_idx]['hits'] += 1
+
+        curve = []
+        for i in range(10):
+            b = buckets[i]
+            n = b['n']
+            actual = round(b['hits'] / n, 4) if n > 0 else None
+            lo = round(i * 0.1, 2)
+            hi = round(lo + 0.1, 2)
+            curve.append({
+                'bucket':  f'{int(lo*100)}-{int(hi*100)}%',
+                'stated':  b['stated_mid'],
+                'actual':  actual,
+                'n':       n,
+            })
+        return curve
+
+    # ── Summary helpers ───────────────────────────────────────────────────────
+
+    def get_open_predictions(self) -> List[Dict[str, Any]]:
+        """Return all open (unresolved) prediction rows as dicts."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """SELECT id, ticker, pattern_type, timeframe, entry_price,
+                          target_1, target_2, stop_loss,
+                          p_hit_t1, p_hit_t2, p_stopped_out,
+                          market_regime, conviction_tier, issued_at, expires_at
+                   FROM prediction_ledger
+                   WHERE outcome IS NULL
+                   ORDER BY issued_at DESC""",
+            ).fetchall()
+            cols = [
+                'id', 'ticker', 'pattern_type', 'timeframe', 'entry_price',
+                'target_1', 'target_2', 'stop_loss',
+                'p_hit_t1', 'p_hit_t2', 'p_stopped_out',
+                'market_regime', 'conviction_tier', 'issued_at', 'expires_at',
+            ]
             return [dict(zip(cols, r)) for r in rows]
         finally:
             conn.close()

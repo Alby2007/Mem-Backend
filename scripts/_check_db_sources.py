@@ -1,0 +1,35 @@
+import sqlite3
+
+DB = '/opt/trading-galaxy/data/trading_knowledge.db'
+c = sqlite3.connect(DB)
+
+# Discover actual column names in facts table
+cols = [r[1] for r in c.execute('PRAGMA table_info(facts)').fetchall()]
+print('FACTS COLUMNS:', cols)
+print()
+
+total = c.execute('SELECT COUNT(*) FROM facts').fetchone()[0]
+tickers = c.execute('SELECT COUNT(DISTINCT subject) FROM facts WHERE predicate="last_price"').fetchone()[0]
+
+sources = c.execute('SELECT source, COUNT(*) FROM facts GROUP BY source ORDER BY 2 DESC LIMIT 60').fetchall()
+preds = c.execute('SELECT predicate, COUNT(*) FROM facts GROUP BY predicate ORDER BY 2 DESC LIMIT 20').fetchall()
+
+try:
+    patterns = c.execute('SELECT status, COUNT(*) FROM pattern_signals GROUP BY status').fetchall()
+except Exception:
+    patterns = []
+
+print(f'TOTAL FACTS:    {total:,}')
+print(f'UNIQUE TICKERS: {tickers:,}')
+print()
+print('TOP SOURCES:')
+for s, n in sources:
+    print(f'  {n:>8,}  {s}')
+print()
+print('TOP PREDICATES:')
+for p, n in preds:
+    print(f'  {n:>8,}  {p}')
+print()
+print('PATTERN SIGNALS:')
+for s, n in patterns:
+    print(f'  {n:>6,}  {s}')

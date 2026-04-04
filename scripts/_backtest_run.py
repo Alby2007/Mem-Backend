@@ -1,0 +1,110 @@
+"""One-shot backtest runner — called remotely via SSH."""
+import json
+import os
+import sqlite3
+
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+db = 'trading_knowledge.db'
+
+# ── KB atom diagnostics ───────────────────────────────────────────────────────
+conn = sqlite3.connect(db)
+diag = {}
+
+try:
+    diag['snapshots_count'] = conn.execute(
+        'SELECT COUNT(*) FROM signal_snapshots').fetchone()[0]
+    diag['distinct_dates'] = [r[0] for r in conn.execute(
+        'SELECT DISTINCT snapshot_date FROM signal_snapshots ORDER BY snapshot_date'
+    ).fetchall()]
+except Exception as e:
+    diag['snapshots_error'] = str(e)
+
+for pred in ('conviction_tier', 'return_1m', 'return_1w', 'signal_quality',
+             'signal_direction', 'last_price', 'price_regime'):
+    try:
+        diag[pred + '_count'] = conn.execute(
+            'SELECT COUNT(*) FROM facts WHERE predicate=?', (pred,)
+        ).fetchone()[0]
+    except Exception as e:
+        diag[pred + '_error'] = str(e)
+
+# Top predicates
+try:
+    top = conn.execute(
+        'SELECT predicate, COUNT(*) n FROM facts GROUP BY predicate ORDER BY n DESC LIMIT 20'
+    ).fetchall()
+    diag['top_predicates'] = {r[0]: r[1] for r in top}
+except Exception as e:
+    diag['top_predicates_error'] = str(e)
+
+conn.close()
+print('=== DIAGNOSTICS ===')
+print(json.dumps(diag, indent=2))
+
+# ── Step 1: HistoricalBackfillAdapter — populates return_1m/1w/3m/6m/1y ──────
+print('\n=== RUNNING HistoricalBackfillAdapter ===')
+try:
+    from knowledge import KnowledgeGraph
+    kg = KnowledgeGraph(db_path=db)
+    from ingest.historical_adapter import HistoricalBackfillAdapter
+    hba = HistoricalBackfillAdapter(db_path=db)
+    hba_atoms = hba.run()
+    print('historical atoms generated:', len(hba_atoms) if hba_atoms else 0)
+    hba_res = hba.push(hba_atoms, kg)
+    print('historical push result:', hba_res)
+except Exception as e:
+    import traceback
+    print('historical error:', e)
+    traceback.print_exc()
+
+# ── Step 2: SignalEnrichmentAdapter — conviction_tier, signal_quality ──────────
+print('\n=== RUNNING SignalEnrichmentAdapter ===')
+try:
+    from knowledge import KnowledgeGraph
+    from ingest.signal_enrichment_adapter import SignalEnrichmentAdapter
+    kg = KnowledgeGraph(db_path=db)
+    sea = SignalEnrichmentAdapter(db_path=db)
+    atoms = sea.run()
+    print('enrichment atoms generated:', len(atoms) if atoms else 0)
+    result = sea.push(atoms, kg)
+    print('enrichment push result:', result)
+except Exception as e:
+    import traceback
+    print('enrichment error:', e)
+    traceback.print_exc()
+
+# Re-check
+conn3 = sqlite3.connect(db)
+ct = conn3.execute(
+    'SELECT COUNT(*) FROM facts WHERE predicate=?', ('conviction_tier',)
+).fetchone()[0]
+r1m = conn3.execute(
+    'SELECT COUNT(*) FROM facts WHERE predicate=?', ('return_1m',)
+).fetchone()[0]
+conn3.close()
+print('conviction_tier atoms after enrichment:', ct)
+print('return_1m atoms after enrichment:', r1m)
+
+# ── Take snapshot ─────────────────────────────────────────────────────────────
+print('\n=== SNAPSHOT ===')
+from analytics.backtest import run_backtest, run_regime_backtest, take_snapshot
+
+snap = take_snapshot(db)
+print(json.dumps(snap, indent=2))
+
+conn4 = sqlite3.connect(db)
+n = conn4.execute('SELECT COUNT(*) FROM signal_snapshots').fetchone()[0]
+dates = [r[0] for r in conn4.execute(
+    'SELECT DISTINCT snapshot_date FROM signal_snapshots ORDER BY snapshot_date'
+).fetchall()]
+conn4.close()
+print('After snapshot: %d rows, dates=%s' % (n, dates))
+
+# ── Run backtests ─────────────────────────────────────────────────────────────
+print('\n=== BACKTEST (1m) ===')
+r = run_backtest(db, window='1m')
+print(json.dumps(r, indent=2))
+
+print('\n=== REGIME BACKTEST ===')
+rr = run_regime_backtest(db)
+print(json.dumps(rr, indent=2))

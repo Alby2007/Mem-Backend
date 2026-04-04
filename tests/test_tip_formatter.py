@@ -6,9 +6,10 @@ from __future__ import annotations
 import pytest
 from analytics.pattern_detector import PatternSignal
 from analytics.position_calculator import PositionRecommendation, calculate_position
+from core.tiers import TIER_CONFIG as TIER_LIMITS
 from notifications.tip_formatter import (
     format_tip, tip_to_dict, pattern_allowed_for_tier,
-    timeframe_allowed_for_tier, TIER_LIMITS, _escape_mdv2,
+    timeframe_allowed_for_tier, _escape_mdv2,
 )
 
 
@@ -73,11 +74,17 @@ class TestTierLimits:
     def test_pro_has_all_7_patterns(self):
         assert len(TIER_LIMITS['pro']['patterns']) == 7
 
-    def test_pro_targets_3(self):
-        assert TIER_LIMITS['pro']['targets'] == 3
+    def test_pro_targets_2(self):
+        assert TIER_LIMITS['pro']['targets'] == 2
 
-    def test_pro_has_15m_timeframe(self):
-        assert '15m' in TIER_LIMITS['pro']['timeframes']
+    def test_premium_targets_3(self):
+        assert TIER_LIMITS['premium']['targets'] == 3
+
+    def test_pro_no_15m_timeframe(self):
+        assert '15m' not in TIER_LIMITS['pro']['timeframes']
+
+    def test_premium_has_15m_timeframe(self):
+        assert '15m' in TIER_LIMITS['premium']['timeframes']
 
     def test_basic_no_15m_timeframe(self):
         assert '15m' not in TIER_LIMITS['basic']['timeframes']

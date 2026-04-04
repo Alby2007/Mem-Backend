@@ -31,7 +31,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from ingest.base import BaseIngestAdapter, RawAtom, db_connect
 from typing import Dict, List, Optional
 
 _logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ from users.user_store import (
 # ── Timeframe → yfinance interval + period mapping ────────────────────────────
 
 _TF_MAP = {
+    '5m':  {'interval': '5m',  'period': '5d'},
     '15m': {'interval': '15m', 'period': '5d'},
     '1h':  {'interval': '1h',  'period': '30d'},
     '4h':  {'interval': '1h',  'period': '60d'},   # yf has no 4h; use 1h and resample
@@ -62,7 +64,9 @@ _TF_MAP = {
 }
 
 # Default timeframes run by the adapter
-_DEFAULT_TIMEFRAMES = ['1h', '1d']
+_DEFAULT_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d']
+
+_TTL_BY_TIMEFRAME = {'5m': 2, '15m': 5, '1h': 14, '4h': 21, '1d': 60}  # days
 
 
 # ── KB atom reader ─────────────────────────────────────────────────────────────
@@ -72,23 +76,30 @@ def _read_kb_context(conn: sqlite3.Connection, ticker: str) -> Dict[str, str]:
     Read conviction, regime, and signal_direction atoms from the facts table
     for this ticker. Returns a dict with keys: conviction, regime, signal_dir.
     """
-    ctx: Dict[str, str] = {'conviction': '', 'regime': '', 'signal_dir': ''}
+    ctx: Dict[str, str] = {'conviction': '', 'regime': '', 'signal_dir': '', 'sector': ''}
+    # Commodity futures have no analyst coverage — default to 'medium' (neutral/technical)
+    # 'low' from KB means no coverage, not fundamental weakness
+    if ticker.upper().endswith('=F'):
+        ctx['conviction'] = 'medium'
     try:
         rows = conn.execute(
             """SELECT predicate, object FROM facts
                WHERE LOWER(subject) = LOWER(?)
-                 AND predicate IN ('signal_confidence','signal_direction',
-                                   'market_regime','kb_conviction')
+                 AND predicate IN ('conviction_tier','signal_confidence','signal_direction',
+                                   'market_regime','kb_conviction','price_regime',
+                                   'volatility_regime','sector')
                ORDER BY created_at DESC""",
             (ticker,),
         ).fetchall()
         for predicate, value in rows:
-            if predicate in ('signal_confidence', 'kb_conviction') and not ctx['conviction']:
+            if predicate in ('conviction_tier', 'signal_confidence', 'kb_conviction') and not ctx['conviction']:
                 ctx['conviction'] = (value or '').lower()
-            elif predicate == 'market_regime' and not ctx['regime']:
+            elif predicate in ('market_regime', 'price_regime', 'volatility_regime') and not ctx['regime']:
                 ctx['regime'] = (value or '').lower()
             elif predicate == 'signal_direction' and not ctx['signal_dir']:
                 ctx['signal_dir'] = (value or '').lower()
+            elif predicate == 'sector' and not ctx['sector']:
+                ctx['sector'] = (value or '').lower()
     except Exception:
         pass
     return ctx
@@ -96,34 +107,89 @@ def _read_kb_context(conn: sqlite3.Connection, ticker: str) -> Dict[str, str]:
 
 # ── OHLCV helpers ──────────────────────────────────────────────────────────────
 
-def _fetch_ohlcv(ticker: str, timeframe: str) -> List[OHLCV]:
+def _read_ohlcv_cache(db_path: str, ticker: str) -> List[OHLCV]:
     """
-    Fetch OHLCV candles from yfinance for the given ticker and timeframe.
-    Returns an empty list on any error.
+    Read daily candles from the ohlcv_cache table (populated by YFinanceAdapter).
+    Returns candles sorted oldest-first.
     """
+    try:
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            with get_pg() as pg_conn:
+                cur = pg_conn.cursor()
+                cur.execute(
+                    "SELECT ts, open, high, low, close, volume FROM ohlcv_cache "
+                    "WHERE UPPER(ticker)=UPPER(%s) AND interval='1d' ORDER BY ts ASC",
+                    (ticker,),
+                )
+                rows = cur.fetchall()
+        else:
+            conn = db_connect(db_path)
+            rows = conn.execute(
+                """SELECT ts, open, high, low, close, volume
+                   FROM ohlcv_cache
+                   WHERE UPPER(ticker)=UPPER(?) AND interval='1d'
+                   ORDER BY ts ASC""",
+                (ticker,),
+            ).fetchall()
+            conn.close()
+        candles: List[OHLCV] = []
+        for row in rows:
+            try:
+                if isinstance(row, dict):
+                    ts, o, h, l, c, v = row['ts'], row['open'], row['high'], row['low'], row['close'], row['volume']
+                else:
+                    ts, o, h, l, c, v = row
+                candles.append(OHLCV(
+                    timestamp=ts,
+                    open=float(o or 0), high=float(h or 0),
+                    low=float(l or 0), close=float(c or 0),
+                    volume=float(v or 0),
+                ))
+            except Exception:
+                continue
+        return candles
+    except Exception:
+        return []
+
+
+def _fetch_ohlcv(ticker: str, timeframe: str, db_path: Optional[str] = None) -> List[OHLCV]:
+    """
+    Fetch OHLCV candles. Reads from ohlcv_cache first (populated by YFinanceAdapter
+    via Ticker.history() which works on OCI rate-limited IPs). Falls back to live
+    yfinance only when the cache is empty.
+    """
+    # Try cache first — avoids hitting yfinance bulk download endpoint
+    if db_path:
+        cached = _read_ohlcv_cache(db_path, ticker)
+        if len(cached) >= 3:
+            return cached
+
     if not HAS_YFINANCE:
         return []
     tf = _TF_MAP.get(timeframe, _TF_MAP['1h'])
     try:
-        df = yf.download(
-            ticker,
-            interval=tf['interval'],
-            period=tf['period'],
-            auto_adjust=True,
-            progress=False,
-        )
+        import yfinance as _yf
+        t = _yf.Ticker(ticker)
+        df = t.history(period=tf['period'], interval=tf['interval'], auto_adjust=True)
         if df is None or df.empty:
             return []
+        def _scalar(v) -> float:
+            try:
+                return float(v.iloc[0]) if hasattr(v, 'iloc') else float(v)
+            except Exception:
+                return 0.0
+
         candles: List[OHLCV] = []
         for ts, row in df.iterrows():
             try:
                 candles.append(OHLCV(
                     timestamp = ts.isoformat(),
-                    open      = float(row['Open']),
-                    high      = float(row['High']),
-                    low       = float(row['Low']),
-                    close     = float(row['Close']),
-                    volume    = float(row.get('Volume', 0) or 0),
+                    open      = _scalar(row['Open']),
+                    high      = _scalar(row['High']),
+                    low       = _scalar(row['Low']),
+                    close     = _scalar(row['Close']),
+                    volume    = _scalar(row.get('Volume', 0) or 0),
                 ))
             except Exception:
                 continue
@@ -152,23 +218,83 @@ def _resample_4h(candles_1h: List[OHLCV]) -> List[OHLCV]:
 # ── Dedup check ────────────────────────────────────────────────────────────────
 
 def _pattern_exists(conn: sqlite3.Connection, sig: PatternSignal) -> bool:
-    """Return True if an identical pattern row already exists in pattern_signals."""
+    """Return True if an identical pattern row already exists in pattern_signals.
+
+    Intentionally omits timeframe from the key — the same zone detected on
+    both 1h and 4h is a duplicate and the first/highest-quality row wins.
+    Uses zone_high/zone_low (rounded to 2dp) as the identity key.
+    """
+    zh = round(sig.zone_high, 2)
+    zl = round(sig.zone_low, 2)
     row = conn.execute(
         """SELECT 1 FROM pattern_signals
            WHERE ticker = ? AND pattern_type = ? AND direction = ?
-             AND formed_at = ? AND timeframe = ?
+             AND ROUND(zone_high, 2) = ? AND ROUND(zone_low, 2) = ?
+             AND status NOT IN ('filled', 'broken', 'expired', 'partially_filled')
            LIMIT 1""",
-        (sig.ticker, sig.pattern_type, sig.direction, sig.formed_at, sig.timeframe),
+        (sig.ticker, sig.pattern_type, sig.direction, zh, zl),
     ).fetchone()
     return row is not None
 
 
+def _dedup_existing_patterns(conn: sqlite3.Connection) -> int:
+    """One-time cleanup: for each duplicate group (same ticker/type/direction/zone)
+    keep the row with the highest quality_score (oldest detected_at if tied),
+    expire the rest by setting status='broken'.
+    Returns number of rows expired.
+    """
+    rows = conn.execute(
+        """SELECT ticker, pattern_type, direction,
+                  ROUND(zone_high,2) as zh, ROUND(zone_low,2) as zl,
+                  COUNT(*) as cnt
+           FROM pattern_signals
+           WHERE status NOT IN ('filled','broken')
+           GROUP BY ticker, pattern_type, direction, zh, zl
+           HAVING cnt > 1"""
+    ).fetchall()
+    expired = 0
+    for (ticker, ptype, direction, zh, zl, _cnt) in rows:
+        candidates = conn.execute(
+            """SELECT id, quality_score, detected_at FROM pattern_signals
+               WHERE ticker=? AND pattern_type=? AND direction=?
+                 AND ROUND(zone_high,2)=? AND ROUND(zone_low,2)=?
+                 AND status NOT IN ('filled','broken')
+               ORDER BY quality_score DESC, detected_at ASC""",
+            (ticker, ptype, direction, zh, zl),
+        ).fetchall()
+        # Keep the first row (highest quality / oldest); expire the rest
+        for row_id, _qs, _dt in candidates[1:]:
+            conn.execute(
+                "UPDATE pattern_signals SET status='broken' WHERE id=?", (row_id,)
+            )
+            expired += 1
+    if expired:
+        conn.commit()
+        _logger.info('PatternAdapter dedup: expired %d duplicate pattern rows', expired)
+    return expired
+
+
 # ── Fill tracker ───────────────────────────────────────────────────────────────
+
+def _kb_last_price(db_conn: sqlite3.Connection, ticker: str) -> Optional[float]:
+    """Read last_price atom from the KB facts table for a ticker."""
+    try:
+        row = db_conn.execute(
+            "SELECT object FROM facts WHERE LOWER(subject)=LOWER(?) AND predicate='last_price' LIMIT 1",
+            (ticker,),
+        ).fetchone()
+        if row:
+            return float(row[0])
+    except Exception:
+        pass
+    return None
+
 
 def _update_existing_patterns(db_path: str, db_conn: sqlite3.Connection) -> None:
     """
     Re-evaluate open/partially_filled pattern rows by checking the latest
     candle against their zones. Updates status in DB if changed.
+    Falls back to KB last_price when yfinance is unavailable.
     """
     open_rows = get_open_patterns(db_path)
     if not open_rows:
@@ -181,10 +307,20 @@ def _update_existing_patterns(db_path: str, db_conn: sqlite3.Connection) -> None
         groups.setdefault(key, []).append(row)
 
     for (ticker, timeframe), rows in groups.items():
-        candles = _fetch_ohlcv(ticker, timeframe)
+        candles = _fetch_ohlcv(ticker, timeframe, db_path=db_path)
+
+        # Fallback: use KB last_price when yfinance is blocked
         if not candles:
-            continue
-        latest = candles[-1]
+            kb_price = _kb_last_price(db_conn, ticker)
+            if kb_price is None:
+                continue
+            latest = OHLCV(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                open=kb_price, high=kb_price, low=kb_price, close=kb_price,
+            )
+        else:
+            latest = candles[-1]
+
         now_iso = datetime.now(timezone.utc).isoformat()
 
         for row in rows:
@@ -239,14 +375,17 @@ class PatternAdapter:
         self.timeframes = timeframes or _DEFAULT_TIMEFRAMES
 
     def _get_tickers(self, conn: sqlite3.Connection) -> List[str]:
-        """Return configured tickers or all unique subjects from the facts table."""
+        """Return configured tickers or subjects that have a last_price atom in the KB.
+        Using last_price as the filter ensures only yfinance-resolvable tickers are scanned
+        and skips macro/country/concept subjects that pollute the facts table."""
         if self.tickers:
             return self.tickers
         try:
             rows = conn.execute(
-                "SELECT DISTINCT subject FROM facts ORDER BY subject"
+                "SELECT DISTINCT subject FROM facts WHERE predicate='last_price' ORDER BY subject"
             ).fetchall()
-            return [r[0] for r in rows if r[0] and len(r[0]) <= 6]
+            # Uppercase to match ohlcv_cache and universe_tickers which store uppercase
+            return [r[0].upper() for r in rows if r[0] and len(r[0]) <= 10]
         except Exception:
             return []
 
@@ -260,13 +399,16 @@ class PatternAdapter:
             _logger.warning('PatternAdapter: yfinance not installed — skipping')
             return 0
 
-        conn = sqlite3.connect(self.db_path, timeout=15)
+        conn = db_connect(self.db_path)
         try:
             ensure_user_tables(conn)
             tickers = self._get_tickers(conn)
             if not tickers:
                 _logger.info('PatternAdapter: no tickers found')
                 return 0
+
+            # One-time cleanup of pre-existing cross-timeframe duplicates
+            _dedup_existing_patterns(conn)
 
             # Update fill status for existing open patterns first
             _update_existing_patterns(self.db_path, conn)
@@ -294,10 +436,10 @@ class PatternAdapter:
     ) -> int:
         """Fetch OHLCV, detect patterns, persist new ones. Returns inserted count."""
         if timeframe == '4h':
-            raw = _fetch_ohlcv(ticker, '4h')  # fetches 1h and resamples
+            raw = _fetch_ohlcv(ticker, '4h', db_path=self.db_path)
             candles = _resample_4h(raw) if raw else []
         else:
-            candles = _fetch_ohlcv(ticker, timeframe)
+            candles = _fetch_ohlcv(ticker, timeframe, db_path=self.db_path)
 
         if len(candles) < 3:
             return 0
@@ -310,27 +452,74 @@ class PatternAdapter:
             kb_conviction = kb_ctx['conviction'],
             kb_regime     = kb_ctx['regime'],
             kb_signal_dir = kb_ctx['signal_dir'],
+            db_path       = self.db_path,
+            sector        = kb_ctx['sector'],
         )
+
+        # Lookup avg_volume_30d once per ticker for volume_vs_avg computation
+        _avg_vol: Optional[float] = None
+        try:
+            _avg_row = conn.execute(
+                "SELECT object FROM facts WHERE UPPER(subject)=UPPER(?) "
+                "AND predicate='avg_volume_30d' ORDER BY timestamp DESC LIMIT 1",
+                (ticker,),
+            ).fetchone()
+            if _avg_row:
+                _v = float(_avg_row[0])
+                if _v > 0:
+                    _avg_vol = _v
+        except Exception:
+            pass
 
         inserted = 0
         for sig in signals:
             if _pattern_exists(conn, sig):
                 continue
             try:
+                ttl_days = _TTL_BY_TIMEFRAME.get(sig.timeframe, 30)
+                expires_at = (
+                    datetime.utcnow() + timedelta(days=ttl_days)
+                ).isoformat()
+
+                # Find the candle volume at zone formation (+-24h timestamp match)
+                _vol_at_formation: Optional[float] = None
+                _vol_vs_avg: Optional[float] = None
+                if sig.formed_at and candles:
+                    try:
+                        _formed_ts = datetime.fromisoformat(
+                            sig.formed_at.replace('Z', '+00:00')
+                        ).timestamp()
+                        for _c in candles:
+                            if not _c.timestamp:
+                                continue
+                            _c_ts = datetime.fromisoformat(
+                                _c.timestamp.replace('Z', '+00:00')
+                            ).timestamp()
+                            if abs(_c_ts - _formed_ts) < 86400:
+                                _vol_at_formation = _c.volume if _c.volume else None
+                                if _vol_at_formation and _avg_vol:
+                                    _vol_vs_avg = round(_vol_at_formation / _avg_vol, 3)
+                                break
+                    except Exception:
+                        pass
+
                 upsert_pattern_signal(self.db_path, {
-                    'ticker':        sig.ticker,
-                    'pattern_type':  sig.pattern_type,
-                    'direction':     sig.direction,
-                    'zone_high':     sig.zone_high,
-                    'zone_low':      sig.zone_low,
-                    'zone_size_pct': sig.zone_size_pct,
-                    'timeframe':     sig.timeframe,
-                    'formed_at':     sig.formed_at,
-                    'status':        sig.status,
-                    'quality_score': sig.quality_score,
-                    'kb_conviction': sig.kb_conviction,
-                    'kb_regime':     sig.kb_regime,
-                    'kb_signal_dir': sig.kb_signal_dir,
+                    'ticker':              sig.ticker,
+                    'pattern_type':        sig.pattern_type,
+                    'direction':           sig.direction,
+                    'zone_high':           sig.zone_high,
+                    'zone_low':            sig.zone_low,
+                    'zone_size_pct':       sig.zone_size_pct,
+                    'timeframe':           sig.timeframe,
+                    'formed_at':           sig.formed_at,
+                    'status':              sig.status,
+                    'quality_score':       sig.quality_score,
+                    'kb_conviction':       sig.kb_conviction,
+                    'kb_regime':           sig.kb_regime,
+                    'kb_signal_dir':       sig.kb_signal_dir,
+                    'expires_at':          expires_at,
+                    'volume_at_formation': _vol_at_formation,
+                    'volume_vs_avg':       _vol_vs_avg,
                 })
                 inserted += 1
             except Exception as exc:

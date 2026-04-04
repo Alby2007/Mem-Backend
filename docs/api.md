@@ -1,6 +1,12 @@
 # REST API Reference
 
-Base URL: `http://localhost:5050`
+Base URL: `https://api.trading-galaxy.uk` (production) · `http://localhost:5050` (local dev)
+
+**Framework:** FastAPI (`api_v2.py`), served by Gunicorn + UvicornWorker.
+
+**CORS:** Cross-origin requests are accepted from the `_ALLOWED_ORIGINS` exact-match set plus `_ALLOWED_ORIGIN_SUFFIXES` suffix matches. Exact origins: `trading-galaxy.uk`, `www.trading-galaxy.uk`, `app.trading-galaxy.uk`, `meridian-operations-terminal.uk`, `www.meridian-operations-terminal.uk`, `localhost:3000/5173/8080`. Suffix wildcards: `*.trycloudflare.com`, `*.ngrok-free.app`, `*.ngrok.io`, `*.pages.dev` (covers all CF Pages preview URLs). All methods and headers are allowed. Caddy reflects the exact `Origin` header so `credentials: 'include'` works correctly from all allowed origins.
+
+**Rate limiting:** `slowapi` (in-memory). Exempt for `EVAL_MODE=1` and localhost. `/waitlist` is 3/hour per IP; chat and other sensitive endpoints are individually gated.
 
 All request/response bodies are JSON. All endpoints return `Content-Type: application/json`.
 
@@ -12,7 +18,7 @@ Liveness check.
 
 **Response**
 ```json
-{ "status": "ok", "db": "trading_knowledge.db" }
+{ "status": "ok", "db": "trading_knowledge.db", "facts": 8890 }
 ```
 
 ---
@@ -126,7 +132,8 @@ Smart multi-strategy retrieval for a natural-language or structured query. This 
   "session_id": "user-abc-session-1",
   "goal":       "evaluate tech long book",
   "topic":      "technology sector",
-  "turn_count": 1
+  "turn_count": 1,
+  "limit":       30
 }
 ```
 
@@ -283,14 +290,169 @@ GET /context/NVDA
 
 ---
 
-## Environment Variables
+## `POST /waitlist`
 
-| Variable | Default | Description |
+Add an email to the beta waitlist. No authentication required.
+
+**Rate limit:** 3 requests per hour per IP.
+
+**Request**
+```json
+{
+  "email":  "alice@example.com",
+  "source": "landing"
+}
+```
+
+`source` is optional (default `"landing"`).
+
+**Response 200**
+```json
+{ "message": "You're on the list", "already": false }
+```
+
+If the email was already registered:
+```json
+{ "message": "You're already on the list", "already": true }
+```
+
+**Error responses**
+
+| Status | `error` value | Meaning |
+|--------|--------------|--------|
+| 400 | `"Invalid email"` | Missing, malformed, or >254 chars |
+| 429 | — | Rate limit exceeded (3/hour per IP) |
+
+A Telegram notification is sent to the operator on every new signup.
+
+---
+
+## `GET /users/{id}/positions/open`
+
+All open followups for a user — both auto-created `watching` (tip sent, user has not yet acted) and `active` (user accepted via 'taking it').
+
+Requires authentication (HttpOnly cookie). Users can only query their own positions.
+
+**Response**
+```json
+{
+  "user_id": "alice",
+  "count": 3,
+  "positions": [
+    {
+      "id": 12,
+      "ticker": "SHEL.L",
+      "direction": "bullish",
+      "status": "active",
+      "pattern_type": "fvg",
+      "timeframe": "4h",
+      "entry_price": 26.80,
+      "stop_loss": 26.10,
+      "target_1": 27.50,
+      "target_2": 28.20,
+      "zone_low": 26.60,
+      "zone_high": 27.00,
+      "expires_at": "2026-03-15T08:00:00+00:00",
+      "conviction_at_entry": "high",
+      "regime_at_entry": "risk_on_expansion",
+      "created_at": "2026-03-01T08:01:00+00:00"
+    }
+  ]
+}
+```
+
+**Status values:**
+
+| Value | Meaning |
+|---|---|
+| `watching` | Auto-created when tip was sent — user has not acted yet |
+| `active` | User clicked 'taking it' — confirmed open position |
+
+---
+
+## `GET /users/{id}/positions/closed`
+
+Recently closed, expired, or stopped-out followups. Defaults to last 30 days.
+
+**Query params:**
+
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `since` | string | 30 days ago | `YYYY-MM-DD` lower bound on `closed_at` |
+
+Requires `Authorization: Bearer <token>`.
+
+**Response**
+```json
+{
+  "user_id": "alice",
+  "count": 2,
+  "since": "2026-02-01",
+  "positions": [
+    {
+      "id": 9,
+      "ticker": "AZN.L",
+      "direction": "bullish",
+      "status": "closed",
+      "entry_price": 118.50,
+      "target_1": 121.00,
+      "stop_loss": 116.00,
+      "closed_at": "2026-02-28T14:32:00+00:00",
+      "conviction_at_entry": "medium"
+    }
+  ]
+}
+```
+
+**Status values in closed set:** `closed` · `expired` · `stopped`
+
+---
+
+## `POST /users/{id}/trader-level`
+
+Set the authenticated user's trader level — controls LLM communication style and tip formatting.
+
+Requires authentication (HttpOnly cookie). Users can only update their own level.
+
+**Request**
+```json
+{ "level": "experienced" }
+```
+
+**Valid values:** `beginner` · `developing` · `experienced` · `quant`
+
+| Level | Effect |
+|---|---|
+| `beginner` | Plain-English explanations, no jargon, no raw atom values |
+| `developing` | Standard format with brief explanations (default) |
+| `experienced` | Full signal detail including Greeks when present |
+| `quant` | Raw atom dump, no prose, all values shown |
+
+**Response 200**
+```json
+{ "trader_level": "experienced" }
+```
+
+**Error responses**
+
+| Status | `error` value | Meaning |
 |---|---|---|
-| `TRADING_KB_DB` | `trading_knowledge.db` | Path to the SQLite database file |
-| `PORT` | `5050` | Flask listening port |
-| `FRED_API_KEY` | *(none)* | Required for `FREDAdapter` — get free key at fred.stlouisfed.org |
-| `EDGAR_USER_AGENT` | `trading-galaxy-kb research@example.com` | Required by SEC EDGAR fair-use policy |
+| 400 | `"Invalid level"` | Value not in the allowed set |
+| 401 | — | Not authenticated |
+| 403 | — | Attempting to modify another user's level |
+
+---
+
+## `GET /waitlist/count`
+
+Public signup counter for landing page social proof. No authentication required.
+
+**Response**
+```json
+{ "count": 42 }
+```
+
+Returns `{"count": 0}` on any error — never 5xx.
 
 ---
 
@@ -302,7 +464,299 @@ All errors return a JSON body with an `error` key:
 { "error": "invalid JSON" }
 ```
 
-| HTTP status | When |
+**Rate limit responses** return HTTP `429` with a plain-text body:
+```
+3 per 1 hour
+```
+
+Handle `429` in your client — show a user-facing message and do not retry immediately.
+
+---
+
+## `POST /chat`
+
+KB-grounded conversational endpoint. Retrieves relevant atoms, builds a context-aware prompt, and calls the LLM (Groq preferred, Ollama fallback). Requires authentication.
+
+**Request**
+```json
+{
+  "message":    "Is NVDA a good entry here?",
+  "session_id": "user-abc-session-1"
+}
+```
+
+Only `message` is required. Optional fields:
+- `tickers` — explicit ticker list to focus retrieval
+- `portfolio` — holdings list for portfolio-aware context
+- `mode` — `"overlay"` to request overlay card alongside answer
+- `explain_mode` — `true` for plain-English explanation mode
+
+**Response**
+```json
+{
+  "answer": "NVDA currently shows a bullish signal with high conviction...",
+  "atoms_used": 12,
+  "kb_depth": "deep",
+  "quota_remaining": 45
+}
+```
+
+**Notes:**
+- Chat quota is enforced per user per day (varies by tier)
+- `kb_depth`: `thin` (<5 atoms) · `shallow` (5–14) · `deep` (≥15)
+- Returns `{"error": "quota_exceeded"}` with HTTP 429 when limit reached
+
+---
+
+## `GET /chat/history`
+
+Paginated conversation history for the authenticated user.
+
+**Query params:**
+
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `user_id` | string | from cookie | Override (fallback for query-string auth) |
+| `limit` | int | 80 | Max entries (max 200) |
+| `offset` | int | 0 | Pagination offset |
+| `search` | string | `""` | Filter by message content |
+
+**Response**
+```json
+{
+  "entries": [ { "id": 1, "role": "user", "content": "What is NVDA?", "timestamp": "..." } ],
+  "total": 142,
+  "user_id": "alice"
+}
+```
+
+---
+
+## `GET /chat/history/{message_id}`
+
+Fetch a single user turn and its paired assistant response.
+
+**Response**
+```json
+{
+  "user":      { "id": 1, "content": "What is NVDA?", "timestamp": "..." },
+  "assistant": { "id": 2, "content": "NVDA is currently...", "metadata": { "atoms_used": 12 } }
+}
+```
+
+`assistant` is `null` if no response is paired.
+
+---
+
+## Paper Trader Endpoints
+
+All paper trader endpoints require authentication and `pro` or `premium` tier. Users can only access their own paper account.
+
+### `GET /users/{id}/paper/account`
+
+Virtual account balance and summary.
+
+**Response**
+```json
+{
+  "user_id": "a1_svao9",
+  "virtual_balance": 487234.50,
+  "currency": "GBP",
+  "open_positions": 3,
+  "created_at": "2026-03-01T00:00:00+00:00"
+}
+```
+
+---
+
+### `GET /users/{id}/paper/positions`
+
+All open paper positions.
+
+**Response**
+```json
+{
+  "positions": [
+    {
+      "id": 42,
+      "ticker": "AAPL",
+      "direction": "bullish",
+      "entry_price": 227.50,
+      "stop": 224.80,
+      "t1": 232.90,
+      "t2": 235.60,
+      "quantity": 18.5185,
+      "status": "open",
+      "partial_closed": 0,
+      "opened_at": "2026-03-06T10:00:00+00:00",
+      "ai_reasoning": "supply_demand bullish | q=0.88 HIGH regime=risk_on | kb_depth=deep (18 atoms)"
+    }
+  ]
+}
+```
+
+**Position statuses:** `open` · `stopped_out` · `t2_hit` · `t1_partial`
+
+---
+
+### `GET /users/{id}/paper/history`
+
+Closed paper positions (stopped out or target hit).
+
+**Query params:** `limit` (default 50), `since` (ISO date)
+
+**Response** — same shape as `/paper/positions` with `exit_price`, `pnl_r`, `closed_at` fields populated.
+
+---
+
+### `GET /users/{id}/paper/log`
+
+Agent activity log — scan starts, entries, skips, stops.
+
+**Query params:** `limit` (default 50)
+
+**Response**
+```json
+{
+  "log": [
+    {
+      "event_type": "scan_start",
+      "ticker": null,
+      "detail": "Scanning open patterns for a1_svao9 (3/12 slots used, 2 on 24h cooldown)",
+      "created_at": "2026-03-06T10:00:00+00:00"
+    },
+    {
+      "event_type": "entry",
+      "ticker": "AAPL",
+      "detail": "bullish entry=227.5000 stop=224.8000 t1=232.9000 qty=18.5185 value=£4,210.71 cash_remaining=£483,023.79",
+      "created_at": "2026-03-06T10:00:01+00:00"
+    },
+    {
+      "event_type": "stopped_out",
+      "ticker": "KB",
+      "detail": "exit=112.80 P&L=-1.00R refund=£2,086.08",
+      "created_at": "2026-03-06T10:02:00+00:00"
+    }
+  ]
+}
+```
+
+**Event types:** `scan_start` · `entry` · `skip` · `stopped_out` · `t2_hit` · `t1_hit` · `monitor_run`
+
+---
+
+### `POST /users/{id}/paper/agent/run`
+
+Trigger a one-shot agent scan synchronously. Returns the scan result immediately.
+
+**Response**
+```json
+{ "status": "ok", "result": { "entries": 2, "skips": 14, "monitor_updates": [] } }
+```
+
+---
+
+### `POST /users/{id}/paper/agent/start`
+
+Start the continuous 30-minute background scanner for this user.
+
+**Response**
+```json
+{ "status": "started", "message": "Continuous scanner started — scans every 30 min" }
+```
+
+Returns `{"status": "already_running"}` if scanner is already active.
+
+---
+
+### `POST /users/{id}/paper/agent/stop`
+
+Stop the continuous scanner.
+
+**Response**
+```json
+{ "status": "stopped", "message": "Scanner stopped" }
+```
+
+---
+
+### `GET /users/{id}/paper/agent/status`
+
+**Response**
+```json
+{ "running": true }
+```
+
+---
+
+---
+
+## Scenario Endpoints
+
+All scenario endpoints require authentication. Scenario execution is read-only — no KB mutations.
+
+### `GET /scenario/seeds`
+
+Return valid seed concepts grouped by category plus the alias mapping. Use for autocomplete chips in the frontend.
+
+**Response**
+```json
+{
+  "categories": { "monetary_policy": ["fed_rate_cut", "fed_rate_hike", ...], ... },
+  "aliases": { "rate cut": "fed_rate_cut", "oil spike": "energy_prices_rise", ... }
+}
+```
+
+---
+
+### `POST /scenario/run`
+
+Run a causal shock scenario through the KB causal graph. Returns chain + affected tickers in <50ms dry-run. Optionally appends a 2–3 sentence LLM narrative (~1–2s Groq).
+
+**Request**
+```json
+{
+  "shock":          "fed rate cut",
+  "max_depth":      4,
+  "min_confidence": 0.5,
+  "narrative":      false
+}
+```
+
+`shock` is free-text — resolved via alias map and edit-distance fallback. `max_depth` max is 8.
+
+**Response**
+```json
+{
+  "shock_input":      "fed rate cut",
+  "seed_concept":     "fed_rate_cut",
+  "resolved":         true,
+  "chain": [
+    { "from": "fed_rate_cut", "to": "dollar_weakens", "confidence": 0.9, "mechanism": "..." },
+    { "from": "dollar_weakens", "to": "gold_rises", "confidence": 0.85, "mechanism": "..." }
+  ],
+  "concepts_reached":  ["dollar_weakens", "gold_rises", "risk_on_equities"],
+  "affected_tickers":  ["GLD", "SHEL.L", "AZN.L"],
+  "portfolio_impact":  { "SHEL.L": "positive", "AZN.L": "neutral" },
+  "chain_confidence":  0.816,
+  "narrative":         null,
+  "elapsed_ms":        64.6
+}
+```
+
+If `resolved=false`, the chain is empty and `unresolved_message` suggests closest-matching seed concepts.
+
+---
+
+### Agent sizing rules
+
+| Rule | Value |
 |---|---|
-| `400` | Missing required field, invalid JSON |
-| `500` | Unhandled server error (check server logs) |
+| Starting balance | £500,000 virtual GBP |
+| Risk per trade | `max_risk_per_trade_pct` from `user_preferences` (default 1%, hard cap 2%) |
+| Max position value | 10% of current balance |
+| Max open positions | 12 |
+| Max new entries per scan | 3 |
+| Stopped-out cooldown | 24 hours per ticker |
+| Scan interval (scheduler) | 30 minutes |
+| Pattern quality threshold | ≥ 0.70, conviction `high`/`confirmed`/`strong` |

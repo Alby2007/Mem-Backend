@@ -22,6 +22,7 @@ retries on the next interval. Other adapters are unaffected.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import threading
 import time
@@ -156,6 +157,39 @@ class IngestScheduler:
         """
         return {name: status.to_dict() for name, status in self._status.items()}
 
+    def update_interval(self, adapter_name: str, new_interval_sec: float) -> bool:
+        """
+        Update the run interval for a named adapter.
+        Cancels the existing scheduled timer and reschedules with the new interval.
+        Returns True if the adapter was found, False otherwise.
+        """
+        target = None
+        for i, (adapter, _) in enumerate(self._adapters):
+            if adapter.name == adapter_name:
+                target = (i, adapter)
+                break
+
+        if target is None:
+            return False
+
+        idx, adapter = target
+        # Update the stored interval
+        self._adapters[idx] = (adapter, new_interval_sec)
+        if adapter_name in self._status:
+            self._status[adapter_name].interval_sec = new_interval_sec
+
+        # Cancel existing timer and reschedule
+        with self._lock:
+            old_timer = self._timers.pop(adapter_name, None)
+        if old_timer:
+            old_timer.cancel()
+
+        if self._running and not self._status.get(adapter_name, AdapterStatus(name=adapter_name, interval_sec=new_interval_sec)).is_running:
+            self._schedule(adapter, new_interval_sec, immediate=False)
+
+        _logger.info('update_interval: %r → %.0fs', adapter_name, new_interval_sec)
+        return True
+
     def run_now(self, adapter_name: str) -> bool:
         """
         Trigger an out-of-schedule immediate run for a named adapter.
@@ -229,16 +263,39 @@ class IngestScheduler:
         status.last_run_at = now
         status.total_runs += 1
 
+        # Hard timeout: adapter must complete within 3× its interval (min 120s, max 600s)
+        # This ensures a hung adapter (e.g. yfinance blocking on bad tickers) never
+        # prevents the finally block from scheduling the next run.
+        timeout_sec = max(120.0, min(interval_sec * 3, 600.0))
+
         try:
-            result = adapter.run_and_push(self._kg)
-            ingested = result.get('ingested', 0)
-            status.total_atoms += ingested
-            status.last_success_at = now
-            status.last_error = None
-            _logger.info(
-                '[%s] run #%d: ingested %d atoms (total: %d)',
-                adapter.name, status.total_runs, ingested, status.total_atoms,
-            )
+            ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = ex.submit(adapter.run_and_push, self._kg)
+            timed_out = False
+            try:
+                result = future.result(timeout=timeout_sec)
+            except concurrent.futures.TimeoutError:
+                timed_out = True
+                _logger.error(
+                    '[%s] run #%d TIMED OUT after %.0fs — skipping',
+                    adapter.name, status.total_runs, timeout_sec,
+                )
+                status.total_errors += 1
+                status.last_error = f'timeout after {timeout_sec:.0f}s'
+                status.last_error_at = now
+            finally:
+                # Don't wait for the hung background thread — let it die on its own
+                ex.shutdown(wait=False)
+
+            if not timed_out:
+                ingested = result.get('ingested', 0)
+                status.total_atoms += ingested
+                status.last_success_at = now
+                status.last_error = None
+                _logger.info(
+                    '[%s] run #%d: ingested %d atoms (total: %d)',
+                    adapter.name, status.total_runs, ingested, status.total_atoms,
+                )
 
         except Exception as e:
             status.total_errors += 1
@@ -251,5 +308,5 @@ class IngestScheduler:
 
         finally:
             status.is_running = False
-            # Schedule next run
+            # Schedule next run regardless of outcome
             self._schedule(adapter, interval_sec, immediate=False)

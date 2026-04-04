@@ -1,0 +1,10 @@
+#!/bin/bash
+DB="/opt/trading-galaxy/data/trading_knowledge.db"
+echo "Tables in $DB:"
+sqlite3 "$DB" ".tables"
+echo ""
+echo "Users sample:"
+sqlite3 "$DB" "SELECT user_id, email, tier FROM users LIMIT 5;" 2>/dev/null || echo "(no users table)"
+echo ""
+echo "Paper account:"
+sqlite3 "$DB" "SELECT user_id, virtual_balance FROM paper_account LIMIT 5;" 2>/dev/null || echo "(no paper_account)"

@@ -53,7 +53,22 @@ class TradingKnowledgeGraph:
         self.db_path = db_path
         self.conn = None
         self._local = threading.local()
+        self._shock_engine = None   # set via set_shock_engine() in api.py
+        self._ledger = None         # set via set_ledger() in api.py
+        self._thesis_monitor = None # set via set_thesis_monitor() in api.py
         self._initialize_db()
+
+    def set_shock_engine(self, engine) -> None:
+        """Inject CausalShockEngine. Called once at api.py startup."""
+        self._shock_engine = engine
+
+    def set_ledger(self, ledger) -> None:
+        """Inject PredictionLedger for intraday price resolution. Called once at api.py startup."""
+        self._ledger = ledger
+
+    def set_thesis_monitor(self, monitor) -> None:
+        """Inject ThesisMonitor for proactive thesis invalidation alerts. Called once at api.py startup."""
+        self._thesis_monitor = monitor
 
     def thread_local_conn(self) -> sqlite3.Connection:
         """Return a per-thread SQLite connection. Safe for use in Flask request handlers."""
@@ -99,6 +114,8 @@ class TradingKnowledgeGraph:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_subject ON facts(subject)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_predicate ON facts(predicate)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_object ON facts(object)")
+        # Composite index for the dominant query pattern: WHERE subject=? AND predicate=?
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_subject_predicate ON facts(subject, predicate)")
         
         # Full-text search
         cursor.execute("""
@@ -172,6 +189,113 @@ class TradingKnowledgeGraph:
             except sqlite3.Error as e:
                 _logger.warning('taxonomy init error for %r: %s', cat, e)
     
+    _SIGNAL_DIRECTION_NORMALISE: Dict[str, str] = {
+        'buy':            'bullish',
+        'strong_buy':     'bullish',
+        'outperform':     'bullish',
+        'overweight':     'bullish',
+        'accumulate':     'bullish',
+        'add':            'bullish',
+        'positive':       'bullish',
+        'long':           'bullish',
+        'near_high':      'bullish',
+        'sell':           'bearish',
+        'strong_sell':    'bearish',
+        'underperform':   'bearish',
+        'underweight':    'bearish',
+        'reduce':         'bearish',
+        'negative':       'bearish',
+        'short':          'bearish',
+        'near_low':       'bearish',
+        'hold':           'neutral',
+        'market_perform': 'neutral',
+        'in_line':        'neutral',
+        'equal_weight':   'neutral',
+        'sector_perform': 'neutral',
+    }
+
+    def _update_fts_shadow(self, cursor, conn, fact_id, subj, pred, obj):
+        """Update the SQLite FTS5 shadow index for a fact (keeps search() working)."""
+        try:
+            cursor.execute('DELETE FROM facts_fts WHERE rowid = ?', (fact_id,))
+            cursor.execute(
+                "INSERT INTO facts_fts (rowid, subject, predicate, object) VALUES (?,?,?,?)",
+                (fact_id, subj, pred, obj))
+            conn.commit()
+        except Exception:
+            pass  # FTS shadow update failure is non-critical
+
+    def _add_fact_sqlite(self, cursor, conn, subj, pred, obj, confidence, source, now, meta_str, upsert):
+        """SQLite-only write path for facts (used when PG is not available)."""
+        new_id = None
+        is_new = False
+        if upsert:
+            cursor.execute("""
+                SELECT id FROM facts WHERE subject = ? AND predicate = ? AND source = ?
+            """, (subj, pred, source))
+            row = cursor.fetchone()
+            if row:
+                existing_id = row['id']
+                cursor.execute("""
+                    SELECT id FROM facts
+                    WHERE subject = ? AND predicate = ? AND object = ? AND id != ?
+                """, (subj, pred, obj, existing_id))
+                collision = cursor.fetchone()
+                if collision:
+                    cursor.execute('DELETE FROM facts WHERE id = ?', (existing_id,))
+                    cursor.execute('DELETE FROM facts_fts WHERE rowid = ?', (existing_id,))
+                    cursor.execute("""
+                        UPDATE facts SET confidence = MAX(confidence, ?), timestamp = ?, metadata = ?
+                        WHERE id = ?
+                    """, (confidence, now, meta_str, collision['id']))
+                else:
+                    cursor.execute("""
+                        UPDATE facts
+                        SET object = ?, confidence = ?, timestamp = ?, metadata = ?
+                        WHERE id = ?
+                    """, (obj, confidence, now, meta_str, existing_id))
+                    cursor.execute('DELETE FROM facts_fts WHERE rowid = ?', (existing_id,))
+                    cursor.execute("""
+                        INSERT INTO facts_fts (rowid, subject, predicate, object)
+                        VALUES (?, ?, ?, ?)
+                    """, (existing_id, subj, pred, obj))
+                conn.commit()
+                return False
+
+        try:
+            cursor.execute("""
+                INSERT INTO facts (subject, predicate, object, confidence, source, timestamp, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (subj, pred, obj, confidence, source, now, meta_str))
+            new_id = cursor.lastrowid
+            is_new = True
+            cursor.execute("""
+                INSERT INTO facts_fts (rowid, subject, predicate, object)
+                VALUES (?, ?, ?, ?)
+            """, (new_id, subj, pred, obj))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            cursor.execute("""
+                SELECT id FROM facts
+                WHERE subject = ? AND predicate = ? AND object = ?
+            """, (subj, pred, obj))
+            row = cursor.fetchone()
+            existing_id = row['id'] if row else None
+            cursor.execute("""
+                UPDATE facts
+                SET confidence = MAX(confidence, ?), timestamp = ?
+                WHERE subject = ? AND predicate = ? AND object = ?
+            """, (confidence, now, subj, pred, obj))
+            if existing_id is not None:
+                cursor.execute('DELETE FROM facts_fts WHERE rowid = ?', (existing_id,))
+                cursor.execute("""
+                    INSERT INTO facts_fts (rowid, subject, predicate, object)
+                    VALUES (?, ?, ?, ?)
+                """, (existing_id, subj, pred, obj))
+            conn.commit()
+            return False
+        return is_new
+
     def add_fact(self, subject: str, predicate: str, object: str,
                  confidence: float = 0.5, source: str = 'unknown',
                  metadata: Optional[Dict] = None,
@@ -194,91 +318,70 @@ class TradingKnowledgeGraph:
         subj = subject.lower().strip()
         pred = predicate.lower().strip()
         obj  = object.lower().strip()
+
+        # Semantic normalisation — collapse synonymous signal_direction values
+        # before write so 'buy' and 'bullish' don't create spurious conflicts.
+        if pred == 'signal_direction':
+            obj = self._SIGNAL_DIRECTION_NORMALISE.get(obj, obj)
         now  = datetime.now().isoformat()
         meta_str = json.dumps(metadata) if metadata else None
 
         new_id = None
         is_new = False
 
-        if upsert:
-            # ── Source-keyed upsert: update if (subj, pred, source) exists ──
-            cursor.execute("""
-                SELECT id FROM facts WHERE subject = ? AND predicate = ? AND source = ?
-            """, (subj, pred, source))
-            row = cursor.fetchone()
+        # ── Postgres path (source of truth) ───────────────────────────────
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    if upsert:
+                        # Source-keyed upsert
+                        cur.execute(
+                            "SELECT id FROM facts WHERE subject=%s AND predicate=%s AND source=%s",
+                            (subj, pred, source))
+                        row = cur.fetchone()
+                        if row:
+                            existing_id = row['id']
+                            cur.execute(
+                                "SELECT id FROM facts WHERE subject=%s AND predicate=%s AND object=%s AND id!=%s",
+                                (subj, pred, obj, existing_id))
+                            collision = cur.fetchone()
+                            if collision:
+                                cur.execute("DELETE FROM facts WHERE id=%s", (existing_id,))
+                                cur.execute(
+                                    "UPDATE facts SET confidence=GREATEST(confidence,%s), timestamp=%s, metadata=%s WHERE id=%s",
+                                    (confidence, now, meta_str, collision['id']))
+                            else:
+                                cur.execute(
+                                    "UPDATE facts SET object=%s, confidence=%s, timestamp=%s, metadata=%s WHERE id=%s",
+                                    (obj, confidence, now, meta_str, existing_id))
+                            # Update SQLite FTS shadow index
+                            self._update_fts_shadow(cursor, conn, existing_id, subj, pred, obj)
+                            return False
+                    # INSERT with ON CONFLICT for (subject, predicate, object)
+                    cur.execute(
+                        """INSERT INTO facts (subject, predicate, object, confidence, source, timestamp, metadata)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s)
+                           ON CONFLICT (subject, predicate, object) DO UPDATE
+                           SET confidence = GREATEST(facts.confidence, EXCLUDED.confidence),
+                               timestamp = EXCLUDED.timestamp
+                           RETURNING id, (xmax = 0) AS inserted""",
+                        (subj, pred, obj, confidence, source, now, meta_str))
+                    result = cur.fetchone()
+                    new_id = result['id'] if result else None
+                    is_new = result['inserted'] if result else False
+                # Update SQLite FTS shadow index
+                if new_id:
+                    self._update_fts_shadow(cursor, conn, new_id, subj, pred, obj)
+            except Exception as _pg_e:
+                _logger.debug('PG facts write failed, falling back to SQLite: %s', _pg_e)
+                # Fall through to SQLite path below
+                return self._add_fact_sqlite(cursor, conn, subj, pred, obj, confidence, source, now, meta_str, upsert)
+        else:
+            return self._add_fact_sqlite(cursor, conn, subj, pred, obj, confidence, source, now, meta_str, upsert)
 
-            if row:
-                existing_id = row['id']
-                # Check if another row already has this exact (subj, pred, obj) value
-                cursor.execute("""
-                    SELECT id FROM facts
-                    WHERE subject = ? AND predicate = ? AND object = ? AND id != ?
-                """, (subj, pred, obj, existing_id))
-                collision = cursor.fetchone()
-                if collision:
-                    # New value already exists in another row — delete our stale row
-                    # and update the colliding row with the better confidence/timestamp
-                    cursor.execute('DELETE FROM facts WHERE id = ?', (existing_id,))
-                    cursor.execute('DELETE FROM facts_fts WHERE rowid = ?', (existing_id,))
-                    cursor.execute("""
-                        UPDATE facts SET confidence = MAX(confidence, ?), timestamp = ?, metadata = ?
-                        WHERE id = ?
-                    """, (confidence, now, meta_str, collision['id']))
-                else:
-                    cursor.execute("""
-                        UPDATE facts
-                        SET object = ?, confidence = ?, timestamp = ?, metadata = ?
-                        WHERE id = ?
-                    """, (obj, confidence, now, meta_str, existing_id))
-                    # Refresh FTS index
-                    cursor.execute('DELETE FROM facts_fts WHERE rowid = ?', (existing_id,))
-                    cursor.execute("""
-                        INSERT INTO facts_fts (rowid, subject, predicate, object)
-                        VALUES (?, ?, ?, ?)
-                    """, (existing_id, subj, pred, obj))
-                conn.commit()
-                return False  # updated, not new
-            # No row for this source yet — fall through to INSERT below.
-            # If (subj, pred, obj) already exists under a different source, the
-            # IntegrityError handler below will update confidence/timestamp safely.
-
-        try:
-            cursor.execute("""
-                INSERT INTO facts (subject, predicate, object, confidence, source, timestamp, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (subj, pred, obj, confidence, source, now, meta_str))
-            new_id = cursor.lastrowid
-            is_new = True
-
-            cursor.execute("""
-                INSERT INTO facts_fts (rowid, subject, predicate, object)
-                VALUES (?, ?, ?, ?)
-            """, (new_id, subj, pred, obj))
-
-            conn.commit()
-        except sqlite3.IntegrityError:
-            cursor.execute("""
-                SELECT id FROM facts
-                WHERE subject = ? AND predicate = ? AND object = ?
-            """, (subj, pred, obj))
-            row = cursor.fetchone()
-            existing_id = row['id'] if row else None
-
-            cursor.execute("""
-                UPDATE facts
-                SET confidence = MAX(confidence, ?), timestamp = ?
-                WHERE subject = ? AND predicate = ? AND object = ?
-            """, (confidence, now, subj, pred, obj))
-
-            if existing_id is not None:
-                cursor.execute('DELETE FROM facts_fts WHERE rowid = ?', (existing_id,))
-                cursor.execute("""
-                    INSERT INTO facts_fts (rowid, subject, predicate, object)
-                    VALUES (?, ?, ?, ?)
-                """, (existing_id, subj, pred, obj))
-
-            conn.commit()
-            return False
+        # Skip SQLite path — PG is source of truth
 
         # Contradiction detection — runs after successful new insert only
         if is_new and HAS_CONTRADICTION:
@@ -293,6 +396,28 @@ class TradingKnowledgeGraph:
                     )
             except Exception:
                 pass  # never let conflict detection break the ingest path
+
+        # Causal shock propagation — fires for ~5 macro predicates, O(1) check
+        if self._shock_engine is not None:
+            try:
+                self._shock_engine.on_atom_written(subj, pred, obj)
+            except Exception:
+                pass  # never let shock engine break the ingest path
+
+        # Prediction ledger intraday resolution — fires only for last_price atoms
+        if self._ledger is not None and pred == 'last_price':
+            try:
+                price = float(obj.split()[0].replace(',', ''))
+                self._ledger.on_price_written(subj, price)
+            except Exception:
+                pass  # never let ledger break the ingest path
+
+        # Thesis monitor — checks for invalidation condition approach on macro predicates
+        if self._thesis_monitor is not None:
+            try:
+                self._thesis_monitor.on_atom_written(subj, pred, obj)
+            except Exception:
+                pass  # never let thesis monitor break the ingest path
 
         return True
     
@@ -340,9 +465,34 @@ class TradingKnowledgeGraph:
     
     def _fallback_search(self, query: str, limit: int, category: str = None) -> List[Dict]:
         """LIKE-based fallback search"""
-        cursor = self.thread_local_conn().cursor()
+        from db import HAS_POSTGRES, get_pg
         pattern = f'%{query.lower()}%'
 
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    if category:
+                        cur.execute("""
+                            SELECT DISTINCT f.subject, f.predicate, f.object, f.confidence, f.source, f.timestamp
+                            FROM facts f
+                            JOIN fact_categories fc ON f.id = fc.fact_id
+                            WHERE (f.subject ILIKE %s OR f.predicate ILIKE %s OR f.object ILIKE %s)
+                            AND fc.category = %s
+                            ORDER BY f.confidence DESC LIMIT %s
+                        """, (pattern, pattern, pattern, category, limit))
+                    else:
+                        cur.execute("""
+                            SELECT subject, predicate, object, confidence, source, timestamp
+                            FROM facts
+                            WHERE subject ILIKE %s OR predicate ILIKE %s OR object ILIKE %s
+                            ORDER BY confidence DESC LIMIT %s
+                        """, (pattern, pattern, pattern, limit))
+                    return [dict(row) for row in cur.fetchall()]
+            except Exception:
+                pass  # fall through to SQLite
+
+        cursor = self.thread_local_conn().cursor()
         try:
             if category:
                 cursor.execute("""
@@ -369,9 +519,32 @@ class TradingKnowledgeGraph:
     def query(self, subject: str = None, predicate: str = None,
               object: str = None, limit: int = 100) -> List[Dict]:
         """Query with filters"""
-        cursor = self.thread_local_conn().cursor()
+        from db import HAS_POSTGRES, get_pg
         conditions, params = [], []
-        
+        if HAS_POSTGRES:
+            if subject:
+                conditions.append("subject ILIKE %s")
+                params.append(f"%{subject.lower()}%")
+            if predicate:
+                conditions.append("predicate ILIKE %s")
+                params.append(f"%{predicate.lower()}%")
+            if object:
+                conditions.append("object ILIKE %s")
+                params.append(f"%{object.lower()}%")
+            where = " AND ".join(conditions) if conditions else "1=1"
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute(f"""
+                        SELECT subject, predicate, object, confidence, source, timestamp, metadata
+                        FROM facts WHERE {where}
+                        ORDER BY confidence DESC, timestamp DESC LIMIT %s
+                    """, params + [limit])
+                    return [dict(row) for row in cur.fetchall()]
+            except Exception:
+                pass  # fall through to SQLite
+
+        cursor = self.thread_local_conn().cursor()
         if subject:
             conditions.append("subject LIKE ?")
             params.append(f"%{subject.lower()}%")
@@ -381,14 +554,12 @@ class TradingKnowledgeGraph:
         if object:
             conditions.append("object LIKE ?")
             params.append(f"%{object.lower()}%")
-        
         where = " AND ".join(conditions) if conditions else "1=1"
         cursor.execute(f"""
             SELECT subject, predicate, object, confidence, source, timestamp, metadata
             FROM facts WHERE {where}
             ORDER BY confidence DESC, timestamp DESC LIMIT ?
         """, params + [limit])
-        
         return [dict(row) for row in cursor.fetchall()]
     
     def get_context(self, entity: str, depth: int = 1) -> List[Dict]:
@@ -410,18 +581,25 @@ class TradingKnowledgeGraph:
     
     def get_stats(self) -> Dict:
         """Get statistics"""
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute("SELECT COUNT(*) as count FROM facts")
+                    total = cur.fetchone()['count']
+                    cur.execute("SELECT COUNT(DISTINCT subject) as count FROM facts")
+                    subjects = cur.fetchone()['count']
+                    cur.execute("SELECT COUNT(DISTINCT predicate) as count FROM facts")
+                    predicates = cur.fetchone()['count']
+                    return {'total_facts': total, 'unique_subjects': subjects, 'unique_predicates': predicates}
+            except Exception:
+                pass
         cursor = self.thread_local_conn().cursor()
         cursor.execute("SELECT COUNT(*) as count FROM facts")
         total = cursor.fetchone()['count']
-        
         cursor.execute("SELECT COUNT(DISTINCT subject) as count FROM facts")
         subjects = cursor.fetchone()['count']
-        
         cursor.execute("SELECT COUNT(DISTINCT predicate) as count FROM facts")
         predicates = cursor.fetchone()['count']
-        
-        return {
-            'total_facts': total,
-            'unique_subjects': subjects,
-            'unique_predicates': predicates
-        }
+        return {'total_facts': total, 'unique_subjects': subjects, 'unique_predicates': predicates}

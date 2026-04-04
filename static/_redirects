@@ -1,0 +1,32 @@
+# Auth pages — redirect to canonical URL
+/login                      /auth               301
+/register                   /auth?screen=register  301
+# SPA routes — all served by /login/index.html (the Trading Galaxy app)
+/dashboard                  /login/index.html   200
+/portfolio                  /login/index.html   200
+/chat                       /login/index.html   200
+/markets                    /login/index.html   200
+/visualiser                 /login/index.html   200
+/tips                       /login/index.html   200
+/patterns                   /login/index.html   200
+/network                    /login/index.html   200
+/history                    /login/index.html   200
+/paper                      /login/index.html   200
+/private-fleet              /login/index.html   200
+/subscription               /login/index.html   200
+/profile                    /login/index.html   200
+
+# /:username/screen routes
+/:username/dashboard        /login/index.html   200
+/:username/portfolio        /login/index.html   200
+/:username/chat             /login/index.html   200
+/:username/markets          /login/index.html   200
+/:username/visualiser       /login/index.html   200
+/:username/tips             /login/index.html   200
+/:username/patterns         /login/index.html   200
+/:username/network          /login/index.html   200
+/:username/history          /login/index.html   200
+/:username/paper            /login/index.html   200
+/:username/private-fleet    /login/index.html   200
+/:username/subscription     /login/index.html   200
+/:username/profile          /login/index.html   200

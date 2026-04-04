@@ -26,5 +26,15 @@ Thumbs.db
 # Secrets
 .env
 
-# Nested repos / local tools
-Mem-Backend/
+# Local Netlify folder
+.netlify
+
+# Large test fixtures (exceed Cloudflare Pages 25 MiB file limit)
+tests/fixtures/*.sql
+
+# Diagnostic / temporary scripts (debugging sessions)
+tmp_*.py
+scripts/_*.py
+
+# Root-level test scaffolding (dev/debug only — not tracked)
+test_*.py

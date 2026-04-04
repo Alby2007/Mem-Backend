@@ -1,120 +1,1955 @@
 """
-services/bot_runner.py — Bot Runner
+services/bot_runner.py — Evolutionary Strategy Bot Runner
 
-Orchestrates position entry decisions. When a bot enters a position it:
-  1. Computes a KB state commitment (Merkle root) for the ticker
-  2. Records the prediction alongside the KB provenance in the ledger
-
-This module is the call site that wires kb_commitment into the prediction
-ledger. Other services should call `enter_position()` rather than writing
-to the ledger directly.
-
-USAGE
-=====
-    from services.bot_runner import BotRunner
-
-    runner = BotRunner(db_path='trading_knowledge.db')
-    result = runner.enter_position(
-        ticker='NVDA',
-        pattern_type='fvg',
-        timeframe='1h',
-        entry_price=890.0,
-        target_1=920.0,
-        target_2=950.0,
-        stop_loss=875.0,
-        market_regime='risk_on_expansion',
-        conviction_tier='high',
-    )
+Manages the lifecycle of genome-defined strategy bots.
+Each bot runs its own scan thread, using the same _should_enter() logic
+as the generalist but with upstream genome filters applied.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import random
 import sqlite3
-from typing import Dict, Optional
+import threading
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
 
-_logger = logging.getLogger(__name__)
+import extensions as ext
 
+_logger = logging.getLogger('bot_runner')
+
+# ── Genome helpers ─────────────────────────────────────────────────────────────
+
+_PATTERN_POOL = ['fvg', 'ifvg', 'order_block', 'breaker', 'mitigation', 'bos', 'choch']
+_SECTOR_POOL  = ['technology', 'energy', 'financials', 'healthcare', 'consumer', 'utilities', 'industrials']
+_VOL_POOL     = ['low', 'medium', 'high', 'extreme']
+_REGIME_POOL  = ['risk_on_expansion', 'risk_off_contraction', 'recovery', 'stagflation']
+
+
+def _hash_genome(genome: dict) -> str:
+    """Stable SHA-256 hash of the parameter vector (excludes identity/lifecycle fields)."""
+    keys = ['pattern_types', 'sectors', 'exchanges', 'volatility', 'regimes',
+            'timeframes', 'direction_bias', 'risk_pct', 'max_positions', 'min_quality']
+    vector = {k: genome.get(k) for k in keys}
+    return hashlib.sha256(json.dumps(vector, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _name_genome(genome: dict) -> str:
+    """Human-readable name from genome genes."""
+    parts = []
+    pt = genome.get('pattern_types')
+    if pt:
+        pts = json.loads(pt) if isinstance(pt, str) else pt
+        parts.append('+'.join(p.upper() for p in pts[:2]))
+    sec = genome.get('sectors')
+    if sec:
+        secs = json.loads(sec) if isinstance(sec, str) else sec
+        if secs:
+            parts.append(secs[0].title())
+    vol = genome.get('volatility')
+    if vol:
+        vols = json.loads(vol) if isinstance(vol, str) else vol
+        if vols:
+            parts.append(vols[0].title() + ' Vol')
+    direction = genome.get('direction_bias')
+    if direction:
+        parts.append(direction.title())
+    role = genome.get('role', 'seed')
+    if role in ('explore', 'mutant'):
+        gid = genome.get('genome_id', '')[:4]
+        parts.append(f'#{gid}')
+    return ' '.join(parts) if parts else f"Bot {genome.get('genome_id', '')[:8]}"
+
+
+def generate_random_genome() -> dict:
+    """Fully randomised genome. Role = explore."""
+    n_pat = random.randint(1, 3)
+    pat = random.sample(_PATTERN_POOL, k=n_pat)
+    sec = random.sample(_SECTOR_POOL, k=random.randint(1, 2)) if random.random() > 0.4 else None
+    vol = random.sample(_VOL_POOL, k=random.randint(1, 2)) if random.random() > 0.4 else None
+    reg = random.sample(_REGIME_POOL, k=random.randint(1, 2)) if random.random() > 0.5 else None
+    direction = random.choice([None, 'bullish', 'bearish'])
+    g = {
+        'pattern_types':  json.dumps(pat),
+        'sectors':        json.dumps(sec) if sec else None,
+        'exchanges':      None,
+        'volatility':     json.dumps(vol) if vol else None,
+        'regimes':        json.dumps(reg) if reg else None,
+        'timeframes':     None,
+        'direction_bias': direction,
+        'risk_pct':       round(random.uniform(0.5, 2.0), 2),
+        'max_positions':  random.randint(2, 6),
+        'min_quality':    round(random.uniform(0.55, 0.75), 2),
+        'role':           'explore',
+        'generation':     0,
+        'parent_id':      None,
+    }
+    g['genome_id'] = _hash_genome(g)
+    g['strategy_name'] = _name_genome(g)
+    return g
+
+
+# ── Seed templates ─────────────────────────────────────────────────────────────
+
+def _make_seed_templates() -> list[dict]:
+    templates = [
+        {
+            # Broadest filter — fvg/ifvg dominate mid-quality range; lower floor to catch them
+            'strategy_name': 'FVG Scanner',
+            'pattern_types':  json.dumps(['fvg', 'ifvg']),
+            'sectors':        None,
+            'exchanges':      None,
+            'volatility':     None,
+            'regimes':        None,
+            'timeframes':     None,
+            'direction_bias': None,
+            'risk_pct':       1.0,
+            'max_positions':  4,
+            'min_quality':    0.55,
+            'role':           'seed',
+            'generation':     0,
+            'parent_id':      None,
+        },
+        {
+            'strategy_name': 'Order Block Hunter',
+            'pattern_types':  json.dumps(['order_block']),
+            'sectors':        None,
+            'exchanges':      None,
+            'volatility':     None,
+            'regimes':        None,
+            'timeframes':     None,
+            'direction_bias': None,
+            'risk_pct':       1.0,
+            'max_positions':  4,
+            'min_quality':    0.65,
+            'role':           'seed',
+            'generation':     0,
+            'parent_id':      None,
+        },
+        {
+            # Vol filter uses actual atom values (low_volatility / high_volatility); regime stripped (sparse atoms)
+            'strategy_name': 'Tech Momentum',
+            'pattern_types':  json.dumps(['fvg', 'order_block']),
+            'sectors':        json.dumps(['technology']),
+            'exchanges':      None,
+            'volatility':     json.dumps(['high_volatility']),
+            'regimes':        None,
+            'timeframes':     None,
+            'direction_bias': 'bullish',
+            'risk_pct':       1.5,
+            'max_positions':  4,
+            'min_quality':    0.60,
+            'role':           'seed',
+            'generation':     0,
+            'parent_id':      None,
+        },
+        {
+            'strategy_name': 'Energy Rotation',
+            'pattern_types':  json.dumps(['order_block', 'breaker']),
+            'sectors':        json.dumps(['energy']),
+            'exchanges':      None,
+            'volatility':     None,
+            'regimes':        None,
+            'timeframes':     None,
+            'direction_bias': None,
+            'risk_pct':       1.0,
+            'max_positions':  4,
+            'min_quality':    0.60,
+            'role':           'seed',
+            'generation':     0,
+            'parent_id':      None,
+        },
+        {
+            # Regime stripped (sparse atoms); vol uses correct atom name
+            'strategy_name': 'Risk-Off Shorts',
+            'pattern_types':  json.dumps(['breaker', 'mitigation']),
+            'sectors':        None,
+            'exchanges':      None,
+            'volatility':     json.dumps(['high_volatility']),
+            'regimes':        None,
+            'timeframes':     None,
+            'direction_bias': 'bearish',
+            'risk_pct':       1.0,
+            'max_positions':  3,
+            'min_quality':    0.60,
+            'role':           'seed',
+            'generation':     0,
+            'parent_id':      None,
+        },
+        {
+            'strategy_name': 'UK Blue Chips',
+            'pattern_types':  json.dumps(['fvg', 'order_block']),
+            'sectors':        None,
+            'exchanges':      json.dumps(['.L']),
+            'volatility':     None,
+            'regimes':        None,
+            'timeframes':     None,
+            'direction_bias': None,
+            'risk_pct':       1.0,
+            'max_positions':  4,
+            'min_quality':    0.55,
+            'role':           'seed',
+            'generation':     0,
+            'parent_id':      None,
+        },
+        {
+            # mitigation: raised min_quality to 0.65 (was 0.55) — pattern was -2.24R avg
+            # Added direction_bias=bullish to avoid shorting into support (structurally losing)
+            'strategy_name': 'Mitigation Hunter',
+            'pattern_types':  json.dumps(['mitigation']),
+            'sectors':        None,
+            'exchanges':      None,
+            'volatility':     None,
+            'regimes':        None,
+            'timeframes':     None,
+            'direction_bias': 'bullish',
+            'risk_pct':       1.0,
+            'max_positions':  4,
+            'min_quality':    0.65,
+            'role':           'seed',
+            'generation':     0,
+            'parent_id':      None,
+        },
+        {
+            # liquidity_void: 16k signals, sector-focused on financials + industrials
+            'strategy_name': 'Liquidity Void',
+            'pattern_types':  json.dumps(['liquidity_void']),
+            'sectors':        json.dumps(['financial_services', 'financial services', 'industrials']),
+            'exchanges':      None,
+            'volatility':     None,
+            'regimes':        None,
+            'timeframes':     None,
+            'direction_bias': None,
+            'risk_pct':       1.0,
+            'max_positions':  4,
+            'min_quality':    0.55,
+            'role':           'seed',
+            'generation':     0,
+            'parent_id':      None,
+        },
+    ]
+    # Assign genome_ids and names where missing
+    for t in templates:
+        if 'genome_id' not in t:
+            t['genome_id'] = _hash_genome(t)
+        if 'strategy_name' not in t or not t['strategy_name']:
+            t['strategy_name'] = _name_genome(t)
+    return templates
+
+
+# ── BotRunner ─────────────────────────────────────────────────────────────────
 
 class BotRunner:
-    """Orchestrates position entries with KB provenance tracking."""
+    """Manages lifecycle of all genome-defined strategy bots."""
 
-    def __init__(self, db_path: str = 'trading_knowledge.db'):
+    def __init__(self, db_path: str):
         self.db_path = db_path
+        self._threads: dict[str, threading.Thread] = {}
+        self._stop_events: dict[str, threading.Event] = {}
+        self._lock = threading.Lock()
+        # Dedicated position exit monitor — separate from per-bot scan threads
+        self._pos_monitor_stop: Optional[threading.Event] = None
+        self._pos_monitor_thread: Optional[threading.Thread] = None
 
-    def enter_position(
-        self,
-        ticker:          str,
-        pattern_type:    str,
-        timeframe:       Optional[str] = None,
-        entry_price:     Optional[float] = None,
-        target_1:        Optional[float] = None,
-        target_2:        Optional[float] = None,
-        stop_loss:       Optional[float] = None,
-        p_hit_t1:        Optional[float] = None,
-        p_hit_t2:        Optional[float] = None,
-        p_stopped_out:   Optional[float] = None,
-        market_regime:   Optional[str] = None,
-        conviction_tier: Optional[str] = None,
-        expires_at:      Optional[str] = None,
-        source:          str = 'system',
-        conn:            Optional[sqlite3.Connection] = None,
-    ) -> Dict:
-        """
-        Enter a position: compute KB commitment then record the prediction.
+    # ── Schema ────────────────────────────────────────────────────────────────
 
-        Returns a dict with:
-          recorded   — True if the prediction was written successfully
-          kb_root    — 64-char hex Merkle root (or None on failure)
-          kb_fact_ids — JSON array of fact IDs (or None on failure)
-        """
-        from analytics.prediction_ledger import PredictionLedger
+    def _ensure_tables(self, conn):
+        from services.paper_trading import ensure_paper_tables
+        ensure_paper_tables(conn)
 
-        # Compute KB state commitment at decision time
-        _kb_root: Optional[str] = None
-        _kb_fact_ids: Optional[str] = None
-        try:
-            from analytics.kb_commitment import compute_kb_root
-            _kb_root, _kb_fact_ids = compute_kb_root(
-                ticker=ticker,
-                db_path=self.db_path,
-                conn=conn,
-            )
-        except Exception as _kbc_e:
-            _logger.warning('kb_commitment failed for %s: %s', ticker, _kbc_e)
+    # ── PG helpers (hot-table routing) ──────────────────────────────────────
+    # These route writes to Postgres when available, SQLite fallback.
 
-        ledger = PredictionLedger(self.db_path)
-        recorded = ledger.record_prediction(
-            ticker=ticker,
-            pattern_type=pattern_type,
-            timeframe=timeframe,
-            entry_price=entry_price,
-            target_1=target_1,
-            target_2=target_2,
-            stop_loss=stop_loss,
-            p_hit_t1=p_hit_t1,
-            p_hit_t2=p_hit_t2,
-            p_stopped_out=p_stopped_out,
-            market_regime=market_regime,
-            conviction_tier=conviction_tier,
-            expires_at=expires_at,
-            source=source,
-            kb_root=_kb_root,
-            kb_fact_ids=_kb_fact_ids,
-            conn=conn,
+    @staticmethod
+    def _pg_log_event(conn, user_id, event_type, ticker, detail, bot_id, now_iso):
+        """Write paper_agent_log row — PG when available, else SQLite conn."""
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    pg.cursor().execute(
+                        "INSERT INTO paper_agent_log "
+                        "(user_id, event_type, ticker, detail, bot_id, created_at) "
+                        "VALUES (%s,%s,%s,%s,%s,%s)",
+                        (user_id, event_type, ticker, detail, bot_id, now_iso),
+                    )
+            except Exception as _e:
+                _logger.debug('PG paper_agent_log write failed: %s', _e)
+            return
+        conn.execute(
+            "INSERT INTO paper_agent_log "
+            "(user_id, event_type, ticker, detail, bot_id, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (user_id, event_type, ticker, detail, bot_id, now_iso),
         )
 
-        if recorded:
-            _logger.info(
-                'Position entered: %s %s | kb_root=%s',
-                ticker, pattern_type,
-                _kb_root[:16] + '...' if _kb_root else 'None',
-            )
-        else:
-            _logger.error('Failed to record prediction for %s %s', ticker, pattern_type)
+    @staticmethod
+    def _pg_write_equity(conn, bot_id, equity, balance, open_count, now_iso):
+        """Write paper_bot_equity row — PG when available, else SQLite conn."""
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    pg.cursor().execute(
+                        "INSERT INTO paper_bot_equity "
+                        "(bot_id, equity_value, cash_balance, open_positions, logged_at) "
+                        "VALUES (%s,%s,%s,%s,%s)",
+                        (bot_id, equity, balance, open_count, now_iso),
+                    )
+            except Exception as _e:
+                _logger.debug('PG paper_bot_equity write failed: %s', _e)
+            return
+        conn.execute(
+            "INSERT INTO paper_bot_equity "
+            "(bot_id, equity_value, cash_balance, open_positions, logged_at) "
+            "VALUES (?,?,?,?,?)",
+            (bot_id, equity, balance, open_count, now_iso),
+        )
 
-        return {
-            'recorded': recorded,
-            'kb_root': _kb_root,
-            'kb_fact_ids': _kb_fact_ids,
-        }
+    @staticmethod
+    def _pg_read_fact(conn, subject, predicate):
+        """Read a single fact row — PG when available, else SQLite conn."""
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute(
+                        "SELECT object FROM facts WHERE LOWER(subject)=LOWER(%s) "
+                        "AND predicate=%s ORDER BY timestamp DESC LIMIT 1",
+                        (subject, predicate),
+                    )
+                    row = cur.fetchone()
+                    return row['object'] if row else None
+            except Exception:
+                return None
+        try:
+            row = conn.execute(
+                "SELECT object FROM facts WHERE LOWER(subject)=? "
+                "AND predicate=? ORDER BY timestamp DESC LIMIT 1",
+                (subject.lower(), predicate),
+            ).fetchone()
+            return row[0] if row else None
+        except Exception:
+            return None
+
+    def _pg_query_patterns(self, config, conn, quality_floor):
+        """Query pattern_signals candidates — PG when available, else SQLite."""
+        from db import HAS_POSTGRES, get_pg
+        filter_sql, filter_params = self._build_filtered_query(config)
+        base_where = (
+            "p.status NOT IN ('filled','broken','expired') "
+            f"AND p.quality_score >= {quality_floor}"
+        )
+        full_where = f"{base_where} AND {filter_sql}" if filter_sql else base_where
+
+        if HAS_POSTGRES:
+            # Convert ? placeholders to %s for Postgres
+            pg_where = full_where.replace('?', '%s')
+            with get_pg() as pg:
+                cur = pg.cursor()
+                cur.execute(
+                    f"""SELECT p.id, p.ticker, p.pattern_type, p.direction,
+                               p.zone_high, p.zone_low, p.quality_score,
+                               p.kb_conviction, p.kb_regime, p.kb_signal_dir
+                        FROM pattern_signals p
+                        WHERE {pg_where}
+                        ORDER BY p.quality_score DESC
+                        LIMIT 100""",
+                    filter_params,
+                )
+                return [dict(r) for r in cur.fetchall()]
+        rows = conn.execute(
+            f"""SELECT p.id, p.ticker, p.pattern_type, p.direction,
+                       p.zone_high, p.zone_low, p.quality_score,
+                       p.kb_conviction, p.kb_regime, p.kb_signal_dir
+                FROM pattern_signals p
+                WHERE {full_where}
+                ORDER BY p.quality_score DESC
+                LIMIT 100""",
+            filter_params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def _pg_update_pattern_status(conn, pattern_id, status):
+        """Update pattern_signals status — PG when available, else SQLite."""
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    pg.cursor().execute(
+                        "UPDATE pattern_signals SET status=%s WHERE id=%s",
+                        (status, pattern_id),
+                    )
+            except Exception as _e:
+                _logger.debug('PG pattern status update failed: %s', _e)
+            return
+        conn.execute(
+            "UPDATE pattern_signals SET status=? WHERE id=?",
+            (status, pattern_id),
+        )
+
+    @staticmethod
+    def _pg_read_pattern(conn, pattern_id):
+        """Read a single pattern_signals row — PG when available, else SQLite."""
+        from db import HAS_POSTGRES, get_pg
+        if HAS_POSTGRES:
+            try:
+                with get_pg() as pg:
+                    cur = pg.cursor()
+                    cur.execute(
+                        "SELECT pattern_type, timeframe, kb_regime FROM pattern_signals WHERE id=%s",
+                        (pattern_id,),
+                    )
+                    return cur.fetchone()
+            except Exception:
+                return None
+        try:
+            return conn.execute(
+                "SELECT pattern_type, timeframe, kb_regime FROM pattern_signals WHERE id=?",
+                (pattern_id,),
+            ).fetchone()
+        except Exception:
+            return None
+
+    # ── Fleet management ──────────────────────────────────────────────────────
+
+    def count_bots(self, user_id: str) -> int:
+        """Return number of active bots for this user."""
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            self._ensure_tables(conn)
+            n = conn.execute(
+                "SELECT COUNT(*) FROM paper_bot_configs WHERE user_id=? AND active=1",
+                (user_id,)
+            ).fetchone()[0]
+            conn.close()
+            return n
+        except Exception as e:
+            _logger.warning('count_bots error for %s: %s', user_id, e)
+            return 0
+
+    def seed_fleet(self, user_id: str, total_balance: float, n_bots: int = 8) -> list[str]:
+        """Create n_bots seed bots, split capital equally, start all scanner threads."""
+        import itertools
+        templates = _make_seed_templates()
+        bot_templates = list(itertools.islice(itertools.cycle(templates), n_bots))
+        per_bot = round(total_balance / n_bots, 2)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        self._ensure_tables(conn)
+        bot_ids = []
+        for tmpl in bot_templates:
+            bot_id = 'bot_' + str(uuid.uuid4()).replace('-', '')[:12]
+            try:
+                conn.execute("""
+                    INSERT INTO paper_bot_configs
+                    (user_id, bot_id, genome_id, strategy_name, generation, parent_id,
+                     pattern_types, sectors, exchanges, volatility, regimes, timeframes,
+                     direction_bias, risk_pct, max_positions, min_quality,
+                     virtual_balance, initial_balance, role, active,
+                     scan_interval_sec, min_trades_eval, required_facts, created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1800,25,?,?)
+                """, (
+                    user_id, bot_id,
+                    tmpl['genome_id'], tmpl['strategy_name'],
+                    tmpl.get('generation', 0), tmpl.get('parent_id'),
+                    tmpl.get('pattern_types'), tmpl.get('sectors'), tmpl.get('exchanges'),
+                    tmpl.get('volatility'), tmpl.get('regimes'), tmpl.get('timeframes'),
+                    tmpl.get('direction_bias'),
+                    tmpl.get('risk_pct', 1.0), tmpl.get('max_positions', 4),
+                    tmpl.get('min_quality', 0.65),
+                    per_bot, per_bot,
+                    tmpl.get('role', 'seed'),
+                    tmpl.get('required_facts'),
+                    now_iso,
+                ))
+                bot_ids.append(bot_id)
+            except Exception as e:
+                _logger.warning('seed_fleet: failed to insert bot %s: %s', bot_id, e)
+        conn.commit()
+        conn.close()
+        _logger.info('seed_fleet: created %d bots for %s (£%.0f each)', len(bot_ids), user_id, per_bot)
+        # Start threads with 15s stagger
+        for i, bot_id in enumerate(bot_ids):
+            delay = i * 15
+            self.start_bot(bot_id, startup_delay=delay)
+        self.start_bot_position_monitor()
+        return bot_ids
+
+    def start_bot(self, bot_id: str, startup_delay: int = 0) -> bool:
+        """Start a scanner thread for this bot. Returns True if started."""
+        with self._lock:
+            if bot_id in self._threads and self._threads[bot_id].is_alive():
+                return False  # already running
+            stop_event = threading.Event()
+            self._stop_events[bot_id] = stop_event
+            t = threading.Thread(
+                target=self._bot_scan_loop,
+                args=(bot_id, stop_event, startup_delay),
+                name=f'bot-{bot_id[:8]}',
+                daemon=True,
+            )
+            self._threads[bot_id] = t
+            t.start()
+            _logger.info('start_bot: %s started (delay=%ds)', bot_id, startup_delay)
+            return True
+
+    def stop_bot(self, bot_id: str) -> bool:
+        """Stop a bot's scanner thread, write paused_at."""
+        with self._lock:
+            ev = self._stop_events.get(bot_id)
+            if ev:
+                ev.set()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn.execute(
+                "UPDATE paper_bot_configs SET paused_at=? WHERE bot_id=?",
+                (now_iso, bot_id)
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            _logger.warning('stop_bot: DB update failed for %s: %s', bot_id, e)
+        _logger.info('stop_bot: %s stopped', bot_id)
+        return True
+
+    def kill_bot(self, bot_id: str, reason: str = 'evolution') -> bool:
+        """Stop, close all positions at live price, mark killed."""
+        self.stop_bot(bot_id)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=15)
+            conn.row_factory = sqlite3.Row
+            self._ensure_tables(conn)
+            # Find user_id for this bot
+            cfg = conn.execute(
+                "SELECT user_id FROM paper_bot_configs WHERE bot_id=?", (bot_id,)
+            ).fetchone()
+            user_id = cfg['user_id'] if cfg else None
+            # Close all open positions
+            open_pos = conn.execute(
+                "SELECT * FROM paper_positions WHERE bot_id=? AND status='open'", (bot_id,)
+            ).fetchall()
+            if open_pos:
+                from services.paper_trading import fetch_live_prices
+                tickers = [p['ticker'] for p in open_pos]
+                live = fetch_live_prices(tickers)
+                for pos in open_pos:
+                    ticker = pos['ticker']
+                    ep = live.get(ticker) or pos['entry_price']
+                    qty = float(pos['quantity'])
+                    from services.paper_trading import compute_pnl_r
+                    pnl_r = compute_pnl_r(pos['direction'], pos['entry_price'], ep, pos['stop'])
+                    conn.execute(
+                        "UPDATE paper_positions SET status='closed', exit_price=?, pnl_r=?, closed_at=? WHERE id=?",
+                        (ep, pnl_r, now_iso, pos['id'])
+                    )
+                    # Restore position value to bot balance
+                    # Long: receive exit_p*qty. Short: return original cost + profit = (2*entry-exit)*qty
+                    entry_p = float(pos['entry_price'])
+                    cash_return = ep * qty if pos['direction'] == 'bullish' else (2 * entry_p - ep) * qty
+                    conn.execute(
+                        "UPDATE paper_bot_configs SET virtual_balance = virtual_balance + ? WHERE bot_id=?",
+                        (cash_return, bot_id)
+                    )
+            # Mark killed
+            conn.execute(
+                "UPDATE paper_bot_configs SET active=0, killed_at=?, paused_at=? WHERE bot_id=?",
+                (now_iso, now_iso, bot_id)
+            )
+            if user_id:
+                self._pg_log_event(conn, user_id, 'evolution_kill', None,
+                    f'Bot {bot_id[:8]} killed: {reason} ({len(open_pos)} positions closed)',
+                    bot_id, now_iso)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            _logger.warning('kill_bot: error for %s: %s', bot_id, e)
+        _logger.info('kill_bot: %s killed (%s)', bot_id, reason)
+        return True
+
+    def start_bot_position_monitor(self, interval_sec: int = 300) -> None:
+        """Start the dedicated bot position exit monitor thread (5-min default).
+
+        This thread calls monitor_positions() for every user that has at least one
+        active bot, every `interval_sec` seconds.  It is intentionally independent
+        of each bot's scan_interval so exits are checked even when the 30-min entry
+        scan has not fired yet.
+        """
+        if self._pos_monitor_thread and self._pos_monitor_thread.is_alive():
+            return
+        self._pos_monitor_stop = threading.Event()
+        self._pos_monitor_thread = threading.Thread(
+            target=self._bot_position_monitor_loop,
+            args=(self._pos_monitor_stop, interval_sec),
+            name='bot-pos-monitor',
+            daemon=True,
+        )
+        self._pos_monitor_thread.start()
+        _logger.info('BotRunner: bot position monitor started (interval=%ds)', interval_sec)
+
+    def stop_bot_position_monitor(self) -> None:
+        """Signal the bot position monitor thread to stop."""
+        if self._pos_monitor_stop:
+            self._pos_monitor_stop.set()
+
+    def _bot_position_monitor_loop(
+        self, stop_event: threading.Event, interval_sec: int
+    ) -> None:
+        """Background loop: call monitor_positions() for every active bot user."""
+        import time as _t
+        _t.sleep(30)  # brief startup delay so DB is ready
+        while not stop_event.is_set():
+            try:
+                self._run_bot_position_monitor_cycle()
+            except Exception as _e:
+                _logger.error('BotRunner pos-monitor cycle error: %s', _e)
+            stop_event.wait(interval_sec)
+
+    def _run_bot_position_monitor_cycle(self) -> None:
+        """One cycle: find all users with active bots, call monitor_positions for each."""
+        from services.paper_trading import monitor_positions
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            rows = conn.execute(
+                "SELECT DISTINCT user_id FROM paper_bot_configs WHERE active=1 AND killed_at IS NULL"
+            ).fetchall()
+            conn.close()
+        except Exception as _e:
+            _logger.warning('BotRunner pos-monitor: failed to load user list: %s', _e)
+            return
+        for (user_id,) in rows:
+            try:
+                result = monitor_positions(user_id)
+                if result.get('updates'):
+                    _logger.info(
+                        'BotRunner pos-monitor: %s — %d exits/partials',
+                        user_id, len(result['updates']),
+                    )
+            except Exception as _ue:
+                _logger.warning('BotRunner pos-monitor: error for %s: %s', user_id, _ue)
+
+    def restore_bots(self, startup_delay: int = 120) -> int:
+        """Re-launch all active bots at server startup."""
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA busy_timeout=30000')
+            self._ensure_tables(conn)
+            rows = conn.execute(
+                "SELECT bot_id FROM paper_bot_configs WHERE active=1 AND killed_at IS NULL"
+            ).fetchall()
+            conn.execute(
+                "UPDATE paper_bot_configs SET paused_at=NULL WHERE active=1 AND killed_at IS NULL"
+            )
+            conn.commit()
+            conn.close()
+            started = 0
+            for i, row in enumerate(rows):
+                delay = startup_delay + i * 10
+                if self.start_bot(row[0], startup_delay=delay):
+                    started += 1
+            self.start_bot_position_monitor()
+            _logger.info('restore_bots: re-launched %d bots', started)
+            return started
+        except Exception as e:
+            _logger.warning('restore_bots error: %s', e)
+            return 0
+
+    def stop_all(self) -> None:
+        """Stop all running bot threads (used on server shutdown)."""
+        with self._lock:
+            for ev in self._stop_events.values():
+                ev.set()
+        self.stop_bot_position_monitor()
+
+    # ── Query builder ─────────────────────────────────────────────────────────
+
+    def _build_filtered_query(self, config: dict) -> tuple[str, list]:
+        """
+        Translate genome filters into SQL WHERE clauses for pattern_signals.
+        Returns (sql_fragment, params).
+        """
+        clauses = []
+        params = []
+
+        # Pattern types filter
+        pt_raw = config.get('pattern_types')
+        if pt_raw:
+            pts = json.loads(pt_raw) if isinstance(pt_raw, str) else pt_raw
+            if pts:
+                placeholders = ','.join('?' for _ in pts)
+                clauses.append(f'LOWER(p.pattern_type) IN ({placeholders})')
+                params.extend([x.lower() for x in pts])
+
+        # Sector filter (EXISTS subquery into facts)
+        sec_raw = config.get('sectors')
+        if sec_raw:
+            secs = json.loads(sec_raw) if isinstance(sec_raw, str) else sec_raw
+            if secs:
+                sec_ph = ','.join('?' for _ in secs)
+                clauses.append(
+                    f"EXISTS (SELECT 1 FROM facts WHERE LOWER(subject)=LOWER(p.ticker) "
+                    f"AND predicate='sector' AND LOWER(object) IN ({sec_ph}))"
+                )
+                params.extend([s.lower() for s in secs])
+
+        # Exchange filter
+        exc_raw = config.get('exchanges')
+        if exc_raw:
+            excs = json.loads(exc_raw) if isinstance(exc_raw, str) else exc_raw
+            if excs:
+                exc_parts = []
+                for ex in excs:
+                    if ex.startswith('.'):
+                        exc_parts.append(f"p.ticker LIKE ?")
+                        params.append(f'%{ex}')
+                    elif ex == '=F':
+                        exc_parts.append("p.ticker LIKE ?")
+                        params.append('%=F')
+                    else:
+                        exc_parts.append(f"p.ticker NOT LIKE '%.%'")
+                if exc_parts:
+                    clauses.append('(' + ' OR '.join(exc_parts) + ')')
+
+        # Direction bias filter
+        direction = config.get('direction_bias')
+        if direction:
+            clauses.append('LOWER(p.direction) = ?')
+            params.append(direction.lower())
+
+        # Timeframes filter
+        tf_raw = config.get('timeframes')
+        if tf_raw:
+            tfs = json.loads(tf_raw) if isinstance(tf_raw, str) else tf_raw
+            if tfs:
+                placeholders = ','.join('?' for _ in tfs)
+                clauses.append(f'p.timeframe IN ({placeholders})')
+                params.extend(tfs)
+
+        # required_facts gate — KB-gated filter (AND logic by default, OR via "any"/"all")
+        rf_raw = config.get('required_facts')
+        if rf_raw:
+            rf = json.loads(rf_raw) if isinstance(rf_raw, str) else rf_raw
+            if isinstance(rf, dict) and ('any' in rf or 'all' in rf):
+                # Extended schema: {"any": [...], "all": [...]}
+                all_pairs = rf.get('all', [])
+                any_pairs = rf.get('any', [])
+                for pair in all_pairs:
+                    for predicate, value in pair.items():
+                        clauses.append(
+                            "EXISTS (SELECT 1 FROM facts WHERE LOWER(subject)=LOWER(p.ticker) "
+                            "AND predicate=? AND LOWER(object)=LOWER(?))"
+                        )
+                        params.extend([predicate, str(value)])
+                if any_pairs:
+                    or_parts = []
+                    for pair in any_pairs:
+                        for predicate, value in pair.items():
+                            or_parts.append(
+                                "EXISTS (SELECT 1 FROM facts WHERE LOWER(subject)=LOWER(p.ticker) "
+                                "AND predicate=? AND LOWER(object)=LOWER(?))"
+                            )
+                            params.extend([predicate, str(value)])
+                    if or_parts:
+                        clauses.append('(' + ' OR '.join(or_parts) + ')')
+            elif isinstance(rf, dict):
+                # Simple schema: {"predicate": "value", ...} — all AND
+                for predicate, value in rf.items():
+                    clauses.append(
+                        "EXISTS (SELECT 1 FROM facts WHERE LOWER(subject)=LOWER(p.ticker) "
+                        "AND predicate=? AND LOWER(object)=LOWER(?))"
+                    )
+                    params.extend([predicate, str(value)])
+
+        # Expiry filter — skip patterns past their TTL
+        clauses.append('(p.expires_at IS NULL OR p.expires_at > ?)')
+        params.append(datetime.utcnow().isoformat())
+
+        return (' AND '.join(clauses), params)
+
+    # ── Bot scan loop ─────────────────────────────────────────────────────────
+
+    def _bot_scan_loop(self, bot_id: str, stop_event: threading.Event, startup_delay: int = 0):
+        """Main scan loop for a single bot."""
+        _logger.info('Bot scan loop started: %s (delay=%ds)', bot_id, startup_delay)
+        if startup_delay and stop_event.wait(startup_delay):
+            return  # stop fired during startup delay
+        while not stop_event.is_set():
+            try:
+                result = self._bot_scan_once(bot_id)
+                _logger.debug('Bot %s scan: %s', bot_id, result)
+            except Exception as e:
+                _logger.error('Bot %s scan error: %s', bot_id, e)
+            # Read interval from config (may have been updated)
+            try:
+                conn = sqlite3.connect(self.db_path, timeout=5)
+                row = conn.execute(
+                    "SELECT scan_interval_sec FROM paper_bot_configs WHERE bot_id=?", (bot_id,)
+                ).fetchone()
+                conn.close()
+                interval = int(row[0]) if row else 1800
+            except Exception:
+                interval = 1800
+            stop_event.wait(interval)
+
+    def _bot_scan_once(self, bot_id: str) -> dict:
+        """Single scan cycle for one bot."""
+        from services.paper_trading import (
+            _should_enter, _is_market_open, compute_pnl_r,
+            fetch_live_prices, _PAPER_MAX_NEW_PER_SCAN,
+        )
+        from analytics.signal_calibration import update_calibration, get_calibration
+        from datetime import timedelta
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=30000')
+        conn.row_factory = sqlite3.Row
+
+        try:
+            self._ensure_tables(conn)
+
+            # Load bot config
+            cfg_row = conn.execute(
+                "SELECT * FROM paper_bot_configs WHERE bot_id=? AND active=1",
+                (bot_id,)
+            ).fetchone()
+            if not cfg_row:
+                conn.close()
+                return {'skipped': True, 'reason': 'bot not active'}
+            config = dict(cfg_row)
+            user_id   = config['user_id']
+            max_pos   = config['max_positions']
+            min_qual  = config['min_quality']
+            risk_pct  = config['risk_pct']
+            balance   = float(config['virtual_balance'])
+
+            # Monitor open positions first
+            self._monitor_bot_positions(bot_id, conn, now_iso)
+            # Re-read balance after monitor may have restored cash on exits
+            _bal_row = conn.execute(
+                "SELECT virtual_balance FROM paper_bot_configs WHERE bot_id=?", (bot_id,)
+            ).fetchone()
+            if _bal_row:
+                balance = float(_bal_row[0])
+
+            # Fix 1: Count open slots — partial_closed positions still occupy a slot
+            open_rows = conn.execute(
+                "SELECT ticker FROM paper_positions WHERE bot_id=? AND status='open'", (bot_id,)
+            ).fetchall()
+            open_tickers = {r['ticker'] for r in open_rows}
+            # Partial closes keep the position open — slot still occupied
+            open_slots_used = conn.execute(
+                "SELECT COUNT(*) FROM paper_positions WHERE bot_id=? AND status='open'", (bot_id,)
+            ).fetchone()[0]
+
+            # Global ticker dedup: skip if ANY agent (generalist or other bot) already holds this ticker
+            _global_open = {r['ticker'] for r in conn.execute(
+                "SELECT DISTINCT ticker FROM paper_positions WHERE user_id=? AND status='open'",
+                (user_id,)
+            ).fetchall()}
+
+            # Fix 5: Fleet-wide ticker concentration — count open positions per ticker across all bots
+            _fleet_ticker_count = {}
+            for r in conn.execute(
+                "SELECT ticker, COUNT(*) as cnt FROM paper_positions "
+                "WHERE user_id=? AND status='open' GROUP BY ticker", (user_id,)
+            ).fetchall():
+                _fleet_ticker_count[r['ticker']] = r['cnt']
+            _FLEET_MAX_PER_TICKER = 2  # no more than 2 bots long the same ticker simultaneously
+
+            # Pattern-level dedup: track which pattern_ids are already open anywhere
+            # in the fleet. Prevents multiple bots entering the same zone and inflating
+            # trade count (1 observation counted N times = false performance metrics).
+            _open_pattern_ids = {
+                r[0] for r in conn.execute(
+                    "SELECT DISTINCT pattern_id FROM paper_positions "
+                    "WHERE user_id=? AND status='open' AND pattern_id IS NOT NULL",
+                    (user_id,)
+                ).fetchall()
+            }
+
+            # HARD GUARD: never open new positions with a negative balance.
+            # A negative balance means more has been deducted than the bot ever had —
+            # allowing further entries would compound the insolvency.
+            # The bot is not killed here — evolution handles that — but entry is blocked.
+            if balance <= 0:
+                self._write_bot_equity(bot_id, conn, balance, len(open_tickers), now_iso)
+                self._pg_log_event(conn, user_id, 'skip', 'ALL',
+                    f'Scan blocked: negative balance £{balance:,.2f} — no new entries until recovered',
+                    bot_id, now_iso)
+                conn.commit()
+                conn.close()
+                return {'skipped': True, 'reason': f'negative_balance: £{balance:,.2f}',
+                        'entries': 0, 'skips': 0}
+
+            if open_slots_used >= max_pos:
+                self._write_bot_equity(bot_id, conn, balance, len(open_tickers), now_iso)
+                conn.commit()
+                conn.close()
+                return {'entries': 0, 'skips': 0, 'reason': 'max_positions reached'}
+
+            # 24h cooldown (bot-specific, stopped-out tickers)
+            _cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            cooled = {r['ticker'] for r in conn.execute(
+                "SELECT DISTINCT ticker FROM paper_positions "
+                "WHERE bot_id=? AND status='stopped_out' AND closed_at > ?",
+                (bot_id, _cutoff)
+            ).fetchall()}
+
+
+            # Build filtered candidate query (routes to PG when available)
+            quality_floor = min_qual  # use configured floor directly, no grace margin
+            candidates = self._pg_query_patterns(config, conn, quality_floor)
+
+            # Enrich with calibration
+            for c in candidates:
+                try:
+                    cal = get_calibration(
+                        ticker=c['ticker'],
+                        pattern_type=c.get('pattern_type', ''),
+                        timeframe='4h',
+                        db_path=self.db_path,
+                    )
+                    c['cal_hit_rate'] = cal.hit_rate_t1 if cal else None
+                    c['cal_samples']  = cal.sample_size  if cal else 0
+                except Exception:
+                    c['cal_hit_rate'] = None
+                    c['cal_samples']  = 0
+
+            # Sort: open markets first, then calibration, then quality
+            candidates.sort(key=lambda x: (
+                1 if _is_market_open(x['ticker']) else 0,
+                x.get('cal_hit_rate') or 0.0,
+                x.get('quality_score') or 0.0,
+            ), reverse=True)
+            candidates = candidates[:50]
+
+            # Post-query volatility/regime filter
+            vol_filter = config.get('volatility')
+            if vol_filter:
+                vol_list = [v.lower() for v in (json.loads(vol_filter) if isinstance(vol_filter, str) else vol_filter)]
+            else:
+                vol_list = None
+            reg_filter = config.get('regimes')
+            if reg_filter:
+                reg_list = [r.lower() for r in (json.loads(reg_filter) if isinstance(reg_filter, str) else reg_filter)]
+            else:
+                reg_list = None
+
+            # Equity-based risk sizing (cash + open position cost basis)
+            open_pos_rows = conn.execute(
+                "SELECT entry_price, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
+                (bot_id,)
+            ).fetchall()
+            open_value = sum(float(r[0]) * float(r[1]) for r in open_pos_rows)
+            equity = balance + open_value
+
+            initial = float(config['initial_balance'])
+            risk_per_trade = equity * risk_pct / 100.0
+            max_pos_value  = equity * 0.15   # scales with compounded equity, not frozen initial
+            remaining_cash = balance
+            entries = 0
+            skips   = 0
+
+            # Fix 3: Fetch current market regime for bot-level alignment check
+            _market_regime = ''
+            try:
+                _mr = self._pg_read_fact(conn, 'market_regime_global', 'market_regime')
+                if not _mr:
+                    # Fallback: predicate-only search for legacy rows
+                    from db import HAS_POSTGRES, get_pg
+                    if HAS_POSTGRES:
+                        with get_pg() as _pgc:
+                            _cur = _pgc.cursor()
+                            _cur.execute("SELECT object FROM facts WHERE predicate='market_regime' ORDER BY timestamp DESC LIMIT 1")
+                            _row = _cur.fetchone()
+                            _mr = _row['object'] if _row else None
+                    else:
+                        _row = conn.execute("SELECT object FROM facts WHERE predicate='market_regime' ORDER BY timestamp DESC LIMIT 1").fetchone()
+                        _mr = _row[0] if _row else None
+                if _mr:
+                    _market_regime = (_mr or '').lower()
+            except Exception:
+                pass
+            direction_bias = (config.get('direction_bias') or '').lower()
+
+            self._pg_log_event(conn, user_id, 'scan_start', None,
+                f'Bot {config["strategy_name"]}: {len(candidates)} candidates, {len(open_tickers)}/{max_pos} slots',
+                bot_id, now_iso)
+
+            for c in candidates:
+                ticker       = c['ticker']
+                direction    = c['direction']
+                quality      = c.get('quality_score') or 0
+                regime       = (c.get('kb_regime') or '').lower()
+                pattern_type = (c.get('pattern_type') or '').lower()
+                timeframe    = (c.get('timeframe') or '').lower()
+
+                # Fix 6: 1 entry per scan cycle maximum
+                if entries >= 1:
+                    break
+                # Same-bot dedup + stopped-out cooldown
+                if ticker in open_tickers or ticker in cooled:
+                    skips += 1
+                    continue
+                # Fleet-wide ticker concentration cap — allows up to _FLEET_MAX_PER_TICKER
+                # bots to hold the same ticker, but no more.
+                # Uses in-memory _fleet_ticker_count (updated on each entry this cycle)
+                # plus a re-check against the DB inside the INSERT to guard against
+                # race conditions between concurrent bot threads.
+                if _fleet_ticker_count.get(ticker, 0) >= _FLEET_MAX_PER_TICKER:
+                    skips += 1
+                    self._pg_log_event(conn, user_id, 'skip', ticker,
+                        f'Fleet cap ({_FLEET_MAX_PER_TICKER}): {_fleet_ticker_count.get(ticker,0)} bots already hold {ticker}',
+                        bot_id, now_iso)
+                    continue
+
+                # Pattern-level dedup: skip if this exact zone is already open anywhere
+                # in the fleet. One pattern = one independent observation. Multiple bots
+                # entering the same zone inflates trade count and concentrates risk.
+                _cand_pattern_id = c.get('id')
+                if _cand_pattern_id and _cand_pattern_id in _open_pattern_ids:
+                    skips += 1
+                    self._pg_log_event(conn, user_id, 'skip', ticker,
+                        f'Pattern already open fleet-wide (id={_cand_pattern_id}) — dedup guard',
+                        bot_id, now_iso)
+                    continue
+                if not _is_market_open(ticker):
+                    skips += 1
+                    continue
+
+                # Post-query volatility filter
+                if vol_list:
+                    ticker_vol = self._pg_read_fact(conn, ticker, 'volatility_regime')
+                    if ticker_vol and ticker_vol.lower() not in vol_list:
+                        skips += 1
+                        continue
+
+                # near_52w_high + bullish hard skip.
+                # Ledger data: 12 resolved predictions in this regime, 41.7% hit rate
+                # vs 65.2% overall — negative edge for bullish entries into exhaustion.
+                # Bearish setups at near_52w_high are fine (fade/reversal logic).
+                if direction == 'bullish':
+                    _pr = self._pg_read_fact(conn, ticker, 'price_regime')
+                    if _pr and _pr.lower() in ('near_52w_high', 'near_high'):
+                        skips += 1
+                        self._pg_log_event(conn, user_id, 'skip', ticker,
+                            f'near_52w_high skip: bullish entry into exhaustion (hit rate 41.7% vs 65.2% avg)',
+                            bot_id, now_iso)
+                        continue
+
+                # Post-query regime filter
+                if reg_list and regime:
+                    if not any(r in regime for r in reg_list):
+                        skips += 1
+                        continue
+
+                # Cold-start quality floor — no calibration data → require HIGHER quality
+                # (was incorrectly lowering the bar to 0.70 for zero-cal patterns,
+                #  which let quality=0.73 through a min_qual=0.78 bot)
+                cal_samples = c.get('cal_samples') or 0
+                if cal_samples == 0:
+                    effective_min_qual = max(min_qual, 0.75)  # stricter without data
+                else:
+                    effective_min_qual = min_qual
+                if quality < effective_min_qual:
+                    skips += 1
+                    continue
+
+                # Conviction gate: block 'avoid' signals on DAILY+ timeframes only.
+                # On 1d+ timeframes, fundamentals influence multi-day moves → avoid is valid.
+                # On 15m/1h, price zones fill on microstructure mechanics regardless of
+                # analyst consensus. Data shows avoid-tagged tickers (V, LYFT, PYPL, MA etc)
+                # have 60-74% calibration HR on liq_void 15m — blocking them is leaving edge
+                # on the table. Short-TF patterns don't care about analyst conviction.
+                _SHORT_TF = ('1m', '3m', '5m', '15m', '30m', '1h')
+                _cand_tf   = (c.get('timeframe') or '').lower()
+                _is_short_tf = _cand_tf in _SHORT_TF
+                if (c.get('kb_conviction') or '').lower() == 'avoid' and not _is_short_tf:
+                    skips += 1
+                    self._pg_log_event(conn, user_id, 'skip', ticker,
+                        f'kb_conviction=avoid on {_cand_tf}: fundamentals-based block (daily+ only)',
+                        bot_id, now_iso)
+                    continue
+
+                # Calibration regime gate for ETF/index liq_void 1d patterns.
+                # SPY/QQQ/HYG/TLT liq_void 1d: HR=73-93% in NULL/correction regimes
+                # but HR=10-24% in risk_on_expansion and recovery (bad regimes mask edge).
+                # Skip these patterns when global regime is expansion or recovery.
+                _pat_sector = ''
+                try:
+                    _sect_val = self._pg_read_fact(conn, ticker, 'sector')
+                    _pat_sector = (_sect_val or '').lower()
+                except Exception:
+                    pass
+
+                if (_pat_sector in ('etf', 'index')
+                        and (c.get('pattern_type') or '') == 'liquidity_void'
+                        and (c.get('timeframe') or '') == '1d'):
+                    _bad_etf_regimes = ('risk_on_expansion', 'recovery')
+                    if any(r in (regime or '') for r in _bad_etf_regimes):
+                        skips += 1
+                        self._pg_log_event(conn, user_id, 'skip', ticker,
+                            f'ETF liq_void 1d blocked: regime={regime} (edge only in corrections)',
+                            bot_id, now_iso)
+                        continue
+
+                # Open-hour kill zone: block BULLISH 4h/1d entries during LSE/NYSE open spike.
+                # 07–09 UTC = LSE open volatility window. Bullish 4h+ patterns hit false breakouts
+                # and get stopped immediately. Data: WR=20-36% on 50+ trades at this hour.
+                # Bearish patterns exempt — they trade WITH the opening dump, not against it.
+                # Short-TF (15m/1h) exempt — microstructure fills are hour-agnostic.
+                import datetime as _dt
+                _now_utc = _dt.datetime.utcnow()
+                _cand_tf_entry = (c.get('timeframe') or '').lower()
+                if (_now_utc.hour in (7, 8, 9)
+                        and direction == 'bullish'
+                        and _cand_tf_entry in ('4h', '1d')):
+                    skips += 1
+                    self._pg_log_event(conn, user_id, 'skip', ticker,
+                        f'Open-hour kill zone: bullish {_cand_tf_entry} blocked at {_now_utc.hour:02d}:xx UTC (07-09 LSE open, WR=20-36%)',
+                        bot_id, now_iso)
+                    continue
+
+                # Mitigation 1d regime gate.
+                # In risk_on_expansion and recovery, daily mitigation zones get blown through
+                # (price is in a bull trend; zone doesn't provide structural support).
+                # Data: risk_on_expansion HR=38.2% gap=−6.4%, recovery HR=38.3% gap=−8.5%.
+                # Profitable only in risk_off_contraction / correction / null-regime.
+                # Note: risk_on_correction is NOT blocked — corrections are the right time.
+                if ((c.get('pattern_type') or '') == 'mitigation'
+                        and _cand_tf_entry == '1d'):
+                    _bad_mit_regimes = ('risk_on_expansion', 'recovery')
+                    if any(r in (_market_regime or '') for r in _bad_mit_regimes):
+                        skips += 1
+                        self._pg_log_event(conn, user_id, 'skip', ticker,
+                            f'Mitigation 1d blocked: regime={_market_regime} (edge only in risk_off/correction)',
+                            bot_id, now_iso)
+                        continue
+
+                # Earnings proximity gate: skip entries within 3 days of earnings.
+                # Earnings = binary event risk — WR collapses regardless of pattern quality.
+                # 3-day window covers pre-earnings IV crush + post-earnings gap risk.
+                try:
+                    _ep_val = self._pg_read_fact(conn, ticker, 'earnings_proximity_days')
+                    if _ep_val and int(_ep_val) <= 3:
+                        skips += 1
+                        self._pg_log_event(conn, user_id, 'skip', ticker,
+                            f'earnings in {_ep_val}d — skip to avoid event risk',
+                            bot_id, now_iso)
+                        continue
+                except (ValueError, TypeError, Exception):
+                    pass
+
+                # RSI falling-knife gate: skip bullish mitigation when RSI < 35.
+                # Live data: mitigation bullish + RSI<35 = 0/6 WR, avg -3.68R.
+                # SAP.DE -5.4R, 9988.HK (Alibaba) -10.15R both had RSI 22-31.
+                # RSI<35 in risk_on_correction = ongoing downtrend momentum, not bounce.
+                # The calibration HR (85-95%) was built historically without this filter.
+                if pattern_type == 'mitigation' and direction == 'bullish':
+                    try:
+                        _rsi_val = self._pg_read_fact(conn, ticker, 'rsi_14')
+                        if _rsi_val and float(_rsi_val) < 35:
+                            skips += 1
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'RSI falling-knife: rsi={float(_rsi_val):.1f} < 35 '
+                                f'on bullish mitigation — 0% WR in live data',
+                                bot_id, now_iso)
+                            continue
+                    except (ValueError, TypeError, Exception):
+                        pass
+
+                # IFVG mid-beta gate:
+                # Live data: IFVG + beta 1.0-1.5 = 33.3% WR, avg -0.09R on n=9
+                # IAG.L, ANTO.L, DPLM.L, SGRO.L all stopped out (beta 1.03-1.30).
+                # Defensive (<0.5): WR=87.5%. High (>1.5): WR=75%. Mid is the dead zone.
+                # The market beta correlation disrupts IFVG zone mechanics for mid-beta stocks.
+                if pattern_type == 'ifvg':
+                    try:
+                        _beta_val = self._pg_read_fact(conn, ticker, 'beta')
+                        if _beta_val and 1.0 <= float(_beta_val) <= 1.5:
+                            skips += 1
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'IFVG mid-beta blocked: beta={float(_beta_val):.2f} '
+                                f'(1.0-1.5 range) — 33% WR in live data vs 87% for defensive',
+                                bot_id, now_iso)
+                            continue
+                    except (ValueError, TypeError, Exception):
+                        pass
+
+                # Liq_void 15m mid-beta gate:
+                # Live data: liq_void 15m + beta 0.5-1.0 = 11.1% WR, avg -1.13R (n=9)
+                # HIK.L -4.76R, PRU.L -1.43R, AUTO.L -1.36R, GMG.AX -1.05R, ALV.DE -1.02R
+                # All beta 0.65-0.96. Defensive (<0.5): 50% WR. High (>1.0): 20% WR.
+                # Mid-beta liq_voids on 15m get neither the tight zone respect of
+                # defensive stocks nor the momentum follow-through of high-beta stocks.
+                # Broader 1h/1d liq_void for mid-beta is fine — this is 15m specific.
+                if pattern_type == 'liquidity_void' and timeframe == '15m':
+                    try:
+                        _lv_beta_val = self._pg_read_fact(conn, ticker, 'beta')
+                        if _lv_beta_val and 0.5 <= float(_lv_beta_val) <= 1.0:
+                            skips += 1
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'liq_void 15m mid-beta blocked: beta={float(_lv_beta_val):.2f} '
+                                f'(0.5-1.0 range) — 11.1% WR in live data',
+                                bot_id, now_iso)
+                            continue
+                    except (ValueError, TypeError, Exception):
+                        pass
+
+                # RSI extreme gates (all pattern types):
+                # 1. Extreme oversold (<30) + bullish = momentum continuation down
+                #    DB1.DE RSI 29.8, BABA RSI 26.6 — these trend down further
+                # 2. Overbought (>70) + bullish = entering at exhaustion top
+                #    EURGBP=X RSI 72.8 bullish breaker is wrong side of the trade
+                # Data: live trades RSI<35 mitigation = 0% WR already gated above
+                # Extend to ALL patterns at extremes: <30 and >70 are danger zones
+                if direction == 'bullish':
+                    try:
+                        _rsi_ext_val = self._pg_read_fact(conn, ticker, 'rsi_14')
+                        if _rsi_ext_val:
+                            _rsi_val = float(_rsi_ext_val)
+                            if _rsi_val < 30:
+                                skips += 1
+                                self._pg_log_event(conn, user_id, 'skip', ticker,
+                                    f'RSI extreme oversold: rsi={_rsi_val:.1f} < 30 — '
+                                    f'momentum continuation, not a bounce',
+                                    bot_id, now_iso)
+                                continue
+                            if _rsi_val > 70:
+                                skips += 1
+                                self._pg_log_event(conn, user_id, 'skip', ticker,
+                                    f'RSI overbought: rsi={_rsi_val:.1f} > 70 — '
+                                    f'entering bullish at exhaustion top',
+                                    bot_id, now_iso)
+                                continue
+                    except (ValueError, TypeError, Exception):
+                        pass
+
+                # Small/micro-cap liquidity gate for short timeframes:
+                # HIK.L -4.76R because price gapped 4.76× through stop (slippage).
+                # Small/micro caps on 15m/5m have wide spreads and gap through stops.
+                # avg_volume_30d < 150k = insufficient liquidity for tight stops.
+                # Exempt: futures (=F) and FX (=X) — volume semantics differ.
+                _ticker_upper = ticker.upper()
+                _is_futures_fx = _ticker_upper.endswith('=F') or _ticker_upper.endswith('=X')
+                if timeframe in ('5m', '15m', '1h') and not _is_futures_fx:
+                    try:
+                        _mc_val = self._pg_read_fact(conn, ticker, 'market_cap_tier')
+                        if _mc_val and _mc_val in ('micro_cap', 'nano_cap'):
+                            skips += 1
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'micro/nano cap blocked on {timeframe}: gap risk too high',
+                                bot_id, now_iso)
+                            continue
+                        _avol_val = self._pg_read_fact(conn, ticker, 'avg_volume_30d')
+                        if _avol_val and float(_avol_val) < 150000:
+                            skips += 1
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'low liquidity: avg_vol={int(float(_avol_val)):,} < 150k — '
+                                f'gap-through-stop risk on {timeframe}',
+                                bot_id, now_iso)
+                            continue
+                    except (ValueError, TypeError, Exception):
+                        pass
+
+                # Fix 3: Regime alignment — pattern-level misalignment (hard skip)
+                if regime and (
+                    (direction == 'bullish' and any(x in regime for x in ('risk_off', 'bearish')))
+                    or (direction == 'bearish' and any(x in regime for x in ('risk_on', 'bullish')))
+                ):
+                    skips += 1
+                    continue
+
+                # Fix 3: Bot direction_bias vs market regime — size penalty on conflict
+                _regime_size_mult = 1.0
+                if _market_regime and direction_bias:
+                    _bias_conflicts = (
+                        (direction_bias == 'bullish' and any(x in _market_regime for x in ('risk_off', 'contraction', 'bearish')))
+                        or (direction_bias == 'bearish' and any(x in _market_regime for x in ('risk_on', 'expansion', 'bullish')))
+                    )
+                    if _bias_conflicts:
+                        _regime_size_mult = 0.5
+
+                zone_low  = float(c.get('zone_low') or 0)
+                zone_high = float(c.get('zone_high') or 0)
+                midpoint  = (zone_low + zone_high) / 2.0 if zone_low and zone_high else None
+                if not midpoint or midpoint <= 0:
+                    skips += 1
+                    continue
+
+                if direction == 'bullish':
+                    entry_p = midpoint
+                    stop_p  = round(zone_low * 0.995, 6)
+                    risk    = entry_p - stop_p
+                    t1_p    = round(entry_p + risk * 2, 6)
+                    t2_p    = round(entry_p + risk * 3, 6)
+                else:
+                    entry_p = midpoint
+                    stop_p  = round(zone_high * 1.005, 6)
+                    risk    = stop_p - entry_p
+                    t1_p    = round(entry_p - risk * 2, 6)
+                    t2_p    = round(entry_p - risk * 3, 6)
+
+                # T3 extension: mitigation 15m T3/T1=0.767 — 76.7% run to 4R.
+                # For quality mitigation 15m patterns, extend T2 from 3R → 4R.
+                # Data: n=369,311 samples. Criteria: q>=0.70 + mit + 15m.
+                _cand_q = float(c.get('quality_score') or 0)
+                if ((c.get('pattern_type') or '') == 'mitigation'
+                        and _cand_tf_entry == '15m'
+                        and _cand_q >= 0.70):
+                    if direction == 'bullish':
+                        t2_p = round(entry_p + risk * 4, 6)
+                    else:
+                        t2_p = round(entry_p - risk * 4, 6)
+
+                if risk <= 0:
+                    skips += 1
+                    continue
+
+                # ── Pre-entry live price validation ───────────────────────────
+                # Skip if live price already past stop (instant stop-out),
+                # >5% from zone midpoint (stale pattern), OR already at/past T2
+                # (trade has already played out — entering would be a ghost win).
+                _live_prices = fetch_live_prices([ticker])
+                _live_price = _live_prices.get(ticker)
+                if _live_price and _live_price > 0:
+                    # Hard block: price already at or past T2 — the move is done
+                    if direction == 'bullish' and _live_price >= t2_p:
+                        skips += 1
+                        self._pg_log_event(conn, user_id, 'skip', ticker,
+                            f'Price {_live_price:.4f} already at/past T2 {t2_p:.4f} — move complete, skipping',
+                            bot_id, now_iso)
+                        continue
+                    if direction == 'bearish' and _live_price <= t2_p:
+                        skips += 1
+                        self._pg_log_event(conn, user_id, 'skip', ticker,
+                            f'Price {_live_price:.4f} already at/past T2 {t2_p:.4f} — move complete, skipping',
+                            bot_id, now_iso)
+                        continue
+                    _ticker_upper = ticker.upper()
+                    _stale_pct = 0.08 if (
+                        _ticker_upper.endswith('=F') or _ticker_upper.endswith('=X')
+                        or '.KS' in _ticker_upper or '.HK' in _ticker_upper
+                        or '.L' in _ticker_upper or '.T' in _ticker_upper
+                        or 'BTC' in _ticker_upper or 'ETH' in _ticker_upper
+                    ) else 0.05
+                    _price_ratio = abs(_live_price - entry_p) / entry_p if entry_p else 0
+                    if _price_ratio > 0.5:
+                        _logger.warning(
+                            'Bot %s: price/zone unit mismatch suspected for %s — '
+                            'live=%.4f zone=%.4f ratio=%.1fx (GBp vs GBX?)',
+                            bot_id, ticker, _live_price, entry_p, _price_ratio
+                        )
+                    if direction == 'bullish':
+                        if _live_price <= stop_p:
+                            skips += 1
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'Price ${_live_price:.2f} already below stop ${stop_p:.2f} — would instant stop',
+                                bot_id, now_iso)
+                            continue
+                        if _price_ratio > _stale_pct:
+                            skips += 1
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern',
+                                bot_id, now_iso)
+                            continue
+                    else:  # bearish
+                        if _live_price >= stop_p:
+                            skips += 1
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'Price ${_live_price:.2f} already above stop ${stop_p:.2f} — would instant stop',
+                                bot_id, now_iso)
+                            continue
+                        if _price_ratio > _stale_pct:
+                            skips += 1
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'Price ${_live_price:.2f} is >{_stale_pct:.0%} from zone midpoint ${entry_p:.2f} — stale pattern',
+                                bot_id, now_iso)
+                            continue
+                    # Fix 3: Use live price as entry for realistic fills
+                    if zone_low <= _live_price <= zone_high:
+                        entry_p = _live_price
+                    elif abs(_live_price - midpoint) / midpoint <= 0.02:
+                        entry_p = _live_price
+                    # Recalculate levels from new entry
+                    if direction == 'bullish':
+                        stop_p = round(zone_low * 0.995, 6)
+                        risk   = entry_p - stop_p
+                        t1_p   = round(entry_p + risk * 2, 6)
+                        t2_p   = round(entry_p + risk * 3, 6)
+                    else:
+                        stop_p = round(zone_high * 1.005, 6)
+                        risk   = stop_p - entry_p
+                        t1_p   = round(entry_p - risk * 2, 6)
+                        t2_p   = round(entry_p - risk * 3, 6)
+                    if risk <= 0:
+                        skips += 1
+                        continue
+
+                should_enter, reason, size_mult = _should_enter(c, remaining_cash, risk_per_trade)
+                if not should_enter:
+                    skips += 1
+                    self._pg_log_event(conn, user_id, 'skip', ticker, reason, bot_id, now_iso)
+                    continue
+
+                # Fix 3: apply regime size multiplier on top of calibration multiplier
+                size_mult *= _regime_size_mult
+
+                # T2 run-through bonus: tickers where calibration shows T2/T1 >= 0.95 and
+                # HR >= 70% are fundamentally higher-EV (price runs the full 2R every time).
+                # 1.25× size justified by: BATS.L EV=+1.66R, USDJPY EV=+1.64R, CL=F EV=+1.8R.
+                # Only applies when no other bot already holds the ticker (fleet concentration
+                # check already passed above), keeping fleet risk within bounds.
+                _t2_multiplier = 1.0
+                try:
+                    _t2_cal = get_calibration(
+                        ticker=ticker,
+                        pattern_type=(c.get('pattern_type') or ''),
+                        timeframe=(c.get('timeframe') or '4h'),
+                        db_path=self.db_path,
+                    )
+                    if (_t2_cal and _t2_cal.hit_rate_t2 and _t2_cal.hit_rate_t1
+                            and _t2_cal.hit_rate_t1 > 0
+                            and _t2_cal.hit_rate_t2 / _t2_cal.hit_rate_t1 >= 0.95
+                            and _t2_cal.hit_rate_t1 >= 0.70):
+                        _t2_multiplier = 1.25
+                except Exception:
+                    pass
+                size_mult *= _t2_multiplier
+
+                eff_risk  = risk_per_trade * size_mult
+                qty = min(eff_risk / risk, (max_pos_value * size_mult) / entry_p)
+                qty = max(round(qty, 4), 0.0001)
+                pos_value = round(entry_p * qty, 2)
+                if pos_value > remaining_cash:
+                    if remaining_cash < risk_per_trade * 2:
+                        skips += 1
+                        continue
+                    qty = round(remaining_cash / entry_p, 4)
+                    pos_value = round(entry_p * qty, 2)
+
+                # Race-condition guard: re-check fleet count inside this connection
+                # right before INSERT. Two threads may both pass the in-memory check
+                # above simultaneously before either commits — this closes that window.
+                _live_fleet_count = conn.execute(
+                    "SELECT COUNT(*) FROM paper_positions "
+                    "WHERE user_id=? AND ticker=? AND status='open'",
+                    (user_id, ticker)
+                ).fetchone()[0]
+                if _live_fleet_count >= _FLEET_MAX_PER_TICKER:
+                    skips += 1
+                    self._pg_log_event(conn, user_id, 'skip', ticker,
+                        f'Race guard: {_live_fleet_count} open positions for {ticker} at commit time',
+                        bot_id, now_iso)
+                    continue
+
+                # Deduct from bot balance
+                conn.execute(
+                    "UPDATE paper_bot_configs SET virtual_balance = virtual_balance - ? WHERE bot_id=?",
+                    (pos_value, bot_id)
+                )
+                remaining_cash -= pos_value
+
+                conn.execute(
+                    """INSERT INTO paper_positions
+                       (user_id, pattern_id, ticker, direction, entry_price, stop, t1, t2,
+                        quantity, status, partial_closed, opened_at, note, ai_reasoning, bot_id)
+                       VALUES (?,?,?,?,?,?,?,?,?,'open',0,?,?,?,?)""",
+                    (user_id, c['id'], ticker, direction,
+                     entry_p, stop_p, t1_p, t2_p, qty,
+                     now_iso, f'Bot: {config["strategy_name"]}',
+                     f'{c.get("pattern_type","?")} {direction} | q={quality:.2f} | {reason}',
+                     bot_id)
+                )
+                # Mark pattern as filled so no other bot picks it up in subsequent scans.
+                # This is the core fix for duplicate concentration — without this, the same
+                # pattern appears in every scan cycle for every bot indefinitely.
+                self._pg_update_pattern_status(conn, c['id'], 'filled')
+                open_tickers.add(ticker)
+                open_slots_used += 1
+                _fleet_ticker_count[ticker] = _fleet_ticker_count.get(ticker, 0) + 1
+                if _cand_pattern_id:
+                    _open_pattern_ids.add(_cand_pattern_id)  # dedup subsequent bots this cycle
+                entries += 1
+                self._pg_log_event(conn, user_id, 'entry', ticker,
+                    f'{c.get("pattern_type","?")} {direction} entry={entry_p:.4f} stop={stop_p:.4f} t1={t1_p:.4f} value=£{pos_value:,.2f} | {reason}',
+                    bot_id, now_iso)
+                try:
+                    if hasattr(ext, 'prediction_ledger') and ext.prediction_ledger is not None:
+                        _pt  = c.get('pattern_type', 'unknown')
+                        _tf  = c.get('timeframe', '4h')
+
+                        # Tier 1: ticker-level calibration for current regime (most specific)
+                        _cal_hr = c.get('cal_hit_rate')
+
+                        # Tier 2: regime-aware pattern baseline — uses the actual
+                        # hit rate for this pattern×timeframe IN THE CURRENT REGIME.
+                        # e.g. breaker 1h in risk_off_contraction: ~30% vs 35% overall
+                        # e.g. liquidity_void 1h in risk_off_contraction: ~51% vs 46% overall
+                        if not _cal_hr and _market_regime:
+                            from analytics.signal_calibration import get_regime_aware_baseline
+                            _cal_hr = get_regime_aware_baseline(
+                                _pt, _tf, _market_regime, self.db_path
+                            )
+
+                        # Tier 3: overall pattern baseline (regime-agnostic fallback)
+                        if not _cal_hr:
+                            from analytics.signal_calibration import get_pattern_baseline
+                            _cal_hr = get_pattern_baseline(_pt, _tf, self.db_path)
+
+                        # Tier 4: hard prior of 0.35 (below-50% conservative default)
+                        if not _cal_hr:
+                            _cal_hr = 0.35
+
+                        # Cap at REGIME-AWARE ceiling first, then overall ceiling.
+                        # Prevents a small-sample ticker cell from overstating confidence
+                        # relative to what the pattern actually achieves in this regime.
+                        from analytics.signal_calibration import (
+                            get_regime_aware_baseline as _grab,
+                            get_pattern_baseline as _gpb,
+                        )
+                        _ceiling = _grab(_pt, _tf, _market_regime, self.db_path) if _market_regime else None
+                        if _ceiling is None:
+                            _ceiling = _gpb(_pt, _tf, self.db_path)
+                        if _ceiling and _cal_hr > _ceiling:
+                            _cal_hr = _ceiling
+
+                        _cal_hr = max(0.05, min(0.95, float(_cal_hr)))
+
+                        # Compute KB state commitment at decision time
+                        _kb_root = None
+                        _kb_fact_ids = None
+                        try:
+                            from analytics.kb_commitment import compute_kb_root
+                            _kb_root, _kb_fact_ids = compute_kb_root(
+                                ticker=ticker,
+                                db_path=self.db_path,
+                                conn=conn,
+                            )
+                        except Exception as _kbc_e:
+                            _logger.warning('kb_commitment failed for %s: %s', ticker, _kbc_e)
+
+                        ext.prediction_ledger.record_prediction(
+                            ticker=ticker,
+                            pattern_type=_pt,
+                            timeframe=_tf,
+                            entry_price=entry_p,
+                            target_1=t1_p,
+                            target_2=t2_p,
+                            stop_loss=stop_p,
+                            p_hit_t1=round(_cal_hr, 4),
+                            p_hit_t2=round(_cal_hr * 0.6, 4),
+                            p_stopped_out=round(1.0 - _cal_hr, 4),
+                            market_regime=regime or None,
+                            conviction_tier=(c.get('kb_conviction') or '').lower() or None,
+                            source='paper_bot',
+                            kb_root=_kb_root,
+                            kb_fact_ids=_kb_fact_ids,
+                            conn=conn,
+                        )
+                except Exception as _pl_e:
+                    _logger.warning('prediction ledger write failed for %s: %s', ticker, _pl_e, exc_info=True)
+
+            # Write equity snapshot
+            fresh_bal = conn.execute(
+                "SELECT virtual_balance FROM paper_bot_configs WHERE bot_id=?", (bot_id,)
+            ).fetchone()
+            bal_now = float(fresh_bal[0]) if fresh_bal else balance
+            self._write_bot_equity(bot_id, conn, bal_now, len(open_tickers), now_iso)
+            conn.commit()
+            conn.close()
+            return {'entries': entries, 'skips': skips}
+
+        except Exception as e:
+            _logger.error('_bot_scan_once error for %s: %s', bot_id, e)
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return {'error': str(e)}
+
+    def _monitor_bot_positions(self, bot_id: str, conn, now_iso: str):
+        """Check open positions for this bot and apply stop/target logic."""
+        from services.paper_trading import _is_market_open, compute_pnl_r, fetch_live_prices
+        from analytics.signal_calibration import update_calibration
+
+        open_pos = conn.execute(
+            "SELECT * FROM paper_positions WHERE bot_id=? AND status='open'", (bot_id,)
+        ).fetchall()
+        if not open_pos:
+            return
+
+        # Fetch user_id for logging
+        cfg = conn.execute(
+            "SELECT user_id FROM paper_bot_configs WHERE bot_id=?", (bot_id,)
+        ).fetchone()
+        user_id = cfg['user_id'] if cfg else 'system'
+
+        tickers = [p['ticker'] for p in open_pos]
+        live = fetch_live_prices(tickers)
+
+        for pos in open_pos:
+            ticker = pos['ticker']
+            if not _is_market_open(ticker):
+                continue
+            price = live.get(ticker, 0)
+            if price <= 0:
+                continue
+            entry     = pos['entry_price']
+            stop_     = pos['stop']
+            t1        = pos['t1']
+            t2        = pos['t2']
+            direction = pos['direction']
+            qty       = float(pos['quantity'])
+            new_status = None
+            exit_p     = None
+
+            if direction == 'bullish':
+                if price <= stop_:
+                    new_status = 'stopped_out'; exit_p = price
+                elif t2 is not None and price >= t2:
+                    new_status = 't2_hit'; exit_p = price
+                elif not pos['partial_closed'] and price >= t1:
+                    half_qty = round(qty / 2, 6)
+                    partial_val = round(price * half_qty, 2)
+                    pnl_r_partial = compute_pnl_r(direction, entry, price, stop_)
+                    conn.execute(
+                        """UPDATE paper_positions
+                           SET partial_closed=1, quantity=?, status='t1_hit_partial',
+                               pnl_r=?
+                           WHERE id=?""",
+                        (half_qty, pnl_r_partial, pos['id'])
+                    )
+                    conn.execute(
+                        "UPDATE paper_bot_configs SET virtual_balance = virtual_balance + ? WHERE bot_id=?",
+                        (partial_val, bot_id)
+                    )
+                    self._pg_log_event(conn, user_id, 't1_hit', ticker,
+                        f't1_hit at {price:.4f} partial close {half_qty} units £{partial_val:,.2f} pnl_r={pnl_r_partial:+.2f}',
+                        bot_id, now_iso)
+            else:
+                if price >= stop_:
+                    new_status = 'stopped_out'; exit_p = price
+                elif t2 is not None and price <= t2:
+                    new_status = 't2_hit'; exit_p = price
+                elif not pos['partial_closed'] and price <= t1:
+                    half_qty = round(qty / 2, 6)
+                    # Short partial: return entry*qty + profit (entry-price)*qty = (2*entry-price)*qty
+                    partial_val = round((2 * entry - price) * half_qty, 2)
+                    pnl_r_partial = compute_pnl_r(direction, entry, price, stop_)
+                    conn.execute(
+                        """UPDATE paper_positions
+                           SET partial_closed=1, quantity=?, status='t1_hit_partial',
+                               pnl_r=?
+                           WHERE id=?""",
+                        (half_qty, pnl_r_partial, pos['id'])
+                    )
+                    conn.execute(
+                        "UPDATE paper_bot_configs SET virtual_balance = virtual_balance + ? WHERE bot_id=?",
+                        (partial_val, bot_id)
+                    )
+                    self._pg_log_event(conn, user_id, 't1_hit', ticker,
+                        f't1_hit at {price:.4f} partial close {half_qty} units £{partial_val:,.2f} pnl_r={pnl_r_partial:+.2f}',
+                        bot_id, now_iso)
+
+            # Max hold time: expire positions open > 10 days with no resolution.
+            # Prevents zombie positions in instruments with stale/missing price data.
+            if not new_status:
+                opened_dt = pos['opened_at']
+                if opened_dt:
+                    try:
+                        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                        opened = _dt.fromisoformat(opened_dt.replace('Z', '+00:00'))
+                        age_days = (_dt.now(_tz.utc) - opened).days
+                        if age_days >= 10:
+                            new_status = 'stopped_out'
+                            exit_p = entry  # neutral exit — no price data
+                            _logger.info(
+                                'Bot %s: expiring %s after %d days (no price resolution)',
+                                bot_id, ticker, age_days
+                            )
+                            self._pg_log_event(conn, user_id, 'skip', ticker,
+                                f'Position expired after {age_days}d — no price resolution, neutral exit',
+                                bot_id, now_iso)
+                    except Exception:
+                        pass
+
+            if new_status and exit_p is not None:
+                pnl_r = compute_pnl_r(direction, entry, exit_p, stop_)
+                conn.execute(
+                    "UPDATE paper_positions SET status=?, exit_price=?, pnl_r=?, closed_at=? WHERE id=?",
+                    (new_status, exit_p, pnl_r, now_iso, pos['id'])
+                )
+                # Long: receive exit_p*qty. Short: return original cost + profit = (2*entry-exit)*qty
+                cash_return = exit_p * qty if direction == 'bullish' else (2 * entry - exit_p) * qty
+                conn.execute(
+                    "UPDATE paper_bot_configs SET virtual_balance = virtual_balance + ? WHERE bot_id=?",
+                    (cash_return, bot_id)
+                )
+                self._pg_log_event(conn, user_id, new_status, ticker,
+                    f'exit={exit_p:.4f} pnl_r={pnl_r:+.2f}',
+                    bot_id, now_iso)
+                # Calibration feedback
+                if pos['pattern_id']:
+                    try:
+                        pat = self._pg_read_pattern(conn, pos['pattern_id'])
+                        if pat:
+                            _outcome_map = {'t1_hit': 'hit_t1', 't2_hit': 'hit_t2', 'stopped_out': 'stopped_out'}
+                            outcome = _outcome_map.get(new_status, 'stopped_out')
+                            _pos_dir = pos.get('direction') or None
+                            _pat_type = pat['pattern_type'] if isinstance(pat, dict) else (pat[0] or 'unknown')
+                            _pat_tf = pat['timeframe'] if isinstance(pat, dict) else (pat[1] or '4h')
+                            _pat_regime = pat['kb_regime'] if isinstance(pat, dict) else pat[2]
+                            update_calibration(
+                                ticker=ticker,
+                                pattern_type=_pat_type,
+                                timeframe=_pat_tf,
+                                market_regime=_pat_regime,
+                                outcome=outcome,
+                                db_path=self.db_path,
+                                source='paper_bot',
+                                bot_id=bot_id,
+                                conn=conn,
+                                direction=_pos_dir,
+                            )
+                    except Exception as _ce:
+                        _logger.debug('bot calibration update failed %s: %s', ticker, _ce)
+
+    def _write_bot_equity(self, bot_id: str, conn, balance: float, open_count: int, now_iso: str):
+        """Write equity snapshot for this bot using mark-to-market live prices."""
+        from services.paper_trading import fetch_live_prices
+        try:
+            pos_rows = conn.execute(
+                "SELECT ticker, entry_price, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
+                (bot_id,)
+            ).fetchall()
+            open_value = 0.0
+            if pos_rows:
+                tickers = [r[0] for r in pos_rows]
+                live = fetch_live_prices(tickers)
+                for ticker, entry_price, qty in pos_rows:
+                    price = live.get(ticker) or entry_price  # fallback to entry if fetch fails
+                    open_value += float(price) * float(qty)
+            equity = round(balance + open_value, 2)
+            self._pg_write_equity(conn, bot_id, equity, balance, open_count, now_iso)
+        except Exception as e:
+            _logger.debug('_write_bot_equity failed for %s: %s', bot_id, e)
+
+    def _get_ticker_atom(self, ticker: str, predicate: str, conn) -> Optional[str]:
+        """Read a single KB atom for a ticker. Delegates to _pg_read_fact."""
+        return self._pg_read_fact(conn, ticker, predicate)
+
+    # ── Performance metrics ───────────────────────────────────────────────────
+
+    def get_bot_performance(self, bot_id: str) -> dict:
+        """Compute fitness metrics for a bot."""
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn.row_factory = sqlite3.Row
+            self._ensure_tables(conn)
+
+            cfg = conn.execute(
+                "SELECT * FROM paper_bot_configs WHERE bot_id=?", (bot_id,)
+            ).fetchone()
+            if not cfg:
+                conn.close()
+                return {}
+            config = dict(cfg)
+
+            closed = conn.execute(
+                "SELECT pnl_r, status FROM paper_positions "
+                "WHERE bot_id=? AND status NOT IN ('open') AND pnl_r IS NOT NULL",
+                (bot_id,)
+            ).fetchall()
+            equity_rows = conn.execute(
+                "SELECT equity_value FROM paper_bot_equity WHERE bot_id=? ORDER BY logged_at ASC",
+                (bot_id,)
+            ).fetchall()
+            # Compute open position value (mark-to-market) before closing connection
+            try:
+                from services.paper_trading import fetch_live_prices
+                pos_rows = conn.execute(
+                    "SELECT ticker, entry_price, quantity FROM paper_positions WHERE bot_id=? AND status='open'",
+                    (bot_id,)
+                ).fetchall()
+                open_value = 0.0
+                if pos_rows:
+                    live = fetch_live_prices([r[0] for r in pos_rows])
+                    for ticker, entry_price, qty in pos_rows:
+                        price = live.get(ticker) or entry_price
+                        open_value += float(price) * float(qty)
+            except Exception:
+                open_value = 0.0
+            conn.close()
+
+            total = len(closed)
+            if total == 0:
+                balance = float(config.get('virtual_balance', 5000))
+                initial = float(config.get('initial_balance', 5000))
+                equity  = round(balance + open_value, 2)
+                return_pct = round((equity - initial) / initial * 100, 2) if initial > 0 else 0.0
+                return {
+                    'bot_id': bot_id,
+                    'strategy_name': config.get('strategy_name', ''),
+                    'role': config.get('role', 'seed'),
+                    'generation': config.get('generation', 0),
+                    'active': bool(config.get('active', 1)),
+                    'total_closed': 0,
+                    'win_rate': 0.0,
+                    'avg_r': 0.0,
+                    'sharpe': 0.0,
+                    'profit_factor': 0.0,
+                    'max_drawdown_pct': 0.0,
+                    'fitness': 0.0,
+                    'tier': 'immature',
+                    'virtual_balance': balance,
+                    'initial_balance': initial,
+                    'equity': equity,
+                    'return_pct': return_pct,
+                    'sparkline': [float(r['equity_value']) for r in equity_rows],
+                    'ev': 0.0,  # Fix 4: Expected value
+                }
+
+            pnls = [float(r['pnl_r']) for r in closed]
+            wins = sum(1 for p in pnls if p > 0)
+            win_rate   = wins / total
+            avg_r      = sum(pnls) / total
+            gross_pos  = sum(p for p in pnls if p > 0) or 0.0
+            gross_neg  = abs(sum(p for p in pnls if p < 0)) or 1e-9
+            profit_factor = min(gross_pos / gross_neg, 99.9)  # Fix 5: Cap profit factor display
+            
+            # Fix 4: Add EV (expected value) to bot performance display
+            avg_win = sum(p for p in pnls if p > 0) / max(wins, 1)
+            avg_loss = abs(sum(p for p in pnls if p < 0)) / max(total - wins, 1)
+            ev = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
+
+            import statistics as _stats
+            std_r = _stats.stdev(pnls) if len(pnls) > 1 else 0.0
+            sharpe = avg_r / std_r if std_r > 0 else 0.0
+
+            # Max drawdown from equity curve
+            max_drawdown_pct = 0.0
+            if equity_rows:
+                eqs = [float(r['equity_value']) for r in equity_rows]
+                peak = eqs[0]
+                for eq in eqs:
+                    peak = max(peak, eq)
+                    if peak > 0:
+                        dd = (peak - eq) / peak
+                        max_drawdown_pct = max(max_drawdown_pct, dd)
+
+            fitness = (
+                avg_r * 0.4
+                + win_rate * 0.3
+                + sharpe * 0.2
+                + (1 - min(max_drawdown_pct, 1.0)) * 0.1
+            )
+
+            min_eval = config.get('min_trades_eval', 25)
+            if total < min_eval:
+                tier = 'immature'
+            elif fitness <= 0 or max_drawdown_pct > 0.60:
+                tier = 'failing'
+            else:
+                tier = 'viable'  # elite is assigned by evolution engine
+
+            balance = float(config.get('virtual_balance', 5000))
+            initial = float(config.get('initial_balance', 5000))
+            equity  = round(balance + open_value, 2)
+            return_pct = round((equity - initial) / initial * 100, 2) if initial > 0 else 0.0
+
+            return {
+                'bot_id': bot_id,
+                'strategy_name': config.get('strategy_name', ''),
+                'role': config.get('role', 'seed'),
+                'generation': config.get('generation', 0),
+                'active': bool(config.get('active', 1)),
+                'total_closed': total,
+                'win_rate': round(win_rate, 4),
+                'avg_r': round(avg_r, 3),
+                'sharpe': round(sharpe, 3),
+                'profit_factor': round(profit_factor, 3),
+                'max_drawdown_pct': round(max_drawdown_pct, 4),
+                'fitness': round(fitness, 4),
+                'tier': tier,
+                'virtual_balance': balance,
+                'initial_balance': initial,
+                'equity': equity,
+                'return_pct': return_pct,
+                'sparkline': [float(r['equity_value']) for r in equity_rows],
+                'ev': round(ev, 3),  # Fix 4: Expected value
+            }
+        except Exception as e:
+            _logger.warning('get_bot_performance error for %s: %s', bot_id, e)
+            return {}
+
+    def list_bots(self, user_id: str) -> list[dict]:
+        """Return active bots for a user with live performance metrics."""
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            self._ensure_tables(conn)
+            rows = conn.execute(
+                "SELECT bot_id FROM paper_bot_configs WHERE user_id=? AND active=1 ORDER BY created_at ASC",
+                (user_id,)
+            ).fetchall()
+            conn.close()
+            bots = []
+            for row in rows:
+                perf = self.get_bot_performance(row[0])
+                if perf:
+                    bots.append(perf)
+            return bots
+        except Exception as e:
+            _logger.warning('list_bots error for %s: %s', user_id, e)
+            return []
+
+    def create_manual_bot(self, user_id: str, genome: dict, balance: float) -> str:
+        """Create a manual bot (role='manual', never killed by evolution)."""
+        genome['role'] = 'manual'
+        genome['genome_id'] = _hash_genome(genome)
+        genome['strategy_name'] = genome.get('strategy_name') or _name_genome(genome)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        bot_id = 'bot_' + str(uuid.uuid4()).replace('-', '')[:12]
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        self._ensure_tables(conn)
+        rf_val = genome.get('required_facts')
+        if rf_val and not isinstance(rf_val, str):
+            import json as _json
+            rf_val = _json.dumps(rf_val)
+        conn.execute("""
+            INSERT INTO paper_bot_configs
+            (user_id, bot_id, genome_id, strategy_name, generation, parent_id,
+             pattern_types, sectors, exchanges, volatility, regimes, timeframes,
+             direction_bias, risk_pct, max_positions, min_quality,
+             virtual_balance, initial_balance, role, active,
+             scan_interval_sec, min_trades_eval, required_facts, created_at)
+            VALUES (?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1800,25,?,?)
+        """, (
+            user_id, bot_id,
+            genome['genome_id'], genome['strategy_name'],
+            genome.get('parent_id'),
+            genome.get('pattern_types'), genome.get('sectors'), genome.get('exchanges'),
+            genome.get('volatility'), genome.get('regimes'), genome.get('timeframes'),
+            genome.get('direction_bias'),
+            float(genome.get('risk_pct', 1.0)), int(genome.get('max_positions', 4)),
+            float(genome.get('min_quality', 0.65)),
+            balance, balance,
+            rf_val,
+            now_iso,
+        ))
+        conn.commit()
+        conn.close()
+        self.start_bot(bot_id)
+        return bot_id

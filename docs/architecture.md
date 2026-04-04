@@ -2,84 +2,116 @@
 
 ## Overview
 
-Trading Galaxy is a **zero-LLM trading knowledge base** — a persistent, queryable, epistemically-aware triple store that:
+Trading Galaxy is a **knowledge-graph-powered trading intelligence platform** — a persistent, queryable, epistemically-aware triple store that:
 
-1. **Ingests** live market data from free data sources on automatic schedules
+1. **Ingests** live market data from multiple sources on automatic schedules
 2. **Stores** knowledge as typed `(subject, predicate, object)` atoms with confidence and provenance
 3. **Retrieves** context for natural-language or structured queries using multi-strategy ranking
 4. **Monitors** epistemic health: knowledge decay, authority conflicts, composite stress
+5. **Serves** a personalised daily briefing to users via the Product Layer
+6. **Provides** a browser-based internal tool (SPA at `GET /`) for portfolio management and KB exploration
 
-The system is designed to feed a copilot or LLM layer with accurate, ranked, non-stale trading context — without needing an LLM to reason about the data itself.
+The system runs fully locally on-device (KB, LLM inference via Ollama). In production the API is hosted on OCI and the frontend on Cloudflare Pages. Groq (`llama-3.3-70b-versatile`) is used for LLM inference when `GROQ_API_KEY` is set; Ollama is the local fallback.
 
 ---
 
 ## Component Diagram
 
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│                        External Data Sources                       │
-│  Yahoo Finance (yfinance)  FRED API  SEC EDGAR  RSS Feeds          │
-└────────┬──────────────────────┬──────────┬──────────┬─────────────┘
-         │                      │          │          │
-         ▼                      ▼          ▼          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      ingest/ package                             │
-│                                                                  │
-│  YFinanceAdapter  FREDAdapter  EDGARAdapter  RSSAdapter          │
-│         └──────────────┬──────────────────────┘                  │
-│                  BaseIngestAdapter                               │
-│                  fetch() → transform() → validate() → push()    │
-│                                                                  │
-│                  IngestScheduler                                 │
-│                  (threading.Timer, per-adapter intervals)        │
-│                  health status tracked per adapter               │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ RawAtom list
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   knowledge/ package                             │
-│                                                                  │
-│  TradingKnowledgeGraph (graph.py)                               │
-│  ├── SQLite WAL triple store (facts table)                       │
-│  ├── FTS5 index (facts_fts)                                      │
-│  ├── fact_conflicts audit log                                    │
-│  ├── decay_log                                                   │
-│  └── thread-local connections                                    │
-│                                                                  │
-│  authority.py        — source trust weights + effective_score    │
-│  decay.py            — confidence decay + background worker      │
-│  contradiction.py    — conflict detection                        │
-│  epistemic_stress.py — composite stress signal                   │
-│  working_state.py    — cross-session goal/topic memory           │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ sqlite3.Connection
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    retrieval.py                                  │
-│                                                                  │
-│  Multi-strategy retrieve():                                      │
-│  0. Graph-relational context (PageRank + clustering + BFS paths) │
-│  1. Cross-asset GNN atoms                                         │
-│  2. FTS on key terms (skipped when tickers+intent present)       │
-│  3. Predicate keyword boost (intent-aware predicate fetch)       │
-│  4. Direct ticker/subject match                                  │
-│  5a. High-value signal predicates                                │
-│  5b. Fallback: top-confidence atoms                              │
-│  → Re-rank by authority.effective_score                          │
-│  → Format into labelled sections                                 │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ (snippet, atoms[])
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       api.py (Flask)                             │
-│                                                                  │
-│  POST /ingest          POST /retrieve      GET /query            │
-│  GET  /search          GET  /context/:e    GET  /stats           │
-│  GET  /health          GET  /ingest/status                       │
-│  POST /repair/diagnose POST /repair/proposals                    │
-│  POST /repair/execute  POST /repair/rollback GET /repair/impact  │
-│  POST /kb/graph        POST /kb/traverse                         │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                         External Data Sources                           │
+│  Yahoo Finance · FRED API · SEC EDGAR · RSS Feeds · Options Chains      │
+└──┬─────────────┬──────────────┬───────────┬──────────┬─────────────────┘
+   │             │              │           │          │
+   ▼             ▼              ▼           ▼          ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         ingest/ package                              │
+│                                                                      │
+│  YFinanceAdapter   FREDAdapter     EDGARAdapter    RSSAdapter        │
+│  OptionsAdapter    PolygonOptionsAdapter           PatternAdapter    │
+│  LLMExtractionAdapter  SignalEnrichmentAdapter  EDGARRealtimeAdapter │
+│  HistoricalBackfillAdapter  BoEAdapter  FCAShortInterestAdapter      │
+│  LSEFlowAdapter  InsiderAdapter  SectorRotationAdapter               │
+│  EarningsCalendarAdapter  EconomicCalendarAdapter  EIAAdapter        │
+│  YieldCurveAdapter  FINRAShortInterestAdapter                        │
+│  GDELTAdapter  UCDPAdapter  ACLEDAdapter  USGSAdapter               │
+│  DynamicWatchlistManager  SeedSyncClient                            │
+│         └──────────────────┬─────────────────────────┘              │
+│                      BaseIngestAdapter                              │
+│                      fetch() → transform() → validate() → push()   │
+│                      IngestScheduler (threading.Timer)              │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │ RawAtom list
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                       knowledge/ package                             │
+│                                                                      │
+│  TradingKnowledgeGraph (graph.py)                                   │
+│  ├── SQLite WAL triple store (facts table)                           │
+│  ├── FTS5 index (facts_fts)                                          │
+│  ├── fact_conflicts · decay_log · causal_edges tables               │
+│  └── thread-local connections                                        │
+│                                                                      │
+│  authority.py · decay.py · contradiction.py · epistemic_stress.py  │
+│  working_state.py · graph_retrieval.py · causal_graph.py            │
+│  kb_insufficiency_classifier.py · kb_repair_proposals.py           │
+│  kb_repair_executor.py · kb_validation.py · confidence_intervals.py│
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │ sqlite3.Connection
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         retrieval.py                                 │
+│  0. Graph-relational (PageRank + clustering + BFS)                  │
+│  1. Cross-asset GNN atoms                                            │
+│  2. FTS5                                                             │
+│  3. Predicate keyword boost                                          │
+│  4. Direct ticker match                                              │
+│  5a/5b. High-value predicates / fallback top-confidence             │
+│  → Re-rank by authority.effective_score                              │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │
+                    ┌────────────┼─────────────┐
+                    ▼            ▼             ▼
+┌────────────┐  ┌─────────┐  ┌──────────────────────────────────────┐
+│  llm/      │  │analytics│  │    api_v2.py (FastAPI) + routes_v2/   │
+│            │  │         │  │                                        │
+│ ollama_    │  │portfolio│  │  KB core:  POST /ingest  GET /stats   │
+│ client.py  │  │universe_│  │            POST /retrieve GET /query  │
+│ (chat,     │  │expander │  │            GET /search   GET /health  │
+│ chat_vision│  │pattern_ │  │  Repair:   POST /repair/diagnose      │
+│ list_models│  │detector │  │            POST /repair/proposals     │
+│ is_avail.) │  │snapshot_│  │            POST /repair/execute       │
+│            │  │curator  │  │  Product:  POST /auth/register        │
+│ overlay_   │  │user_    │  │            POST /auth/token           │
+│ builder.py │  │modeller │  │            GET/POST /users/{id}/port. │
+│            │  │network_ │  │  Screenshot: POST /users/{id}/        │
+│ prompt_    │  │effect_  │  │              history/screenshot        │
+│ builder.py │  │engine   │  │  Notifications, tips, alerts,         │
+└────────────┘  │backtest │  │  network, patterns, universe          │
+                │counter- │  │                                        │
+                │factual  │  │  Served by: Gunicorn + UvicornWorker  │
+                └─────────┘  └──────────────────────────────────────┘
+                                              │
+                              ┌───────────────┼──────────────────┐
+                              ▼               ▼                  ▼
+                    ┌──────────────┐  ┌────────────┐  ┌─────────────────┐
+                    │ middleware/  │  │  users/    │  │ notifications/  │
+                    │ auth.py      │  │ user_store │  │ tip_scheduler   │
+                    │ rate_limiter │  │ personal_kb│  │ tip_formatter   │
+                    │ validators   │  └────────────┘  │ snapshot_curator│
+                    │ audit        │                   │ telegram_notif. │
+                    └──────────────┘                   └─────────────────┘
+                                                                │
+                                                                ▼
+                                              ┌─────────────────────────────┐
+                                              │   analytics/position_monitor │
+                                              │  PositionMonitor (bg thread) │
+                                              │  _check_triggers: stop·zone  │
+                                              │  invalidation·regime·T1      │
+                                              │  _compute_confidence (norm.) │
+                                              │  _check_expiry (DB only)     │
+                                              │  _is_actionable_hours gate   │
+                                              └─────────────────────────────┘
 ```
 
 ---
@@ -198,10 +230,30 @@ POST /kb/traverse { topic }
 
 | Adapter | Interval | Rationale |
 |---|---|---|
-| `YFinanceAdapter` | 5 min | Price + signals need to be near-real-time |
+| `LLMExtractionAdapter` | 5 min (tunable) | LLM-based entity and signal extraction from RSS queue (`INGEST_INTERVAL_SECONDS`) |
 | `RSSAdapter` | 15 min | Headlines cycle every 15–30 min |
-| `EDGARAdapter` | 6 hours | Filings are rare; daily is sufficient |
+| `YFinanceAdapter` | 30 min | Price + signals, all tracked tickers |
+| `EDGARRealtimeAdapter` | 30 min | 8-K real-time filings via EDGAR full-text search |
+| `SectorRotationAdapter` | 60 min | Sector ETF relative performance regime |
+| `SignalEnrichmentAdapter` | 60 min | Derived signals from price + KB data |
+| `InsiderAdapter` | 60 min | SEC Form 4 insider transactions |
+| `GDELTAdapter` | 60 min | Geopolitical tension tone scores (country pairs) |
+| `USGSAdapter` | 60 min | Significant earthquakes near key regions |
+| `EarningsCalendarAdapter` | 60 min | Earnings proximity + implied move |
+| `PatternAdapter` | 60 min | Pattern detection (daemon thread, own loop) |
+| `LSEFlowAdapter` | 2 hours | Institutional microstructure flow for LSE equities |
+| `BoEAdapter` | 24 hours | Bank of England macro indicators |
+| `ACLEDAdapter` | 24 hours | Protest/unrest intensity via GDELT artlist proxy |
+| `EIAAdapter` | 24 hours | EIA crude oil inventory + production |
+| `FINRAShortInterestAdapter` | 24 hours | US short interest from FINRA CDN (free, no key) |
+| `YieldCurveAdapter` | 24 hours | Yield curve regime from TLT/IEF/SHY ETFs (requires `POLYGON_API_KEY`) |
 | `FREDAdapter` | 24 hours | FRED macro series update daily at most |
+| `EconomicCalendarAdapter` | 24 hours | Upcoming FOMC/CPI/NFP event risk flags |
+| `HistoricalBackfillAdapter` | On-demand | One-shot via `POST /ingest/historical` |
+
+> **Not in live scheduler:** `OptionsAdapter`, `PolygonOptionsAdapter`, `FCAShortInterestAdapter`, `EDGARAdapter`, `UCDPAdapter` — files exist in `ingest/` but are not registered in the `api_v2.py` lifespan. `SeedSyncClient` runs hourly as an independent background thread.
+
+`SeedSyncClient` runs every hour (independent of the scheduler) as a background thread polling `Alby2007/Mem-Backend` GitHub Releases for a newer seed.
 
 ---
 
@@ -270,23 +322,356 @@ The JARVIS epistemic governance stack is fully wired:
 | `restore_atoms` | Entropy collapse after prior repair |
 | `manual_review` | Unknown / no automated strategy |
 
+## UK Market Context
+
+The system is configured for UK/LSE-first operation:
+
+| Setting | Value |
+|---|---|
+| Default timezone | `Europe/London` |
+| Default delivery time | `07:30` |
+| Default account currency | `GBP` |
+| Default watchlist | FTSE 100 heavyweights + UK macro proxies (`.L` suffix) |
+| Options watchlist | Top FTSE names with liquid options |
+| LLM universe expansion | UK market context injected for `.L` tickers |
+| Low-liquidity options | `_LOW_OPTIONS_LIQUIDITY` set — confidence capped for `iv_rank` (0.40) and `smart_money_signal` (0.35) |
+
+---
+
+## Frontend
+
+Two separate clients consume `https://api.trading-galaxy.uk`:
+
+### Trading Galaxy App
+
+Zero-build vanilla JS, served from `static/` publish dir (Cloudflare Pages `mem-backend2`):
+
+| File | Served at | Purpose |
+|---|---|---|
+| `static/index.html` | `https://trading-galaxy.uk/` | Marketing landing page |
+| `static/login/index.html` | `https://trading-galaxy.uk/login` + SPA routes | Main app — auth + all screens |
+| `static/login/css/app.css` | External stylesheet | Extracted styles |
+| `static/login/js/*.js` | 17 JS files loaded in order | Extracted scripts |
+| `static/auth/index.html` | `https://trading-galaxy.uk/auth/` | Standalone auth page |
+
+**Screens:** Auth · Dashboard · Portfolio · Chat · Tips · Patterns · Network · History · Paper Trader · Subscription · Profile
+
+**Session restore:** on boot calls `GET /auth/me` via `tg_access` HttpOnly cookie. If 401, silently attempts `POST /auth/refresh`. If that fails, shows auth screen in-place.
+
+All fetch calls use `credentials: 'include'` to send HttpOnly cookies cross-origin. API base auto-selects `http://localhost:5050` in dev, `https://api.trading-galaxy.uk` in production.
+
+### Meridian Operations Terminal
+
+React 18 + Vite SPA. Separate repo at `C:\Users\alber\CascadeProjects\Meridian Operations Terminal`.
+
+| Property | Value |
+|---|---|
+| Production URL | `https://meridian-operations-terminal-co.pages.dev` |
+| CF Pages project | `meridian-operations-terminal-co` |
+| Custom domain | `meridian-operations-terminal.uk` (DNS pending) |
+| API | same `https://api.trading-galaxy.uk` backend |
+| Auth | Bearer token in memory; refresh token in sessionStorage (`mot_refresh`) |
+
+**Screens:** Atlas (market intelligence) · Dispatch (morning briefing) · Crucible (decision queue) · Forge (kanban pipeline, premium) · Sentinel (positions) · Network/Fleet Intel · Oracle (AI chat, premium) · Subscriptions
+
+See `docs/frontend.md` Part 2 for full screen-level documentation.
+
+---
+
+## Vision Pipeline
+
+`POST /users/{id}/history/screenshot` — broker screenshot → holdings extraction:
+
+```
+multipart/form-data (file: image/png|jpeg, max 10 MB)
+    → list_models() check — return vision_unavailable gracefully if llava absent
+    → base64 encode image
+    → chat_vision(image_b64, prompt, model='llava')
+    → strip markdown fences from response
+    → json.loads → normalise (uppercase ticker, float coercion)
+    → return { holdings: [{ticker, quantity, avg_cost}], vision_available, count }
+```
+
+Requires `llava` pulled locally: `ollama pull llava` (or `make setup-models`).
+Override model: `OLLAMA_VISION_MODEL` env var.
+
+---
+
+## Historical Calibration Layer
+
+Two modules back-populate the system with real outcome data before any live user feedback exists:
+
+### `analytics/historical_calibration.py`
+
+Slides a 100-candle detection window through 3+ years of daily OHLCV. For each pattern detected, checks T1/T2/T3 hits and stop-outs in the following 20 candles. Aggregates hit rates by `(ticker, pattern_type, timeframe, regime)` and writes to `signal_calibration`.
+
+```
+POST /calibrate/historical
+    → bulk yf.download() for watchlist + proxy tickers
+    → for each ticker:
+        → slide window [100 candles] step 5
+        → detect_all_patterns(window)
+        → classify_regime(SPY, VIX, TLT, GLD at window_end)
+        → _check_outcome(pattern, future[20 candles])
+        → aggregate into _AggBucket keyed by (ticker, pattern, regime)
+    → _upsert_calibration() → signal_calibration table
+```
+
+**Result (3yr, 77 tickers):** 377,801 patterns detected → 2,310 calibration rows → 378,910 total samples, 1,366 `established` rows (≥100 samples each).
+
+### `analytics/regime_history.py`
+
+Classifies each calendar month over 5 years into a macro regime using cross-asset proxies (SPY, HYG, TLT, GLD, VIX). Writes month-level regime atoms and per-ticker regime-conditional performance atoms.
+
+**Regime matrix (priority order):**
+
+| Regime | Condition |
+|---|---|
+| `risk_off_contraction` | SPY < -3% AND (HYG < -1% OR VIX > +10%) |
+| `stagflation` | SPY < 1% AND GLD > +2% |
+| `recovery` | SPY > +2% AND TLT > +1% |
+| `risk_on_expansion` | SPY > +1% (baseline) |
+
+**Result (5yr, 73 tickers):** 52 months classified, 740 atoms written.
+
+---
+
+## Deployment
+
+### Production infrastructure
+
+| Layer | Platform | URL |
+|---|---|---|
+| API | Oracle Cloud (OCI) VM — `132.145.33.75` | `https://api.trading-galaxy.uk` |
+| App frontend | Cloudflare Pages (`mem-backend2`) | `https://trading-galaxy.uk` |
+
+### OCI server
+
+FastAPI (`api_v2.py`) runs under **Gunicorn + UvicornWorker** via **systemd** (`trading-galaxy.service`) on port `5050`.
+[Caddy v2](https://caddyserver.com) handles TLS termination and reverse proxies `localhost:5050`.
+Let's Encrypt certificates are provisioned and renewed automatically by Caddy.
+
+```
+Internet → Caddy :443 → Gunicorn/UvicornWorker :5050
+Internet → Caddy :80  → 301 → :443
+```
+
+Caddy config: `deploy/Caddyfile`
+
+Deploy command (from local machine):
+```bash
+ssh -i <key> ubuntu@132.145.33.75 "bash ~/trading-galaxy/deploy/oci-update.sh"
+```
+
+This script: pulls latest git, updates pip dependencies, restarts `trading-galaxy.service`.
+
+**Data persistence:** SQLite WAL DB at `/opt/trading-galaxy/data/trading_knowledge.db` — survives deploys.
+
+**Environment:** loaded from `/home/ubuntu/trading-galaxy/.env` by the systemd `EnvironmentFile` directive.
+
+### Cloudflare Pages
+
+GitHub auto-deploy is **not reliable** — always deploy the frontend manually via `wrangler`:
+```bash
+npx wrangler pages deploy static --project-name mem-backend2 --branch master --commit-dirty=true
+```
+
+One-shot full deploy (backend + frontend):
+```powershell
+.\deploy\deploy.ps1
+```
+
+### CORS
+
+Configured in `api_v2.py` via two mechanisms:
+
+1. **`_ALLOWED_ORIGINS` frozenset** — exact-match allowlist checked by CSRF middleware and `CORSMiddleware`
+2. **`_ALLOWED_ORIGIN_SUFFIXES` tuple** — suffix-match allowlist (no regex needed for these)
+
+| Origin / Suffix | Purpose |
+|---|---|
+| `https://trading-galaxy.uk` | TG app (CF Pages) |
+| `https://www.trading-galaxy.uk` | TG app www |
+| `https://app.trading-galaxy.uk` | TG app subdomain |
+| `https://meridian-operations-terminal.uk` | Meridian custom domain |
+| `https://www.meridian-operations-terminal.uk` | Meridian www |
+| `http://localhost:3000` / `:5173` / `:8080` | Local dev |
+| `*.trycloudflare.com` | Cloudflare dev tunnels |
+| `*.ngrok-free.app` / `*.ngrok.io` | ngrok tunnels |
+| `*.pages.dev` | All Cloudflare Pages preview deployments (includes `meridian-operations-terminal-co.pages.dev`) |
+
+**Caddy** (`/etc/caddy/Caddyfile`) reflects the exact request `Origin` header rather than returning `*`, ensuring `Access-Control-Allow-Credentials: true` is browser-compatible. The Caddy `respond @options 204` block handles preflight immediately without forwarding to FastAPI.
+
+---
+
+## Seed Management
+
+| Script | Purpose |
+|---|---|
+| `scripts/export_seed.py` | Export shared KB tables to `tests/fixtures/kb_seed.sql`. Runs quality gate. |
+| `scripts/push_seed.py` | Export + upload to GitHub Releases (`seed-YYYYMMDD-HHMM` tag). Prunes releases > 10. |
+| `scripts/load_seed.py` | Load seed SQL into local DB |
+| `deploy/seed-bootstrap.sh` | First-boot: download latest seed from GitHub Releases, load into `kb-data` volume |
+| `ingest/seed_sync.py` | Background hourly poll — downloads newer seed from GitHub Releases and applies shared tables only; never touches `user_*` tables |
+
+Seed allowlist (tables synced): `facts`, `fact_conflicts`, `causal_edges`, `pattern_signals`, `signal_calibration`, and governance tables. Personal KB (`user_*`) is structurally protected.
+
+---
+
+## Paper Trading System
+
+The autonomous paper trader is a self-contained agent that runs on the ingest scheduler alongside data adapters. It uses the KB signal pipeline as its signal source and virtual accounts as its execution layer.
+
+### Components
+
+| Component | Location | Role |
+|---|---|---|
+| `_paper_ai_run(user_id)` | `services/paper_trading.py` | Single scan — fetches top patterns, filters, LLM decision, opens/monitors positions |
+| `_paper_continuous_scan(user_id, stop_event, interval_sec)` | `services/paper_trading.py` | Loop: calls `_paper_ai_run` every `interval_sec` seconds |
+| `restore_scanners()` | `services/paper_trading.py` | Re-launches continuous scan threads for users with `agent_running=1` in DB (called at startup) |
+| `ensure_paper_tables()` | `services/paper_trading.py` | Creates `paper_account`, `paper_positions`, `paper_agent_log` on startup; adds `agent_running` column idempotently |
+
+### Scan flow
+
+```
+PaperAgentAdapter.run() / POST /paper/agent/run
+    → _paper_ai_run(user_id)
+        → open_tickers = SELECT ticker FROM paper_positions WHERE status='open'
+        → cooled_tickers = SELECT ticker FROM paper_positions
+                           WHERE status='stopped_out' AND closed_at > (now - 24h)
+        → balance = SELECT virtual_balance FROM paper_account
+        → candidates = top pattern_signals ordered by quality_score DESC LIMIT 20
+        → for each candidate:
+            if ticker in open_tickers → skip (already open)
+            if ticker in cooled_tickers → skip (24h cooldown)
+            if open_positions >= 12 → break (max slots)
+            if new_entries_this_scan >= 3 → break (per-scan cap)
+            → LLM decision: ENTER / SKIP / WAIT
+            if ENTER:
+                risk_pct = min(user_prefs.max_risk_per_trade_pct or 1.0, 2.0)
+                risk_per_trade = balance × risk_pct / 100
+                qty = risk_per_trade / (entry - stop)
+                position_value = qty × entry
+                if position_value > balance × 0.10:
+                    qty = (balance × 0.10) / entry
+                → INSERT paper_positions (status='open')
+                → UPDATE paper_account (virtual_balance -= position_value)
+                → INSERT paper_agent_log (event='entry')
+        → monitor open positions:
+            for each open position:
+                fetch current_price from KB (last_price atom)
+                if bullish AND current_price <= stop → stopped_out
+                if bullish AND current_price >= t2  → t2_hit
+                if bullish AND current_price >= t1 AND NOT partial_closed → t1_hit
+            → UPDATE paper_positions, paper_account
+            → INSERT paper_agent_log
+```
+
+### Sizing rules
+
+| Rule | Value |
+|---|---|
+| Starting balance | £500,000 virtual GBP (per user, created on first scan) |
+| Risk per trade | `max_risk_per_trade_pct` from `user_preferences` (default 1.0%) |
+| Risk hard cap | 2.0% regardless of user preference |
+| Max position value | 10% of current virtual balance |
+| Max open positions | 12 |
+| Max new entries per scan | 3 |
+| Stopped-out cooldown | 24 hours per ticker |
+| Pattern quality threshold | ≥ 0.70 |
+| Conviction requirement | `high` / `confirmed` / `strong` |
+
+### LLM decision gate
+
+Before entering, the agent calls the LLM with:
+- Pattern signal details (ticker, direction, entry, stop, T1, T2, quality score, conviction)
+- Current KB context for the ticker (signal atoms, regime, macro)
+- Account state (slots used, balance)
+
+The LLM returns `ENTER`, `SKIP`, or `WAIT` with reasoning. `SKIP` and `WAIT` are logged. Only `ENTER` triggers position sizing and order insertion.
+
+Groq (`llama-3.3-70b-versatile`) is used when `GROQ_API_KEY` is set; Ollama local model is the fallback.
+
+---
+
 ## Module Status
 
-Status taxonomy used below:
+Status taxonomy:
 
 - **Live** — imported and executed in startup/request path
-- **Partial** — schema/API wiring is live, but downstream decision logic is not yet integrated
-- **Dormant** — file exists but is not wired into live runtime path
+- **Partial** — schema/API wiring is live but downstream decision logic not yet integrated
+- **Dormant** — file exists but is not wired into live runtime
 
-### Dormant (not wired)
+### `analytics/position_monitor.py` (Live)
 
-| Module | Status | Evidence |
-|---|---|---|
-| `graph_v2.py` | Still dormant — requires `aiosqlite` and is not imported in the live request/startup path | Runtime uses `knowledge.graph` via `KnowledgeGraph`; `graph_v2.py` is never imported in `api.py`/`retrieval.py` |
-| `graph_enhanced.py` | Still dormant — standalone class, not wired into `api.py` or `retrieval.py` | No startup/request-path import and no endpoint/retrieval integration |
+Background thread (`PositionMonitor`) that polls all open `tip_followups` rows every 5 minutes, evaluates trigger conditions, and fires Telegram alerts.
 
-### Partially wired
+| Component | Detail |
+|---|---|
+| `_check_triggers(pos, price, db)` | CRITICAL: stop zone, structural zone breach, KB signal contradiction, earnings imminent. HIGH/MEDIUM: T1 approach, conviction drop, regime shift, sector reversal. |
+| `_compute_confidence(db, ticker, direction)` | Normalised score: `confirming_atoms / total_relevant` over 4 predicates (`conviction_tier`, `signal_direction`, `sector_tailwind`, `macro_signal`). Returns `None` if <2 atoms found. |
+| `_is_actionable_hours()` | Mon–Fri 06:30–18:30 UTC gate. All alerts (including CRITICAL) suppressed outside this window. |
+| `_check_expiry(pos, db)` | If `expires_at` is past, marks row `expired`, writes LOW alert to DB. **No Telegram** — surfaced in next Monday/Wednesday briefing. |
+| `_send_telegram_alert_with_confidence` | Formats via `format_emergency_alert_with_confidence`, includes confidence bar if ≥2 atoms found. |
+| Cooldowns | CRITICAL: 6h · HIGH: 4h · MEDIUM: 24h |
+
+### Living Portfolio Briefing
+
+Replaces the one-tip-per-day scheduler with a full position lifecycle system. Delivered via Telegram.
+
+```
+Monday cycle (all tiers):
+  expire_stale_followups()              → marks past-expiry rows in DB
+  get_user_open_positions()             → all watching + active followups
+  get_recently_closed_positions(7 days) → closed/expired/stopped last week
+  _pick_batch(N patterns)               → new setups eligible for user's tier
+  format_monday_briefing()              → 📍 OPEN POSITIONS + NEW THIS WEEK + CLOSED
+  upsert_tip_followup(status='watching')→ auto-create followup for each sent setup
+  TelegramNotifier.send()
+
+Position monitor cycle (Tue/Wed/Thu — position_monitor, Fri — week_close, Sat — weekend_summary):
+  expire_stale_followups()
+  get_user_open_positions()
+  get_kb_changes_since(monday_00:00, tickers=open_tickers)
+  format_position_monitor_briefing(briefing_mode=…)
+    → 📊 POSITION UPDATE  (Tue/Wed/Thu)
+    → � WEEK IN REVIEW   (Fri)
+    → 🗓 WEEKEND SUMMARY  (Sat, premium only)
+  TelegramNotifier.send()   ← 1 retry on 429/5xx with 2s backoff
+```
+
+**Tier delivery schedule:**
+
+| Tier | Monday setups | Wednesday followup | Daily briefing |
+|---|---|---|---|
+| `basic` | 2 | ✅ | ❌ |
+| `pro` | 5 | ✅ | ❌ |
+| `premium` | 1/day | ✅ | ✅ (daily) |
+
+```
+Emergency alerts (every 5 min, PositionMonitor):
+  _check_triggers() → _send_telegram_alert_with_confidence()
+```
+
+**Delivery gate:** `notifications/notify_gate.py` — single `should_notify()` function used by both `DeliveryScheduler` and `TipScheduler`. Handles timezone, weekday gate, and dedup. Normalises `'daily'` tier config to a full weekday list.
+
+**KB change predicates (position monitor filter):** `signal_direction` · `conviction_tier` · `sector_tailwind` · `regime_label` · `market_regime` · `price_regime` · `macro_event_risk` · `smart_money_signal` · `flow_conviction` · `uk_market_regime` · `volatility_regime` (and 3 lower-signal predicates).
+
+**Position status distinction:**
+- `watching` — auto-created when a tip fires; user has not acted. Shown as "On radar 🔓"
+- `active` — user clicked "taking it". Shown as "In position 📍"
+
+---
+
+### Dormant
+
+| Module | Notes |
+|---|---|
+| `knowledge/graph_v2.py` | Requires `aiosqlite`; not imported in live path |
+| `knowledge/graph_enhanced.py` | Standalone class; not wired into `api_v2.py` or `retrieval.py` |
+
+### Partial
 
 | Module | Live today | Pending |
 |---|---|---|
-| `confidence_intervals.py` | `ensure_confidence_columns()` runs at startup; `GET /kb/confidence` endpoint is exposed | Interval output does not yet feed back into `position_size_pct` (planned v2) |
+| `confidence_intervals.py` | `ensure_confidence_columns()` at startup; `GET /kb/confidence` exposed | Interval not yet fed into `position_size_pct` |

@@ -1,0 +1,2054 @@
+<!DOCTYPE html><!-- build:f1a2b3c -->
+<!-- v20260301-prod1 -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://telegram.org https://fonts.googleapis.com https://cdnjs.cloudflare.com; frame-src https://oauth.telegram.org https://s.tradingview.com https://api.trading-galaxy.uk https://telegram.org; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.trading-galaxy.uk https://telegram.org;">
+<title>Trading Galaxy — Sign In</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
+<link rel="stylesheet" href="css/app.css?v=20260309e">
+<style>
+/* ── Auth layout override — loaded after app.css, wins cascade ── */
+html[data-auth], html[data-auth] body {
+  height: 100% !important;
+  overflow: hidden !important;
+}
+html[data-auth] #topbar  { display: none !important; }
+html[data-auth] #sidebar { display: none !important; }
+html[data-auth] #main    { display: none !important; }
+html[data-auth] nav      { display: none !important; }
+
+#screen-login, #screen-register {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 500 !important;
+  background: #080A06 !important;
+  overflow-y: auto !important;
+  display: none;
+}
+html[data-auth="login"]    #screen-login    { display: block !important; }
+html[data-auth="register"] #screen-register { display: block !important; }
+
+#screen-login .auth-page,
+#screen-register .auth-page {
+  width: 100% !important;
+  height: 100vh !important;
+  display: grid !important;
+  grid-template-columns: 1fr 380px 1fr !important;
+  grid-template-areas: "brand card deco" !important;
+  grid-template-rows: 100vh !important;
+  align-items: center !important;
+  position: relative !important;
+  z-index: 1 !important;
+}
+#screen-login .auth-brand-col,
+#screen-register .auth-brand-col {
+  grid-area: brand !important;
+  min-width: 0 !important;
+  padding: 0 16px 0 32px !important;
+}
+#screen-login .auth-card-col,
+#screen-register .auth-card-col  {
+  grid-area: card !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+}
+#screen-login .auth-deco-col,
+#screen-register .auth-deco-col  {
+  grid-area: deco !important;
+  min-width: 0 !important;
+  padding: 0 16px !important;
+}
+#screen-login .auth-brand-headline,
+#screen-register .auth-brand-headline {
+  font-size: 24px !important;
+}
+#screen-login .auth-brand-sub,
+#screen-register .auth-brand-sub {
+  margin-bottom: 24px !important;
+}
+#screen-login .auth-brand-mark,
+#screen-register .auth-brand-mark {
+  margin-bottom: 24px !important;
+}
+
+/* Card: visible background + border */
+#screen-login .auth-card,
+#screen-register .auth-card {
+  background: #111410 !important;
+  border: 1px solid rgba(232,160,32,0.25) !important;
+  border-radius: 14px !important;
+  padding: 36px 32px !important;
+  box-shadow: 0 0 0 1px rgba(232,160,32,0.05) inset,
+              0 24px 64px rgba(0,0,0,0.8),
+              0 0 40px rgba(232,160,32,0.06) !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+#screen-login .auth-card::before,
+#screen-register .auth-card::before {
+  content: '' !important;
+  position: absolute !important;
+  top: 0 !important; left: 24px !important; right: 24px !important; height: 1px !important;
+  background: linear-gradient(90deg, transparent, #E8A020, transparent) !important;
+  opacity: 0.6 !important;
+}
+#screen-login .auth-field input,
+#screen-register .auth-field input {
+  background: rgba(255,255,255,0.05) !important;
+  border: 1px solid rgba(232,160,32,0.18) !important;
+  color: #E8E4DC !important;
+  border-radius: 8px !important;
+  padding: 12px 14px !important;
+  width: 100% !important;
+  font-family: 'DM Mono', monospace !important;
+  font-size: 13px !important;
+  outline: none !important;
+  box-sizing: border-box !important;
+}
+#screen-login .auth-field input:focus,
+#screen-register .auth-field input:focus {
+  border-color: rgba(232,160,32,0.45) !important;
+  background: rgba(232,160,32,0.04) !important;
+}
+#screen-login .auth-field input::placeholder,
+#screen-register .auth-field input::placeholder {
+  color: #4a4a42 !important;
+}
+#screen-login .auth-btn-primary,
+#screen-register .auth-btn-primary {
+  background: #E8A020 !important;
+  color: #0A0C08 !important;
+  border: none !important;
+  border-radius: 8px !important;
+  padding: 13px !important;
+  width: 100% !important;
+  font-family: 'Syne', sans-serif !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  cursor: pointer !important;
+  margin-top: 6px !important;
+}
+#screen-login .auth-btn-primary:hover,
+#screen-register .auth-btn-primary:hover {
+  background: #F0AA28 !important;
+  box-shadow: 0 0 28px rgba(232,160,32,0.45) !important;
+}
+#screen-login .auth-card-title,
+#screen-register .auth-card-title {
+  font-family: 'Syne', sans-serif !important;
+  font-size: 22px !important;
+  font-weight: 700 !important;
+  color: #E8E4DC !important;
+  margin-bottom: 4px !important;
+}
+#screen-login .auth-card-sub,
+#screen-register .auth-card-sub {
+  font-size: 11px !important;
+  color: #6B6860 !important;
+  margin-bottom: 28px !important;
+  font-family: 'DM Mono', monospace !important;
+}
+#screen-login .auth-field label,
+#screen-register .auth-field label {
+  font-size: 9px !important;
+  letter-spacing: 0.12em !important;
+  text-transform: uppercase !important;
+  color: #6B6860 !important;
+  display: block !important;
+  margin-bottom: 6px !important;
+  font-family: 'DM Mono', monospace !important;
+}
+#screen-login .auth-card-footer,
+#screen-register .auth-card-footer {
+  margin-top: 24px !important;
+  text-align: center !important;
+  font-size: 11px !important;
+  color: #6B6860 !important;
+  font-family: 'DM Mono', monospace !important;
+}
+#screen-login .auth-card-footer a,
+#screen-register .auth-card-footer a {
+  color: #E8A020 !important;
+  text-decoration: none !important;
+}
+#screen-login .auth-divider-line,
+#screen-register .auth-divider-line {
+  background: rgba(232,160,32,0.15) !important;
+}
+#screen-login .auth-divider-text,
+#screen-register .auth-divider-text {
+  color: #6B6860 !important;
+  font-size: 10px !important;
+  font-family: 'DM Mono', monospace !important;
+}
+</style>
+<script>
+try{var _p=location.pathname;document.documentElement.setAttribute('data-auth',_p.indexOf('register')!==-1?'register':'login');}catch(e){}
+</script>
+</head>
+<body>
+
+<!-- ── Top bar ──────────────────────────────────────────────────────── -->
+<div id="topbar">
+  <span class="wordmark" id="wordmark-home" style="cursor:pointer;" title="Go to homepage">TRADING GALAXY</span>
+  <div class="spacer"></div>
+  <div id="conn-dot"></div>
+  <span id="conn-label">CONNECTING</span>
+  <div id="tg-login-btn">
+    <script src="https://telegram.org/js/telegram-widget.js?22"
+      data-telegram-login="TheTelescopeBot"
+      data-size="small"
+      data-radius="5"
+      data-onauth="onTelegramAuth(user)"
+      data-request-access="write">
+    </script>
+  </div>
+  <div id="tg-user-chip">
+    <img id="tg-avatar" class="tg-avatar" src="" alt="" style="display:none">
+    <span id="tg-name" class="tg-name"></span>
+  </div>
+  <span id="user-badge" style="display:none">not signed in</span>
+  <span id="kb-count">KB: —</span>
+</div>
+
+<!-- ── Sidebar ─────────────────────────────────────────────────────── -->
+<nav id="sidebar">
+  <div class="nav-top">
+    <div class="nav-item active" data-screen="dashboard" id="nav-dashboard">
+      <span class="nav-icon">▦</span><span class="nav-label">Dashboard</span>
+    </div>
+    <div class="nav-item" data-screen="portfolio" id="nav-portfolio" style="display:none;">
+      <span class="nav-icon">◈</span><span class="nav-label">Portfolio</span>
+    </div>
+    <div class="nav-item" data-screen="markets" id="nav-markets">
+      <span class="nav-icon">◬</span><span class="nav-label">Markets</span>
+    </div>
+    <div class="nav-item" data-screen="visualiser" id="nav-visualiser">
+      <span class="nav-icon">⬡</span><span class="nav-label">Visualiser</span>
+    </div>
+    <div class="nav-item" data-screen="chat" id="nav-chat" style="position:relative">
+      <span class="nav-icon">◎</span><span class="nav-label">Chat</span>
+      <span id="chat-alert-badge" style="display:none;position:absolute;top:4px;right:6px;min-width:16px;height:16px;padding:0 4px;background:#e53e3e;color:#fff;font-size:9px;font-weight:700;border-radius:8px;line-height:16px;text-align:center;"></span>
+    </div>
+    <div class="nav-item" data-screen="tips" id="nav-tips">
+      <span class="nav-icon">◆</span><span class="nav-label">Tips</span>
+    </div>
+    <div class="nav-item" data-screen="patterns" id="nav-patterns">
+      <span class="nav-icon">⟁</span><span class="nav-label">Patterns</span>
+    </div>
+    <div class="nav-item" data-screen="network" id="nav-network">
+      <span class="nav-icon">⬡</span><span class="nav-label">Network</span>
+    </div>
+    <div class="nav-item" data-screen="history" id="nav-history">
+      <span class="nav-icon">◷</span><span class="nav-label">History</span>
+    </div>
+    <div class="nav-item" data-screen="journal" id="nav-journal">
+      <span class="nav-icon">◧</span><span class="nav-label">Journal</span>
+    </div>
+    <div class="nav-item" data-screen="paper" id="nav-paper">
+      <span class="nav-icon">◫</span><span class="nav-label">Paper Trader</span>
+    </div>
+    <div class="nav-item" data-screen="private-fleet" id="nav-private-fleet" style="display:none;">
+      <span class="nav-icon">⬡</span><span class="nav-label">Private Fleet</span>
+    </div>
+  </div>
+  <div class="nav-bottom">
+    <div class="nav-item" data-screen="subscription" id="nav-subscription">
+      <span class="nav-icon">◉</span><span class="nav-label">Subscription</span>
+    </div>
+    <div class="nav-item" data-screen="profile" id="nav-profile">
+      <span class="nav-icon">⊕</span><span class="nav-label">Profile</span>
+    </div>
+    <div class="nav-item" data-no-nav="1" id="nav-signout" onclick="doSignOut()">
+      <span class="nav-icon">⏻</span><span class="nav-label">Sign Out</span>
+    </div>
+  </div>
+</nav>
+
+<!-- bg layers (shared, body-level) -->
+<div class="auth-bg-grid" id="auth-bg-grid"></div>
+<div class="auth-bg-glow" id="auth-bg-glow"></div>
+<div class="auth-candles" id="auth-candles"></div>
+
+<!-- LOGIN ─────────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-login">
+  <div class="auth-page">
+
+      <!-- Left: brand -->
+      <div class="auth-brand-col">
+        <div class="auth-brand-mark">
+          <div class="auth-brand-icon">
+            <svg viewBox="0 0 32 32" fill="none" width="32" height="32">
+              <polygon points="16,2 20,12 30,12 22,19 25,30 16,24 7,30 10,19 2,12 12,12" fill="none" stroke="#E8A020" stroke-width="1.5"/>
+              <circle cx="16" cy="16" r="3" fill="#E8A020" opacity="0.8"/>
+            </svg>
+          </div>
+          <span class="auth-brand-name">Trading Galaxy</span>
+        </div>
+        <h1 class="auth-brand-headline">Epistemic<br>trading<br><em>intelligence.</em></h1>
+        <p class="auth-brand-sub">Signals grounded in evidence, not vibes. AI-powered analysis built for serious traders.</p>
+        <div class="auth-brand-stats">
+          <div class="auth-stat-row"><div class="auth-stat-dot"></div><span class="auth-stat-label">Coverage</span><span class="auth-stat-val">FTSE + US Markets</span></div>
+          <div class="auth-stat-row"><div class="auth-stat-dot"></div><span class="auth-stat-label">Signal latency</span><span class="auth-stat-val">&lt; 30 min</span></div>
+          <div class="auth-stat-row"><div class="auth-stat-dot"></div><span class="auth-stat-label">Greeks data</span><span class="auth-stat-val">Live Options Flow</span></div>
+          <div class="auth-stat-row"><div class="auth-stat-dot"></div><span class="auth-stat-label">AI layer</span><span class="auth-stat-val">Tiered Intelligence</span></div>
+        </div>
+      </div>
+
+      <!-- Centre: card -->
+      <div class="auth-card-col">
+        <div class="auth-card">
+          <div class="auth-card-title">Sign in</div>
+          <div class="auth-card-sub">Access your trading intelligence dashboard</div>
+          <div class="auth-field">
+            <label for="login-email">Email</label>
+            <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email" />
+          </div>
+          <div class="auth-field">
+            <div class="auth-field-row">
+              <label for="login-pw">Password</label>
+            </div>
+            <input id="login-pw" type="password" placeholder="••••••••••" autocomplete="current-password" />
+          </div>
+          <button class="auth-btn auth-btn-primary" id="login-btn">Sign In →</button>
+          <div id="login-msg" class="auth-msg"></div>
+          <div class="auth-divider"><div class="auth-divider-line"></div><span class="auth-divider-text">or</span><div class="auth-divider-line"></div></div>
+          <div id="tg-widget-auth" class="auth-tg-widget"></div>
+          <div class="auth-card-footer">Don't have an account? <a href="/register" onclick="navigate('register');return false;">Start free trial →</a></div>
+        </div>
+      </div>
+
+      <!-- Right: ticker deco -->
+      <div class="auth-deco-col">
+        <div class="auth-ticker-feed">
+          <div class="auth-ticker-item auth-ticker-col">
+            <div class="auth-ticker-top"><span class="auth-ticker-sym">AAPL</span><span class="auth-ticker-up">+1.24%</span></div>
+            <div class="auth-tick-bar"><span style="height:60%"></span><span style="height:80%"></span><span style="height:50%"></span><span style="height:90%"></span><span style="height:70%"></span></div>
+          </div>
+          <div class="auth-ticker-item auth-ticker-col">
+            <div class="auth-ticker-top"><span class="auth-ticker-sym">TSLA</span><span class="auth-ticker-down">−2.11%</span></div>
+            <div class="auth-tick-bar"><span style="height:90%"></span><span style="height:60%"></span><span style="height:40%"></span><span style="height:55%"></span><span style="height:30%"></span></div>
+          </div>
+          <div class="auth-ticker-item auth-ticker-col">
+            <div class="auth-ticker-top"><span class="auth-ticker-sym">BARC.L</span><span class="auth-ticker-up">+0.87%</span></div>
+            <div class="auth-tick-bar"><span style="height:40%"></span><span style="height:55%"></span><span style="height:70%"></span><span style="height:65%"></span><span style="height:80%"></span></div>
+          </div>
+          <div class="auth-ticker-item auth-ticker-col">
+            <div class="auth-ticker-top"><span class="auth-ticker-sym">SPY</span><span class="auth-ticker-up">+0.43%</span></div>
+            <div class="auth-tick-bar"><span style="height:50%"></span><span style="height:60%"></span><span style="height:55%"></span><span style="height:70%"></span><span style="height:75%"></span></div>
+          </div>
+          <div class="auth-ticker-item">
+            <span class="auth-ticker-sym" style="font-size:10px;color:#6B6860">IV RANK</span>
+            <span style="font-size:11px;color:#E8A020">68th pct</span>
+          </div>
+        </div>
+      </div>
+
+  </div>
+</div>
+
+<!-- REGISTER ──────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-register">
+  <div class="auth-page">
+
+      <!-- Left: brand + tiers -->
+      <div class="auth-brand-col">
+        <div class="auth-brand-mark">
+          <div class="auth-brand-icon">
+            <svg viewBox="0 0 32 32" fill="none" width="28" height="28">
+              <polygon points="16,2 20,12 30,12 22,19 25,30 16,24 7,30 10,19 2,12 12,12" fill="none" stroke="#E8A020" stroke-width="1.5"/>
+              <circle cx="16" cy="16" r="3" fill="#E8A020" opacity="0.8"/>
+            </svg>
+          </div>
+          <span class="auth-brand-name">Trading Galaxy</span>
+        </div>
+        <h1 class="auth-brand-headline">Join the <em>edge.</em></h1>
+        <p class="auth-brand-sub">Start free, upgrade when you're ready. Every tier includes AI-grounded signals.</p>
+        <div class="auth-tier-list">
+          <div class="auth-tier-card auth-tier-active">
+            <div class="auth-tier-dot" style="background:#6B6860"></div>
+            <div class="auth-tier-info"><div class="auth-tier-name">Free</div><div class="auth-tier-desc">3 tips/day · Basic signals</div></div>
+            <span class="auth-tier-free">£0</span>
+          </div>
+          <div class="auth-tier-card">
+            <div class="auth-tier-dot" style="background:#E8A020"></div>
+            <div class="auth-tier-info"><div class="auth-tier-name">Basic</div><div class="auth-tier-desc">10 tips/day · Daily briefing</div></div>
+            <span class="auth-tier-price">£9/mo</span>
+          </div>
+          <div class="auth-tier-card">
+            <div class="auth-tier-dot" style="background:#F0AA28"></div>
+            <div class="auth-tier-info"><div class="auth-tier-name">Pro</div><div class="auth-tier-desc">25 tips/day · Greeks data</div></div>
+            <span class="auth-tier-price">£29/mo</span>
+          </div>
+          <div class="auth-tier-card">
+            <div class="auth-tier-dot" style="background:#FFD166"></div>
+            <div class="auth-tier-info"><div class="auth-tier-name">Premium</div><div class="auth-tier-desc">Unlimited · Full intelligence</div></div>
+            <span class="auth-tier-price">£79/mo</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Centre: register card -->
+      <div class="auth-card-col">
+        <div class="auth-card">
+          <div class="auth-card-title">Create account</div>
+          <div class="auth-card-sub">Start your free trial — no card required</div>
+          <div class="auth-field">
+            <label for="reg-email">Email</label>
+            <input id="reg-email" type="email" placeholder="you@example.com" autocomplete="email" />
+          </div>
+          <div class="auth-field">
+            <label for="reg-pw">Password</label>
+            <input id="reg-pw" type="password" placeholder="Min. 8 characters" autocomplete="new-password" />
+            <div class="auth-pw-strength">
+              <div class="auth-pw-bar" id="reg-bar1"></div>
+              <div class="auth-pw-bar" id="reg-bar2"></div>
+              <div class="auth-pw-bar" id="reg-bar3"></div>
+              <div class="auth-pw-bar" id="reg-bar4"></div>
+            </div>
+          </div>
+          <div class="auth-field">
+            <label for="reg-pw2">Confirm password</label>
+            <input id="reg-pw2" type="password" placeholder="••••••••" autocomplete="new-password" />
+          </div>
+          <div class="auth-field auth-field-beta">
+            <label for="reg-beta">Beta access password</label>
+            <input id="reg-beta" type="password" placeholder="Required for early access" autocomplete="off" />
+          </div>
+          <button class="auth-btn auth-btn-primary" id="reg-btn">Create Free Account →</button>
+          <div id="reg-msg" class="auth-msg"></div>
+          <div class="auth-card-footer">Already have an account? <a href="/login" onclick="navigate('login');return false;">Sign in →</a></div>
+        </div>
+      </div>
+
+      <!-- Right: features -->
+      <div class="auth-deco-col">
+        <div class="auth-features-list">
+          <div class="auth-feature-label">Free tier includes</div>
+          <div class="auth-feature-item"><div class="auth-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>3 AI tips per day</div>
+          <div class="auth-feature-item"><div class="auth-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>FTSE + US signals</div>
+          <div class="auth-feature-item"><div class="auth-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>Telegram alerts</div>
+          <div class="auth-feature-item"><div class="auth-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>News sentiment</div>
+          <div class="auth-feature-item"><div class="auth-check"><svg viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="#4CAF50" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>Macro regime data</div>
+          <div class="auth-free-badge"><strong>No card required</strong>Upgrade anytime from £9/mo</div>
+        </div>
+      </div>
+
+  </div>
+</div>
+
+<!-- ── Main ────────────────────────────────────────────────────────── -->
+<main id="main">
+
+<!-- DASHBOARD ─────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-dashboard">
+
+  <!-- Page header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;gap:14px;">
+      <div style="font-size:16px;font-weight:700;">Dashboard</div>
+      <div class="dsh-live-time" id="dsh-live-time"></div>
+    </div>
+    <button class="btn btn-ghost btn-sm" id="dash-refresh-btn">↻ Refresh</button>
+  </div>
+
+  <!-- ── STAT ROW ── -->
+  <div class="dsh-stat-row">
+    <div class="dsh-stat a-amber">
+      <div class="dsh-stat-label">Market Regime</div>
+      <div class="dsh-stat-value amber" id="s-regime" style="font-size:18px;margin-bottom:5px;">—</div>
+      <div class="dsh-stat-sub" id="s-regime-sub">from KB</div>
+    </div>
+    <div class="dsh-stat a-green">
+      <div class="dsh-stat-label">Active Signals</div>
+      <div class="dsh-stat-value green" id="s-patterns">—</div>
+      <div class="dsh-stat-sub" id="s-patterns-sub">open patterns</div>
+    </div>
+    <div class="dsh-stat a-muted" id="s-stress-card" title="Epistemic Activity: the KB actively reconciles competing signals — higher means more live data flowing.">
+      <div class="dsh-stat-label">Knowledge Base</div>
+      <div class="dsh-stat-value" id="s-facts" style="font-size:20px;">—</div>
+      <div class="dsh-stat-sub" id="s-stress-sub">facts · <span class="hi" id="s-stress">—</span> epistemic activity</div>
+    </div>
+    <div class="dsh-stat a-blue">
+      <div class="dsh-stat-label">Next Briefing</div>
+      <div class="dsh-stat-value blue" id="s-next-day" style="font-size:16px;">—</div>
+      <div class="dsh-stat-sub" id="s-next-sub">—</div>
+    </div>
+  </div>
+
+  <!-- ── MAIN GRID ── -->
+  <div class="dsh-main-grid">
+
+    <!-- TOP CONVICTION -->
+    <div class="dsh-card">
+      <div class="dsh-card-hdr">
+        <div class="dsh-card-title">Top Conviction</div>
+        <a class="dsh-card-action" href="#" onclick="navigate('patterns');return false;">View all patterns →</a>
+      </div>
+      <div class="dsh-conviction-list" id="dash-conviction">
+        <div class="dsh-empty"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- ACTIVE POSITIONS -->
+    <div class="dsh-card">
+      <div class="dsh-card-hdr">
+        <div class="dsh-card-title">Your Active Positions</div>
+        <a class="dsh-card-action" href="#" onclick="navigate('journal');return false;">→ Journal</a>
+      </div>
+      <div id="dash-positions">
+        <div class="dsh-empty">
+          <span class="dsh-empty-icon">📊</span>
+          <div class="dsh-empty-title">No positions tracked yet</div>
+          <div class="dsh-empty-sub">Accept a tip or log a manual trade in the Journal to start tracking positions.</div>
+          <a class="dsh-empty-cta" onclick="navigate('journal')">Open Journal →</a>
+        </div>
+      </div>
+      <!-- hidden adapter panel preserved for dev-mode JS toggle -->
+      <div id="dash-adapters-panel" style="display:none;"></div>
+      <div id="dash-adapters" style="display:none;"></div>
+      <div id="dash-positions-panel" style="display:none;"></div>
+    </div>
+
+    <!-- RIGHT COLUMN -->
+    <div class="dsh-right-col">
+
+      <!-- MARKET REGIME DETAIL -->
+      <div class="dsh-card">
+        <div class="dsh-card-hdr">
+          <div class="dsh-card-title">Market Regime</div>
+          <span style="font-size:9px;color:var(--muted);font-family:var(--mono);">from KB</span>
+        </div>
+        <div class="dsh-regime-body">
+          <div class="dsh-regime-name" id="dsh-regime-name">—</div>
+          <div class="dsh-regime-desc" id="dsh-regime-desc">Loading market context…</div>
+          <div class="dsh-regime-ind"><span class="dsh-regime-ind-label">Bias</span><span class="dsh-regime-ind-val amber" id="dsh-regime-bias">—</span></div>
+          <div class="dsh-regime-ind"><span class="dsh-regime-ind-label">Volatility</span><span class="dsh-regime-ind-val" id="dsh-regime-vol">—</span></div>
+          <div class="dsh-regime-ind"><span class="dsh-regime-ind-label">Sector lead</span><span class="dsh-regime-ind-val" id="dsh-regime-sector">—</span></div>
+          <div class="dsh-regime-ind"><span class="dsh-regime-ind-label">KB confidence</span><span class="dsh-regime-ind-val amber" id="dsh-regime-conf">—</span></div>
+        </div>
+      </div>
+
+      <!-- NEXT BRIEFING -->
+      <div class="dsh-card">
+        <div class="dsh-card-hdr">
+          <div class="dsh-card-title">Next Briefing</div>
+          <a class="dsh-card-action" href="#" onclick="navigate('tips');return false;">→ Tips</a>
+        </div>
+        <div class="dsh-next-body">
+          <div class="dsh-countdown">
+            <div class="dsh-countdown-val" id="dsh-countdown">—</div>
+            <div class="dsh-countdown-lbl">until delivery</div>
+          </div>
+          <div class="dsh-next-detail" id="dsh-next-detail">—</div>
+          <div class="dsh-checklist" id="dsh-checklist">
+            <div class="dsh-check-row"><span class="dsh-check-ok">✓</span><span class="dsh-check-text">KB synced</span></div>
+            <div class="dsh-check-row"><span class="dsh-check-warn">!</span><span class="dsh-check-text warn">Portfolio not submitted</span></div>
+            <div class="dsh-check-row"><span class="dsh-check-warn">!</span><span class="dsh-check-text warn">Telegram not linked</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /dsh-right-col -->
+  </div><!-- /dsh-main-grid -->
+
+  <!-- ── BOTTOM ROW ── -->
+  <div class="dsh-bottom-row">
+
+    <!-- RECENT HIGH-CONVICTION PATTERNS -->
+    <div class="dsh-card">
+      <div class="dsh-card-hdr">
+        <div class="dsh-card-title">Recent Patterns</div>
+        <a class="dsh-card-action" id="dsh-patterns-link" href="#" onclick="navigate('patterns');return false;">View all →</a>
+      </div>
+      <div id="dsh-recent-patterns">
+        <div class="dsh-empty" style="padding:20px 16px;"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- MARKET SNAPSHOT -->
+    <div class="dsh-card">
+      <div class="dsh-card-hdr">
+        <div class="dsh-card-title">Market Snapshot</div>
+        <a class="dsh-card-action" href="#" onclick="navigate('markets');return false;">→ Markets</a>
+      </div>
+      <div id="dsh-market-snapshot">
+        <div class="dsh-mkt-item"><div class="dsh-mkt-sym">^GSPC</div><div class="dsh-mkt-name">S&amp;P 500</div><div class="dsh-mkt-price" id="dsh-spx-price">—</div><div class="dsh-mkt-chg" id="dsh-spx-chg">—</div></div>
+        <div class="dsh-mkt-item"><div class="dsh-mkt-sym">^FTSE</div><div class="dsh-mkt-name">FTSE 100</div><div class="dsh-mkt-price" id="dsh-ftse-price">—</div><div class="dsh-mkt-chg" id="dsh-ftse-chg">—</div></div>
+        <div class="dsh-mkt-item"><div class="dsh-mkt-sym">^FTMC</div><div class="dsh-mkt-name">FTSE 250</div><div class="dsh-mkt-price" id="dsh-ftmc-price">—</div><div class="dsh-mkt-chg" id="dsh-ftmc-chg">—</div></div>
+        <div class="dsh-mkt-item"><div class="dsh-mkt-sym">GLD</div><div class="dsh-mkt-name">Gold</div><div class="dsh-mkt-price" id="dsh-gld-price">—</div><div class="dsh-mkt-chg" id="dsh-gld-chg">—</div></div>
+        <div class="dsh-mkt-item"><div class="dsh-mkt-sym">GBP/USD</div><div class="dsh-mkt-name">GBP/USD</div><div class="dsh-mkt-price" id="dsh-gbp-price">—</div><div class="dsh-mkt-chg" id="dsh-gbp-chg">—</div></div>
+      </div>
+      <div class="dsh-kb-extra">
+        <div class="dsh-kb-coverage" id="dsh-kb-coverage">—</div>
+        <div class="dsh-kb-signal-wrap" id="dsh-kb-signal-wrap" style="display:none;">
+          <div class="dsh-kb-signal-bar">
+            <div class="dsh-kb-sig-bull" id="dsh-kb-sig-bull"></div>
+            <div class="dsh-kb-sig-neut" id="dsh-kb-sig-neut"></div>
+            <div class="dsh-kb-sig-bear" id="dsh-kb-sig-bear"></div>
+          </div>
+          <div class="dsh-kb-signal-labels" id="dsh-kb-signal-labels"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- INTELLIGENCE SOURCES (KB health) -->
+    <div class="dsh-card">
+      <div class="dsh-card-hdr">
+        <div class="dsh-card-title">Intelligence Sources</div>
+        <span class="dsh-card-action" id="dsh-sources-count">—</span>
+      </div>
+      <div id="dsh-kb-sources">
+        <div class="dsh-empty" style="padding:20px 16px;"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- PAPER PERFORMANCE -->
+    <div class="dsh-card">
+      <div id="dsh-paper-performance">
+        <div class="dsh-empty" style="padding:20px 16px;"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+  </div><!-- /dsh-bottom-row -->
+</div>
+
+<!-- PORTFOLIO ─────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-portfolio">
+
+  <!-- Page header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div style="font-size:16px;font-weight:700;">Portfolio</div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn btn-outline btn-sm" id="p-gen-sim-btn" title="Generate a seeded UK test portfolio for your account">⚡ Generate Test Portfolio</button>
+      <select class="btn btn-outline btn-sm" id="p-change-profile-select" title="Load a diverse test profile" style="cursor:pointer;">
+        <option value="">⇄ Change Portfolio…</option>
+        <option value="uk_banks">🇬🇧 UK Banks</option>
+        <option value="us_tech">🇺🇸 US Tech</option>
+        <option value="global_macro">🌍 Global Macro</option>
+        <option value="dividend_income">💰 Dividend Income</option>
+        <option value="crypto_growth">₿ Crypto &amp; Growth</option>
+        <option value="commodities">🏗 Commodities &amp; Energy</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="p-sim-banner" style="display:none;"></div>
+
+  <!-- Setup banner — hidden once portfolio has holdings -->
+  <div class="ptf-setup-banner" id="ptf-setup-banner">
+    <div class="ptf-sb-icon">⚡</div>
+    <div class="ptf-sb-text">
+      <strong>Finish setup to start receiving tips</strong>
+      <span>Add your holdings, set a delivery time in Tips, and link Telegram — then your Monday briefing is ready to fire.</span>
+    </div>
+    <div class="ptf-sb-dismiss" onclick="document.getElementById('ptf-setup-banner').style.display='none'">×</div>
+  </div>
+
+  <div class="ptf-grid">
+
+    <!-- LEFT: Holdings builder -->
+    <div class="ptf-card">
+      <div class="ptf-card-header">
+        <div class="ptf-card-title">Holdings</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span id="ptf-holding-count" style="font-size:10px;color:var(--muted);"></span>
+          <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 8px;color:var(--red);border-color:rgba(239,68,68,.3);" onclick="if(confirm('Clear all holdings?')){state.holdings=[];renderHoldings();}">Clear all</button>
+        </div>
+      </div>
+
+      <!-- Input method tabs -->
+      <div style="padding:14px 16px 0;">
+        <div class="ptf-input-tabs">
+          <button class="ptf-tab-btn active" onclick="ptfSwitchTab('manual',this)">✏️ Manual entry</button>
+          <button class="ptf-tab-btn" onclick="ptfSwitchTab('sector',this)">🏷 By sector</button>
+          <button class="ptf-tab-btn" onclick="ptfSwitchTab('screenshot',this)">📷 Broker screenshot</button>
+        </div>
+      </div>
+
+      <!-- TAB: Manual -->
+      <div class="ptf-tab-content active" id="ptf-tab-manual" style="padding:0 16px 14px;">
+        <table class="ptf-holdings-table">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th>Qty</th>
+              <th>Avg Cost</th>
+              <th>P&amp;L</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="p-holdings-list">
+            <tr class="ptf-empty-row"><td colspan="5">No holdings added yet</td></tr>
+          </tbody>
+        </table>
+        <!-- Add row — reuses existing p-ticker, p-qty, p-cost, p-add-btn IDs -->
+        <div class="ptf-add-row">
+          <div class="autocomplete-wrap" style="position:relative;">
+            <input id="p-ticker" placeholder="Ticker — e.g. BARC.L" autocomplete="off" style="width:100%;background:var(--card);border:1px solid var(--border);border-radius:3px;padding:7px 10px;color:var(--text);font-size:12px;font-family:var(--mono);text-transform:uppercase;outline:none;" />
+            <div class="autocomplete-dropdown" id="p-ac-dropdown"></div>
+          </div>
+          <input id="p-qty" placeholder="Qty" type="number" min="0" />
+          <input id="p-cost" placeholder="Avg cost" type="number" min="0" step="0.01" />
+          <button class="ptf-add-holding-btn" id="p-add-btn" title="Add holding">+</button>
+        </div>
+      </div>
+
+      <!-- TAB: Sector -->
+      <div class="ptf-tab-content" id="ptf-tab-sector" style="padding:0 16px 14px;">
+        <p style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5;">Select sectors to add a basket of top holdings. You can remove individual stocks after.</p>
+        <div class="ptf-sector-grid" id="p-sector-btns"></div>
+      </div>
+
+      <!-- TAB: Screenshot -->
+      <div class="ptf-tab-content" id="ptf-tab-screenshot" style="padding:0 16px 14px;">
+        <div class="drop-zone mb-12" id="p-drop-zone" style="border:1.5px dashed var(--border);border-radius:6px;padding:28px 20px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;">
+          <input type="file" id="p-screenshot-input" accept="image/png,image/jpeg,image/webp" style="display:none;" />
+          <div style="font-size:28px;margin-bottom:10px;">📷</div>
+          <div style="font-size:13px;color:var(--text);margin-bottom:4px;">Drop a broker screenshot or click to upload</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.5;">We'll extract your holdings automatically using AI.<br>Works with most UK broker layouts.</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:8px;">Hargreaves Lansdown · Freetrade · Trading 212 · IG · AJ Bell · Interactive Brokers</div>
+        </div>
+        <div id="p-screenshot-msg" class="text-sm text-muted" style="margin-bottom:10px;"></div>
+        <p style="font-size:11px;color:var(--muted);line-height:1.6;">For best results, screenshot your holdings or portfolio summary page. Include ticker symbols and quantities. Avg cost is optional but improves P&amp;L tracking.</p>
+      </div>
+
+      <!-- Cash section — always visible below tabs -->
+      <div style="border-top:1px solid var(--border);">
+        <!-- Hidden panels preserved for existing JS — p-holdings-panel / p-cash-panel wiring kept alive -->
+        <div id="p-holdings-panel" style="display:none;"></div>
+        <div class="ptf-cash-section">
+          <div class="ptf-cash-label">
+            Available Cash
+            <span class="ptf-cash-tip">AI uses this for position sizing</span>
+          </div>
+          <div class="ptf-cash-input-row">
+            <select id="p-cash-currency">
+              <option value="GBP">🇬🇧 GBP — £</option>
+              <option value="USD">🇺🇸 USD — $</option>
+              <option value="EUR">🇪🇺 EUR — €</option>
+              <option value="CHF">🇨🇭 CHF — Fr</option>
+              <option value="JPY">🇯🇵 JPY — ¥</option>
+              <option value="CAD">🇨🇦 CAD — $</option>
+              <option value="AUD">🇦🇺 AUD — $</option>
+              <option value="HKD">🇭🇰 HKD — $</option>
+              <option value="SGD">🇸🇬 SGD — $</option>
+            </select>
+            <input id="p-cash-input" type="number" min="0" step="0.01" placeholder="e.g. 5000" />
+          </div>
+          <div class="ptf-cash-actions">
+            <button class="btn btn-primary btn-sm" id="p-cash-save-btn">Save Cash</button>
+            <button class="btn btn-ghost btn-sm" id="p-cash-clear-btn">Clear</button>
+          </div>
+          <div id="p-cash-msg" class="text-sm mt-8 text-muted"></div>
+        </div>
+        <!-- Hidden cash panel for existing JS mode toggle compat -->
+        <div id="p-cash-panel" style="display:none;"></div>
+        <div id="p-mode-holdings" style="display:none;"></div>
+        <div id="p-mode-cash" style="display:none;"></div>
+      </div>
+
+      <!-- Submit bar -->
+      <div class="ptf-submit-bar">
+        <button class="btn btn-primary" id="p-submit-btn">Submit Portfolio</button>
+        <span class="ptf-submit-hint">Submitting builds your trader profile and enables personalised signals.</span>
+      </div>
+      <div id="p-msg" class="text-sm" style="padding:0 16px 12px;min-height:16px;"></div>
+    </div>
+
+    <!-- RIGHT COLUMN -->
+    <div class="ptf-right-col">
+
+      <!-- Setup Progress -->
+      <div class="ptf-card" id="ptf-setup-card">
+        <div class="ptf-card-header">
+          <div class="ptf-card-title">Setup Progress</div>
+          <span id="ptf-setup-count" style="font-size:10px;color:var(--muted);">1 of 4 done</span>
+        </div>
+        <div class="ptf-step-row">
+          <div class="ptf-step-num done">✓</div>
+          <div class="ptf-step-info"><div class="ptf-step-name done">Create account</div></div>
+          <span class="ptf-step-done-mark">✓</span>
+        </div>
+        <div class="ptf-step-row" id="ptf-step2-row">
+          <div class="ptf-step-num active" id="ptf-step2-num">2</div>
+          <div class="ptf-step-info">
+            <div class="ptf-step-name" id="ptf-step2-name">Add portfolio</div>
+            <div class="ptf-step-desc">Submit holdings to build your trader profile</div>
+          </div>
+          <span class="ptf-step-action" id="ptf-step2-action">Current</span>
+        </div>
+        <div class="ptf-step-row">
+          <div class="ptf-step-num" id="ptf-step3-num">3</div>
+          <div class="ptf-step-info">
+            <div class="ptf-step-name">Set delivery time</div>
+            <div class="ptf-step-desc">Configure when briefings arrive</div>
+          </div>
+          <span class="ptf-step-action" onclick="navigate('tips')">→ Tips</span>
+        </div>
+        <div class="ptf-step-row">
+          <div class="ptf-step-num" id="ptf-step4-num">4</div>
+          <div class="ptf-step-info">
+            <div class="ptf-step-name">Link Telegram</div>
+            <div class="ptf-step-desc">Required to receive tips and alerts</div>
+          </div>
+          <span class="ptf-step-action" onclick="navigate('profile')">→ Profile</span>
+        </div>
+      </div>
+
+      <!-- Portfolio Summary -->
+      <div class="ptf-card" id="ptf-summary-card">
+        <div class="ptf-card-header">
+          <div class="ptf-card-title">Portfolio Summary</div>
+        </div>
+        <div id="ptf-summary-body">
+          <div class="ptf-summary-empty">
+            <span class="pse-icon">📊</span>
+            <div class="pse-title">No portfolio yet</div>
+            <div class="pse-sub">Submit your holdings to see total value, P&amp;L, and sector exposure.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Trader Profile (User Model) -->
+      <div class="ptf-card">
+        <div class="ptf-card-header">
+          <div class="ptf-card-title">Trader Profile</div>
+          <span style="font-size:10px;color:var(--muted);">Built from your portfolio</span>
+        </div>
+        <div id="p-model-card">
+          <div class="ptf-model-grid">
+            <div><div class="ptf-m-label">Risk Tolerance</div><div class="ptf-m-value unknown" id="ptf-m-risk">—</div></div>
+            <div><div class="ptf-m-label">Holding Style</div><div class="ptf-m-value unknown" id="ptf-m-style">—</div></div>
+            <div><div class="ptf-m-label">Portfolio Beta</div><div class="ptf-m-value unknown" id="ptf-m-beta">—</div></div>
+            <div><div class="ptf-m-label">Preferred Pattern</div><div class="ptf-m-value unknown" id="ptf-m-pattern">Learning…</div></div>
+            <div><div class="ptf-m-label">Avg Win Rate</div><div class="ptf-m-value unknown" id="ptf-m-winrate">No history yet</div></div>
+            <div><div class="ptf-m-label">Sector Affinity</div><div class="ptf-m-value unknown" id="ptf-m-sector">—</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Watchlist Signals -->
+      <div class="ptf-card">
+        <div class="ptf-card-header">
+          <div class="ptf-card-title">Watchlist Signals</div>
+          <span style="font-size:10px;color:var(--muted);">From your holdings</span>
+        </div>
+        <div id="p-signals">
+          <div class="ptf-signals-empty">
+            <span class="pse-icon">📡</span>
+            <div class="pse-title">No signals yet</div>
+            <div class="pse-sub">Submit your portfolio to generate live signals for your holdings. Signals update as patterns form.</div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /ptf-right-col -->
+  </div><!-- /ptf-grid -->
+</div>
+
+<!-- MARKETS ───────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-markets">
+  <div id="markets-header">
+    <span style="font-size:16px;font-weight:700;">Markets</span>
+    <input id="markets-ticker-input" placeholder="Symbol (e.g. BARC.L, SPY, XAUUSD)…" autocomplete="off" />
+    <button class="btn btn-primary btn-sm" id="markets-go-btn">Go</button>
+    <span id="markets-current-label" class="mono-amber text-sm"></span>
+  </div>
+  <div id="markets-cat-tabs">
+    <span class="mcat-tab active" data-cat="indices">Indices</span>
+    <span class="mcat-tab" data-cat="uk_equities">UK Equities</span>
+    <span class="mcat-tab" data-cat="us_equities">US Equities</span>
+    <span class="mcat-tab" data-cat="eu_equities">EU Equities</span>
+    <span class="mcat-tab" data-cat="commodities">Commodities</span>
+    <span class="mcat-tab" data-cat="forex">Forex</span>
+    <span class="mcat-tab" data-cat="crypto">Crypto</span>
+    <span class="mcat-tab" data-cat="etfs">ETFs</span>
+    <span class="mcat-tab" data-cat="options_etf">Options / Vol</span>
+  </div>
+  <div id="markets-chips"></div>
+  <div id="markets-body">
+    <div id="tv-chart"></div>
+    <div id="kb-panel"><div class="kb-title">KB Intelligence</div><div style="color:var(--muted);font-size:12px;">Select a symbol to load KB data.</div></div>
+  </div>
+  <div id="mkt-sector-pulse" class="mkt-sector-pulse-row" style="display:none;"></div>
+  <div id="mkt-opportunities" style="margin-top:18px;">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;">
+      High Conviction Opportunities
+      <span id="mkt-regime-badge" style="margin-left:8px;font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;background:rgba(245,158,11,0.12);color:var(--accent);text-transform:capitalize;"></span>
+    </div>
+    <div id="mkt-opp-list"></div>
+  </div>
+</div>
+
+<!-- VISUALISER ────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-visualiser">
+  <div class="vis-topbar">
+    <div style="font-size:16px;font-weight:700;">KB Visualiser</div>
+    <div class="vis-toggle-group">
+      <button class="vis-toggle-btn active" data-view="bubble">Bubble Map</button>
+      <button class="vis-toggle-btn" data-view="heatmap">Sector Heatmap</button>
+      <button class="vis-toggle-btn" data-view="radar">Signal Radar</button>
+    </div>
+    <div class="vis-filter-row">
+      <div class="vis-pills">
+        <span class="vis-pill" data-filter="bullish">Bullish</span>
+        <span class="vis-pill" data-filter="bearish">Bearish</span>
+        <span class="vis-pill" data-filter="neutral">Neutral</span>
+      </div>
+      <input id="vis-search" class="vis-searchbox" placeholder="Search ticker…" autocomplete="off" />
+    </div>
+  </div>
+  <div id="vis-canvas" class="vis-canvas"></div>
+  <div class="vis-footer">
+    <span id="vis-last-updated" class="vis-last-updated"></span>
+  </div>
+</div>
+
+<!-- HISTORY ───────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-history">
+  <div style="font-size:16px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;">
+    <span>Conversation History</span>
+    <span id="hist-turn-count" class="mono-muted text-xs"></span>
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:14px;">
+    <input id="hist-search" placeholder="Search conversations…" style="flex:1;max-width:340px;" />
+    <button class="btn btn-outline btn-sm" id="hist-search-btn">Search</button>
+    <button class="btn btn-ghost btn-sm" id="hist-atoms-btn" title="View extracted signals">⚛ Signals</button>
+  </div>
+  <div id="hist-stats-bar" style="display:flex;gap:16px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;margin-bottom:10px;font-size:11px;color:var(--muted);flex-wrap:wrap;">
+    <span>Turns: <strong id="hst-turns" class="mono-amber">—</strong></span>
+    <span>Atoms: <strong id="hst-atoms" class="mono-amber">—</strong></span>
+    <span>Graduated: <strong id="hst-grad" style="color:var(--green);">—</strong></span>
+    <span>Pending: <strong id="hst-pending" class="mono-amber">—</strong></span>
+    <span>Last 7d: <strong id="hst-7d" class="mono-amber">—</strong></span>
+    <span id="hst-subjects" style="margin-left:auto;"></span>
+  </div>
+  <div style="display:grid;grid-template-columns:340px 1fr;gap:14px;height:calc(100vh - var(--topbar-h) - 150px);">
+    <!-- Timeline list -->
+    <div style="overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);">
+      <div id="hist-timeline"><div class="empty"><div class="spinner"></div></div></div>
+    </div>
+    <!-- Detail panel -->
+    <div id="hist-detail" style="overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:18px;">
+      <div class="text-muted text-sm" style="margin-top:40px;text-align:center;">Select a turn to read the full exchange</div>
+    </div>
+  </div>
+  <!-- Atoms modal overlay -->
+  <div id="hist-atoms-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:200;overflow-y:auto;">
+    <div style="max-width:760px;margin:48px auto;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:24px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div style="font-size:15px;font-weight:700;">Extracted Signals</div>
+        <button class="btn btn-ghost btn-sm" id="hist-atoms-close">✕ Close</button>
+      </div>
+      <div id="hist-atoms-stats" class="text-sm text-muted mb-12"></div>
+      <div id="hist-atoms-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- CHAT ──────────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-chat">
+  <div id="chat-messages">
+    <div id="chat-prompts">
+      <div class="chat-empty-icon">◎</div>
+      <div class="chat-empty-title">Trading Galaxy KB</div>
+      <div class="chat-empty-sub">Ask anything about markets, your portfolio, or trade setups</div>
+      <div class="chat-prompt-pills">
+        <button class="prompt-chip" data-prompt="What's the strongest setup in my portfolio right now?">Strongest portfolio setup</button>
+        <button class="prompt-chip" data-prompt="Show me high conviction FTSE signals">High conviction FTSE signals</button>
+        <button class="prompt-chip" data-prompt="What's the current market regime?">Current market regime</button>
+      </div>
+    </div>
+  </div>
+  <div id="chat-input-wrap">
+    <div id="chat-input-bar">
+      <button class="chat-overlay-btn" id="overlay-btn" title="Toggle overlay mode">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+      <input type="checkbox" id="overlay-toggle" style="display:none;">
+      <div style="position:relative;">
+        <button class="chat-overlay-btn" id="chat-workflow-btn" title="Workflows">
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 1v13M1 7.5h13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <div id="chat-workflow-menu" class="chat-wf-menu" style="display:none;">
+          <div class="chat-wf-menu-title">Workflows</div>
+          <button class="chat-wf-item" data-cmd="/setup">
+            <span class="chat-wf-icon">📋</span>
+            <span><strong>Log a trade</strong><small>/setup</small></span>
+          </button>
+        </div>
+      </div>
+      <div style="position:relative;flex:1;display:flex;">
+        <textarea id="chat-input" placeholder="Ask anything… (type $ for ticker suggestions)" rows="1"></textarea>
+        <div id="ticker-autocomplete" class="ticker-ac-dropdown" style="display:none;"></div>
+      </div>
+      <button class="chat-send-btn" id="chat-send-btn" title="Send message">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 13V3M8 3L3.5 7.5M8 3l4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- TIPS ──────────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-tips">
+  <div style="font-size:16px;font-weight:700;margin-bottom:20px;">Tips</div>
+  <div class="two-col mb-20">
+    <div>
+      <div class="section-title">Delivery Settings</div>
+      <div class="card">
+        <div class="form-row"><label>Account Value</label><div style="display:flex;align-items:center;gap:8px;"><span id="tip-account-display" style="font-size:14px;font-weight:700;color:var(--accent);">—</span><span style="font-size:11px;color:var(--muted);">from portfolio</span></div></div>
+        <div class="form-row"><label>Available Cash</label><div><span id="tip-cash-display" style="font-size:14px;font-weight:700;color:var(--accent);">—</span><span id="tip-cash-nudge" style="font-size:11px;color:var(--muted);margin-left:6px;"></span></div></div>
+        <div class="form-row"><label>How much to risk per setup (%)</label><input id="tip-risk" type="number" placeholder="1.0" step="0.1" /></div>
+        <div class="form-row"><label>Delivery Time</label><div><input id="tip-time" type="time" value="07:30" min="06:00" max="09:00" /><div style="font-size:10px;color:var(--muted);margin-top:3px;">Recommended: 07:00–07:30 before market open (Basic &amp; Pro)</div></div></div>
+        <div class="form-row"><label>Timezone</label>
+          <select id="tip-tz">
+            <option value="Europe/London" selected>Europe/London (GMT/BST)</option>
+            <option value="UTC">UTC</option>
+            <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
+            <option value="America/New_York">America/New_York (ET)</option>
+            <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
+          </select>
+        </div>
+        <div class="form-row" id="tip-tier-row"><label>Tier</label>
+          <select id="tip-tier">
+            <option value="basic">Basic — Mon + Wed (2 setups/week)</option>
+            <option value="pro">Pro — Mon + Wed (5 setups/week)</option>
+            <option value="premium">Premium — Daily tips</option>
+          </select>
+        </div>
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+          <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;">Interested Markets</div>
+          <div class="mkt-toggle-row">
+            <label class="toggle-switch">
+              <input type="checkbox" id="mkt-all-toggle" checked>
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="mkt-toggle-label" id="mkt-all-label">All Markets <span class="mkt-count">(default — tips from any ticker)</span></span>
+          </div>
+          <div id="mkt-picker-wrap">
+            <div class="mkt-chips" id="mkt-chips"></div>
+            <input class="mkt-search" id="mkt-search" type="text" placeholder="Search tickers…" autocomplete="off">
+            <div class="mkt-groups" id="mkt-groups"></div>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm mt-8" id="tip-config-btn">Save Config</button>
+        <div id="tip-config-msg" class="text-sm mt-8 text-muted"></div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">Today's Tip Preview</div>
+      <div id="tip-preview-wrap">
+        <button class="btn btn-outline btn-sm mb-12" id="tip-preview-btn">▶ Load Preview</button>
+        <div id="tip-preview-card"></div>
+      </div>
+      <div id="tip-sample-card" style="margin-top:12px;background:var(--surface);border:1px dashed var(--border);border-radius:8px;padding:14px;">
+        <div style="font-size:10px;font-weight:700;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:10px;">Example Tip Format</div>
+        <div class="tip-card" style="opacity:0.65;pointer-events:none;">
+          <div class="tip-card-header">
+            <span class="tip-ticker">AAPL</span>
+            <span class="tier-badge" style="background:#f59e0b;">HIGH</span>
+            <span class="tip-dir">📈 FVG Bullish</span>
+            <span class="tip-tf text-muted">1D</span>
+          </div>
+          <div class="tip-zone">Zone: <span class="mono-amber">210.50 – 213.20</span></div>
+          <div class="tip-pos-grid">
+            <div><span class="tip-label">Entry</span><span class="mono-amber">212.00</span></div>
+            <div><span class="tip-label">Stop</span><span class="mono-red">208.40</span></div>
+            <div><span class="tip-label">T1</span><span class="mono-green">218.50</span></div>
+            <div><span class="tip-label">T2</span><span class="mono-green">224.00</span></div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px;">Your real tips fire at your configured delivery time.</div>
+      </div>
+    </div>
+  </div>
+  <div class="section-title">Delivery History</div>
+  <div id="tips-history"><div class="empty text-sm text-muted">No history yet</div></div>
+</div>
+
+<!-- PATTERNS ──────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-patterns">
+  <div style="font-size:16px;font-weight:700;margin-bottom:16px;">Patterns</div>
+  <div class="filter-bar">
+    <select id="pf-type"><option value="">All Types</option><option value="fvg">FVG</option><option value="order_block">Order Block</option><option value="bos">BOS</option><option value="choch">CHoCH</option></select>
+    <select id="pf-tf"><option value="">All Timeframes</option><option value="1m">1m</option><option value="5m">5m</option><option value="15m">15m</option><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option></select>
+    <select id="pf-dir"><option value="">All Directions</option><option value="bullish">Bullish</option><option value="bearish">Bearish</option></select>
+    <input id="pf-ticker" placeholder="Ticker…" style="width:100px;" />
+    <button class="btn btn-outline btn-sm" id="pf-search-btn">Search</button>
+    <span id="pf-count" class="text-muted text-xs"></span>
+  </div>
+  <div id="pf-shift-hint" class="text-xs text-muted" style="margin-bottom:10px;display:none;"></div>
+  <div id="patterns-grid" class="pattern-grid">
+    <div class="empty"><div class="spinner"></div></div>
+  </div>
+  <div id="pf-load-more" class="pat-load-more" style="display:none;"></div>
+</div>
+
+<!-- NETWORK ───────────────────────────────────────────────────────── -->
+<div class="screen" id="screen-network">
+  <div style="font-size:16px;font-weight:700;margin-bottom:20px;">Network</div>
+  <div class="three-col">
+    <div>
+      <div class="section-title">Coverage Leaderboard</div>
+      <div id="net-leaderboard"><div class="empty"><div class="spinner"></div></div></div>
+    </div>
+    <div>
+      <div class="section-title">Trending Markets (7d)</div>
+      <div id="net-trending"><div class="empty"><div class="spinner"></div></div></div>
+    </div>
+    <div>
+      <div class="section-title">Network Health</div>
+      <div id="net-health"><div class="empty"><div class="spinner"></div></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- JOURNAL ───────────────────────────────────────────────── -->
+<div class="screen" id="screen-journal">
+  <!-- Header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div style="font-size:16px;font-weight:700;">Trade Journal</div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-ghost btn-sm jnl-tab active" data-tab="open" onclick="jnlSwitchTab(this,'open')">Open</button>
+      <button class="btn btn-ghost btn-sm jnl-tab" data-tab="closed" onclick="jnlSwitchTab(this,'closed')">Closed</button>
+      <button class="btn btn-ghost btn-sm jnl-tab" data-tab="stats" onclick="jnlSwitchTab(this,'stats')">Stats</button>
+      <button class="btn btn-ghost btn-sm jnl-tab" data-tab="add" onclick="jnlSwitchTab(this,'add')">+ Add</button>
+    </div>
+  </div>
+
+  <!-- Open positions tab -->
+  <div id="jnl-tab-open" class="jnl-tab-panel">
+    <div id="jnl-open-list" class="jnl-open-list"><div class="empty"><div class="spinner"></div></div></div>
+  </div>
+
+  <!-- Closed trades tab -->
+  <div id="jnl-tab-closed" class="jnl-tab-panel" style="display:none;">
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
+      <span class="text-muted text-xs">Last</span>
+      <select id="jnl-since-days" onchange="loadJournalClosed()" style="font-size:12px;padding:3px 8px;width:auto;">
+        <option value="30">30 days</option>
+        <option value="90" selected>90 days</option>
+        <option value="180">180 days</option>
+        <option value="365">1 year</option>
+      </select>
+    </div>
+    <div id="jnl-closed-list" class="jnl-closed-list"><div class="empty"><div class="spinner"></div></div></div>
+  </div>
+
+  <!-- Stats tab -->
+  <div id="jnl-tab-stats" class="jnl-tab-panel" style="display:none;">
+    <div class="jnl-stats-grid">
+      <div class="jnl-stat-card"><div class="jnl-stat-label">Total Trades</div><div class="jnl-stat-value" id="jnl-total">—</div></div>
+      <div class="jnl-stat-card"><div class="jnl-stat-label">Win Rate</div><div class="jnl-stat-value green" id="jnl-winrate">—</div></div>
+      <div class="jnl-stat-card"><div class="jnl-stat-label">Avg R</div><div class="jnl-stat-value" id="jnl-avgr">—</div></div>
+      <div class="jnl-stat-card"><div class="jnl-stat-label">Best Pattern</div><div class="jnl-stat-value amber" id="jnl-bestpat">—</div></div>
+      <div class="jnl-stat-card"><div class="jnl-stat-label">Worst Pattern</div><div class="jnl-stat-value red" id="jnl-worstpat">—</div></div>
+      <div class="jnl-stat-card"><div class="jnl-stat-label">Best Regime</div><div class="jnl-stat-value green" id="jnl-bestreg">—</div></div>
+    </div>
+    <div style="margin-top:20px;">
+      <div class="section-title">Pattern Breakdown</div>
+      <div id="jnl-pattern-bars" class="jnl-pattern-bars"></div>
+    </div>
+    <div style="margin-top:20px;">
+      <div class="section-title">Regime Breakdown</div>
+      <div id="jnl-regime-bars" class="jnl-regime-bars"></div>
+    </div>
+  </div>
+
+  <!-- Add position tab -->
+  <div id="jnl-tab-add" class="jnl-tab-panel" style="display:none;">
+    <div class="jnl-add-form">
+      <div class="jnl-add-title">Manual Position Entry</div>
+
+      <div class="jnl-add-row">
+        <div class="jnl-add-field">
+          <label>Ticker *</label>
+          <input id="jnl-add-ticker" type="text" placeholder="e.g. BARC.L" style="text-transform:uppercase;" />
+        </div>
+        <div class="jnl-add-field">
+          <label>Direction *</label>
+          <div class="jnl-dir-toggle">
+            <button class="jnl-dir-btn active" data-val="bullish">▲ Long</button>
+            <button class="jnl-dir-btn" data-val="bearish">▼ Short</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="jnl-add-row">
+        <div class="jnl-add-field">
+          <label>Entry Price *</label>
+          <input id="jnl-add-entry" type="number" step="any" placeholder="0.00" />
+        </div>
+        <div class="jnl-add-field">
+          <label>Stop Loss *</label>
+          <input id="jnl-add-stop" type="number" step="any" placeholder="0.00" />
+        </div>
+      </div>
+
+      <div class="jnl-add-row">
+        <div class="jnl-add-field">
+          <label>Target 1 *</label>
+          <input id="jnl-add-t1" type="number" step="any" placeholder="0.00" />
+        </div>
+        <div class="jnl-add-field">
+          <label>Target 2</label>
+          <input id="jnl-add-t2" type="number" step="any" placeholder="0.00" />
+        </div>
+      </div>
+
+      <div class="jnl-add-row">
+        <div class="jnl-add-field">
+          <label>Position Size (shares/units)</label>
+          <input id="jnl-add-size" type="number" step="any" placeholder="optional" />
+        </div>
+        <div class="jnl-add-field">
+          <label>Timeframe</label>
+          <select id="jnl-add-tf">
+            <option value="">—</option>
+            <option value="15m">15m</option>
+            <option value="1h">1h</option>
+            <option value="4h">4h</option>
+            <option value="1d">1d</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="jnl-add-field">
+        <label>Pattern / Setup Type</label>
+        <input id="jnl-add-pattern" type="text" placeholder="e.g. FVG, breakout, manual" />
+      </div>
+
+      <div class="jnl-add-field">
+        <label>Note</label>
+        <textarea id="jnl-add-note" rows="2" placeholder="Why you took this trade…"></textarea>
+      </div>
+
+      <div id="jnl-add-rr-preview" class="jnl-rr-preview" style="display:none;">
+        Risk: <span id="jnl-add-risk-pct"></span> · R:R <span id="jnl-add-rr"></span>
+      </div>
+
+      <div class="jnl-add-error" id="jnl-add-error" style="color:var(--red);font-size:12px;display:none;"></div>
+      <button class="btn btn-primary" id="jnl-add-submit-btn" style="margin-top:12px;width:100%;">Add Position</button>
+    </div>
+  </div>
+
+  <!-- Partial close modal (inline) -->
+  <div id="jnl-partial-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center;">
+    <div class="jnl-partial-popup">
+      <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Partial Exit</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Closing <span id="jnl-partial-ticker" style="color:var(--text);font-weight:600;"></span></div>
+      <div style="margin-bottom:12px;">
+        <label style="font-size:11px;color:var(--muted);">Exit %</label>
+        <input type="range" id="jnl-partial-slider" min="1" max="100" value="50" step="1" style="width:100%;margin:6px 0 4px;"
+          oninput="jnlUpdatePartialPreview()" />
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);">
+          <span>1%</span><span class="snap-hint">25 · 33 · 50 · 67 · 75 · 100</span><span>100%</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:12px;align-items:center;">
+        <input type="number" id="jnl-partial-pct-input" min="1" max="100" value="50" style="width:70px;font-size:14px;font-weight:700;text-align:center;"
+          oninput="jnlSyncSlider()" />
+        <span style="font-size:12px;color:var(--muted);">% →</span>
+        <span id="jnl-partial-preview" style="font-size:13px;font-weight:600;color:var(--green);">—</span>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px;color:var(--muted);">Exit price (optional)</label>
+        <input type="number" id="jnl-partial-price" placeholder="Leave blank for last price" step="0.01" style="width:100%;margin-top:4px;" />
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn btn-ghost btn-sm" onclick="jnlClosePartialModal()">Cancel</button>
+        <button class="btn btn-primary btn-sm" onclick="jnlConfirmPartial()">Confirm Partial</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PAPER TRADER ──────────────────────────────────────────── -->
+<div class="screen" id="screen-private-fleet"></div>
+
+<!-- PAPER TRADER ──────────────────────────────────────────── -->
+<div class="screen" id="screen-paper">
+
+  <!-- Header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="font-size:16px;font-weight:700;">Paper Trader</div>
+      <span style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--accent);background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:3px;padding:2px 7px;">AI AUTONOMOUS</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <span id="pt-scanner-dot" style="width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block;"></span>
+      <button class="btn btn-primary btn-sm" id="pt-start-btn">▶ Start Agent</button>
+      <button class="btn btn-ghost btn-sm" id="pt-download-btn" title="Download full audit log as CSV">⬇ Download Log</button>
+      <button class="btn btn-sm" id="pt-reset-btn" title="Factory reset — wipe all trades, logs and restart from scratch" style="background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.35);">↺ Reset</button>
+    </div>
+  </div>
+
+  <!-- Reset confirmation modal -->
+  <div id="pt-reset-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;align-items:center;justify-content:center;">
+    <div style="background:var(--card);border:1px solid rgba(239,68,68,.4);border-radius:10px;padding:28px 32px;max-width:380px;width:90%;text-align:center;">
+      <div style="font-size:28px;margin-bottom:12px;">⚠️</div>
+      <div style="font-size:15px;font-weight:700;margin-bottom:8px;">Reset Paper Trader?</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:24px;line-height:1.6;">This will permanently delete all positions, trade history, equity log and agent activity. The portfolio value setup will reappear. This cannot be undone.</div>
+      <div style="display:flex;gap:10px;justify-content:center;">
+        <button id="pt-reset-cancel" class="btn btn-ghost btn-sm" style="min-width:100px;">Cancel</button>
+        <button id="pt-reset-confirm" class="btn btn-sm" style="background:#ef4444;color:#fff;border:none;min-width:100px;font-weight:700;">Delete Everything</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stat cards -->
+  <div class="dsh-stat-row" id="pt-stat-row">
+    <div class="dsh-stat a-muted">
+      <div class="dsh-stat-label">Account Value</div>
+      <div class="dsh-stat-value amber" id="pt-balance" style="font-size:20px;">—</div>
+      <div class="dsh-stat-sub" id="pt-balance-sub">GBP</div>
+    </div>
+    <div class="dsh-stat a-green">
+      <div class="dsh-stat-label">Open Positions</div>
+      <div class="dsh-stat-value green" id="pt-open-count">—</div>
+      <div class="dsh-stat-sub">live trades</div>
+    </div>
+    <div class="dsh-stat a-amber">
+      <div class="dsh-stat-label">Win Rate</div>
+      <div class="dsh-stat-value" id="pt-win-rate">—</div>
+      <div class="dsh-stat-sub" id="pt-closed-count">closed trades</div>
+    </div>
+    <div class="dsh-stat a-blue">
+      <div class="dsh-stat-label">Avg R</div>
+      <div class="dsh-stat-value blue" id="pt-avg-r" style="font-size:20px;">—</div>
+      <div class="dsh-stat-sub">R-multiple</div>
+    </div>
+  </div>
+
+  <!-- Equity Curve -->
+  <div class="ptf-card" id="pt-equity-card" style="margin-bottom:16px;">
+    <div class="ptf-card-header">
+      <div class="ptf-card-title">Equity Curve</div>
+      <span id="pt-equity-label" style="font-size:10px;color:var(--muted);font-family:var(--mono);"></span>
+    </div>
+    <div id="pt-equity-chart" style="padding:12px 16px;min-height:100px;display:flex;align-items:center;justify-content:center;">
+      <span style="color:var(--muted);font-size:12px;">No data yet — starts recording each scan cycle</span>
+    </div>
+  </div>
+
+  <!-- AI Activity Feed -->
+  <div class="ptf-card" style="margin-bottom:16px;">
+    <div class="ptf-card-header">
+      <div class="ptf-card-title">AI Activity Feed</div>
+      <span id="pt-feed-status" style="font-size:10px;color:var(--muted);font-family:var(--mono);">auto-refreshes every 60s</span>
+    </div>
+    <div id="pt-feed" style="font-family:var(--mono);font-size:11px;line-height:1.8;padding:12px 16px;max-height:260px;overflow-y:auto;">
+      <div style="color:var(--muted);">Waiting for agent activity…</div>
+    </div>
+  </div>
+
+  <!-- Open Positions (read-only) -->
+  <div class="ptf-card" style="margin-bottom:16px;">
+    <div class="ptf-card-header">
+      <div class="ptf-card-title">Open Positions</div>
+      <span id="pt-open-label" style="font-size:10px;color:var(--muted);"></span>
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="tbl" id="pt-open-table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Dir</th>
+            <th>Entry</th>
+            <th>Stop</th>
+            <th>T1</th>
+            <th>T2</th>
+            <th>Now</th>
+            <th>Value</th>
+            <th>Unreal. R</th>
+            <th>Status</th>
+            <th>Opened</th>
+            <th>AI Reasoning</th>
+          </tr>
+        </thead>
+        <tbody id="pt-open-tbody">
+          <tr><td colspan="11" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No open positions — agent runs every 30 min</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Trade Log -->
+  <div class="ptf-card">
+    <div class="ptf-card-header">
+      <div class="ptf-card-title">Trade Log</div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-ghost btn-sm pt-log-tab active" data-tab="closed" onclick="ptSwitchLogTab(this,'closed')">Closed</button>
+        <button class="btn btn-ghost btn-sm pt-log-tab" data-tab="stats" onclick="ptSwitchLogTab(this,'stats')">Stats</button>
+      </div>
+    </div>
+    <div id="pt-log-closed" class="pt-log-panel" style="overflow-x:auto;">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Dir</th>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>Result</th>
+            <th>P&amp;L (R)</th>
+            <th>Closed</th>
+          </tr>
+        </thead>
+        <tbody id="pt-closed-tbody">
+          <tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px;font-size:12px;">No closed trades yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="pt-log-stats" class="pt-log-panel" style="display:none;padding:16px;">
+      <div id="pt-stats-body"><div style="color:var(--muted);font-size:12px;text-align:center;padding:20px;">No stats yet — the AI agent needs to close some trades first.</div></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- PROFILE ───────────────────────────────────────────────────── -->
+<div class="screen" id="screen-profile">
+  <h1 class="prf-page-title">Profile</h1>
+
+  <div class="prf-grid">
+
+    <!-- LEFT COLUMN -->
+    <div class="prf-col">
+
+      <!-- Identity -->
+      <div class="prf-card">
+        <div class="prf-identity">
+          <div class="prf-avatar" id="profile-avatar">?</div>
+          <div class="prf-identity-info">
+            <div class="prf-display-name" id="profile-display-name">—</div>
+            <div class="prf-username" id="profile-username-display"></div>
+            <div class="prf-meta" id="profile-member-since"></div>
+          </div>
+          <div class="prf-member-badge">BETA</div>
+        </div>
+      </div>
+
+      <!-- Account Info -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">Account Details</div></div>
+        <div class="prf-card-body">
+          <div class="prf-field-row">
+            <div class="prf-field">
+              <label>First Name</label>
+              <input id="profile-first" type="text" placeholder="First name" oninput="_prfUpdateDisplay()" />
+            </div>
+            <div class="prf-field">
+              <label>Last Name</label>
+              <input id="profile-last" type="text" placeholder="Last name" oninput="_prfUpdateDisplay()" />
+            </div>
+          </div>
+          <div class="prf-field">
+            <label>Email Address</label>
+            <input id="profile-email" type="email" readonly />
+            <div class="prf-hint">Email cannot be changed. Contact support if needed.</div>
+          </div>
+          <div class="prf-field">
+            <label>Phone Number</label>
+            <input id="profile-phone" type="tel" placeholder="+44 7700 000000" />
+            <div class="prf-hint">Used for account recovery only. Never shared.</div>
+          </div>
+          <button class="btn btn-primary prf-btn-full" id="profile-save-btn">Save Changes</button>
+          <div class="profile-msg" id="profile-save-msg"></div>
+        </div>
+      </div>
+
+      <!-- Change Password -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">CHANGE PASSWORD</div></div>
+        <div class="prf-card-body">
+          <div class="prf-field">
+            <label>Current Password</label>
+            <input id="profile-pw-current" type="password" placeholder="Enter current password" autocomplete="current-password" />
+          </div>
+          <div class="prf-field">
+            <label>New Password</label>
+            <input id="profile-pw-new" type="password" placeholder="Min 8 characters" autocomplete="new-password" />
+          </div>
+          <div class="prf-field">
+            <label>Confirm New Password</label>
+            <input id="profile-pw-confirm" type="password" placeholder="Repeat new password" autocomplete="new-password" />
+          </div>
+          <button class="btn btn-primary prf-btn-full" id="profile-pw-btn">Update Password</button>
+          <div class="profile-msg" id="profile-pw-msg"></div>
+        </div>
+      </div>
+
+      <!-- Trading Preferences -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">TRADING PREFERENCES</div></div>
+        <div class="prf-card-body">
+          <div class="prf-field">
+            <label>Default Risk per Trade</label>
+            <div class="prf-risk-display">
+              <span class="prf-risk-value" id="prf-risk-val">1.0</span>
+              <span class="prf-risk-unit">% of portfolio</span>
+            </div>
+            <input type="range" id="prf-risk-slider" class="prf-range" min="0.5" max="5" step="0.5" value="1.0"
+              oninput="document.getElementById('prf-risk-val').textContent = parseFloat(this.value).toFixed(1)" />
+            <div class="prf-range-labels"><span>0.5% (conservative)</span><span>5% (aggressive)</span></div>
+          </div>
+          <div class="prf-field">
+            <label>Preferred Broker</label>
+            <select id="prf-broker">
+              <option value="">— Select —</option>
+              <option>Hargreaves Lansdown</option>
+              <option>Freetrade</option>
+              <option>Trading 212</option>
+              <option>IG</option>
+              <option>AJ Bell</option>
+              <option>Interactive Brokers</option>
+              <option>Other</option>
+            </select>
+            <div class="prf-hint">Helps format position sizes for your broker's conventions.</div>
+          </div>
+          <div class="prf-field">
+            <label>Experience Level</label>
+            <select id="prf-experience">
+              <option value="beginner">Beginner — New to trading, learning the basics</option>
+              <option value="developing" selected>Developing — Some experience, building a strategy</option>
+              <option value="experienced">Experienced — Comfortable with technical analysis and risk management</option>
+              <option value="quant">Quant — Data-driven, comfortable with statistics and Greeks</option>
+            </select>
+            <div class="prf-hint">Controls how tips and chat responses are formatted for you.</div>
+          </div>
+          <div class="prf-field">
+            <label>Trading Bio <span style="color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none;font-size:10px;">— optional</span></label>
+            <textarea id="prf-bio" rows="3" placeholder="What markets do you focus on? Any context helps the AI understand your style…"></textarea>
+          </div>
+          <button class="btn btn-primary prf-btn-full" id="prf-trading-save-btn">Save Preferences</button>
+          <div class="profile-msg" id="prf-trading-msg"></div>
+        </div>
+      </div>
+
+      <!-- Signal Style (Layer 3 personalisation) -->
+      <div class="prf-card">
+        <div class="prf-card-header">
+          <div class="prf-card-title">SIGNAL STYLE</div>
+          <span class="prf-notif-saved" id="prf-style-saved"></span>
+        </div>
+        <div class="prf-card-body">
+          <div class="prf-field">
+            <label>Risk Tolerance</label>
+            <div class="prf-btn-group" id="prf-style-risk">
+              <button class="prf-choice-btn" data-val="conservative">Conservative</button>
+              <button class="prf-choice-btn active" data-val="moderate">Moderate</button>
+              <button class="prf-choice-btn" data-val="aggressive">Aggressive</button>
+            </div>
+            <div class="prf-hint">Filters signal conviction thresholds and stop-loss tightness.</div>
+          </div>
+          <div class="prf-field">
+            <label>Preferred Timeframe</label>
+            <div class="prf-btn-group" id="prf-style-tf">
+              <button class="prf-choice-btn" data-val="scalp">Scalp <span class="prf-choice-sub">15m</span></button>
+              <button class="prf-choice-btn" data-val="intraday">Intraday <span class="prf-choice-sub">1h</span></button>
+              <button class="prf-choice-btn active" data-val="swing">Swing <span class="prf-choice-sub">4h/1d</span></button>
+              <button class="prf-choice-btn" data-val="position">Position <span class="prf-choice-sub">1d+</span></button>
+            </div>
+            <div class="prf-hint">Signals matching your timeframe rank higher in chat responses.</div>
+          </div>
+          <div class="prf-field">
+            <label>Sector Focus <span class="prf-label-opt">— optional</span></label>
+            <div class="prf-pill-grid" id="prf-style-sectors">
+              <button class="prf-pill" data-val="technology">Technology</button>
+              <button class="prf-pill" data-val="financials">Financials</button>
+              <button class="prf-pill" data-val="energy">Energy</button>
+              <button class="prf-pill" data-val="healthcare">Healthcare</button>
+              <button class="prf-pill" data-val="industrials">Industrials</button>
+              <button class="prf-pill" data-val="consumer_discretionary">Consumer</button>
+              <button class="prf-pill" data-val="materials">Materials</button>
+              <button class="prf-pill" data-val="real_estate">Real Estate</button>
+              <button class="prf-pill" data-val="utilities">Utilities</button>
+              <button class="prf-pill" data-val="communication_services">Comms</button>
+            </div>
+            <div class="prf-hint">Personalises which sectors surface first in opportunity scans.</div>
+          </div>
+          <button class="btn btn-primary prf-btn-full" id="prf-style-save-btn">Save Signal Style</button>
+          <div class="profile-msg" id="prf-style-msg"></div>
+        </div>
+      </div>
+
+    </div><!-- /left -->
+
+    <!-- RIGHT COLUMN -->
+    <div class="prf-col">
+
+      <!-- Subscription summary -->
+      <div class="prf-card">
+        <div class="prf-card-header">
+          <div class="prf-card-title">SUBSCRIPTION</div>
+          <span class="prf-card-link" onclick="navigate('subscription')">Manage plan →</span>
+        </div>
+        <div class="prf-card-body">
+          <div class="prf-sub-tier-row">
+            <div class="prf-sub-tier-name" id="profile-sub-tier">—</div>
+            <div class="prf-sub-tier-price" id="profile-sub-price"></div>
+          </div>
+          <div class="prf-sub-meta-row">
+            <div class="prf-sub-meta-item">
+              <div class="prf-sub-meta-label">Status</div>
+              <div class="prf-sub-meta-value" style="color:var(--green);">● Active</div>
+            </div>
+            <div class="prf-sub-meta-item">
+              <div class="prf-sub-meta-label">Cycle</div>
+              <div class="prf-sub-meta-value">Monthly</div>
+            </div>
+          </div>
+          <div class="prf-sub-features" id="profile-sub-features"></div>
+          <div class="prf-sub-upgrade-hint" id="profile-sub-upgrade-hint"></div>
+          <button class="btn btn-primary prf-btn-full" onclick="navigate('subscription')">Manage Subscription →</button>
+        </div>
+      </div>
+
+      <!-- Trading Account cash balance -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">TRADING ACCOUNT</div></div>
+        <div class="prf-card-body">
+
+          <!-- Display state: shown once a balance is saved -->
+          <div id="prf-cash-display" style="display:none;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+              <span class="prf-hint" style="margin:0;">Available Cash Balance</span>
+              <button class="btn btn-ghost btn-sm" id="prf-cash-edit-btn" style="font-size:11px;padding:2px 8px;">Edit</button>
+            </div>
+            <div id="prf-cash-display-value" style="font-size:22px;font-weight:700;color:var(--accent);letter-spacing:-0.5px;">—</div>
+          </div>
+
+          <!-- Edit state: shown when no balance set or Edit clicked -->
+          <div id="prf-cash-form">
+            <div class="prf-field">
+              <label>Available Cash Balance</label>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <select id="prf-cash-currency" style="width:80px;">
+                  <option value="GBP">GBP</option>
+                  <option value="USD">USD</option>
+                  <option value="EUR">EUR</option>
+                </select>
+                <input id="prf-cash-balance" type="number" min="0" step="100" placeholder="e.g. 10000" style="flex:1;" />
+              </div>
+              <div class="prf-hint">Used to size positions in tips. Updated anytime.</div>
+            </div>
+            <button class="btn btn-primary prf-btn-full" id="prf-cash-save-btn">Save Cash Balance</button>
+            <div class="profile-msg" id="prf-cash-msg"></div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Telegram -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">TELEGRAM</div></div>
+        <div class="prf-card-body">
+          <div class="prf-tg-status-row" id="prf-tg-status-row">
+            <div class="prf-tg-dot" id="prf-tg-dot"></div>
+            <div class="prf-tg-info">
+              <div class="prf-tg-label" id="profile-tg-status">—</div>
+              <div class="prf-tg-sub" id="prf-tg-sub">Briefings and alerts won't fire until Telegram is connected.</div>
+            </div>
+          </div>
+          <div class="prf-tg-steps" id="prf-tg-steps">
+            <div class="prf-tg-step">
+              <div class="prf-tg-step-num">1</div>
+              <div class="prf-tg-step-text">Click the button below to authorise your Telegram account.</div>
+            </div>
+            <div class="prf-tg-step">
+              <div class="prf-tg-step-num">2</div>
+              <div class="prf-tg-step-text">Your account links instantly. Monday briefings start next cycle.</div>
+            </div>
+          </div>
+          <div id="profile-tg-widget"></div>
+          <div id="profile-tg-relink" style="display:none;">
+            <button class="btn btn-ghost btn-sm" id="profile-tg-relink-btn">Re-link Telegram account</button>
+          </div>
+          <div class="profile-msg" id="profile-tg-msg"></div>
+        </div>
+      </div>
+
+      <!-- Notification prefs -->
+      <div class="prf-card">
+        <div class="prf-card-header">
+          <div class="prf-card-title">NOTIFICATION PREFERENCES</div>
+          <span class="prf-notif-saved" id="prf-notif-saved"></span>
+        </div>
+        <div class="prf-card-body prf-card-body-tight">
+          <div class="prf-toggle-row">
+            <div class="prf-toggle-info">
+              <div class="prf-toggle-label">Monday briefing</div>
+              <div class="prf-toggle-desc">Weekly setup batch at your configured delivery time</div>
+            </div>
+            <label class="prf-toggle-switch"><input type="checkbox" data-pref="monday_briefing" checked><span class="prf-slider"></span></label>
+          </div>
+          <div class="prf-toggle-row">
+            <div class="prf-toggle-info">
+              <div class="prf-toggle-label">Wednesday update</div>
+              <div class="prf-toggle-desc">Open position status + KB signal changes</div>
+            </div>
+            <label class="prf-toggle-switch"><input type="checkbox" data-pref="wednesday_update" checked><span class="prf-slider"></span></label>
+          </div>
+          <div class="prf-toggle-row">
+            <div class="prf-toggle-info">
+              <div class="prf-toggle-label">Zone hit alerts</div>
+              <div class="prf-toggle-desc">Fire when price enters your entry zone</div>
+            </div>
+            <label class="prf-toggle-switch"><input type="checkbox" data-pref="zone_alerts" checked><span class="prf-slider"></span></label>
+          </div>
+          <div class="prf-toggle-row">
+            <div class="prf-toggle-info">
+              <div class="prf-toggle-label">Thesis break alerts</div>
+              <div class="prf-toggle-desc">Structural invalidation before your stop is hit</div>
+            </div>
+            <label class="prf-toggle-switch"><input type="checkbox" data-pref="thesis_alerts" checked><span class="prf-slider"></span></label>
+          </div>
+          <div class="prf-toggle-row">
+            <div class="prf-toggle-info">
+              <div class="prf-toggle-label">Profit lock alerts <span class="prf-pro-tag">PRO+</span></div>
+              <div class="prf-toggle-desc">Exit signal when KB weakens at T1/T2</div>
+            </div>
+            <label class="prf-toggle-switch"><input type="checkbox" data-pref="profit_lock_alerts" disabled><span class="prf-slider"></span></label>
+          </div>
+          <div class="prf-toggle-row">
+            <div class="prf-toggle-info">
+              <div class="prf-toggle-label">Trailing pullback alerts <span class="prf-pro-tag">PRO+</span></div>
+              <div class="prf-toggle-desc">Peak detected + retrace warning</div>
+            </div>
+            <label class="prf-toggle-switch"><input type="checkbox" data-pref="trailing_alerts" disabled><span class="prf-slider"></span></label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Session + sign out -->
+      <div class="prf-card">
+        <div class="prf-card-header"><div class="prf-card-title">SESSION</div></div>
+        <div class="prf-card-body prf-card-body-tight">
+          <div class="prf-session-row">
+            <div>
+              <div class="prf-session-device">This browser</div>
+              <div class="prf-session-meta" id="profile-session-meta">Active now</div>
+            </div>
+            <div class="prf-session-current">CURRENT</div>
+          </div>
+        </div>
+        <div style="padding:0 18px 16px;">
+          <button class="btn btn-ghost prf-btn-full" id="profile-signout-btn">Sign Out</button>
+        </div>
+      </div>
+
+      <!-- Danger Zone -->
+      <div class="prf-card prf-danger-card">
+        <div class="prf-card-header prf-danger-header"><div class="prf-card-title prf-danger-title">DANGER ZONE</div></div>
+        <div class="prf-card-body">
+          <div class="prf-danger-text">Permanently deletes your account, portfolio, conversation history, and all associated data. This cannot be undone.</div>
+          <button class="btn-danger prf-btn-full" id="profile-delete-btn">Delete My Account</button>
+          <div class="profile-msg" id="profile-delete-msg"></div>
+        </div>
+      </div>
+
+    </div><!-- /right -->
+
+  </div><!-- /prf-grid -->
+</div>
+
+<!-- SUBSCRIPTION ──────────────────────────────────────────────── -->
+<div class="screen" id="screen-subscription">
+  <div class="sub-page-header">
+    <h1 class="sub-page-title">Subscription</h1>
+  </div>
+  <p class="sub-page-subtitle">Manage your plan. All tiers include Monday + Wednesday briefings via Telegram.</p>
+
+  <!-- Locked-state callout — shown only for basic (no active sub) -->
+  <div class="sub-locked-banner hidden" id="sub-locked-banner">
+    <div class="sub-locked-icon">🔒</div>
+    <div class="sub-locked-text">
+      <div class="sub-locked-title">Subscribe to unlock the full app</div>
+      <div class="sub-locked-desc">Your account has no active subscription. Subscribe to a plan below to unlock Dashboard, Portfolio, Chat, Tips, Patterns, and History.</div>
+    </div>
+    <button id="sub-test-access-btn" onclick="devUpgradePremium()" style="white-space:nowrap;flex-shrink:0;background:var(--accent);color:#000;border:none;border-radius:4px;padding:10px 18px;font-size:13px;font-weight:700;letter-spacing:.5px;cursor:pointer;">Get Test Access</button>
+  </div>
+
+  <!-- Current plan banner -->
+  <div class="sub-plan-banner">
+    <div>
+      <div class="sub-plan-label">CURRENT PLAN</div>
+      <div class="sub-plan-name" id="sub-plan-name">—</div>
+      <div class="sub-plan-renews" id="sub-plan-renews">Billed monthly</div>
+    </div>
+    <button class="sub-manage-btn" id="sub-manage-btn" onclick="openBillingPortal()">Manage Billing →</button>
+  </div>
+
+  <!-- Billing toggle -->
+  <div class="sub-billing-toggle">
+    <span class="sub-toggle-label">Billing cycle</span>
+    <div class="sub-toggle-wrap">
+      <div class="sub-toggle-opt active" id="sub-tog-monthly" onclick="subSetMonthly()">Monthly</div>
+      <div class="sub-toggle-opt" id="sub-tog-annual" onclick="subSetAnnual()">Annual</div>
+    </div>
+    <span class="sub-save-badge">SAVE 20%</span>
+  </div>
+
+  <!-- Tier cards -->
+  <div class="sub-tiers">
+
+    <!-- BASIC -->
+    <div class="sub-tier-card" id="sub-card-basic">
+      <div class="sub-tier-top">
+        <div class="sub-tier-badge-row">
+          <div class="sub-tier-name">BASIC</div>
+          <div class="sub-badge sub-badge-current" id="sub-badge-basic" style="display:none;">CURRENT</div>
+        </div>
+        <div class="sub-tier-price">
+          <span class="sub-price-amount" id="sub-basic-price">£9</span>
+          <span class="sub-price-period">/month</span>
+        </div>
+        <div class="sub-price-annual" id="sub-basic-annual" style="visibility:hidden">£86/yr · <span>save £22</span></div>
+        <div class="sub-tier-tagline">For traders who want weekly context without the noise.</div>
+      </div>
+      <div class="sub-tier-features">
+        <div class="sub-feature-group-label">Briefings</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Monday Week Ahead briefing</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Wednesday compound update</div>
+        <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Daily briefing</div>
+        <div class="sub-feature-group-label">Setups</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">2 setups</span> per Monday</span></div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> FVG + IFVG patterns</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> 4h &amp; daily timeframes</div>
+        <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> All pattern types</div>
+        <div class="sub-feature-group-label">Alerts</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Zone + thesis alerts</div>
+        <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Profit lock alerts</div>
+        <div class="sub-feature-row sub-dimmed"><span class="sub-fdash">–</span> Trailing pullback alerts</div>
+      </div>
+      <div class="sub-tier-cta">
+        <button class="sub-cta-btn sub-cta-primary" id="sub-cta-basic" onclick="startCheckout('basic')">Upgrade to Basic →</button>
+      </div>
+    </div>
+
+    <!-- PRO -->
+    <div class="sub-tier-card sub-recommended" id="sub-card-pro">
+      <div class="sub-tier-top">
+        <div class="sub-tier-badge-row">
+          <div class="sub-tier-name sub-tier-name-amber">PRO</div>
+          <div class="sub-badge sub-badge-popular" id="sub-badge-pro">MOST POPULAR</div>
+        </div>
+        <div class="sub-tier-price">
+          <span class="sub-price-amount" id="sub-pro-price">£29</span>
+          <span class="sub-price-period">/month</span>
+        </div>
+        <div class="sub-price-annual" id="sub-pro-annual" style="visibility:hidden">£278/yr · <span>save £70</span></div>
+        <div class="sub-tier-tagline">More setups, all patterns, real-time profit intelligence.</div>
+      </div>
+      <div class="sub-tier-features">
+        <div class="sub-feature-group-label">Briefings</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Monday Week Ahead briefing</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Wednesday compound update</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">Daily briefing</span> Mon–Fri</span></div>
+        <div class="sub-feature-group-label">Setups</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">3 setups</span> per Monday</span></div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> All pattern types</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> 4h &amp; daily timeframes</div>
+        <div class="sub-feature-group-label">Alerts</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Zone + thesis alerts</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Profit lock alerts (T1/T2)</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Trailing pullback alerts</div>
+      </div>
+      <div class="sub-tier-cta">
+        <button class="sub-cta-btn sub-cta-primary" id="sub-cta-pro" onclick="startCheckout('pro')">Upgrade to Pro →</button>
+      </div>
+    </div>
+
+    <!-- PREMIUM -->
+    <div class="sub-tier-card" id="sub-card-premium">
+      <div class="sub-tier-top">
+        <div class="sub-tier-badge-row">
+          <div class="sub-tier-name">PREMIUM</div>
+          <div class="sub-badge sub-badge-current" id="sub-badge-premium" style="display:none;">CURRENT</div>
+        </div>
+        <div class="sub-tier-price">
+          <span class="sub-price-amount" id="sub-premium-price">£79</span>
+          <span class="sub-price-period">/month</span>
+        </div>
+        <div class="sub-price-annual" id="sub-premium-annual" style="visibility:hidden">£758/yr · <span>save £190</span></div>
+        <div class="sub-tier-tagline">Every signal, every day. For serious active traders.</div>
+      </div>
+      <div class="sub-tier-features">
+        <div class="sub-feature-group-label">Briefings</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Monday Week Ahead briefing</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Wednesday compound update</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">Daily briefing</span> every morning</span></div>
+        <div class="sub-feature-group-label">Setups</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> <span><span class="sub-fhl">Unlimited setups</span></span></div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> All pattern types</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> All timeframes (15m–1d)</div>
+        <div class="sub-feature-group-label">Alerts</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Zone + thesis alerts</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Profit lock alerts (T1/T2/T3)</div>
+        <div class="sub-feature-row"><span class="sub-fcheck">✓</span> Trailing pullback alerts</div>
+      </div>
+      <div class="sub-tier-cta">
+        <button class="sub-cta-btn sub-cta-secondary" id="sub-cta-premium" onclick="startCheckout('premium')">Upgrade to Premium →</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Guarantee strip -->
+  <div class="sub-guarantee">
+    <div class="sub-guarantee-icon">🛡</div>
+    <div class="sub-guarantee-text"><strong>7-day money-back guarantee.</strong> Not what you expected? Email us within 7 days of upgrading and we'll refund in full — no questions.</div>
+  </div>
+
+  <!-- Comparison table -->
+  <hr class="sub-divider">
+  <div class="sub-section-title">Full comparison</div>
+  <table class="sub-compare-table">
+    <thead>
+      <tr>
+        <th style="width:38%;text-align:left;"></th>
+        <th>BASIC</th>
+        <th class="sub-col-hl">PRO</th>
+        <th>PREMIUM</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="sub-row-group"><td colspan="4">BRIEFINGS</td></tr>
+      <tr><td>Monday Week Ahead</td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Wednesday compound update</td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Daily morning briefing</td><td><span class="sub-crs">–</span></td><td class="sub-col-hl"><span class="sub-crs">–</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr class="sub-row-group"><td colspan="4">SETUPS</td></tr>
+      <tr><td>Monday setups per week</td><td>2</td><td class="sub-col-hl">5</td><td>Unlimited</td></tr>
+      <tr><td>Pattern types</td><td>FVG, IFVG</td><td class="sub-col-hl">All</td><td>All</td></tr>
+      <tr><td>Timeframes</td><td>1h, 4h</td><td class="sub-col-hl">1h, 4h, 1d</td><td>15m–1d</td></tr>
+      <tr><td>Profit targets per setup</td><td>2 (T1/T2)</td><td class="sub-col-hl">2 (T1/T2)</td><td>3 (T1/T2/T3)</td></tr>
+      <tr class="sub-row-group"><td colspan="4">REAL-TIME ALERTS</td></tr>
+      <tr><td>Zone hit alerts<small style="display:block;color:var(--muted);font-size:10px;margin-top:1px;">Price entering your entry zone</small></td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Thesis break alerts<small style="display:block;color:var(--muted);font-size:10px;margin-top:1px;">Structural invalidation before stop hits</small></td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Profit lock alerts<small style="display:block;color:var(--muted);font-size:10px;margin-top:1px;">Exit signal when KB weakens at target</small></td><td><span class="sub-crs">–</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Trailing pullback alerts<small style="display:block;color:var(--muted);font-size:10px;margin-top:1px;">Peak detected, retrace warning fired</small></td><td><span class="sub-crs">–</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr class="sub-row-group"><td colspan="4">INTELLIGENCE</td></tr>
+      <tr><td>KB-backed signal reasons</td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Geopolitical context</td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>Position sizing (from cash balance)</td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+      <tr><td>AI chat (full KB access)</td><td><span class="sub-chk">✓</span></td><td class="sub-col-hl"><span class="sub-chk">✓</span></td><td><span class="sub-chk">✓</span></td></tr>
+    </tbody>
+  </table>
+
+  <!-- FAQ -->
+  <hr class="sub-divider">
+  <div class="sub-section-title">Common questions</div>
+  <div class="sub-faq-grid">
+    <div class="sub-faq-item">
+      <div class="sub-faq-q">When does my Monday briefing arrive?</div>
+      <div class="sub-faq-a">At your configured delivery time (default 07:00 GMT). You can change this in Delivery Settings under Tips. We recommend 07:00–07:30 to get it before market open.</div>
+    </div>
+    <div class="sub-faq-item">
+      <div class="sub-faq-q">Can I upgrade or downgrade at any time?</div>
+      <div class="sub-faq-a">Yes. Upgrades take effect immediately and are prorated. Downgrades apply at the end of your current billing period — you keep your current tier until then.</div>
+    </div>
+    <div class="sub-faq-item">
+      <div class="sub-faq-q">What's the difference between a setup and an alert?</div>
+      <div class="sub-faq-a">A setup is a planned trade delivered in your Monday briefing — entry zone, stop, and targets. An alert fires in real time when price hits a key level or your KB confidence shifts on an open position.</div>
+    </div>
+    <div class="sub-faq-item">
+      <div class="sub-faq-q">Do I need Telegram?</div>
+      <div class="sub-faq-a">Yes — briefings and alerts are delivered via Telegram. Link your account in Profile → Telegram. The app gives you the chat interface and pattern browser, but delivery happens in Telegram.</div>
+    </div>
+  </div>
+
+</div>
+
+</main><!-- /main -->
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<!-- Mobile bottom nav -->
+<nav id="mobile-nav" aria-label="Mobile navigation">
+  <div id="mobile-nav-inner">
+    <div class="mnav-item active" data-screen="dashboard" id="mnav-dashboard"><span class="mnav-icon">▦</span>Dashboard</div>
+    <div class="mnav-item" data-screen="portfolio" id="mnav-portfolio" style="display:none;"><span class="mnav-icon">◈</span>Portfolio</div>
+    <div class="mnav-item" data-screen="markets" id="mnav-markets"><span class="mnav-icon">◬</span>Markets</div>
+    <div class="mnav-item" data-screen="visualiser" id="mnav-visualiser"><span class="mnav-icon">⬡</span>Visualiser</div>
+    <div class="mnav-item" data-screen="chat" id="mnav-chat" style="position:relative"><span class="mnav-icon">◎</span>Chat<span id="mchat-alert-badge" style="display:none;position:absolute;top:2px;right:4px;min-width:14px;height:14px;padding:0 3px;background:#e53e3e;color:#fff;font-size:8px;font-weight:700;border-radius:7px;line-height:14px;text-align:center;"></span></div>
+    <div class="mnav-item" data-screen="tips" id="mnav-tips"><span class="mnav-icon">◆</span>Tips</div>
+    <div class="mnav-item" data-screen="patterns" id="mnav-patterns"><span class="mnav-icon">⟁</span>Patterns</div>
+    <div class="mnav-item" data-screen="network" id="mnav-network"><span class="mnav-icon">⬡</span>Network</div>
+    <div class="mnav-item" data-screen="history" id="mnav-history"><span class="mnav-icon">◷</span>History</div>
+    <div class="mnav-item" data-screen="journal" id="mnav-journal"><span class="mnav-icon">◧</span>Journal</div>
+    <div class="mnav-item" data-screen="paper" id="mnav-paper"><span class="mnav-icon">◫</span>Paper Trader</div>
+    <div class="mnav-item" data-screen="private-fleet" id="mnav-private-fleet" style="display:none;"><span class="mnav-icon">⬡</span>Private Fleet</div>
+    <div class="mnav-item" data-screen="subscription" id="mnav-subscription"><span class="mnav-icon">◉</span>Subscription</div>
+    <div class="mnav-item" data-screen="profile" id="mnav-profile"><span class="mnav-icon">⊕</span>Profile</div>
+    <div class="mnav-item" data-no-nav="1" id="mnav-signout" onclick="doSignOut()"><span class="mnav-icon">⏻</span>Sign Out</div>
+  </div>
+</nav>
+
+<script src="js/state.js?v=20260312a"></script>
+<script src="js/api.js?v=20260307"></script>
+<script src="js/router.js?v=20260312a"></script>
+<script src="js/helpers.js?v=20260307"></script>
+<script src="js/screens/markets.js"></script>
+<script src="js/screens/auth.js"></script>
+<script src="js/screens/dashboard.js?v=20260307a"></script>
+<script src="js/screens/portfolio.js?v=20260309g"></script>
+<script src="js/screens/chat.js?v=20260310a"></script>
+<script src="js/screens/paper.js?v=20260307b"></script>
+<script src="js/screens/private_fleet.js"></script>
+<script src="js/screens/profile.js"></script>
+<script src="js/screens/subscription.js"></script>
+<script src="js/screens/tips.js"></script>
+<script src="js/screens/patterns.js?v=20260309d"></script>
+<script src="js/screens/network.js"></script>
+<script src="js/screens/history.js"></script>
+<script src="js/screens/journal.js?v=20260309a"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js" crossorigin="anonymous"></script>
+<script src="js/screens/visualiser.js?v=20260309h"></script>
+<script src="js/boot.js?v=20260307"></script>
+<script>
+(function() {
+  var container = document.getElementById('auth-candles');
+  if (!container) return;
+  var colors = ['#E8A020','#4CAF50','#EF5350'];
+  for (var i = 0; i < 18; i++) {
+    var c = document.createElement('div');
+    c.className = 'auth-candle';
+    var h = 20 + Math.random() * 60;
+    var color = colors[Math.floor(Math.random() * colors.length)];
+    c.style.cssText = 'left:' + (Math.random()*100) + '%;height:' + h + 'px;background:' + color + ';animation-duration:' + (12+Math.random()*20) + 's;animation-delay:' + (Math.random()*15) + 's;opacity:0;';
+    var wick = document.createElement('div');
+    wick.style.cssText = 'position:absolute;left:50%;transform:translateX(-50%);width:1px;height:' + (h*0.4) + 'px;background:' + color + ';top:-' + (h*0.4) + 'px;opacity:0.5;';
+    c.appendChild(wick);
+    container.appendChild(c);
+  }
+
+  // Password strength on register page
+  var pwInput = document.getElementById('reg-pw');
+  var bars = ['reg-bar1','reg-bar2','reg-bar3','reg-bar4'].map(function(id){ return document.getElementById(id); });
+  var strengthColors = ['#EF5350','#FF9800','#E8A020','#4CAF50'];
+  if (pwInput) {
+    pwInput.addEventListener('input', function() {
+      var pw = pwInput.value, score = 0;
+      if (pw.length >= 8) score++;
+      if (pw.length >= 12) score++;
+      if (/[A-Z]/.test(pw) && /[0-9]/.test(pw)) score++;
+      if (/[^A-Za-z0-9]/.test(pw)) score++;
+      bars.forEach(function(bar, i) {
+        if (bar) bar.style.background = i < score ? strengthColors[score-1] : 'rgba(255,255,255,0.06)';
+      });
+    });
+  }
+})();
+</script>
+</body>
+</html>

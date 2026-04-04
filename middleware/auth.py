@@ -26,16 +26,27 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Optional
 
+# TODO(FastAPI migration): replace g.user_id with dependency injection; require_auth becomes a Depends()
 from flask import g, jsonify, request
 
 _log = logging.getLogger(__name__)
 
 _SECRET_KEY           = os.environ.get('JWT_SECRET_KEY', 'dev-insecure-key-change-in-production')
-_EXPIRY_HOURS         = int(os.environ.get('JWT_EXPIRY_HOURS', '24'))
+_EXPIRY_MINUTES       = int(os.environ.get('JWT_EXPIRY_MINUTES', '15'))
 _REFRESH_EXPIRY_DAYS  = int(os.environ.get('JWT_REFRESH_EXPIRY_DAYS', '30'))
 
 _LOCKOUT_MINUTES  = 15
 _MAX_FAILED_ATTEMPTS = 5
+
+
+def _auth_conn(timeout: int = 30) -> sqlite3.Connection:
+    """Return a WAL-mode connection to the dedicated auth DB."""
+    import extensions as _ext
+    path = _ext.AUTH_DB_PATH
+    conn = sqlite3.connect(path, timeout=timeout)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=30000')
+    return conn
 
 try:
     import jwt as _jwt
@@ -50,6 +61,10 @@ try:
 except ImportError:
     _bcrypt = None  # type: ignore
     HAS_BCRYPT = False
+
+# Precomputed dummy hash used for constant-time blind when email is not found.
+# Prevents user enumeration via timing (invalid email returns in ~0ms vs ~100ms).
+_DUMMY_HASH: str = ''
 
 
 _DDL_REFRESH_TOKENS = """
@@ -79,11 +94,26 @@ def ensure_user_auth_table(conn: sqlite3.Connection) -> None:
     conn.execute(_DDL_USER_AUTH)
     conn.execute(_DDL_REFRESH_TOKENS)
     conn.commit()
+    for ddl in [
+        "ALTER TABLE user_auth ADD COLUMN oauth_provider TEXT",
+        "ALTER TABLE user_auth ADD COLUMN oauth_sub TEXT",
+    ]:
+        try:
+            conn.execute(ddl)
+            conn.commit()
+        except Exception:
+            pass
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_user_auth_oauth
+        ON user_auth (oauth_provider, oauth_sub)
+        WHERE oauth_provider IS NOT NULL
+    """)
+    conn.commit()
 
 
 # ── Token helpers ──────────────────────────────────────────────────────────────
 
-def _make_access_token(user_id: str, email: str) -> str:
+def _make_access_token(user_id: str, email: str, token_version: int = 0) -> str:
     if not HAS_JWT:
         raise RuntimeError('PyJWT is not installed — run: pip install PyJWT')
     payload = {
@@ -91,14 +121,26 @@ def _make_access_token(user_id: str, email: str) -> str:
         'user_id': user_id,
         'email':   email,
         'type':    'access',
-        'exp':     datetime.now(timezone.utc) + timedelta(hours=_EXPIRY_HOURS),
+        'tv':      token_version,
+        'exp':     datetime.now(timezone.utc) + timedelta(minutes=_EXPIRY_MINUTES),
         'iat':     datetime.now(timezone.utc),
     }
     return _jwt.encode(payload, _SECRET_KEY, algorithm='HS256')
 
 
-def _make_token(user_id: str, email: str) -> str:
-    return _make_access_token(user_id, email)
+def _make_token(user_id: str, email: str, db_path: str = '') -> str:
+    """Convenience wrapper that reads token_version from auth DB."""
+    tv = 0
+    try:
+        _c = _auth_conn(timeout=3)
+        _r = _c.execute(
+            "SELECT token_version FROM user_auth WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        _c.close()
+        tv = int(_r[0]) if _r and _r[0] is not None else 0
+    except Exception:
+        pass
+    return _make_access_token(user_id, email, token_version=tv)
 
 
 def _decode_token(token: str) -> dict:
@@ -118,7 +160,7 @@ def issue_refresh_token(db_path: str, user_id: str) -> dict:
     token_id   = _secrets.token_urlsafe(48)
     now        = datetime.now(timezone.utc)
     expires_at = now + timedelta(days=_REFRESH_EXPIRY_DAYS)
-    conn = sqlite3.connect(db_path, timeout=10)
+    conn = _auth_conn()
     try:
         ensure_user_auth_table(conn)
         conn.execute(
@@ -138,7 +180,17 @@ def rotate_refresh_token(db_path: str, refresh_token: str) -> dict:
     refresh token pair (rotation).  Raises ValueError if invalid/expired/revoked.
     Returns { access_token, refresh_token, token_type, expires_in, user_id }.
     """
-    conn = sqlite3.connect(db_path, timeout=10)
+    # Retry up to 3 times on DB lock — auth DB should be fast but be defensive
+    _last_exc = None
+    for _attempt in range(3):
+        try:
+            conn = _auth_conn()
+            break
+        except Exception as _e:
+            _last_exc = _e
+            import time as _time; _time.sleep(0.5 * (_attempt + 1))
+    else:
+        raise _last_exc
     try:
         ensure_user_auth_table(conn)
         row = conn.execute(
@@ -176,13 +228,24 @@ def rotate_refresh_token(db_path: str, refresh_token: str) -> dict:
     finally:
         conn.close()
 
-    access_token  = _make_access_token(user_id, email)
+    # Read current token_version so refreshed token carries correct version
+    try:
+        _tv_conn = _auth_conn(timeout=5)
+        _tv_row  = _tv_conn.execute(
+            "SELECT token_version FROM user_auth WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        _tv_conn.close()
+        tv = int(_tv_row[0]) if _tv_row and _tv_row[0] is not None else 0
+    except Exception:
+        tv = 0
+
+    access_token  = _make_access_token(user_id, email, token_version=tv)
     refresh_data  = issue_refresh_token(db_path, user_id)
     return {
         'access_token':  access_token,
         'refresh_token': refresh_data['refresh_token'],
         'token_type':    'Bearer',
-        'expires_in':    _EXPIRY_HOURS * 3600,
+        'expires_in':    _EXPIRY_MINUTES * 60,
         'user_id':       user_id,
     }
 
@@ -195,6 +258,15 @@ def _hash_password(password: str) -> str:
     return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
 
 
+def _init_dummy_hash() -> None:
+    global _DUMMY_HASH
+    if HAS_BCRYPT and not _DUMMY_HASH:
+        _DUMMY_HASH = _hash_password('__timing_blind_dummy__')
+
+
+_init_dummy_hash()
+
+
 def _check_password(password: str, hashed: str) -> bool:
     if not HAS_BCRYPT:
         return False
@@ -205,15 +277,21 @@ def _check_password(password: str, hashed: str) -> bool:
 
 def require_auth(f):
     """
-    Decorator: validate Bearer JWT, set g.user_id.
+    Decorator: validate JWT, set g.user_id.
+    Accepts token from:
+      1. Authorization: Bearer <token>  header (API clients, backwards compat)
+      2. tg_access HttpOnly cookie       (browser SPA — preferred)
     Returns 401 if token is missing, invalid, or expired.
     """
     @wraps(f)
     def decorated(*args, **kwargs):
         if not HAS_JWT:
             return jsonify({'error': 'auth not available — PyJWT not installed'}), 503
+        # Prefer Authorization header; fall back to HttpOnly cookie
         header = request.headers.get('Authorization', '')
         token = header.removeprefix('Bearer ').strip()
+        if not token:
+            token = request.cookies.get('tg_access', '').strip()
         if not token:
             return jsonify({'error': 'unauthorized', 'detail': 'missing token'}), 401
         try:
@@ -267,7 +345,7 @@ def register_user(
     now = datetime.now(timezone.utc).isoformat()
     password_hash = _hash_password(password)
 
-    conn = sqlite3.connect(db_path, timeout=10)
+    conn = _auth_conn()
     try:
         ensure_user_auth_table(conn)
         try:
@@ -285,6 +363,25 @@ def register_user(
     return {'user_id': user_id, 'email': email, 'created_at': now}
 
 
+def revoke_user_tokens(db_path: str, user_id: str) -> None:
+    """
+    Increment token_version to immediately invalidate all existing access tokens
+    for a user. Called on password change and forced logout.
+    The next login will issue a token with the new version; old tokens will fail
+    the version check in get_current_user.
+    """
+    try:
+        conn = _auth_conn()
+        conn.execute(
+            "UPDATE user_auth SET token_version = COALESCE(token_version, 0) + 1 WHERE user_id = ?",
+            (user_id,),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        _log.warning("revoke_user_tokens failed for %s: %s", user_id, exc)
+
+
 def authenticate_user(
     db_path: str,
     email: str,
@@ -294,19 +391,25 @@ def authenticate_user(
     Verify credentials.  Returns JWT token dict on success.
     Raises ValueError on bad credentials or locked account.
     """
-    conn = sqlite3.connect(db_path, timeout=10)
+    conn = _auth_conn()
     try:
         ensure_user_auth_table(conn)
         row = conn.execute(
-            """SELECT user_id, password_hash, failed_attempts, locked_until
+            """SELECT user_id, password_hash, failed_attempts, locked_until, oauth_provider
                FROM user_auth WHERE email = ?""",
             (email.lower().strip(),),
         ).fetchone()
 
         if row is None:
+            # Constant-time blind: run bcrypt so timing matches a wrong-password path
+            if _DUMMY_HASH:
+                _check_password(password, _DUMMY_HASH)
             raise ValueError('invalid email or password')
 
-        user_id, password_hash, failed_attempts, locked_until = row
+        user_id, password_hash, failed_attempts, locked_until, oauth_provider = row
+
+        if oauth_provider:
+            raise ValueError('google_account_use_oauth')
 
         # Check lockout
         if locked_until:
@@ -346,11 +449,17 @@ def authenticate_user(
         )
         conn.commit()
 
-        token = _make_token(user_id, email)
+        # Read current token_version for embedding in JWT
+        tv_row = conn.execute(
+            "SELECT token_version FROM user_auth WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        tv = int(tv_row[0]) if tv_row and tv_row[0] is not None else 0
+
+        token = _make_access_token(user_id, email, token_version=tv)
         return {
             'access_token': token,
             'token_type':   'Bearer',
-            'expires_in':   _EXPIRY_HOURS * 3600,
+            'expires_in':   _EXPIRY_MINUTES * 60,
             'user_id':      user_id,
         }
     finally:

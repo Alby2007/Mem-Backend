@@ -137,6 +137,24 @@ class ContradictionDetector:
         # Log to fact_conflicts
         self._log_conflict(conn, winner_id, loser_id, winner_obj, loser_obj, reason)
 
+        # Propagate conflict downstream: write signal_conflicted atom so
+        # signal_enrichment_adapter picks it up on next cycle and downgrades
+        # conviction_tier automatically without any additional wiring.
+        _SIGNAL_PREDICATES = {'signal_direction', 'price_target', 'conviction_tier'}
+        if predicate in _SIGNAL_PREDICATES:
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO facts "
+                    "(subject, predicate, object, confidence, source, timestamp) "
+                    "VALUES (?, 'signal_conflicted', ?, 0.9, 'contradiction_detector', ?)",
+                    (subject,
+                     f"{winner_obj}_vs_{loser_obj}",
+                     datetime.now(timezone.utc).isoformat()),
+                )
+                conn.commit()
+            except Exception:
+                pass   # never let downstream propagation break the ingest path
+
         return ConflictResult(
             detected=True,
             winner_id=winner_id,

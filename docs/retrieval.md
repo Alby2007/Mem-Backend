@@ -56,16 +56,23 @@ When no tickers: fetches top-20 atoms globally for the boosted predicate set.
 | Query keyword | Predicates fetched |
 |---|---|
 | `upside`, `target`, `consensus`, `analyst` | `price_target`, `signal_direction` |
-| `signal`, `direction`, `long`, `short`, `momentum` | `signal_direction`, `signal_confidence` |
+| `signal`, `direction`, `long`, `momentum` | `signal_direction`, `signal_confidence` |
 | `regime`, `macro` | `regime_label`, `central_bank_stance`, `dominant_driver`, `growth_environment`, `inflation_environment` |
 | `inflation` | `inflation_environment`, `dominant_driver`, `regime_label` |
 | `rate` | `central_bank_stance`, `dominant_driver` |
-| `yield` | `risk_factor`, `dominant_driver` |
+| `yield`, `yields`, `treasury`, `curve`, `inversion`, `steepen`, `flatten` | `yield_curve_regime`, `yield_curve_slope`, `yield_curve_tlt_shy`, `tlt_1d_change_pct`, `long_end_stress` |
+| `tlt`, `bonds` | `tlt_close`, `ief_close`, `yield_curve_regime`, `long_end_stress` |
+| `rates` | `yield_curve_regime`, `yield_curve_slope`, `tlt_1d_change_pct`, `long_end_stress`, `central_bank_stance` |
+| `short`, `shorts`, `squeeze`, `borrow`, `finra` | `short_interest`, `days_to_cover`, `short_squeeze_risk`, `short_vs_signal` |
+| `geopolitical`, `conflict`, `war`, `tension`, `geo` | `gdelt_tension`, `ucdp_conflict`, `active_war`, `conflict_score` |
 | `sector` | `sector` |
 | `volatility`, `beta` | `volatility_regime` |
 | `catalyst` | `catalyst` |
 | `risk` | `risk_factor` |
 | `earnings` | `earnings_quality` |
+| `options`, `greeks`, `delta`, `gamma`, `iv`, `gex`, `pcr` | `delta_atm`, `gamma_atm`, `iv_true`, `put_call_oi_ratio`, `gamma_exposure` |
+| `insider` | `insider_transaction`, `risk_factor` |
+| `energy`, `oil`, `crude` | `crude_inventory_change`, `energy_regime`, `crude_production` |
 
 *Use case:* "NVDA META GOOGL upside target" → collects `price_target` and `signal_direction` for each ticker before any bulk fetch
 
@@ -127,38 +134,46 @@ Results are then truncated to `limit` (default 30).
 
 ## Output Formatting
 
-Results are sorted into labelled sections based on predicate and source:
+Results are routed into named buckets based on predicate and source. Each bucket maps to a labelled section in the snippet:
 
-| Section | Condition |
-|---|---|
-| `[Signals & Positioning]` | `predicate in (signal_direction, signal_confidence, price_target, entry_condition, exit_condition, invalidation_condition)` |
-| `[Theses & Evidence]` | `predicate in (premise, supporting_evidence, contradicting_evidence, risk_reward_ratio, position_sizing_note)` |
-| `[Macro / Regime]` | `source.startswith('macro_data')` OR `predicate in (regime_label, dominant_driver, central_bank_stance, risk_on_off)` |
-| `[Research]` | `source.startswith('broker_research')` OR `predicate in (rating, key_finding, compared_to_consensus)` |
-| `[Other]` | Everything else |
-
-Each section is capped:
-- `[Signals]` — 10 atoms
-- `[Theses]` — 8 atoms
-- `[Macro]` — 6 atoms
-- `[Research]` — 6 atoms
-- `[Other]` — 6 atoms
+| Section header | Routing condition | Cap |
+|---|---|---|
+| `# signals` | `predicate in (signal_direction, signal_confidence, price_target, entry_condition, exit_condition, invalidation_condition)` | 10 |
+| `# theses` | `predicate in (premise, supporting_evidence, contradicting_evidence, risk_reward_ratio, position_sizing_note)` | 8 |
+| `# macro` | `source.startswith('macro_data')` OR `predicate in (regime_label, dominant_driver, central_bank_stance, risk_on_off)` | 8 |
+| `# historical` | `predicate in (return_1w, return_1m, ..., max_drawdown_5y, volatility_5y, ...)` | 6 |
+| `# geo` | `source` is GDELT/UCDP/ACLED/news_wire OR `predicate in (conflict_score, active_war, gdelt_tension, ...)` | 15 |
+| `# options-greeks` | `predicate in (delta_atm, gamma_atm, theta_atm, vega_atm, iv_true, put_call_oi_ratio, gamma_exposure, ...)` | 15 |
+| `# yield-curve` | `predicate in (tlt_close, ief_close, yield_curve_slope, yield_curve_regime, long_end_stress, ...)` OR `source == 'yield_curve'` | 10 |
+| `# short-interest` | `predicate in (short_interest, days_to_cover, short_squeeze_risk, short_vs_signal)` OR `source in ('finra_short_interest', 'alt_data_fca_shorts')` | 12 |
+| `# research` | `source.startswith('broker_research')` OR `predicate in (rating, key_finding, compared_to_consensus)` | 6 |
+| `# context` | Everything else | 6 |
 
 **Example output:**
 ```
 === TRADING KNOWLEDGE CONTEXT ===
-[Signals & Positioning]
+# signals
   nvda | price_target | 253.99
   nvda | signal_direction | long
   meta | price_target | 861.3
   meta | signal_direction | long
-[Macro / Regime]
+# macro
   us_macro | central_bank_stance | neutral_to_restrictive
   us_macro | regime_label | tight policy
-[Other]
+# yield-curve
+  macro | yield_curve_regime | bull_flatten
+  macro | long_end_stress | false
+  macro | tlt_1d_change_pct | 0.609
+# options-greeks
+  nvda | iv_true | 34.2
+  nvda | put_call_oi_ratio | 0.92
+  nvda | gamma_exposure | -1230000
+# context
   nvda | sector | technology
   nvda | last_price | 190.4
 ```
+
+> **LLM interpretation rules:** The `# options-greeks` section triggers `_SYSTEM_GREEKS_RULE` injection (experienced/quant levels only). The `# yield-curve` section triggers `_SYSTEM_YIELD_CURVE_RULE` injection (all levels). Both rules cite actual atom values — the LLM is prohibited from inventing values not present in the snippet.
 
 ---
 
