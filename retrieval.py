@@ -21,6 +21,13 @@ import re
 import sqlite3
 from typing import List, Tuple, Dict
 
+try:
+    from analytics.provenance_context import record_fact_access as _record_fact_access
+    HAS_PROVENANCE = True
+except ImportError:
+    HAS_PROVENANCE = False
+    def _record_fact_access(_id): pass  # type: ignore
+
 _logger = logging.getLogger(__name__)
 
 try:
@@ -434,6 +441,7 @@ def retrieve(
                 # Truncate to date portion only (2026-03-01T23:10:54... → 2026-03-01)
                 ts = ts_raw[:10] if ts_raw else ''
                 return {
+                    'fact_id':    int(r['id']) if 'id' in keys and r['id'] is not None else None,
                     'subject':    str(r['subject'] or '').strip(),
                     'predicate':  str(r['predicate'] or '').strip(),
                     'object':     str(r['object'] or '')[:300].strip(),
@@ -443,9 +451,10 @@ def retrieve(
                 }
             ts_raw = str(r[6]).strip() if len(r) > 6 else ''
             return {
-                'subject': str(r[0]).strip(), 'predicate': str(r[1]).strip(),
-                'object': str(r[2])[:300].strip(),
-                'source': str(r[3]).strip() if len(r) > 3 else '',
+                'fact_id':    int(r[7]) if len(r) > 7 and r[7] is not None else None,
+                'subject':    str(r[0]).strip(), 'predicate': str(r[1]).strip(),
+                'object':     str(r[2])[:300].strip(),
+                'source':     str(r[3]).strip() if len(r) > 3 else '',
                 'confidence': float(r[4]) if len(r) > 4 else 0.5,
                 'timestamp':  ts_raw[:10] if ts_raw else '',
             }
@@ -472,6 +481,7 @@ def retrieve(
                     and atom['subject'] and atom['object']:
                 seen.add(key)
                 results.append(atom)
+                _record_fact_access(atom.get('fact_id'))
 
     def _add_geo(rows):
         """Like _add but also registers atoms in geo_results so they survive truncation."""
@@ -487,10 +497,12 @@ def retrieve(
                 if key not in seen:
                     seen.add(key)
                     results.append(atom)
+                    _record_fact_access(atom.get('fact_id'))
                 if key not in _geo_seen:
                     _geo_seen.add(key)
                     geo_results.append(atom)
 
+    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     msg_lower = message.lower()
     terms = _extract_key_terms(message)
@@ -811,7 +823,7 @@ def retrieve(
                 pinned = pinned + list(_PINNED_PREDICATES_GREEKS)
             _pin_ph = ','.join('?' * len(pinned))
             c.execute(f"""
-                SELECT subject, predicate, object, source, confidence
+                SELECT id, subject, predicate, object, source, confidence
                 FROM facts
                 WHERE LOWER(subject) = ?
                 AND predicate IN ({_pin_ph})
@@ -972,7 +984,7 @@ def retrieve(
     for ticker in tickers:
         try:
             c.execute("""
-                SELECT subject, predicate, object, source, confidence
+                SELECT id, subject, predicate, object, source, confidence
                 FROM facts
                 WHERE LOWER(subject) LIKE ?
                 AND predicate NOT IN ('source_code','has_title','has_section','has_content')
@@ -988,7 +1000,7 @@ def retrieve(
         try:
             pred_placeholders = ','.join('?' * len(_HIGH_VALUE_PREDICATES))
             c.execute(f"""
-                SELECT subject, predicate, object, source, confidence
+                SELECT id, subject, predicate, object, source, confidence
                 FROM facts
                 WHERE predicate IN ({pred_placeholders})
                 AND (LOWER(subject) LIKE ? OR LOWER(object) LIKE ?)
@@ -1458,3 +1470,48 @@ def set_db_path(db_path: str) -> None:
 def get_last_precedent():
     """Return the HistoricalPrecedent from the most recent retrieve() call, or None."""
     return _last_precedent
+
+
+def _fetch_pinned_for_ticker(ticker: str, conn: sqlite3.Connection) -> None:
+    """
+    Fetch pinned key atoms for a single ticker and register their IDs
+    into any active ProvenanceContext on this thread.
+
+    Used by bot_runner to get a trace-accurate KB commitment without running
+    the full retrieval pipeline. Lightweight re-query (~5ms).
+    """
+    _PINNED_BASE = (
+        'last_price', 'currency', 'price_target', 'signal_direction', 'earnings_quality',
+        'signal_quality', 'macro_confirmation', 'price_regime', 'upside_pct',
+        'return_1m', 'return_3m', 'return_6m', 'return_1y',
+        'volatility_30d', 'volatility_90d', 'drawdown_from_52w_high',
+        'return_vs_spy_1m', 'return_vs_spy_3m',
+        'invalidation_price', 'invalidation_distance', 'thesis_risk_level',
+        'conviction_tier', 'volatility_scalar', 'position_size_pct',
+    )
+    _PINNED_GREEKS = (
+        'delta_atm', 'gamma_atm', 'theta_atm', 'vega_atm',
+        'iv_true', 'put_call_oi_ratio', 'gamma_exposure',
+    )
+    _OPTIONS_COVERED = frozenset({
+        'COIN', 'HOOD', 'MSTR', 'PLTR', 'NVDA',
+        'AMZN', 'META', 'GOOGL', 'AAPL', 'MSFT', 'MA', 'SPY',
+    })
+    pinned = list(_PINNED_BASE)
+    if ticker.upper() in _OPTIONS_COVERED:
+        pinned += list(_PINNED_GREEKS)
+    ph = ','.join('?' * len(pinned))
+    try:
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute(
+            f"SELECT id, subject, predicate, object, source, confidence "
+            f"FROM facts "
+            f"WHERE LOWER(subject) = ? AND predicate IN ({ph}) "
+            f"ORDER BY confidence DESC",
+            (ticker.lower(), *pinned),
+        )
+        for r in c.fetchall():
+            _record_fact_access(r['id'] if r['id'] is not None else None)
+    except Exception:
+        pass

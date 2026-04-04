@@ -50,6 +50,49 @@ def _merkle_root(leaves: List[bytes]) -> bytes:
     return layer[0]
 
 
+def compute_kb_root_from_ids(
+    fact_ids: frozenset,
+    db_path: str,
+    conn: Optional[sqlite3.Connection] = None,
+) -> Tuple[str, str]:
+    """
+    Compute a Merkle root over a specific set of fact IDs.
+
+    Use this when the caller knows exactly which rows were consumed
+    (e.g. from ProvenanceContext). Falls back to empty-root sentinel
+    if fact_ids is empty.
+
+    Returns
+    -------
+    (root_hex, fact_ids_json)
+        root_hex      — 64-char hex SHA-256 Merkle root
+        fact_ids_json — JSON array of fact IDs actually found in DB
+    """
+    if not fact_ids:
+        return hashlib.sha256(b"no_facts").hexdigest(), "[]"
+
+    _own = conn is None
+    _conn = sqlite3.connect(db_path, timeout=10) if _own else conn
+
+    placeholders = ','.join('?' * len(fact_ids))
+    try:
+        rows = _conn.execute(
+            f"SELECT id, predicate, object, confidence FROM facts "
+            f"WHERE id IN ({placeholders}) ORDER BY id ASC",
+            tuple(sorted(fact_ids)),
+        ).fetchall()
+    finally:
+        if _own:
+            _conn.close()
+
+    if not rows:
+        return hashlib.sha256(b"no_facts_found").hexdigest(), "[]"
+
+    leaves = [_leaf_hash(r[0], r[1], r[2], r[3] or 0.0) for r in rows]
+    root = _merkle_root(leaves)
+    return root.hex(), json.dumps([r[0] for r in rows])
+
+
 def compute_kb_root(
     ticker: str,
     db_path: str,

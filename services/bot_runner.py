@@ -1529,15 +1529,30 @@ class BotRunner:
                         _cal_hr = max(0.05, min(0.95, float(_cal_hr)))
 
                         # Compute KB state commitment at decision time
+                        # Uses ProvenanceContext to capture exactly which fact IDs
+                        # were consumed by the pinned pre-fetch for this ticker,
+                        # producing a root over consumed facts rather than all ticker facts.
                         _kb_root = None
                         _kb_fact_ids = None
                         try:
-                            from analytics.kb_commitment import compute_kb_root
-                            _kb_root, _kb_fact_ids = compute_kb_root(
-                                ticker=ticker,
-                                db_path=self.db_path,
-                                conn=conn,
+                            from analytics.provenance_context import ProvenanceContext
+                            from analytics.kb_commitment import (
+                                compute_kb_root_from_ids,
+                                compute_kb_root,
                             )
+                            from retrieval import _fetch_pinned_for_ticker
+                            with ProvenanceContext() as _pctx:
+                                _fetch_pinned_for_ticker(ticker, conn)
+                            if _pctx.consumed_ids:
+                                _kb_root, _kb_fact_ids = compute_kb_root_from_ids(
+                                    _pctx.consumed_ids, self.db_path, conn
+                                )
+                            else:
+                                _kb_root, _kb_fact_ids = compute_kb_root(
+                                    ticker=ticker,
+                                    db_path=self.db_path,
+                                    conn=conn,
+                                )
                         except Exception as _kbc_e:
                             _logger.warning('kb_commitment failed for %s: %s', ticker, _kbc_e)
 
